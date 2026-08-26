@@ -37,8 +37,6 @@ __all__ = [
     "encode_key",
     "generate_keypair",
     "is_clamped",
-    "keypair_from_private",
-    "keypair_from_private_b64",
     "public_from_private",
     "public_key_matches",
 ]
@@ -200,43 +198,6 @@ def public_from_private(private: bytes | SecretBytes) -> bytes:
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
-
-
-def keypair_from_private(private: bytes | SecretBytes) -> KeyPair:
-    """Build a :class:`KeyPair` from an existing private scalar.
-
-    Args:
-        private: Raw private key bytes, or a :class:`SecretBytes`
-            wrapping them.
-
-    Returns:
-        The :class:`KeyPair` with the derived public key.
-
-    Raises:
-        KeyMaterialError: If ``private`` is not exactly
-            :data:`X25519_KEY_SIZE` bytes.
-    """
-    raw = _coerce_private_bytes(private)
-    public = public_from_private(raw)
-    return KeyPair(private=SecretBytes(raw), public=public)
-
-
-def keypair_from_private_b64(value: str) -> KeyPair:
-    """Build a :class:`KeyPair` from a base64-encoded private scalar.
-
-    Args:
-        value: A base64-encoded private key, optionally prefixed with
-            :data:`B64_KEY_PREFIX`.
-
-    Returns:
-        The :class:`KeyPair` with the derived public key.
-
-    Raises:
-        KeyMaterialError: If ``value`` does not decode to exactly
-            :data:`X25519_KEY_SIZE` bytes of canonical base64.
-    """
-    raw = decode_key(value, field="private_key")
-    return keypair_from_private(raw)
 
 
 def encode_key(raw: bytes) -> str:
