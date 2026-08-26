@@ -10,6 +10,9 @@ from pathlib import Path
 import pytest
 
 from meshprovision.db.atomic_writer import (
+    BackupInfo,
+    _claim_backup_path,
+    _parse_backup_timestamp,
     atomic_write,
     backup_name,
     create_backup,
@@ -66,9 +69,17 @@ def test_backup_taken_before_replace(tmp_path: Path) -> None:
 
 def test_backup_name_and_parse_round_trip(tmp_path: Path) -> None:
     target = tmp_path / "nodes_db.ods"
-    when = datetime(2026, 8, 25, 3, 14, 10, tzinfo=UTC)
+    when = datetime(2026, 8, 25, 3, 14, 10, 123456, tzinfo=UTC)
     name = backup_name(target, when)
-    assert name == "nodes_db-20260825T031410Z.ods"
+    assert name == "nodes_db-20260825T031410.123456Z.ods"
+    assert _parse_backup_timestamp(name, target) == when
+
+
+def test_legacy_second_resolution_backup_names_still_parse(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    assert _parse_backup_timestamp("nodes_db-20260825T031410Z.ods", target) == datetime(
+        2026, 8, 25, 3, 14, 10, tzinfo=UTC
+    )
 
 
 def test_two_backups_same_second_get_distinct_paths(tmp_path: Path) -> None:
@@ -86,6 +97,53 @@ def test_two_backups_same_second_get_distinct_paths(tmp_path: Path) -> None:
     assert info1.path != info2.path
     assert info1.path.exists()
     assert info2.path.exists()
+
+
+def test_backup_racing_an_identical_name_does_not_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    when = datetime(2026, 8, 25, 3, 14, 10, 123456, tzinfo=UTC)
+
+    real_copy2 = shutil.copy2
+    inner: list[BackupInfo] = []
+
+    def copy2_then_race(src: Path, dst: Path, *args: object, **kwargs: object) -> object:
+        result = real_copy2(src, dst, *args, **kwargs)
+        if not inner:  # only the outer call races; the inner one must not recurse
+            monkeypatch.setattr(shutil, "copy2", real_copy2)
+            target.write_bytes(b"v2")
+            info = create_backup(target, backup_dir=backup_dir, now=when)
+            assert info is not None
+            inner.append(info)
+            monkeypatch.setattr(shutil, "copy2", copy2_then_race)
+        return result
+
+    monkeypatch.setattr(shutil, "copy2", copy2_then_race)
+    outer = create_backup(target, backup_dir=backup_dir, now=when)
+
+    assert outer is not None
+    assert outer.path != inner[0].path
+    assert outer.path.read_bytes() == b"v1"
+    assert inner[0].path.read_bytes() == b"v2"
+    assert len(list_backups(target, backup_dir=backup_dir)) == 2
+
+
+def test_claim_backup_path_never_overwrites_an_existing_name(tmp_path: Path) -> None:
+    directory = tmp_path / "backups"
+    directory.mkdir()
+    (directory / "data-20260825T031410.123456Z.txt").write_bytes(b"existing")
+    source = directory / ".tmp-copy"
+    source.write_bytes(b"new")
+
+    claimed = _claim_backup_path(directory, "data-20260825T031410.123456Z.txt", source)
+
+    assert claimed.name == "data-20260825T031410.123456Z-1.txt"
+    assert (directory / "data-20260825T031410.123456Z.txt").read_bytes() == b"existing"
+    assert claimed.read_bytes() == b"new"
+    assert not source.exists()
 
 
 def test_prune_backups_keeps_exactly_retention_newest(tmp_path: Path) -> None:
@@ -242,14 +300,14 @@ def test_backup_is_written_via_a_temp_file(tmp_path: Path, monkeypatch: pytest.M
 
     monkeypatch.setattr(shutil, "copy2", fake_copy2)
 
-    real_replace = Path.replace
-    modes_at_replace: list[int] = []
+    real_link = os.link
+    modes_at_link: list[int] = []
 
-    def fake_replace(self: Path, target_path: str | Path) -> Path:
-        modes_at_replace.append(self.stat().st_mode & 0o777)
-        return real_replace(self, target_path)
+    def fake_link(src: object, dst: object, *args: object, **kwargs: object) -> object:
+        modes_at_link.append(Path(src).stat().st_mode & 0o777)
+        return real_link(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(Path, "replace", fake_replace)
+    monkeypatch.setattr(os, "link", fake_link)
 
     info = create_backup(target, backup_dir=backup_dir)
 
@@ -258,11 +316,11 @@ def test_backup_is_written_via_a_temp_file(tmp_path: Path, monkeypatch: pytest.M
     # The copy lands on a temp path, not the final backup name.
     assert seen_dst[0] != info.path
     assert seen_dst[0].parent == backup_dir
-    # The temp file is already 0o600 by the time it is renamed into place --
-    # this is what distinguishes chmod-on-temp-before-replace (correct) from
-    # chmod-on-destination-after-replace (incorrect): both produce the same
+    # The temp file is already 0o600 by the time it is linked into place --
+    # this is what distinguishes chmod-on-temp-before-link (correct) from
+    # chmod-on-destination-after-link (incorrect): both produce the same
     # *final* mode, but only the correct order satisfies this assertion.
-    assert modes_at_replace == [0o600]
+    assert modes_at_link == [0o600]
 
 
 def test_failed_backup_copy_leaves_no_stray_temp_file(
@@ -360,7 +418,15 @@ def test_atomic_write_completes_when_pruning_loses_a_race(
             now=datetime(2026, 8, 25, 0, 0, i, tzinfo=UTC),
         )
 
+    real_unlink = Path.unlink
+
     def flaky_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        # Only real backup files are "lost the race" -- the temp source
+        # _claim_backup_path unlinks after a successful link is process-local
+        # and no concurrent writer could ever have removed it first.
+        if ".tmp-" in self.name:
+            real_unlink(self, *args, **kwargs)
+            return
         raise FileNotFoundError("lost the race")
 
     monkeypatch.setattr(Path, "unlink", flaky_unlink)

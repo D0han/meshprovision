@@ -59,8 +59,16 @@ DEFAULT_BACKUP_DIR: Final[Path] = Path("data/backups")
 DEFAULT_RETENTION: Final[int] = 20
 """Default number of backups to keep per target file."""
 
-BACKUP_TIMESTAMP_FORMAT: Final[str] = "%Y%m%dT%H%M%SZ"
+BACKUP_TIMESTAMP_FORMAT: Final[str] = "%Y%m%dT%H%M%S.%fZ"
 """``strftime``/``strptime`` format embedded in a backup file's name."""
+
+_LEGACY_BACKUP_TIMESTAMP_FORMAT: Final[str] = "%Y%m%dT%H%M%SZ"
+"""Second-resolution format used before backup names carried microseconds.
+
+Still parsed by :func:`_parse_backup_timestamp` so backups already on
+disk keep listing with their real creation time rather than falling
+back to mtime; never written.
+"""
 
 _BACKUP_DIR_MODE: Final[int] = 0o700
 
@@ -129,27 +137,45 @@ def backup_name(target: Path, when: datetime) -> str:
     return f"{target.stem}-{when.strftime(BACKUP_TIMESTAMP_FORMAT)}{target.suffix}"
 
 
-def _unique_backup_path(directory: Path, name: str) -> Path:
-    """Find a free path for a backup file, resolving same-second collisions.
+def _claim_backup_path(directory: Path, name: str, source: Path) -> Path:
+    """Hard-link a finished backup copy into the first free name, atomically.
+
+    ``os.link`` fails with :class:`FileExistsError` rather than
+    clobbering, which is what makes this safe against a concurrent
+    ``mesh db backup``: an ``exists()`` check followed by
+    ``os.replace`` would let two processes agree on one name and
+    silently lose one of the two copies. The link is made only after
+    ``source`` is a complete, correctly-moded copy, so a partial backup
+    can never appear under a final name.
 
     Args:
         directory: The backup directory.
         name: The proposed backup file name, from :func:`backup_name`.
+        source: The completed temp copy to link into place. Unlinked on
+            success, leaving exactly one name for the new inode.
 
     Returns:
-        ``directory / name`` if free; otherwise ``directory / "<stem>-<n><suffix>"``
-        for the smallest positive ``n`` that is free.
+        The path the backup now occupies -- ``directory / name`` if it
+        was free, otherwise ``directory / "<stem>-<n><suffix>"`` for the
+        smallest positive ``n`` that was free.
+
+    Raises:
+        OSError: If linking fails for any reason other than the
+            candidate name already existing.
     """
-    candidate = directory / name
-    if not candidate.exists():
-        return candidate
-    stem, suffix = candidate.stem, candidate.suffix
-    counter = 1
+    base = directory / name
+    stem, suffix = base.stem, base.suffix
+    candidate = base
+    counter = 0
     while True:
-        candidate = directory / f"{stem}-{counter}{suffix}"
-        if not candidate.exists():
-            return candidate
-        counter += 1
+        try:
+            os.link(source, candidate)
+        except FileExistsError:
+            counter += 1
+            candidate = directory / f"{stem}-{counter}{suffix}"
+            continue
+        source.unlink()
+        return candidate
 
 
 def create_backup(
@@ -199,10 +225,8 @@ def create_backup(
         _logger.debug("Failed to chmod backup directory %s: %s", resolved_dir, exc)
 
     when = _normalize_utc(now)
-    destination = _unique_backup_path(resolved_dir, backup_name(target, when))
-    tmp_destination = destination.with_name(
-        f".{destination.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
-    )
+    name = backup_name(target, when)
+    tmp_destination = resolved_dir / f".{name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
     try:
         shutil.copy2(target, tmp_destination)
         # Mode is set on the temp file, before it becomes visible under the
@@ -212,17 +236,18 @@ def create_backup(
             tmp_destination.chmod(_FILE_MODE)
         except OSError as chmod_exc:
             _logger.debug("Failed to chmod backup %s: %s", tmp_destination, chmod_exc)
-        tmp_destination.replace(destination)
+        destination = _claim_backup_path(resolved_dir, name, tmp_destination)
     except OSError as exc:
         with contextlib.suppress(OSError):
             tmp_destination.unlink()
         raise AtomicWriteError(
-            f"Failed to back up {target} to {destination}: {exc}", path=str(target)
+            f"Failed to back up {target} into {resolved_dir} as {name}: {exc}", path=str(target)
         ) from exc
 
     # Captured before pruning: two backups can share the same embedded
-    # (second-resolution) timestamp, so the one just created is not
-    # guaranteed to survive a subsequent prune -- see _backup_sort_key.
+    # timestamp when the caller passes an explicit `now=`, so the one just
+    # created is not guaranteed to survive a subsequent prune -- see
+    # _backup_sort_key.
     size_bytes = destination.stat().st_size
     prune_backups(target, backup_dir=resolved_dir, retention=retention)
 
@@ -238,8 +263,9 @@ def _parse_backup_timestamp(name: str, target: Path) -> datetime | None:
     """Extract the embedded timestamp from a backup file name, if possible.
 
     Tolerates a trailing collision suffix (``-N``) from
-    :func:`_unique_backup_path`, which is not itself part of the
-    timestamp.
+    :func:`_claim_backup_path`, which is not itself part of the
+    timestamp. Accepts both :data:`BACKUP_TIMESTAMP_FORMAT` and the
+    legacy second-resolution format backups may still carry on disk.
 
     Args:
         name: The backup file's bare name (no directory component).
@@ -257,25 +283,28 @@ def _parse_backup_timestamp(name: str, target: Path) -> datetime | None:
     if target.suffix and remainder.endswith(target.suffix):
         remainder = remainder[: -len(target.suffix)]
     token = remainder.split("-", 1)[0]
-    try:
-        return datetime.strptime(token, BACKUP_TIMESTAMP_FORMAT).replace(tzinfo=UTC)
-    except ValueError:
-        return None
+    for fmt in (BACKUP_TIMESTAMP_FORMAT, _LEGACY_BACKUP_TIMESTAMP_FORMAT):
+        try:
+            return datetime.strptime(token, fmt).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+    return None
 
 
 def _backup_sort_key(path: Path, target: Path) -> tuple[datetime, float]:
     """Build a newest-first sort key for one backup file.
 
-    The embedded timestamp only has second resolution, so two backups
-    created within the same second can share one; ``shutil.copy2``
-    (used by :func:`create_backup`) preserves ``target``'s mtime onto
-    each backup, and since ``target``'s mtime advances between writes,
-    that mtime is normally a finer-grained tiebreaker for creation
-    order. A backup collision suffix from :func:`_unique_backup_path`
-    is deliberately *not* used for ordering: once an older backup
-    sharing that base name is pruned, a later backup can be assigned
-    the same freed-up suffix, which would make counter-based ordering
-    wrong.
+    The embedded timestamp now has microsecond resolution, so two
+    backups share one only when the caller passes an explicit ``now=``
+    or a backup carries the legacy second-resolution format;
+    ``shutil.copy2`` (used by :func:`create_backup`) preserves
+    ``target``'s mtime onto each backup, and since ``target``'s mtime
+    advances between writes, that mtime is normally a finer-grained
+    tiebreaker for creation order. A backup collision suffix from
+    :func:`_claim_backup_path` is deliberately *not* used for ordering:
+    once an older backup sharing that base name is pruned, a later
+    backup can be assigned the same freed-up suffix, which would make
+    counter-based ordering wrong.
 
     This is a best-effort tiebreak, not a hard guarantee: on a
     filesystem/clock whose mtime resolution is coarser than the actual
