@@ -4,9 +4,9 @@ Unlike loranet.pl's single bulk dump, lorastats.pl's ``/API/{region}/Nodes/
 JSON`` endpoint supports server-side filtering via a ``?node=<hex>`` query
 parameter -- verified to shrink a ~1.84 MB bulk region dump down to a
 ~150-byte filtered response. This module therefore queries per node
-rather than pulling region dumps (:meth:`LorastatsSource.fetch_nodes` must
-never use :meth:`LorastatsSource.fetch_region`, which exists only for
-completeness).
+rather than pulling region dumps, and deliberately exposes no bulk-dump
+method at all: lorastats.pl's terms treat bulk scraping as grounds for an
+IP ban, so the absence is the safeguard.
 
 Two behaviors verified live and worth restating here because they drive
 this module's design:
@@ -213,48 +213,18 @@ class LorastatsSource(BaseHTTPDataSource):
             record = _match_record(records, nid)
             if record is None:
                 continue
-            return parse_node(record, region=candidate, observed_at=datetime.now(tz=UTC))
-        return None
-
-    def fetch_region(
-        self, region: str, *, force_refresh: bool | None = None
-    ) -> dict[NodeId, NodeObservation]:
-        """Fetch the full, unfiltered dump for one region.
-
-        Exists for completeness only -- :meth:`fetch_nodes` must never
-        call this, since the bulk region dump (~1.84 MB) is exactly what
-        the per-node ``?node=`` filter (~150 B per response) exists to
-        avoid.
-
-        Args:
-            region: The region to fetch. Validated before use.
-            force_refresh: Whether to bypass the HTTP cache read.
-
-        Returns:
-            A mapping from every successfully parsed record's node id to
-            its observation. A malformed record is skipped, not fatal.
-
-        Raises:
-            meshprovision.errors.SettingsError: If ``region`` does not
-                match :data:`REGION_PATTERN`.
-            meshprovision.errors.InvalidResponseError: If the response
-                body does not parse as a JSON array.
-            meshprovision.errors.HttpError: If the request itself fails.
-        """
-        (validated,) = validate_regions((region,))
-        url = f"{self._base_url}{LORASTATS_NODES_PATH.format(region=validated)}"
-        payload = self.get_json(url, force_refresh=force_refresh)
-        records = require_json_list(payload, url=url, source=self.name)
-        observed_at = datetime.now(tz=UTC)
-
-        result: dict[NodeId, NodeObservation] = {}
-        for record in records:
-            if not isinstance(record, dict):
+            observation = parse_node(record, region=candidate, observed_at=datetime.now(tz=UTC))
+            if observation is None:
                 continue
-            observation = parse_node(record, region=validated, observed_at=observed_at)
-            if observation is not None:
-                result[observation.node_id] = observation
-        return result
+            if observation.node_id != nid:
+                _logger.warning(
+                    "lorastats returned a record for %s in response to a query for %s; ignoring",
+                    observation.node_id.hex,
+                    nid.hex,
+                )
+                continue
+            return observation
+        return None
 
     def node_status(self, node_id: NodeIdLike, *, force_refresh: bool | None = None) -> bool | None:
         """Check a node's health via the ``/Node/{id}/Status`` endpoint.
@@ -299,16 +269,18 @@ class LorastatsSource(BaseHTTPDataSource):
 
 
 def _match_record(records: list[Any], nid: NodeId) -> Mapping[str, Any] | None:
-    """Pick the record whose ``NodeId`` matches ``nid``, or fall back to the first.
+    """Pick the record whose ``NodeId`` matches ``nid``.
 
     Args:
         records: The decoded JSON array from a ``Nodes/JSON`` response.
         nid: The id being looked up.
 
     Returns:
-        The exactly-matching record when one is found; otherwise the
-        first well-formed (``dict``) record, logged at DEBUG; ``None``
-        when ``records`` contains no ``dict`` entries at all.
+        The exactly-matching record, or ``None`` when no record's
+        ``NodeId`` parses to ``nid`` (logged at DEBUG). A record for a
+        *different* node is never returned: filing another node's
+        telemetry under the requested id is worse than reporting the
+        node as not found.
     """
     for record in records:
         if not isinstance(record, dict):
@@ -321,12 +293,7 @@ def _match_record(records: list[Any], nid: NodeId) -> Mapping[str, Any] | None:
                 return record
         except NodeIdError:
             continue
-    for record in records:
-        if isinstance(record, dict):
-            _logger.debug(
-                "lorastats returned no exact NodeId match for %s; using the first record", nid.hex
-            )
-            return record
+    _logger.debug("lorastats returned no record matching NodeId %s", nid.hex)
     return None
 
 

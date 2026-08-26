@@ -49,6 +49,10 @@ class DataSource(Protocol):
     ``status/merge.py`` (a later layer) consumes only this protocol, so it
     never sees a source-specific shape -- adding a third source (for
     example MQTT) later requires no change to the merge layer.
+
+    An implementation must never return an observation whose ``node_id``
+    differs from the id it was asked about. Callers file observations
+    under the requested id and do not re-check.
     """
 
     @property

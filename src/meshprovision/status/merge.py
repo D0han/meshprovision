@@ -511,8 +511,10 @@ def merge_observations(
     Args:
         node_id: The node id being merged.
         observations: Every source's observation of this node (any
-            order; each is expected to already carry this ``node_id``,
-            though that is not re-checked here).
+            order; each is expected to already carry this ``node_id`` --
+            :class:`~meshprovision.datasources.base.DataSource` documents
+            the invariant that producers must uphold; not re-checked
+            here).
         record: This node's ``Nodes`` sheet row, when it exists in the
             database.
         now: The current time. Must be timezone-aware.

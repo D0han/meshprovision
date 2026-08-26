@@ -201,8 +201,20 @@ def test_lorastats_fetch_node_matches_by_node_id(tmp_path: Path) -> None:
 
 
 @respx.mock
-def test_lorastats_fetch_node_falls_back_to_first_record(tmp_path: Path) -> None:
+def test_lorastats_fetch_node_ignores_a_record_for_a_different_node(tmp_path: Path) -> None:
     records = [{"NodeId": "aaaaaaaa", "ShortName": "fallback"}]
+    route = respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(200, json=records))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid")
+    assert source.fetch_node("deadbe01") is None
+    assert route.called  # the request was made; None is a match failure, not a short-circuit
+
+
+@respx.mock
+def test_lorastats_fetch_node_tolerant_id_forms_still_match(tmp_path: Path) -> None:
+    records = [{"NodeId": "!DEADBE01", "ShortName": "found"}]
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
@@ -210,7 +222,35 @@ def test_lorastats_fetch_node_falls_back_to_first_record(tmp_path: Path) -> None
     source = LorastatsSource(client, contact="t@example.invalid")
     obs = source.fetch_node("deadbe01")
     assert obs is not None
-    assert obs.short_name == "fallback"
+    assert obs.short_name == "found"
+
+
+@respx.mock
+def test_lorastats_fetch_node_tries_next_region_after_a_malformed_record(tmp_path: Path) -> None:
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(200, json=[{"ShortName": "no id"}]))
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='XX')}"
+    ).mock(return_value=httpx.Response(200, json=[{"NodeId": "deadbe01", "ShortName": "found"}]))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL", "XX"))
+    obs = source.fetch_node("deadbe01")
+    assert obs is not None
+    assert obs.short_name == "found"
+
+
+@respx.mock
+def test_lorastats_fetch_nodes_never_files_an_observation_under_a_foreign_id(
+    tmp_path: Path,
+) -> None:
+    records = [{"NodeId": "deadbeef", "ShortName": "wrong node"}]
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(200, json=records))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid")
+    assert source.fetch_nodes([NodeId.from_hex("cafefeed")]) == {}
 
 
 @respx.mock
