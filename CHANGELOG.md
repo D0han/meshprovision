@@ -42,8 +42,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README covering installation, the template and `.ods` walkthroughs, every
   command, the security model, and Linux Mint troubleshooting.
 
+### Fixed
+
+- `mesh status`'s lorastats source no longer falls back to an unrelated
+  record when no exact node-id match is found in a per-node query response;
+  a non-matching record is now treated as "no observation" rather than
+  filed under the wrong node's id. The unused, upstream-IP-ban-risking
+  `fetch_region` bulk-dump method has been removed.
+- Concurrent `mesh provision`, `mesh admin bootstrap`, and `mesh admin
+  import` runs against the same database no longer silently discard each
+  other's writes. An advisory sidecar file lock (`<database>.lock`) now
+  serializes the load-modify-save cycle; a writer that cannot acquire it
+  within `MESHPROVISION_LOCK_TIMEOUT` seconds (default 5) fails fast with
+  `DatabaseLockedError` (exit code 4) instead of racing. `--dry-run` never
+  takes the lock; read-only commands (`mesh status`, `mesh db verify`) are
+  never blocked by it. Platforms without `fcntl` degrade to a documented
+  no-op with a one-time warning, rather than failing outright.
+- `mesh provision`'s post-write verification no longer crashes with an
+  unhandled traceback if the device reconnects successfully but a
+  subsequent read fails; it now reports the same safe "uncertain, database
+  not updated" outcome as a failed reconnect, with a distinct message.
+- Backup files are now written atomically (temp file, then renamed into
+  place) instead of via a direct copy, so a crash mid-backup can no longer
+  leave a truncated file indistinguishable from a good one. Backup
+  pruning and listing now tolerate losing a race to a concurrent writer
+  instead of aborting the operation that triggered them.
+- `mesh db verify` now surfaces a hand-edited, LibreOffice-coerced text
+  cell in its warnings list (including `--json`), not only in the log.
+- Deleted `provisioning/repair.py`'s unused, already-diverged
+  `build_repair_plan`/`repair_node`/`reconcile_record` functions (no
+  production caller; `mesh provision` already covers drift repair via the
+  functions that remain) along with a stale docstring warning that
+  described a bug those functions no longer had.
+
 ### Security
 
+- The `security.is_managed` lockdown safety gate's "admin key has a
+  private counterpart" check now cryptographically verifies that the
+  private key actually corresponds to its claimed public key, instead of
+  only checking that a row exists in the database. This closes a path
+  where a hand-edited spreadsheet containing a mismatched key pair could
+  lock a device (`--allow-lockdown`) with an admin key nobody could
+  actually use to administer it, recoverable only by a physical factory
+  reset. `mesh db verify` gained a matching `admin_key_mismatch` check.
+- The database file and its backups are now written at permission mode
+  `0600` (owner-only), matching the hardening already applied to the HTTP
+  cache and backup directory, instead of inheriting the process umask.
 - X25519 keypairs are generated with `cryptography`'s
   `X25519PrivateKey.generate()`, matching the CVE-2025-52464 advisory's own
   recommendation. Factory keys are treated as compromised and regenerated.
