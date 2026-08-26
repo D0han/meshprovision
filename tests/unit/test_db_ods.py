@@ -512,7 +512,7 @@ def test_utc_timestamp_round_trip() -> None:
     assert schema.utc_timestamp(dt) == text
 
     naive_treated_as_utc = schema.parse_timestamp("2026-08-25T03:14:10")
-    assert naive_treated_as_utc.tzinfo is not None
+    assert naive_treated_as_utc.tzinfo is UTC
 
 
 def test_validate_row_fills_every_column() -> None:

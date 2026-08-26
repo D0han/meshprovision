@@ -90,7 +90,8 @@ class TestFingerprintRedact:
         raw = b"y" * 32
         assert fingerprint(raw) == fingerprint(bytearray(raw))
         assert fingerprint(raw) == fingerprint(SecretBytes(raw))
-        assert fingerprint("some string") is not None
+        assert fingerprint("some string") == fingerprint(b"some string")
+        assert fingerprint("kanał-ä") == fingerprint("kanał-ä".encode())
 
     def test_fingerprint_type_error_otherwise(self) -> None:
         with pytest.raises(TypeError):
