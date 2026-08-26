@@ -68,6 +68,48 @@ def test_db_verify_unresolved_template_ref_exits_four(
     assert "unresolved_template_ref" in kinds
 
 
+def test_db_verify_degrades_when_the_template_exceeds_the_admin_key_limit(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    write_template: Callable[..., Path],
+) -> None:
+    node = NodeRecord(
+        node_id="deadbe01",
+        short_name="MT00",
+        region="EU_868",
+        authorized_admin_keys=("MISSING_pub",),
+    )
+    seed_db(nodes=[node])
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["A", "B", "C", "D"]))
+
+    result = invoke(runner, ["db", "verify", "--json"], env)
+
+    # Exit 4 (the database's own findings), not 5 (the provisioning-domain
+    # error the unguarded AdminKeyCapacityError produced).
+    assert result.exit_code == 4
+    document = json.loads(result.stdout)
+    kinds = {problem["kind"] for problem in document["problems"]}
+    assert "unresolved_admin_ref" in kinds
+    assert "Could not load template for cross-checking" in result.stderr
+    assert "at most 3" in result.stderr
+
+
+def test_db_verify_degrades_when_the_template_is_unparseable(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("not: [a valid: template", encoding="utf-8")
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(broken)
+
+    result = invoke(runner, ["db", "verify"], env)
+
+    assert result.exit_code == 0
+    assert "Could not load template for cross-checking" in result.stderr
+    assert "Database OK." in result.stderr
+
+
 def test_db_verify_duplicate_public_key_across_nodes_exits_six(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:

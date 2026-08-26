@@ -28,7 +28,13 @@ from meshprovision.config.template import admin_public_key_ref
 from meshprovision.crypto import weakkeys
 from meshprovision.db import atomic_writer, schema
 from meshprovision.db.schema import KeyType
-from meshprovision.errors import AtomicWriteError, ConfigError, ExitCode, KeyMaterialError
+from meshprovision.errors import (
+    AdminKeyCapacityError,
+    AtomicWriteError,
+    ConfigError,
+    ExitCode,
+    KeyMaterialError,
+)
 from meshprovision.nodeid import NodeId
 
 if TYPE_CHECKING:
@@ -375,7 +381,15 @@ def db_verify(ctx: CliContext, *, strict: bool, json_output: bool) -> None:
         template: TemplateConfig | None
         try:
             template = ctx.load_template()
-        except ConfigError as exc:
+        # Any template failure must degrade to a warning, never abort: verifying
+        # a database has to work without a usable template. AdminKeyCapacityError
+        # is a ProvisioningError, not a ConfigError, so ConfigError alone misses
+        # it -- extend this tuple if a new TemplateConfig validator raises outside
+        # the ConfigError branch. Deliberately not `except MeshprovisionError`:
+        # ctx.load_template() runs inside the open database session, and a broad
+        # catch here would downgrade a real DbError into "template unavailable"
+        # and then report a falsely clean verification.
+        except (ConfigError, AdminKeyCapacityError) as exc:
             ctx.warn(f"Could not load template for cross-checking: {exc.user_message}")
             template = None
 
