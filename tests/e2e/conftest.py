@@ -147,6 +147,7 @@ class FakeMeshInterface:
         firmware_version: str = FAKE_FIRMWARE,
         drop_security_keys: bool = False,
         fail_sections: frozenset[str] = frozenset(),
+        fail_reads_after_write: bool = False,
     ) -> None:
         """Initialize a fake device at factory or custom naming defaults.
 
@@ -165,10 +166,17 @@ class FakeMeshInterface:
                 firmware issue #7449.
             fail_sections: Section names whose write raises
                 ``RuntimeError``, simulating a device-side write failure.
+            fail_reads_after_write: When ``True``, ``getMyUser()`` raises
+                ``RuntimeError`` once at least one section has been
+                written -- simulating a flaky serial read during the
+                post-write verify reconnect. Gated on a write having
+                already happened so the *initial* detection pass (before
+                any write) is unaffected.
         """
         self.nid = NodeId.from_hex(node_id)
         self.drop_security_keys = drop_security_keys
         self.fail_sections = fail_sections
+        self.fail_reads_after_write = fail_reads_after_write
         self.closed = 0
 
         self.myInfo = SimpleNamespace(my_node_num=self.nid.num)
@@ -198,7 +206,15 @@ class FakeMeshInterface:
         Returns:
             A shallow copy of :attr:`user`, so a caller can never mutate
             this interface's own state through the returned mapping.
+
+        Raises:
+            RuntimeError: If :attr:`fail_reads_after_write` is set and at
+                least one config section has already been written --
+                simulates a flaky serial read during the post-write
+                verify reconnect.
         """
+        if self.fail_reads_after_write and self.localNode.written_sections:
+            raise RuntimeError("serial read timed out")
         return dict(self.user)
 
     def getPublicKey(self) -> str | None:  # noqa: N802 -- matches MeshInterface's spelling

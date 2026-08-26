@@ -52,6 +52,7 @@ from meshprovision.db.schema import BLE_PIN_LENGTH
 from meshprovision.errors import (
     ConnectionBackendError,
     ConnectionFailedError,
+    DetectionError,
     EnumMappingError,
     ExitCode,
     PlanConflictError,
@@ -1010,8 +1011,23 @@ def apply_plan(
             node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
         )
 
-    live_after = detect.read_live_config(fresh_iface)
-    device_pub = fresh_iface.getPublicKey()
+    from meshtastic.mesh_interface import MeshInterface as _MeshInterface
+
+    try:
+        live_after = detect.read_live_config(fresh_iface)
+        device_pub = fresh_iface.getPublicKey()
+    except (DetectionError, *_DEVICE_EXCEPTIONS, _MeshInterface.MeshInterfaceError) as exc:
+        results.append(
+            WriteResult(
+                "<verify>",
+                WriteStatus.FAILED,
+                f"Reconnected, but could not read back the device state to verify: {exc}",
+            )
+        )
+        return ApplyOutcome(
+            node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
+        )
+
     results.extend(verify_plan(plan, live_after, keypair=keypair, device_public_key=device_pub))
 
     outcome = ApplyOutcome(

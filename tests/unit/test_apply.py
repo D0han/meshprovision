@@ -488,6 +488,92 @@ def test_apply_plan_reports_uncertain_when_the_reconnect_fails(tmp_path, make_li
     assert verify_results[0].status == WriteStatus.FAILED
     assert verify_results[0].message == "Could not reconnect to verify the writes"
 
+
+class _FakeIfaceRaisesOnUser(_FakeIfaceForApply):
+    """A fresh interface whose reconnect succeeded but whose user read fails.
+
+    ``getMyUser`` is the read ``detect.read_live_config`` actually calls
+    unconditionally -- ``getMyNodeInfo`` is only consulted when ``myInfo``
+    is ``None``, which it never is on this fake -- so this is the read
+    that must fail to reach the ``DetectionError`` branch under test.
+    """
+
+    def getMyUser(self) -> dict[str, str]:  # noqa: N802 -- real MeshInterface method name
+        raise ValueError("serial read timed out")
+
+
+class _FakeIfaceRaisesOnPublicKey(_FakeIfaceForApply):
+    """A fresh interface whose reconnect succeeded but whose key read fails."""
+
+    def getPublicKey(self) -> str | None:  # noqa: N802 -- real MeshInterface method name
+        raise RuntimeError("serial read timed out")
+
+
+class _ReadFailsAfterReconnectSession:
+    """A session whose reconnect succeeds but returns a fresh, failing interface."""
+
+    def __init__(self, write_iface: _FakeIfaceForApply, fresh_iface: _FakeIfaceForApply) -> None:
+        self._write_iface = write_iface
+        self._fresh_iface = fresh_iface
+
+    @property
+    def interface(self) -> _FakeIfaceForApply:
+        return self._write_iface
+
+    def describe(self) -> str:
+        return "fake (reconnect succeeds, post-reconnect read fails)"
+
+    def refresh(self) -> _FakeIfaceForApply:
+        return self._fresh_iface
+
+
+def test_verify_reports_uncertain_when_the_post_reconnect_read_fails(tmp_path, make_live) -> None:
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    write_iface = _FakeIfaceForApply()
+    fresh_iface = _FakeIfaceRaisesOnUser()
+    session = _ReadFailsAfterReconnectSession(write_iface, fresh_iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert outcome.dry_run is False
+    assert outcome.verified is True
+    assert outcome.uncertain is True
+    assert outcome.may_update_database is False
+
+    verify_results = [r for r in outcome.results if r.section == "<verify>"]
+    assert len(verify_results) == 1
+    assert verify_results[0].status == WriteStatus.FAILED
+    assert verify_results[0].message != "Could not reconnect to verify the writes"
+    assert "could not read back the device state to verify" in verify_results[0].message
+
+
+def test_verify_reports_uncertain_when_get_public_key_raises(tmp_path, make_live) -> None:
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    write_iface = _FakeIfaceForApply()
+    fresh_iface = _FakeIfaceRaisesOnPublicKey()
+    session = _ReadFailsAfterReconnectSession(write_iface, fresh_iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert outcome.dry_run is False
+    assert outcome.verified is True
+    assert outcome.uncertain is True
+    assert outcome.may_update_database is False
+
+    verify_results = [r for r in outcome.results if r.section == "<verify>"]
+    assert len(verify_results) == 1
+    assert verify_results[0].status == WriteStatus.FAILED
+    assert verify_results[0].message != "Could not reconnect to verify the writes"
+    assert "could not read back the device state to verify" in verify_results[0].message
+
     db_path = tmp_path / "db.ods"
     db = OdsDatabase.create(db_path)
     nodes = NodeRepository(db)

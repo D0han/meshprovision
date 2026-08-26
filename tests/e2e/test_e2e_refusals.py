@@ -160,6 +160,24 @@ def test_transactional_write_failure_drop_security_keys(
     assert not backups_dir.exists() or not any(backups_dir.iterdir())
 
 
+def test_post_reconnect_verify_read_failure_leaves_the_database_untouched(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, tmp_path: Path
+) -> None:
+    bus.use(FakeMeshInterface("deadbe01", fail_reads_after_write=True))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code != 0
+    assert "UNCERTAIN" in result.stderr
+    assert "the database was NOT updated" in result.stderr
+    assert db_fingerprint(db_path) == before
+
+    backups_dir = tmp_path / "data" / "backups"
+    assert not backups_dir.exists() or not any(backups_dir.iterdir())
+
+
 def test_transactional_write_failure_section_raises(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, tmp_path: Path
 ) -> None:
