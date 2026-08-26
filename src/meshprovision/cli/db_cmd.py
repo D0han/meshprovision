@@ -15,6 +15,7 @@ never rewrites the database itself.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,8 +45,9 @@ class DbProblem:
     Attributes:
         kind: One of ``"integrity_warning"``, ``"unresolved_admin_ref"``,
             ``"unresolved_template_ref"``, ``"duplicate_public_key"``,
-            ``"alias_public_key"``, ``"weak_key"``, or
-            ``"admin_key_mismatch"``.
+            ``"alias_public_key"``, ``"weak_key"``,
+            ``"admin_key_mismatch"``, or ``"insecure_permissions"`` (POSIX
+            only).
         severity: ``"critical"``, ``"error"``, or ``"warning"``.
         message: Human-readable description of the finding.
         sheet: Name of the offending sheet, when known.
@@ -174,6 +176,21 @@ def verify_database(
         The full :class:`VerifyReport`.
     """
     problems: list[DbProblem] = []
+
+    if os.name == "posix":
+        mode = db.path.stat().st_mode & 0o777
+        if mode & 0o077:
+            problems.append(
+                DbProblem(
+                    kind="insecure_permissions",
+                    severity="warning",
+                    message=(
+                        f"Database file mode is {mode:04o}; it holds private key material "
+                        f"and should be 0600. Run `chmod 600 {db.path}`."
+                    ),
+                    ref=str(db.path),
+                )
+            )
 
     for warning in db.db.warnings:
         problems.append(

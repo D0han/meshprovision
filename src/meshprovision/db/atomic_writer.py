@@ -4,13 +4,21 @@ This module has no knowledge of the ODS format at all -- it operates on
 raw ``bytes``. The write pattern is: write to a temp file in the *same*
 directory as the target (so the final rename is on one filesystem and
 therefore atomic), copy the previous version of the target into a
-timestamped backup directory, then ``os.replace()`` the temp file into
-place. Order matters: the backup is taken **before** the replace, so an
-interrupted or failed replace never loses the pre-write state.
+timestamped backup directory (itself via its own temp-then-rename, so a
+partially-copied backup can never appear under a final name), then
+``os.replace()`` the temp file into place. Order matters: the backup is
+taken **before** the replace, so an interrupted or failed replace never
+loses the pre-write state.
 
 Backups default to ``data/backups/`` (already covered by ``.gitignore``)
 with a retention limit, since key material lives in the ODS this module
-is typically used to protect.
+is typically used to protect. Both the target file and each backup are
+created with mode ``0o600``: the target's temp file is pre-created at
+that mode before it is handed to the caller, and ``os.replace`` carries
+it onto the target unchanged; each backup's temp copy is chmodded to the
+same mode before its own rename. There is no window in which a
+fully-written database or a complete backup of one sits at the process
+umask, and a brand-new database gets the same treatment as a rewrite.
 """
 
 from __future__ import annotations
@@ -55,6 +63,8 @@ BACKUP_TIMESTAMP_FORMAT: Final[str] = "%Y%m%dT%H%M%SZ"
 """``strftime``/``strptime`` format embedded in a backup file's name."""
 
 _BACKUP_DIR_MODE: Final[int] = 0o700
+
+_FILE_MODE: Final[int] = 0o600
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,9 +200,22 @@ def create_backup(
 
     when = _normalize_utc(now)
     destination = _unique_backup_path(resolved_dir, backup_name(target, when))
+    tmp_destination = destination.with_name(
+        f".{destination.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    )
     try:
-        shutil.copy2(target, destination)
+        shutil.copy2(target, tmp_destination)
+        # Mode is set on the temp file, before it becomes visible under the
+        # final name: a complete copy of the key material must never exist
+        # at the process umask, even briefly.
+        try:
+            tmp_destination.chmod(_FILE_MODE)
+        except OSError as chmod_exc:
+            _logger.debug("Failed to chmod backup %s: %s", tmp_destination, chmod_exc)
+        tmp_destination.replace(destination)
     except OSError as exc:
+        with contextlib.suppress(OSError):
+            tmp_destination.unlink()
         raise AtomicWriteError(
             f"Failed to back up {target} to {destination}: {exc}", path=str(target)
         ) from exc
@@ -371,12 +394,14 @@ def atomic_write(
             true. Defaults to the current time.
 
     Yields:
-        A temporary file path in ``target``'s directory. The caller must
-        write the full desired contents of ``target`` to this path.
+        A temporary file path in ``target``'s directory, already created
+        with mode ``0o600``. The caller must write the full desired
+        contents of ``target`` to this path; both ``open("wb")`` and
+        ``write_bytes`` truncate without changing the mode.
 
     Raises:
-        AtomicWriteError: If creating the backup or replacing ``target``
-            fails.
+        AtomicWriteError: If creating the temporary file, creating the
+            backup, or replacing ``target`` fails.
     """
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -386,6 +411,12 @@ def atomic_write(
         ) from exc
 
     tmp_path = target.parent / f".{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        os.close(os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, _FILE_MODE))
+    except OSError as exc:
+        raise AtomicWriteError(
+            f"Failed to create temporary file {tmp_path}: {exc}", path=str(target)
+        ) from exc
     try:
         yield tmp_path
     except BaseException:

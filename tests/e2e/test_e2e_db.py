@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -135,6 +136,24 @@ def test_db_verify_does_not_report_an_orphan_private_key_as_a_mismatch(
     document = json.loads(result.stdout)
     kinds = {problem["kind"] for problem in document["problems"]}
     assert "admin_key_mismatch" not in kinds
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_db_verify_insecure_permissions_is_a_warning_unless_strict(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    db_path.chmod(0o644)
+
+    lenient = invoke(runner, ["db", "verify", "--json"], env)
+    assert lenient.exit_code == 0
+    lenient_doc = json.loads(lenient.stdout)
+    problem = next(p for p in lenient_doc["problems"] if p["kind"] == "insecure_permissions")
+    assert problem["severity"] == "warning"
+
+    strict = invoke(runner, ["db", "verify", "--strict"], env)
+    assert strict.exit_code == 4
 
 
 def test_db_backup_create_and_list(

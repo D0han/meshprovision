@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -174,3 +176,120 @@ def test_backup_directory_cannot_be_created_raises(tmp_path: Path) -> None:
 
     with pytest.raises(AtomicWriteError):
         create_backup(target, backup_dir=bad_backup_dir)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_atomic_write_creates_a_new_file_with_owner_only_permissions(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    old_umask = os.umask(0o000)
+    try:
+        write_bytes_atomic(target, b"x", backup=False, backup_dir=tmp_path / "backups")
+    finally:
+        os.umask(old_umask)
+
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_atomic_write_rewrites_an_existing_file_with_owner_only_permissions(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "data.txt"
+    target.write_bytes(b"old")
+    target.chmod(0o644)
+
+    write_bytes_atomic(target, b"new", backup=False, backup_dir=tmp_path / "backups")
+
+    assert target.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_temp_file_is_not_world_readable_while_the_caller_holds_it(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    with atomic_write(target, backup=False, backup_dir=tmp_path / "backups") as tmp:
+        assert tmp.stat().st_mode & 0o777 == 0o600
+        tmp.write_bytes(b"hello")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_backup_files_are_owner_only(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    target.chmod(0o644)
+
+    write_bytes_atomic(target, b"v2", backup=True, backup_dir=backup_dir)
+
+    backups = list_backups(target, backup_dir=backup_dir)
+    assert backups
+    for info in backups:
+        assert info.path.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_backup_is_written_via_a_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    target.chmod(0o644)
+
+    real_copy2 = shutil.copy2
+    seen_dst: list[Path] = []
+
+    def fake_copy2(src: Path, dst: Path, *args: object, **kwargs: object) -> object:
+        seen_dst.append(Path(dst))
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copy2", fake_copy2)
+
+    real_replace = Path.replace
+    modes_at_replace: list[int] = []
+
+    def fake_replace(self: Path, target_path: str | Path) -> Path:
+        modes_at_replace.append(self.stat().st_mode & 0o777)
+        return real_replace(self, target_path)
+
+    monkeypatch.setattr(Path, "replace", fake_replace)
+
+    info = create_backup(target, backup_dir=backup_dir)
+
+    assert info is not None
+    assert len(seen_dst) == 1
+    # The copy lands on a temp path, not the final backup name.
+    assert seen_dst[0] != info.path
+    assert seen_dst[0].parent == backup_dir
+    # The temp file is already 0o600 by the time it is renamed into place --
+    # this is what distinguishes chmod-on-temp-before-replace (correct) from
+    # chmod-on-destination-after-replace (incorrect): both produce the same
+    # *final* mode, but only the correct order satisfies this assertion.
+    assert modes_at_replace == [0o600]
+
+
+def test_failed_backup_copy_leaves_no_stray_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+
+    def failing_copy2(src: Path, dst: Path, *args: object, **kwargs: object) -> object:
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(shutil, "copy2", failing_copy2)
+
+    with pytest.raises(AtomicWriteError):
+        create_backup(target, backup_dir=backup_dir)
+
+    stray = [p for p in backup_dir.iterdir() if ".tmp-" in p.name]
+    assert stray == []
+
+
+def test_backup_preserves_source_mtime(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+
+    info = create_backup(target, backup_dir=backup_dir)
+
+    assert info is not None
+    assert info.path.stat().st_mtime == pytest.approx(target.stat().st_mtime)
