@@ -1,0 +1,104 @@
+# Pre-commit configuration for meshprovision.
+#
+# Run `pre-commit install` once after `pip install -e ".[dev]"`, then
+# `pre-commit run --all-files` to check the whole tree. The two `repo: local`
+# hooks below (mypy, no-tracked-secrets) intentionally use `language: system`
+# — see the comment above that block for why an isolated pre-commit env will
+# not work for this project, and run pre-commit from the venv where you ran
+# `pip install -e ".[dev]"`.
+minimum_pre_commit_version: "3.5.0"
+default_language_version:
+  python: python3
+default_install_hook_types: [pre-commit]
+fail_fast: false
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-yaml
+      - id: end-of-file-fixer
+        # data/nodes_db.example.ods is a zip container (an ODF spreadsheet).
+        # Appending/normalizing a trailing newline in it corrupts the archive
+        # and breaks tests/e2e, so binary ODS files are excluded here.
+        exclude: '\.ods$'
+      - id: trailing-whitespace
+        args: ["--markdown-linebreak-ext=md"]
+        exclude: '\.ods$'
+      - id: check-added-large-files
+        # The largest tracked binary is data/nodes_db.example.ods at ~6.4 KB.
+        # Nothing legitimate in this repo approaches 512 KB; the 12.7 MB
+        # loranet.pl dump lives only in the gitignored HTTP cache.
+        args: ["--maxkb=512"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.4
+    hooks:
+      # No --config or select/ignore args here: every rule lives in
+      # pyproject.toml's [tool.ruff] table (line-length 100, target py311,
+      # the full rule selection, the google docstring convention, and the
+      # tests/** + scripts/** per-file-ignores). Ruff discovers that
+      # automatically from the repo root.
+      - id: ruff-check
+        args: ["--fix", "--exit-non-zero-on-fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        # No --baseline argument: a baseline would require a tracked
+        # .secrets.baseline file, which nobody can regenerate in this
+        # environment and which is not part of this project's file list.
+        #
+        # The three exclusions below are load-bearing, published, PUBLIC,
+        # non-secret constants — not a blanket carve-out — and must never be
+        # widened blindly by a future reader:
+        #   * data/known_bad_keys.txt holds 7 base64-encoded 32-byte X25519
+        #     small-order PUBLIC points (lines 36-54). detect-secrets'
+        #     Base64HighEntropyString detector (limit 4.5) flags high-entropy
+        #     base64 of that shape.
+        #   * src/meshprovision/crypto/weakkeys.py lines 123-153 hold the same
+        #     7 points as 64-char hex literals; HexHighEntropyString
+        #     (limit 3.0) flags those.
+        #   * *.ods files are zip containers; the example DB embeds base64
+        #     placeholder key material.
+        exclude: |
+          (?x)^(
+            data/known_bad_keys\.txt|
+            src/meshprovision/crypto/weakkeys\.py|
+            .*\.ods
+          )$
+
+  # `language: system` for both hooks below, not an isolated pre-commit env
+  # (e.g. mirrors-mypy), because:
+  #   * mypy --strict on this tree needs the real dependency set installed
+  #     (pydantic v2 models, click, structlog, httpx, rich, odfpy,
+  #     meshtastic). Reproducing that via `additional_dependencies` would
+  #     duplicate pyproject.toml's dependency list, drift from it over time,
+  #     and pull the heavy `meshtastic` dependency into a second env.
+  #   * The no-tracked-secrets guard runs the real pytest test at
+  #     tests/unit/test_no_tracked_secrets.py. That test itself only needs
+  #     stdlib + pytest, but pytest collection first imports
+  #     tests/conftest.py, which imports meshprovision (it stubs time.sleep
+  #     before the first meshprovision import). An isolated env with only
+  #     pytest installed would fail at collection. It must run in the
+  #     project venv.
+  #   * Consequence, documented in the README: run pre-commit from the venv
+  #     where `pip install -e ".[dev]"` was performed.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy --strict
+        entry: mypy
+        args: ["--strict", "src"]
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: false
+        require_serial: true
+      - id: no-tracked-secrets
+        name: no tracked secrets (git ls-files guard)
+        entry: python -m pytest
+        args: ["-q", "tests/unit/test_no_tracked_secrets.py"]
+        language: system
+        pass_filenames: false
+        always_run: true

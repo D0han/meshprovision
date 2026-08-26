@@ -1,0 +1,45 @@
+# Dependabot configuration for meshprovision.
+#
+# The `pip` ecosystem below reads PEP 621 [project.dependencies] and
+# [project.optional-dependencies] straight out of pyproject.toml; there is no
+# requirements.txt in this repo and none should be added.
+#
+# `Europe/Warsaw` matches the PL-mesh operator this toolkit is built for, and
+# is also the timezone lorastats.pl's naive timestamps are interpreted in.
+#
+# `prefix: "chore"` matches this project's conventional-commit types (feat,
+# fix, refactor, docs, test, chore, perf, ci).
+#
+# There is deliberately no `pre-commit` ecosystem entry here: Dependabot has
+# no pre-commit ecosystem. Hook revisions in .pre-commit-config.yaml are
+# bumped with `pre-commit autoupdate`, which the README documents.
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Warsaw"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "python"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      dev-tooling:
+        patterns: ["ruff", "mypy", "pytest*", "pre-commit", "detect-secrets", "respx", "responses"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Warsaw"
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "github-actions"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"

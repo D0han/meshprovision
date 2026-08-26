@@ -1,0 +1,329 @@
+"""``mesh status`` against respx-mocked loranet.pl and lorastats.pl.
+
+Covers JSON and table output, the HTTP-200-with-HTML soft-404 invalid
+region guard, cache TTL behaviour, ``--watch``, and the read-only mtime
+guarantee.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+import pytest
+
+from meshprovision.nodeid import NodeId
+from tests.e2e.conftest import db_fingerprint, invoke
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import respx
+    from click.testing import CliRunner
+
+    from meshprovision.db.nodes import NodeRecord
+
+pytestmark = pytest.mark.e2e
+
+_SECRET_KEY_NAMES = frozenset({"ble_pin", "key_ref"})
+_BASE64_KEY_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])")
+_SIX_DIGIT_RE = re.compile(r"(?<!\d)\d{6}(?!\d)")
+
+
+def _scan_document(value: object) -> None:
+    """Recursively assert a decoded JSON document names/carries no secret."""
+    if isinstance(value, dict):
+        for key, val in value.items():
+            assert key not in _SECRET_KEY_NAMES
+            _scan_document(val)
+    elif isinstance(value, list):
+        for item in value:
+            _scan_document(item)
+    elif isinstance(value, str):
+        assert not _BASE64_KEY_RE.search(value)
+        assert not _SIX_DIGIT_RE.search(value)
+
+
+def _seed_one_node(seed_db: Callable[..., Path], node_record_cls: type[NodeRecord]) -> str:
+    """Seed the database with one node and return its hex id."""
+    record = node_record_cls(
+        node_id="deadbe01",
+        short_name="MTa1",
+        long_name="Meshtastic MTa1",
+        hw_model="RAK4631",
+        role="CLIENT",
+        region="EU_868",
+    )
+    seed_db(nodes=[record])
+    return "deadbe01"
+
+
+def test_json_run_reports_an_online_node(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}):
+        result = invoke(runner, ["status", "--json"], env)
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert set(document) >= {
+        "generated_at",
+        "thresholds",
+        "counts",
+        "cache",
+        "failures",
+        "nodes",
+    }
+    (node_doc,) = document["nodes"]
+    assert node_doc["availability"] == "online"
+    assert set(node_doc["sources"]) == {"loranet", "lorastats"}
+
+    _scan_document(document)
+
+
+def test_table_run_shows_short_name_and_online_label(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}):
+        result = invoke(runner, ["status"], env)
+
+    assert result.exit_code == 0
+    assert "MTa1" in result.stdout
+    assert "online" in result.stdout
+    assert result.stderr == ""
+
+
+def test_offline_node_exit_code_and_no_fail_on_offline(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    stale = int(time.time()) - 48 * 3600
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": stale}}}):
+        degraded = invoke(runner, ["status", "--json"], env)
+        assert degraded.exit_code == 7
+
+        ok = invoke(runner, ["status", "--json", "--no-fail-on-offline"], env)
+        assert ok.exit_code == 0
+
+
+def test_invalid_region_returns_html_with_http_200(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    with mock_sources(
+        nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}},
+        lorastats_body="<html>API docs</html>",
+        region="NOTAREGION",
+    ):
+        result = invoke(
+            runner,
+            ["--no-cache", "status", "--json", "--region", "NOTAREGION"],
+            env,
+        )
+
+    assert result.exit_code == 7
+    document = json.loads(result.stdout)
+    assert document["failures"]
+    failure = document["failures"][0]
+    assert failure["source"] == "lorastats"
+    assert "did not return JSON" in failure["message"]
+    assert "text/html" in failure["message"]
+    (node_doc,) = document["nodes"]
+    assert "loranet" in node_doc["sources"]
+
+
+def test_cache_behaviour_hits_then_force_refresh(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}) as router:
+        loranet_route = next(r for r in router.routes if "loranet.pl" in str(r.pattern))
+
+        first = invoke(runner, ["status", "--json"], env)
+        assert first.exit_code == 0
+        assert loranet_route.call_count == 1
+
+        second = invoke(runner, ["status", "--json"], env)
+        assert second.exit_code == 0
+        assert loranet_route.call_count == 1
+        second_doc = json.loads(second.stdout)
+        assert second_doc["cache"]["hits"] > 0
+        assert second_doc["cache"]["network_requests"] == 0
+
+        third = invoke(runner, ["--force-refresh", "status", "--json"], env)
+        assert third.exit_code == 0
+        assert loranet_route.call_count == 2
+
+
+def test_watch_two_cache_respecting_polls(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    calls = {"n": 0}
+
+    def fake_sleep(_seconds: float) -> None:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}) as router:
+        loranet_route = next(r for r in router.routes if "loranet.pl" in str(r.pattern))
+        result = invoke(runner, ["status", "--watch", "--interval", "1", "--json"], env)
+        assert loranet_route.call_count == 1
+
+    assert result.stdout.count('"generated_at"') == 2
+    assert "cache: 2 hit(s)" in result.stderr
+    assert result.stderr.rstrip().endswith("Stopped.")
+
+
+def test_read_only_guarantee_across_run_modes(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}):
+        before = db_fingerprint(db_path)
+        invoke(runner, ["status"], env)
+        assert db_fingerprint(db_path) == before
+
+        invoke(runner, ["status", "--json"], env)
+        assert db_fingerprint(db_path) == before
+
+        calls = {"n": 0}
+
+        def fake_sleep(_seconds: float) -> None:
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                raise KeyboardInterrupt
+
+        monkeypatch.setattr(time, "sleep", fake_sleep)
+        invoke(runner, ["status", "--watch", "--interval", "1"], env)
+        assert db_fingerprint(db_path) == before
+
+    backups_dir = tmp_path / "data" / "backups"
+    assert not backups_dir.exists() or not any(backups_dir.iterdir())
+
+
+def test_missing_contact_exits_two(runner: CliRunner, env: dict[str, str]) -> None:
+    env = dict(env)
+    del env["MESHPROVISION_CONTACT"]
+
+    result = invoke(runner, ["status", "--json"], env)
+
+    assert result.exit_code == 2
+    assert "MESHPROVISION_CONTACT" in result.stderr
+    assert "lorastats.pl" in result.stderr
+
+
+def test_source_filter_makes_zero_lorastats_requests(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}) as router:
+        lorastats_route = next(r for r in router.routes if "lorastats.pl" in str(r.pattern))
+        result = invoke(runner, ["status", "--json", "--source", "loranet"], env)
+        assert result.exit_code == 0
+        assert lorastats_route.call_count == 0
+
+
+def test_node_filter_restricts_the_report(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    record_a = NodeRecord(node_id="deadbe01", short_name="AAAA", region="EU_868")
+    record_b = NodeRecord(node_id="deadbe02", short_name="BBBB", region="EU_868")
+    seed_db(nodes=[record_a, record_b])
+    recent = int(time.time()) - 60
+
+    with mock_sources(
+        nodes={
+            "deadbe01": {"shortName": "AAAA", "seenBy": {"gw1": recent}},
+            "deadbe02": {"shortName": "BBBB", "seenBy": {"gw1": recent}},
+        }
+    ):
+        result = invoke(runner, ["status", "--json", "--node", "!deadbe01"], env)
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert len(document["nodes"]) == 1
+    assert document["nodes"][0]["node_id"] == "deadbe01"
+
+
+def test_threshold_ordering_is_validated(runner: CliRunner, env: dict[str, str]) -> None:
+    result = invoke(runner, ["status", "--stale-after", "30", "--offline-after", "10"], env)
+    assert result.exit_code == 2
+    assert "strictly less than" in result.stderr
+
+
+def test_loranet_decimal_key_matches_from_hex_decimal() -> None:
+    """Sanity check the design note: never hand-write a loranet dump key."""
+    assert NodeId.from_hex("deadbe01").decimal == str(int("deadbe01", 16))

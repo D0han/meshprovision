@@ -1,0 +1,459 @@
+"""Read-only status orchestration: load, query, merge, and report.
+
+This module is the only place that assembles a full
+:class:`StatusReport`, and it is **strictly read-only**. It loads node
+ids and records from the ODS database (load only, never save or
+replace), queries both data sources through the cache layer, tolerates a
+failing source without aborting the whole report, and hands the result
+to :mod:`meshprovision.status.render` for presentation.
+
+**The read-only guarantee, stated for both a human reviewer and a unit
+test.** Nothing in this module may reference
+``OdsDatabase.save``, ``OdsDatabase.replace``, ``NodeRepository.upsert``,
+``NodeRepository.delete``, ``KeyRepository.upsert``,
+``KeyRepository.delete``, ``db.atomic_writer``, or anything in
+``meshprovision.provisioning.apply`` or ``meshprovision.provisioning.
+repair``. An e2e test asserts the ODS file's mtime is unchanged across a
+full ``mesh status`` run, and a unit test greps this module's AST for
+those names -- both are expected to keep passing as this module changes.
+:func:`load_records` additionally asserts, defensively, that merely
+loading the database never marks the in-memory session dirty.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from types import MappingProxyType
+from typing import Final
+
+from meshprovision.cache.http import CachedHTTPClient
+from meshprovision.config.settings import Settings
+from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS, DataSource
+from meshprovision.datasources.loranet import LoranetSource
+from meshprovision.datasources.lorastats import DEFAULT_REGIONS, LorastatsSource
+from meshprovision.datasources.models import NodeObservation
+from meshprovision.db.nodes import NodeRecord, NodeRepository
+from meshprovision.db.ods import OdsDatabase
+from meshprovision.errors import DataSourceError, DbIntegrityError, ExitCode
+from meshprovision.nodeid import NodeId
+from meshprovision.status.merge import (
+    SOURCE_PRIORITY,
+    Availability,
+    MergedNode,
+    Thresholds,
+    merge_all,
+)
+
+__all__ = [
+    "SourceFailure",
+    "StatusOptions",
+    "StatusReport",
+    "build_report",
+    "collect_observations",
+    "load_node_ids",
+    "load_records",
+    "run_status",
+]
+
+_logger = logging.getLogger(__name__)
+
+_ALL_AVAILABILITIES: Final[tuple[Availability, ...]] = tuple(Availability)
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFailure:
+    """One data source's failure while collecting observations for a report.
+
+    Attributes:
+        source: The failing source's short name (for example
+            ``"loranet"``, ``"lorastats"``).
+        message: The underlying error's human-readable message.
+        hint: The underlying error's actionable hint, when it had one.
+    """
+
+    source: str
+    message: str
+    hint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StatusOptions:
+    """Everything that shapes one ``mesh status`` run.
+
+    Attributes:
+        thresholds: Age boundaries used to classify node availability.
+        force_refresh: Whether to bypass the HTTP cache read for this
+            run (the fetched response is still written back to the
+            cache either way).
+        sources: Which data sources to query, by short name. Defaults to
+            both, in :data:`~meshprovision.status.merge.SOURCE_PRIORITY`
+            order.
+        regions: The lorastats region list to query. Defaults to
+            :data:`~meshprovision.datasources.lorastats.DEFAULT_REGIONS`.
+        node_ids: Which nodes to report on. An empty tuple means every
+            node in the database.
+        fail_on_offline: Whether an offline node should make
+            :meth:`StatusReport.exit_code` return a non-zero exit code.
+    """
+
+    thresholds: Thresholds = field(default_factory=Thresholds)
+    force_refresh: bool = False
+    sources: tuple[str, ...] = SOURCE_PRIORITY
+    regions: tuple[str, ...] = DEFAULT_REGIONS
+    node_ids: tuple[NodeId, ...] = ()
+    fail_on_offline: bool = True
+
+
+_DEFAULT_STATUS_OPTIONS: Final[StatusOptions] = StatusOptions()
+"""Module-level singleton default for the ``options`` parameter below --
+avoids constructing a fresh :class:`StatusOptions` on every call/def
+evaluation (``StatusOptions`` is immutable, so sharing one instance is
+always safe)."""
+
+
+@dataclass(frozen=True, slots=True)
+class StatusReport:
+    """The full result of one ``mesh status`` run.
+
+    Attributes:
+        generated_at: When this report was assembled. Timezone-aware.
+        nodes: Every reported node's merged view, in database row order.
+        thresholds: The age boundaries used to classify availability.
+        failures: Data sources that failed during collection, if any.
+        cache_hits: Cache hits accumulated by the underlying HTTP client
+            during this run.
+        cache_misses: Cache misses accumulated by the underlying HTTP
+            client during this run.
+        network_requests: Actual network requests made by the underlying
+            HTTP client during this run (including retries).
+    """
+
+    generated_at: datetime
+    nodes: tuple[MergedNode, ...]
+    thresholds: Thresholds
+    failures: tuple[SourceFailure, ...] = ()
+    cache_hits: int = 0
+    cache_misses: int = 0
+    network_requests: int = 0
+
+    @property
+    def counts(self) -> Mapping[Availability, int]:
+        """Node counts broken down by availability.
+
+        Returns:
+            A mapping with every :class:`~meshprovision.status.merge.
+            Availability` member present (zero-filled when a category has
+            no members), in :class:`Availability` declaration order.
+        """
+        counts: dict[Availability, int] = dict.fromkeys(_ALL_AVAILABILITIES, 0)
+        for node in self.nodes:
+            counts[node.availability] += 1
+        return MappingProxyType(counts)
+
+    @property
+    def unobserved(self) -> tuple[MergedNode, ...]:
+        """Nodes that are in the database but were found by no source.
+
+        Returns:
+            Every node with ``in_database`` true and ``observed`` false,
+            in report order.
+        """
+        return tuple(node for node in self.nodes if node.in_database and not node.observed)
+
+    @property
+    def has_offline(self) -> bool:
+        """Whether any reported node is classified offline.
+
+        Returns:
+            ``True`` if any node's availability is
+            :attr:`~meshprovision.status.merge.Availability.OFFLINE`.
+        """
+        return any(node.availability is Availability.OFFLINE for node in self.nodes)
+
+    @property
+    def degraded(self) -> bool:
+        """Whether this report represents a degraded run.
+
+        Returns:
+            ``True`` if :attr:`has_offline` or any source failed.
+        """
+        return self.has_offline or bool(self.failures)
+
+    def exit_code(self, *, fail_on_offline: bool = True) -> int:
+        """Compute the process exit code the ``mesh status`` CLI should return.
+
+        A source failure always degrades the exit code, since a status
+        report built from an incomplete set of sources is not fully
+        trustworthy. An offline node only does so when ``fail_on_offline``
+        is true.
+
+        Args:
+            fail_on_offline: Whether an offline node should count as
+                degraded for this call.
+
+        Returns:
+            :attr:`~meshprovision.errors.ExitCode.STATUS_DEGRADED` when
+            degraded; :attr:`~meshprovision.errors.ExitCode.OK` otherwise.
+        """
+        is_degraded = bool(self.failures) or (fail_on_offline and self.has_offline)
+        return int(ExitCode.STATUS_DEGRADED) if is_degraded else int(ExitCode.OK)
+
+    def summary(self) -> str:
+        """Render a one-line human-readable summary of this report.
+
+        Returns:
+            For example ``"5 node(s): 3 online, 1 stale, 0 offline, 1
+            unknown; 1 source failure(s)"``.
+        """
+        counts = self.counts
+        breakdown = ", ".join(f"{counts[avail]} {avail.value}" for avail in _ALL_AVAILABILITIES)
+        text = f"{len(self.nodes)} node(s): {breakdown}"
+        if self.failures:
+            text += f"; {len(self.failures)} source failure(s)"
+        return text
+
+
+def load_records(db_path: Path) -> dict[NodeId, NodeRecord]:
+    """Load every node record from the ODS database, strictly read-only.
+
+    Args:
+        db_path: Path to the ``.ods`` database file.
+
+    Returns:
+        A mapping from each node's id to its record, in the database's
+        own row order (a plain ``dict``'s insertion order, never
+        re-sorted).
+
+    Raises:
+        meshprovision.errors.SchemaError: If the file cannot be read or
+            does not match the expected schema.
+        meshprovision.errors.DbValidationError: If any cell fails
+            validation.
+        meshprovision.errors.DuplicateNodeError: If a ``node_id`` value
+            repeats.
+        DbIntegrityError: If a cached derived value disagrees with its
+            recomputed value while loading, or -- defensively -- if
+            merely loading the database somehow marked the in-memory
+            session dirty.
+    """
+    db = OdsDatabase(db_path)
+    db.load()
+    repo = NodeRepository(db)
+    records = {rec.node: rec for rec in repo.all()}
+    if db.dirty():
+        raise DbIntegrityError(
+            "Loading the database marked it dirty; refusing to continue in read-only mode",
+            sheet=None,
+            cell=None,
+        )
+    return records
+
+
+def load_node_ids(db_path: Path) -> tuple[NodeId, ...]:
+    """Return every node id in the database, in the database's own row order.
+
+    Args:
+        db_path: Path to the ``.ods`` database file.
+
+    Returns:
+        Every node id currently in the ``Nodes`` sheet, in row order.
+
+    Raises:
+        meshprovision.errors.SchemaError: If the file cannot be read or
+            does not match the expected schema.
+        meshprovision.errors.DbValidationError: If any cell fails
+            validation.
+        meshprovision.errors.DuplicateNodeError: If a ``node_id`` value
+            repeats.
+        DbIntegrityError: If a cached derived value disagrees with its
+            recomputed value while loading, or if loading marked the
+            session dirty.
+    """
+    return tuple(load_records(db_path).keys())
+
+
+def collect_observations(
+    sources: Sequence[DataSource], ids: Sequence[NodeId], *, force_refresh: bool = False
+) -> tuple[dict[str, dict[NodeId, NodeObservation]], tuple[SourceFailure, ...]]:
+    """Query every source for the given node ids, tolerating a failing source.
+
+    A source that raises :class:`~meshprovision.errors.DataSourceError`
+    (covering ``HttpError``, ``RateLimitError``, ``InvalidResponseError``,
+    ``CacheError``, ``NodeNotFoundError``) is recorded as a
+    :class:`SourceFailure` and skipped; the remaining sources still run.
+    One dead source degrades the report, it never aborts it.
+    :class:`~meshprovision.errors.MissingContactError` (a
+    :class:`~meshprovision.errors.ConfigError`, not a
+    :class:`~meshprovision.errors.DataSourceError`) is deliberately not
+    caught here: an unset ``MESHPROVISION_CONTACT`` is a configuration
+    failure the operator must fix, so it propagates to the caller.
+
+    Args:
+        sources: The data sources to query, in the order they were
+            configured.
+        ids: The node ids to fetch observations for.
+        force_refresh: Forwarded to each source's ``fetch_nodes`` call.
+
+    Returns:
+        A ``(observations_by_source, failures)`` pair: the first maps
+        each source's name to its ``{node_id: observation}`` result
+        (sources that failed entirely are simply absent); the second
+        lists every source that failed, in the order they were queried.
+    """
+    observations: dict[str, dict[NodeId, NodeObservation]] = {}
+    failures: list[SourceFailure] = []
+    for source in sources:
+        try:
+            # The `DataSource` protocol does not declare `force_refresh` (it
+            # is an extension both concrete sources -- LoranetSource and
+            # LorastatsSource -- share), so this call is validated at
+            # runtime rather than by the protocol's static signature.
+            fetched = source.fetch_nodes(ids, force_refresh=force_refresh)  # type: ignore[call-arg]
+        except DataSourceError as exc:
+            failures.append(SourceFailure(source=source.name, message=exc.message, hint=exc.hint))
+            _logger.warning("%s data source failed: %s", source.name, exc.message)
+            continue
+        observations[source.name] = fetched
+    return observations, tuple(failures)
+
+
+def build_report(
+    *,
+    records: Mapping[NodeId, NodeRecord],
+    observations_by_source: Mapping[str, Mapping[NodeId, NodeObservation]],
+    node_ids: Sequence[NodeId],
+    failures: Sequence[SourceFailure] = (),
+    now: datetime,
+    options: StatusOptions = _DEFAULT_STATUS_OPTIONS,
+) -> StatusReport:
+    """Assemble a :class:`StatusReport` from already-collected data. Pure.
+
+    Performs no I/O: every input is already in memory. Cache counters
+    (``cache_hits``/``cache_misses``/``network_requests``) are left at
+    their defaults here; :func:`run_status` copies them in from the
+    :class:`~meshprovision.cache.http.CachedHTTPClient` it drove.
+
+    Args:
+        records: Every known node's database record, keyed by id.
+        observations_by_source: Per-source observation maps, keyed by
+            source name.
+        node_ids: The node ids to include in the report, in the desired
+            output order (:func:`load_node_ids` returns the database's
+            own row order; this function never re-sorts it).
+        failures: Data sources that failed during collection.
+        now: The current time. Must be timezone-aware.
+        options: The thresholds to classify availability against
+            (``options.thresholds``); other fields of ``options`` are not
+            read here -- they shape what the caller already collected.
+
+    Returns:
+        The assembled, byte-identical-on-identical-input report.
+
+    Raises:
+        ValueError: If ``now`` is not timezone-aware.
+    """
+    merged = merge_all(
+        observations_by_source,
+        node_ids=node_ids,
+        records=records,
+        now=now,
+        thresholds=options.thresholds,
+    )
+    return StatusReport(
+        generated_at=now,
+        nodes=merged,
+        thresholds=options.thresholds,
+        failures=tuple(failures),
+    )
+
+
+def run_status(
+    settings: Settings,
+    options: StatusOptions = _DEFAULT_STATUS_OPTIONS,
+    *,
+    client: CachedHTTPClient | None = None,
+    now: datetime | None = None,
+) -> StatusReport:
+    """Run one full, read-only status collection and assembly.
+
+    Loads the database (never writing to it), queries the configured
+    data sources through a cache-backed HTTP client, and assembles the
+    resulting :class:`StatusReport`. ``--watch`` is a CLI concern, not
+    this module's: because every request flows through
+    :class:`~meshprovision.cache.http.CachedHTTPClient`, calling this
+    function again on an interval performs zero network calls as long as
+    the calls land inside the cache TTL -- there is no watch loop here.
+
+    Args:
+        settings: Application settings (database path, cache directory,
+            cache TTL, contact string).
+        options: Options shaping this run.
+        client: An existing HTTP client to reuse instead of constructing
+            one. When given, this function does not own it and will not
+            close it -- useful for tests and for a CLI ``--watch`` loop
+            that wants to reuse one client (and its cache) across polls.
+        now: The current time. Defaults to ``datetime.now(tz=UTC)``.
+
+    Returns:
+        The assembled status report.
+
+    Raises:
+        meshprovision.errors.MissingContactError: If
+            ``MESHPROVISION_CONTACT`` is unset and lorastats is one of
+            the configured sources.
+        meshprovision.errors.SchemaError: If the database cannot be read
+            or does not match the expected schema.
+        meshprovision.errors.DbValidationError: If any database cell
+            fails validation.
+        meshprovision.errors.DuplicateNodeError: If a ``node_id`` value
+            repeats in the database.
+        DbIntegrityError: If loading the database marked the session
+            dirty.
+    """
+    resolved_now = now if now is not None else datetime.now(tz=UTC)
+    contact = settings.require_contact()
+    owned_client = client is None
+    active_client = client or CachedHTTPClient(
+        cache_dir=settings.cache_dir,
+        user_agent=settings.user_agent(),
+        ttl=settings.cache_ttl,
+        force_refresh=options.force_refresh,
+    )
+    try:
+        records = load_records(settings.db_path)
+        ids = options.node_ids or tuple(records)
+
+        sources: list[DataSource] = []
+        if SOURCE_LORANET in options.sources:
+            sources.append(LoranetSource(active_client))
+        if SOURCE_LORASTATS in options.sources:
+            sources.append(LorastatsSource(active_client, contact=contact, regions=options.regions))
+
+        observations, failures = collect_observations(
+            sources, ids, force_refresh=options.force_refresh
+        )
+        stats = active_client.stats
+        report = build_report(
+            records=records,
+            observations_by_source=observations,
+            node_ids=ids,
+            failures=failures,
+            now=resolved_now,
+            options=options,
+        )
+        return StatusReport(
+            generated_at=report.generated_at,
+            nodes=report.nodes,
+            thresholds=report.thresholds,
+            failures=report.failures,
+            cache_hits=stats.hits,
+            cache_misses=stats.misses,
+            network_requests=stats.network_requests,
+        )
+    finally:
+        if owned_client:
+            active_client.close()

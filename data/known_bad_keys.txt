@@ -1,0 +1,54 @@
+# meshprovision — known-bad X25519 public keys.
+#
+# Format: one base64-encoded 32-byte X25519 public key per line.
+#         Blank lines are ignored. Everything from a '#' to end of line is a comment.
+#
+# IMPORTANT, READ THIS BEFORE ASSUMING THIS FILE PROTECTS YOU FROM CVE-2025-52464:
+#
+# This file does NOT contain the keypairs affected by CVE-2025-52464 ("Repeated
+# Public/Private Keypairs", CVSS 9.5, Meshtastic firmware >=2.5.0 <2.6.11).
+# No such list has ever been published. This was verified during planning by
+# enumerating the complete file trees of meshtastic/firmware and
+# meshtastic/Meshtastic-Android and by reading NodeDB.cpp and CryptoEngine.cpp at
+# tag v2.6.12.9861e82: the firmware's only duplicate detection is the on-mesh
+# advertisement check in NodeDB.cpp ("Remote device has advertised your public
+# key"), and the advisory itself publishes no blocklist. Publishing one would
+# also mean publishing live private keys for nodes still in the field.
+# Padding this file with invented entries would give false assurance, so it is
+# deliberately short and honest.
+#
+# The effective controls against CVE-2025-52464 in meshprovision are:
+#   * the firmware-version window check  (crypto/weakkeys.py, WeakKeyCheck.FIRMWARE_WINDOW)
+#   * cross-node duplicate detection across your own Keys sheet (WeakKeyCheck.DUPLICATE)
+#
+# What IS in this file: the 7 canonical X25519 small-order / degenerate points from
+# libsodium's has_small_order() blocklist in
+# crypto_scalarmult/curve25519/ref10/x25519_ref10.c. Any node advertising one of
+# these has a broken or malicious key, and every shared secret derived from one is
+# degenerate. These same 7 values are also compiled into
+# crypto/weakkeys.py:SMALL_ORDER_POINTS, so they apply even when this file is absent.
+#
+# To merge a future published list without a code change:
+#     python scripts/update_known_bad_keys.py --source new_keys.txt --comment "provenance"
+# p below is 2**255 - 19; all encodings are little-endian 32-byte.
+
+# 1. The all-zero point (order 4). Also the firmware's own "key is all zeros" check.
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+# 2. The point 1 (order 1) — 0x01 followed by 31 zero bytes.
+AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+
+# 3. Order-8 point #1 (libsodium blacklist entry 3).
+4Ot6fDtBuK4WVuP68Z/EatoJjeucMrH9hmIFFl9JuAA=
+
+# 4. Order-8 point #2 (libsodium blacklist entry 4).
+X5yVvKNQjCSx0LFVnIPvWwREXMRYHI6G2CJO3dCfEVc=
+
+# 5. p - 1 (order 2).
+7P///////////////////////////////////////38=
+
+# 6. p (order 4) — the field modulus itself, a non-canonical encoding of 0.
+7f///////////////////////////////////////38=
+
+# 7. p + 1 (order 1) — a non-canonical encoding of 1.
+7v///////////////////////////////////////38=

@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify the tag matches the packaged version
+        if: startsWith(github.ref, 'refs/tags/')
+        # tomllib is stdlib from Python 3.11 onward, so this guard needs no
+        # extra dependency. `if: startsWith(...)` lets a manual
+        # workflow_dispatch run skip the guard.
+        #
+        # The ref name is read from the GITHUB_REF_NAME environment variable
+        # inside the quoted heredoc (<<'PY'), never interpolated directly
+        # into the Python source via ${{ }} — interpolating a ref name
+        # straight into a script body is a script-injection risk.
+        run: |
+          python - <<'PY'
+          import os, sys, tomllib
+          with open("pyproject.toml", "rb") as fh:
+              project_version = tomllib.load(fh)["project"]["version"]
+          tag = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          if tag != project_version:
+              sys.exit(f"Tag {tag!r} does not match pyproject version {project_version!r}")
+          print(f"Tag and pyproject agree on version {project_version}")
+          PY
+
+      - name: Build and check
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+          python -m build
+          twine check dist/*
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: github release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    # Scoped to this job only; the workflow-level default above stays
+    # `contents: read`.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'a') || contains(github.ref_name, 'b') }}
+
+  # OPTIONAL, DISABLED BY DEFAULT — PyPI publish.
+  #
+  # meshprovision is not published to PyPI. Uncomment this job only after you
+  # have (1) claimed the `meshprovision` name on PyPI, (2) configured a PyPI
+  # Trusted Publisher for this repository and this workflow filename, and
+  # (3) created a GitHub environment named `pypi`. Trusted Publishing is used
+  # deliberately: it needs no long-lived PYPI_API_TOKEN secret in the repo.
+  # Note the distribution name is `meshprovision`; only the console script is
+  # named `mesh`, so this does not collide with the unrelated abandoned
+  # `mesh` distribution on PyPI.
+  #
+  # publish-pypi:
+  #   name: publish to PyPI
+  #   needs: build
+  #   runs-on: ubuntu-latest
+  #   if: startsWith(github.ref, 'refs/tags/')
+  #   environment: pypi
+  #   permissions:
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #       with:
+  #         name: dist
+  #         path: dist
+  #     - uses: pypa/gh-action-pypi-publish@release/v1

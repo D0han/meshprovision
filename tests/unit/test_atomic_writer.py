@@ -1,0 +1,176 @@
+"""Tests for meshprovision.db.atomic_writer."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+
+from meshprovision.db.atomic_writer import (
+    atomic_write,
+    backup_name,
+    create_backup,
+    list_backups,
+    prune_backups,
+    restore_backup,
+    write_bytes_atomic,
+)
+from meshprovision.errors import AtomicWriteError
+
+pytestmark = pytest.mark.unit
+
+
+def test_write_bytes_atomic_creates_file_no_stray_temp(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    write_bytes_atomic(target, b"hello", backup=False, backup_dir=backup_dir)
+    assert target.read_bytes() == b"hello"
+    assert list(tmp_path.iterdir()) == [target] or all(
+        p in (target, backup_dir) for p in tmp_path.iterdir()
+    )
+    stray = [p for p in tmp_path.iterdir() if p.name.startswith(".") and "tmp" in p.name]
+    assert stray == []
+
+
+def test_exception_inside_block_leaves_target_untouched(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    target.write_bytes(b"original")
+    backup_dir = tmp_path / "backups"
+
+    with (
+        pytest.raises(RuntimeError),
+        atomic_write(target, backup=False, backup_dir=backup_dir) as tmp,
+    ):
+        tmp.write_bytes(b"new content")
+        raise RuntimeError("boom")
+
+    assert target.read_bytes() == b"original"
+    leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(f".{target.name}.tmp")]
+    assert leftovers == []
+
+
+def test_backup_taken_before_replace(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    write_bytes_atomic(target, b"v1", backup=False, backup_dir=backup_dir)
+    write_bytes_atomic(target, b"v2", backup=True, backup_dir=backup_dir)
+
+    backups = list_backups(target, backup_dir=backup_dir)
+    assert len(backups) == 1
+    assert backups[0].path.read_bytes() == b"v1"
+    assert target.read_bytes() == b"v2"
+
+
+def test_backup_name_and_parse_round_trip(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    when = datetime(2026, 8, 25, 3, 14, 10, tzinfo=UTC)
+    name = backup_name(target, when)
+    assert name == "nodes_db-20260825T031410Z.ods"
+
+
+def test_two_backups_same_second_get_distinct_paths(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    when = datetime(2026, 8, 25, 3, 14, 10, tzinfo=UTC)
+
+    info1 = create_backup(target, backup_dir=backup_dir, now=when)
+    target.write_bytes(b"v2")
+    info2 = create_backup(target, backup_dir=backup_dir, now=when)
+
+    assert info1 is not None
+    assert info2 is not None
+    assert info1.path != info2.path
+    assert info1.path.exists()
+    assert info2.path.exists()
+
+
+def test_prune_backups_keeps_exactly_retention_newest(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+
+    for i in range(5):
+        target.write_bytes(f"v{i + 1}".encode())
+        create_backup(
+            target,
+            backup_dir=backup_dir,
+            retention=1000,
+            now=datetime(2026, 8, 25, 0, 0, i, tzinfo=UTC),
+        )
+
+    backups_before = list_backups(target, backup_dir=backup_dir)
+    assert len(backups_before) == 5
+
+    removed = prune_backups(target, backup_dir=backup_dir, retention=2)
+    assert len(removed) == 3
+
+    backups_after = list_backups(target, backup_dir=backup_dir)
+    assert len(backups_after) == 2
+
+
+def test_prune_backups_retention_non_positive_prunes_nothing(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+    create_backup(target, backup_dir=backup_dir)
+    target.write_bytes(b"v1")
+    create_backup(target, backup_dir=backup_dir)
+
+    removed = prune_backups(target, backup_dir=backup_dir, retention=0)
+    assert removed == ()
+    assert len(list_backups(target, backup_dir=backup_dir)) == 2
+
+
+def test_list_backups_newest_first_and_empty_when_absent(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    assert list_backups(target, backup_dir=backup_dir) == ()
+
+    target.write_bytes(b"v0")
+    create_backup(target, backup_dir=backup_dir, now=datetime(2026, 1, 1, tzinfo=UTC))
+    target.write_bytes(b"v1")
+    create_backup(target, backup_dir=backup_dir, now=datetime(2026, 6, 1, tzinfo=UTC))
+
+    backups = list_backups(target, backup_dir=backup_dir)
+    assert len(backups) == 2
+    assert backups[0].created_at >= backups[1].created_at
+
+
+def test_create_backup_returns_none_when_target_absent(tmp_path: Path) -> None:
+    target = tmp_path / "does_not_exist.txt"
+    assert create_backup(target, backup_dir=tmp_path / "backups") is None
+
+
+def test_restore_backup_restores_and_backs_up_current(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    write_bytes_atomic(target, b"v1", backup=False, backup_dir=backup_dir)
+    info = create_backup(target, backup_dir=backup_dir)
+    assert info is not None
+    write_bytes_atomic(target, b"v2", backup=False, backup_dir=backup_dir)
+
+    restore_backup(info.path, target, backup_dir=backup_dir)
+    assert target.read_bytes() == b"v1"
+
+    backups = list_backups(target, backup_dir=backup_dir)
+    assert any(b.path.read_bytes() == b"v2" for b in backups)
+
+
+def test_restore_backup_missing_file_raises(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    target.write_bytes(b"v1")
+    with pytest.raises(AtomicWriteError):
+        restore_backup(tmp_path / "nope.bak", target, backup_dir=tmp_path / "backups")
+
+
+def test_backup_directory_cannot_be_created_raises(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    target.write_bytes(b"v1")
+    blocking_file = tmp_path / "blocked"
+    blocking_file.write_text("i am a file, not a dir")
+    bad_backup_dir = blocking_file / "backups"
+
+    with pytest.raises(AtomicWriteError):
+        create_backup(target, backup_dir=bad_backup_dir)

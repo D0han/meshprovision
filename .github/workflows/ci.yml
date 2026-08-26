@@ -1,0 +1,120 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUNBUFFERED: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
+jobs:
+  # This project uses pip + `python -m build`, not uv, in CI. The build
+  # backend is hatchling>=1.27; there is no uv.lock, no [tool.uv] table, and
+  # no PEP 735 [dependency-groups] table — dev dependencies live in
+  # [project.optional-dependencies].dev, which `pip install -e ".[dev]"`
+  # resolves natively. The plan's local verification commands use `uv run`,
+  # which is fine on a developer machine, but CI intentionally does not
+  # require uv to be installed.
+  quality:
+    name: quality (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: ruff check
+        run: ruff check --output-format=github .
+
+      - name: ruff format --check
+        run: ruff format --check .
+
+      - name: mypy --strict
+        run: mypy --strict src
+
+      - name: pytest
+        # `pytest` is invoked bare, not `python -m pytest`: pyproject's
+        # [tool.pytest.ini_options] already supplies testpaths, -ra,
+        # --strict-markers, --strict-config, and the unit/e2e markers.
+        #
+        # `--cov` with no value picks up [tool.coverage.run] source =
+        # ["src/meshprovision"] from pyproject.toml. [tool.coverage.report]
+        # fail_under = 85 already enforces the floor; --cov-fail-under=85 is
+        # passed anyway so the floor is visible directly in the CI log and in
+        # this file. The suite currently sits at 90.60% with 564 tests, so 85
+        # is a real floor with headroom, not a rubber stamp.
+        #
+        # Deliberately not setting MESHPROVISION_CONTACT or any other
+        # MESHPROVISION_* variable here: tests/conftest.py's autouse
+        # _isolated_cwd_and_env fixture strips every MESHPROVISION_* variable
+        # and chdirs into tmp_path, so setting one in the job env would be
+        # dead weight at best and could mask a real settings-layering bug.
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=85
+
+  package:
+    name: package build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install --upgrade pip
+          pip install build twine
+          python -m build
+          twine check dist/*
+
+      - name: Smoke-test the built wheel in a clean environment
+        # The point of this job: prove the single console script
+        # `mesh = "meshprovision.cli.main:cli"` is actually installed and
+        # that the four subcommand groups register, from a built wheel
+        # rather than from an editable install.
+        #
+        # `mesh --help` (and each subcommand's --help) is side-effect free by
+        # design — the group callback only builds Settings and configures
+        # logging, it never opens the DB, loads the template, or hits the
+        # network — so no config files are needed for this step.
+        run: |
+          python -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --upgrade pip
+          /tmp/smoke/bin/pip install dist/*.whl
+          /tmp/smoke/bin/mesh --version
+          /tmp/smoke/bin/mesh --help
+          /tmp/smoke/bin/mesh provision --help
+          /tmp/smoke/bin/mesh status --help
+          /tmp/smoke/bin/mesh admin --help
+          /tmp/smoke/bin/mesh db --help
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error

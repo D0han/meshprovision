@@ -1,0 +1,842 @@
+"""``mesh provision`` and the reusable provisioning pipeline.
+
+This module owns two things: the `provision` click command itself, and
+the reusable pipeline (transport resolution, device session management,
+admin-key resolution, weak-key audits, name allocation, plan build/render,
+apply, persist) that :mod:`meshprovision.cli.admin`'s ``mesh admin
+bootstrap`` reuses wholesale rather than duplicating.
+
+**CRITICAL -- do NOT use ``repair.build_repair_plan``.** It calls
+``plan.build_plan(live, template, db_entry=..., state=..., ...)`` with
+keyword arguments, but the shipped ``plan.build_plan`` takes a single
+:class:`~meshprovision.provisioning.plan.PlanInputs` argument. That
+function is broken as written and belongs to an earlier layer this group
+may not edit. :func:`run_provision` builds a ``PlanInputs`` itself and
+calls ``plan_mod.build_plan(inputs)`` for *both* the fresh-provision and
+the drift-repair path -- ``build_plan`` already implements the repair
+defaults (when ``desired_short_name``/``desired_long_name`` are ``None``
+and ``db_entry`` has names, the database's names win; the recorded BLE
+PIN is reused because the caller passes it in). From
+:mod:`meshprovision.provisioning.repair` this module uses only
+``diff_record`` and ``Drift``, which are correct.
+
+Secret hygiene: nothing here ever prints/logs a BLE PIN, a base64 key, or
+raw key bytes. Identification always goes through
+:func:`meshprovision.crypto.redact.fingerprint` or the already-redaction-safe
+``ChangePlan.describe()``/``to_json_dict()`` and ``ApplyOutcome.describe()``.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import dataclasses
+import logging
+from collections.abc import Iterator, Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, cast
+
+import click
+
+from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_errors, pass_cli
+from meshprovision.crypto import keys as crypto_keys
+from meshprovision.crypto import redact, weakkeys
+from meshprovision.crypto.redact import SecretBytes
+from meshprovision.db.keys import KeyRecord, KeyRepository
+from meshprovision.db.nodes import NodeRecord, NodeRepository
+from meshprovision.db.schema import KeyType
+from meshprovision.errors import (
+    DeviceNotFoundError,
+    ExitCode,
+    KeyMaterialError,
+    NamespaceExhaustedError,
+)
+from meshprovision.nodeid import NodeId
+from meshprovision.provisioning import apply, connection, detect, discovery, repair
+from meshprovision.provisioning import plan as plan_mod
+
+if TYPE_CHECKING:
+    from meshprovision.cli.common import CliContext, DbSession
+    from meshprovision.config.template import TemplateConfig
+
+__all__ = [
+    "ProvisionOptions",
+    "ProvisionResult",
+    "TransportOptions",
+    "allocate_names",
+    "audit_live_admin_keys",
+    "audit_node_key",
+    "device_session",
+    "provision",
+    "render_plan",
+    "resolve_admin_keys",
+    "resolve_backend",
+    "run_provision",
+]
+
+_logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class TransportOptions:
+    """Operator-supplied transport-selection flags, before resolution.
+
+    Attributes:
+        interface: Forces a transport (``"serial"``, ``"ble"``, or
+            ``"tcp"``) when set, from ``--interface``.
+        port: An explicit serial port path, from ``--port``.
+        ble_address: An explicit BLE address, from ``--ble-address``.
+        ble_scan: Whether to run a BLE scan before selection, from
+            ``--ble-scan``.
+        host: An explicit TCP host, from ``--host``.
+        timeout: Connect timeout, in seconds, from ``--timeout``.
+        ble_scan_timeout: BLE scan duration, in seconds, from
+            ``--ble-scan-timeout``.
+    """
+
+    interface: connection.Transport | None = None
+    port: str | None = None
+    ble_address: str | None = None
+    ble_scan: bool = False
+    host: str | None = None
+    timeout: int = connection.DEFAULT_CONNECT_TIMEOUT
+    ble_scan_timeout: float = discovery.DEFAULT_BLE_SCAN_TIMEOUT
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionOptions:
+    """Operator-supplied provisioning flags shared by ``provision`` and ``admin bootstrap``.
+
+    Attributes:
+        dry_run: Whether to print the plan without touching the device or
+            the database, from ``--dry-run``.
+        allow_lockdown: Whether ``security.is_managed`` may be enabled,
+            from ``--allow-lockdown``.
+        force_regenerate_key: Whether to regenerate the node keypair
+            unconditionally, from ``--force-regenerate-key``.
+        rename: Whether an already-provisioned node may be renamed, from
+            ``--rename``.
+        no_reconnect: Whether to verify writes against the in-memory
+            interface only (a weaker guarantee), from ``--no-reconnect``.
+        json_output: Whether to emit machine-readable JSON instead of
+            human text, from ``--json``.
+        admin_ref: Set only by ``mesh admin bootstrap``: the reference to
+            additionally file this node's keys under.
+    """
+
+    dry_run: bool = False
+    allow_lockdown: bool = False
+    force_regenerate_key: bool = False
+    rename: bool = False
+    no_reconnect: bool = False
+    json_output: bool = False
+    admin_ref: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ProvisionResult:
+    """The full outcome of one :func:`run_provision` call.
+
+    Attributes:
+        node_id: The provisioned node's id.
+        detection: The node's classification before the plan was built.
+        drifts: Drifts detected against the database, when the node was
+            already provisioned.
+        plan: The change plan that was built and (unless a dry run)
+            applied.
+        keypair: The freshly generated node keypair, when one was
+            generated.
+        outcome: The result of applying the plan to the device, or
+            ``None`` for a dry run.
+        persisted: Whether the database was updated.
+        exit_code: The process exit code this run should produce.
+    """
+
+    node_id: NodeId
+    detection: detect.Detection
+    drifts: tuple[repair.Drift, ...]
+    plan: plan_mod.ChangePlan
+    keypair: crypto_keys.KeyPair | None
+    outcome: apply.ApplyOutcome | None
+    persisted: bool
+    exit_code: int
+
+
+def resolve_backend(ctx: CliContext, opts: TransportOptions) -> connection.ConnectionBackend:
+    """Resolve exactly one connection backend from transport flags.
+
+    Discovery is owned by this function (never by
+    :func:`meshprovision.provisioning.connection.select_backend`, which
+    performs no I/O itself) -- that separation is an invariant the
+    provisioning layer's own unit tests assert.
+
+    Priority, matching ``--port`` > ``--ble-address``/``--ble-scan`` >
+    ``--host`` > auto: any explicit target flag skips discovery entirely;
+    a forced ``--interface`` runs only that transport's discovery and
+    turns ambiguity into a hard error (cron-safe); ``--ble-scan`` alone
+    forces BLE but keeps ambiguity interactive; full auto tries serial
+    first, then offers an interactive BLE scan and a TCP host prompt when
+    nothing is found (skipped entirely when non-interactive).
+
+    Args:
+        ctx: The shared CLI context (consulted for ``non_interactive``,
+            ``chooser``, and interactive prompts).
+        opts: The operator's transport-selection flags.
+
+    Returns:
+        The single resolved connection backend.
+
+    Raises:
+        AmbiguousDeviceError: If multiple candidates are found and cannot
+            be disambiguated.
+        DeviceNotFoundError: If no candidate device can be found at all.
+        NonInteractiveError: If disambiguation would require a prompt but
+            none is available.
+        UnsupportedTransportError: If ``opts.interface`` names an
+            unsupported transport, or BLE support (``bleak``) is
+            unavailable.
+    """
+    request = connection.ConnectionRequest(
+        interface=opts.interface,
+        port=opts.port,
+        ble_address=opts.ble_address,
+        ble_scan=opts.ble_scan,
+        host=opts.host,
+        non_interactive=ctx.non_interactive,
+        timeout=opts.timeout,
+    )
+
+    explicit_target = opts.port is not None or opts.ble_address is not None or opts.host is not None
+    if explicit_target:
+        return connection.select_backend(request, connection.DiscoveryResult(), chooser=ctx.chooser)
+
+    if opts.interface == "serial":
+        serial_ports = discovery.discover_serial_ports()
+        return connection.select_backend(
+            request, connection.DiscoveryResult(serial_ports=serial_ports), chooser=ctx.chooser
+        )
+
+    if opts.interface == "ble":
+        ctx.info("Scanning for BLE devices...")
+        ble_devices = discovery.discover_ble_devices(timeout=opts.ble_scan_timeout)
+        return connection.select_backend(
+            request, connection.DiscoveryResult(ble_devices=ble_devices), chooser=ctx.chooser
+        )
+
+    if opts.interface == "tcp":
+        return connection.select_backend(request, connection.DiscoveryResult(), chooser=ctx.chooser)
+
+    if opts.ble_scan:
+        ctx.info("Scanning for BLE devices...")
+        ble_devices = discovery.discover_ble_devices(timeout=opts.ble_scan_timeout)
+        if not ble_devices:
+            raise DeviceNotFoundError(
+                "No BLE device found.",
+                transport="ble",
+                hint="Pass --ble-address, or --host <ip> for TCP.",
+            )
+        return connection.select_backend(
+            request,
+            connection.DiscoveryResult(serial_ports=(), ble_devices=ble_devices),
+            chooser=ctx.chooser,
+        )
+
+    # Full auto: serial first.
+    ports = discovery.discover_serial_ports()
+    if len(ports) == 1:
+        ctx.info(f"Using the only serial port found: {ports[0].summary()}")
+        return connection.select_backend(
+            request, connection.DiscoveryResult(serial_ports=ports), chooser=ctx.chooser
+        )
+    if len(ports) > 1:
+        return connection.select_backend(
+            request, connection.DiscoveryResult(serial_ports=ports), chooser=ctx.chooser
+        )
+
+    # No serial device at all: offer BLE, then a TCP host prompt, when interactive.
+    scanned_ble: tuple[discovery.BleDeviceInfo, ...] = ()
+    if not ctx.non_interactive and ctx.confirm(
+        "No serial device found. Scan for BLE devices?", default=True
+    ):
+        ble_devices = discovery.discover_ble_devices(timeout=opts.ble_scan_timeout)
+        scanned_ble = ble_devices
+    if scanned_ble:
+        return connection.select_backend(
+            request, connection.DiscoveryResult(ble_devices=scanned_ble), chooser=ctx.chooser
+        )
+    if not ctx.non_interactive:
+        host = ctx.prompt("TCP host to connect to (blank to give up)", default="")
+        if host:
+            request = dataclasses.replace(request, host=host)
+            return connection.select_backend(request, connection.DiscoveryResult(), chooser=None)
+    return connection.select_backend(request, connection.DiscoveryResult(), chooser=ctx.chooser)
+
+
+@contextlib.contextmanager
+def device_session(
+    ctx: CliContext, backend: connection.ConnectionBackend, *, no_reconnect: bool = False
+) -> Iterator[apply.DeviceSession]:
+    """Open a device connection and yield a session :func:`apply.apply_plan` can drive.
+
+    Args:
+        ctx: The shared CLI context, used to print progress.
+        backend: The resolved connection backend to open.
+        no_reconnect: When ``True``, yields an
+            :class:`~meshprovision.provisioning.apply.InPlaceSession`
+            (weaker write-verification guarantee -- see firmware issue
+            #7449) instead of a full
+            :class:`~meshprovision.provisioning.apply.ReconnectingSession`.
+
+    Yields:
+        The open device session.
+
+    Raises:
+        ConnectionFailedError: If the connection attempt fails.
+    """
+    ctx.info(f"Connecting over {backend.describe()}...")
+    if no_reconnect:
+        ctx.warn(
+            "--no-reconnect: writes are verified against the in-memory interface only "
+            "(weaker guarantee; see firmware issue #7449)."
+        )
+    session = apply.ReconnectingSession(backend=backend)
+    with session:
+        if no_reconnect:
+            yield apply.InPlaceSession(session.interface)
+        else:
+            yield session
+
+
+def resolve_admin_keys(
+    keys: KeyRepository, template: TemplateConfig, *, known_bad: frozenset[bytes]
+) -> tuple[plan_mod.ResolvedAdminKey, ...]:
+    """Resolve and audit every configured admin node's public key.
+
+    Deliberately audits with
+    :func:`meshprovision.crypto.weakkeys.audit_public_key` (structural +
+    blocklist checks only), never with
+    :func:`meshprovision.crypto.weakkeys.audit_node`'s
+    ``known_public_keys`` cross-fleet duplicate check: ``mesh admin
+    bootstrap --ref LABEL`` intentionally files the same public key under
+    both ``<node_id>_pub`` and ``<LABEL>_pub``, so a fleet-wide duplicate
+    check here would produce a false CRITICAL and wrongly block the
+    ``--allow-lockdown`` gate. Cross-fleet duplicate detection is ``mesh
+    db verify``'s job, where the alias case is classified explicitly.
+
+    Args:
+        keys: The key repository to resolve references against.
+        template: The provisioning template naming ``admin_nodes``.
+        known_bad: The loaded weak-key blocklist, threaded through from
+            the caller so the blocklist file is read at most once per
+            run.
+
+    Returns:
+        One :class:`~meshprovision.provisioning.plan.ResolvedAdminKey`
+        per entry in ``template.admin_nodes``, in template order.
+
+    Raises:
+        AdminRefUnresolvedError: If any ``admin_nodes`` reference does
+            not resolve to a ``Keys`` sheet row.
+    """
+    resolved: list[plan_mod.ResolvedAdminKey] = []
+    for ref in template.admin_nodes:
+        record = keys.resolve_admin_refs((ref,))[0]
+        material = record.material()
+        audit = weakkeys.audit_public_key(material, key_ref=record.key_ref, known_bad=known_bad)
+        if audit.findings and not audit.compromised:
+            _logger.warning("admin key %s: %s", record.key_ref, audit.summary())
+        resolved.append(
+            plan_mod.ResolvedAdminKey(
+                ref=ref,
+                key_ref=record.key_ref,
+                public=material,
+                has_private=keys.has_private(ref),
+                audit_ok=not audit.compromised,
+                fingerprint=redact.fingerprint(material),
+                audit_summary=audit.summary(),
+            )
+        )
+    return tuple(resolved)
+
+
+def audit_live_admin_keys(
+    live: detect.LiveConfig, *, known_bad: frozenset[bytes]
+) -> frozenset[bytes]:
+    """Audit the admin keys a live device currently reports, for removal.
+
+    Args:
+        live: The device's normalized live configuration.
+        known_bad: The loaded weak-key blocklist.
+
+    Returns:
+        The subset of ``live.security.admin_keys`` that are malformed or
+        failed the weak-key audit and should be dropped from the plan.
+    """
+    rejected: set[bytes] = set()
+    for key in live.security.admin_keys:
+        try:
+            result = weakkeys.audit_public_key(key, known_bad=known_bad)
+        except KeyMaterialError:
+            rejected.add(key)
+            continue
+        if result.compromised:
+            rejected.add(key)
+    return frozenset(rejected)
+
+
+def audit_node_key(live: detect.LiveConfig, *, known_bad: frozenset[bytes]) -> tuple[bool, str]:
+    """Audit a live device's own keypair for the CVE-2025-52464 weak-key condition.
+
+    Args:
+        live: The device's normalized live configuration.
+        known_bad: The loaded weak-key blocklist.
+
+    Returns:
+        A ``(compromised, reason)`` pair. ``(False, "")`` when the device
+        reports no public key at all (``plan.py`` already forces
+        regeneration for missing material, so no audit is needed here).
+        Otherwise ``compromised`` reflects the audit result and
+        ``reason`` is the first critical finding's reason, or ``""``.
+    """
+    security = live.security
+    if not security.has_public_key:
+        return False, ""
+    public = security.public_key
+    if public is None:  # pragma: no cover - has_public_key already guarantees this
+        return False, ""
+    try:
+        result = weakkeys.audit_node(
+            public=public,
+            private=security.private_key,
+            node_id=live.node_id.display,
+            key_ref=f"{live.node_id.hex}_pub",
+            firmware_version=live.firmware_version or None,
+            known_bad=known_bad,
+        )
+    except KeyMaterialError:
+        return True, "malformed key material"
+    reason = next(
+        (finding.reason for finding in result.findings if finding.severity == "critical"), ""
+    )
+    return result.compromised, reason
+
+
+def allocate_names(
+    nodes: NodeRepository, template: TemplateConfig, *, existing: NodeRecord | None, rename: bool
+) -> tuple[str | None, str | None]:
+    """Allocate a fresh ``short_name``/``long_name`` pair, when one is needed.
+
+    Args:
+        nodes: The node repository to check name collisions against.
+        template: The provisioning template supplying the name patterns.
+        existing: The node's existing database row, or ``None`` for a new
+            node.
+        rename: Whether an already-provisioned node may be renamed.
+
+    Returns:
+        ``(None, None)`` when ``existing`` is set and ``rename`` is
+        ``False`` -- :func:`~meshprovision.provisioning.plan.build_plan`
+        then keeps the database's (or, failing that, the device's)
+        current names. Otherwise a freshly allocated
+        ``(short_name, long_name)`` pair, using the same namespace index
+        for both when the two patterns' slot counts allow it.
+
+    Raises:
+        NamespaceExhaustedError: If the short-name pattern's namespace
+            has no unused names remaining.
+    """
+    if existing is not None and not rename:
+        return None, None
+
+    short_spec = template.short_name_spec()
+    index, short = nodes.next_free_name(short_spec, warn_at=template.name_capacity_warn_utilization)
+    long_spec = template.long_name_spec()
+    try:
+        long = long_spec.render(index)
+    except NamespaceExhaustedError:
+        long = nodes.next_free_name(long_spec)[1]
+    return short, long
+
+
+def render_plan(
+    ctx: CliContext,
+    change_plan: plan_mod.ChangePlan,
+    *,
+    drifts: Sequence[repair.Drift] = (),
+    json_output: bool = False,
+) -> None:
+    """Render a change plan (and any pre-existing drift) for the operator.
+
+    Args:
+        ctx: The shared CLI context.
+        change_plan: The plan to render.
+        drifts: Drifts detected against the database before the plan was
+            built, when the node was already provisioned.
+        json_output: When ``True``, emit a single JSON document on STDOUT
+            and nothing else there; otherwise render human text, mostly
+            to STDERR (the change-list lines themselves go to STDOUT via
+            :meth:`~meshprovision.cli.common.CliContext.print_out`, so a
+            ``--dry-run`` plan stays diffable without ``--json``).
+    """
+    if json_output:
+        echo_json(
+            {
+                "detection": {
+                    "node_id": change_plan.node_id.hex,
+                    "state": change_plan.state.value,
+                    "is_new": change_plan.is_new,
+                },
+                "drifts": [
+                    {
+                        "kind": drift.kind.value,
+                        "field": drift.field,
+                        "recorded": drift.recorded,
+                        "observed": drift.observed,
+                    }
+                    for drift in drifts
+                ],
+                "plan": change_plan.to_json_dict(),
+            }
+        )
+        return
+
+    if drifts:
+        ctx.info("Drift detected:")
+        for drift in drifts:
+            ctx.info(drift.describe())
+
+    if change_plan.is_empty:
+        ctx.info("No changes needed.")
+    else:
+        ctx.info("Planned changes:")
+        for line in change_plan.describe():
+            ctx.print_out(line)
+
+    for warning in change_plan.warnings:
+        ctx.warn(warning.message)
+
+    ctx.info(change_plan.summary())
+
+    if change_plan.reboots_device:
+        ctx.warn("Applying this plan reboots the device.")
+
+
+def run_provision(
+    ctx: CliContext,
+    session: apply.DeviceSession,
+    db: DbSession,
+    template: TemplateConfig,
+    opts: ProvisionOptions,
+) -> ProvisionResult:
+    """Run the full provisioning pipeline against an already-open device session.
+
+    Detects the node's state, diffs any existing database record for
+    drift, resolves and audits admin keys, builds the change plan, prints
+    it, and -- unless ``opts.dry_run`` is set -- confirms, applies it to
+    the device, optionally registers an admin alias, and persists the
+    result to the database.
+
+    Args:
+        ctx: The shared CLI context.
+        session: The already-open device session.
+        db: The already-open database session.
+        template: The validated provisioning template.
+        opts: The operator's provisioning flags.
+
+    Returns:
+        The full :class:`ProvisionResult`.
+
+    Raises:
+        AdminKeyCapacityError: If the resolved admin-key set exceeds the
+            firmware's capacity.
+        LockdownRefusedError: If the template requests
+            ``security.is_managed=true`` but the safety gates are not
+            satisfied.
+        NamespaceExhaustedError: If a name pattern's namespace is
+            exhausted while allocating a new name.
+        click.Abort: If the operator declines the confirmation prompt.
+    """
+    iface = session.interface
+    live = detect.read_live_config(iface)
+
+    record = db.nodes.find(live.node_id)
+    detection = detect.classify(live, db_entry=record)
+    ctx.info(detection.summary())
+
+    known_bad = weakkeys.load_known_bad_keys()
+
+    drifts: tuple[repair.Drift, ...]
+    if record is not None:
+        pubmap = db.keys.public_key_map()
+        by_material = {material: key_ref for key_ref, material in pubmap.items()}
+        drifts = repair.diff_record(live, record, admin_key_refs=by_material)
+    else:
+        drifts = ()
+
+    admin_keys = resolve_admin_keys(db.keys, template, known_bad=known_bad)
+    rejected = audit_live_admin_keys(live, known_bad=known_bad)
+    node_key_compromised, node_key_reason = audit_node_key(live, known_bad=known_bad)
+
+    db_public_key: bytes | None = None
+    db_key_record = db.keys.find(f"{live.node_id.hex}_pub")
+    if db_key_record is not None:
+        db_public_key = db_key_record.material()
+
+    desired_short, desired_long = allocate_names(
+        db.nodes, template, existing=record, rename=opts.rename
+    )
+
+    ble_pin = (
+        record.ble_pin.get_secret_value()
+        if (record is not None and record.ble_pin is not None)
+        else apply.generate_ble_pin()
+    )
+
+    inputs = plan_mod.PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detection.state,
+        admin_keys=admin_keys,
+        rejected_admin_keys=rejected,
+        desired_short_name=desired_short,
+        desired_long_name=desired_long,
+        ble_pin=ble_pin,
+        node_key_compromised=node_key_compromised,
+        node_key_reason=node_key_reason,
+        db_public_key=db_public_key,
+        force_regenerate_key=opts.force_regenerate_key,
+        allow_lockdown=opts.allow_lockdown,
+    )
+    change_plan = plan_mod.build_plan(inputs)
+
+    render_plan(ctx, change_plan, drifts=drifts, json_output=opts.json_output)
+
+    if opts.dry_run:
+        return ProvisionResult(
+            node_id=change_plan.node_id,
+            detection=detection,
+            drifts=drifts,
+            plan=change_plan,
+            keypair=None,
+            outcome=None,
+            persisted=False,
+            exit_code=int(ExitCode.OK),
+        )
+
+    if not change_plan.is_empty:
+        if detection.state is detect.NodeState.FOREIGN:
+            ctx.warn(
+                "This node is not in the database and does not look factory-default; "
+                "it may belong to someone else."
+            )
+        question = f"Apply this plan to {change_plan.node_id.display} over {session.describe()}?"
+        if not ctx.confirm(question, default=False):
+            raise click.Abort()
+
+    keypair = crypto_keys.generate_keypair() if change_plan.key_plan.regenerate else None
+
+    outcome = apply.apply_plan(change_plan, session, keypair=keypair, dry_run=False)
+    for line in outcome.describe():
+        ctx.info(line)
+
+    if (
+        opts.admin_ref is not None
+        and opts.admin_ref != change_plan.node_id.hex
+        and outcome.may_update_database
+    ):
+        now = datetime.now(tz=UTC)
+        public_material: bytes | None
+        private_material: SecretBytes | None
+        if keypair is not None:
+            public_material = keypair.public
+            private_material = keypair.private
+        else:
+            pub_record = db.keys.find(f"{change_plan.node_id.hex}_pub")
+            priv_record = db.keys.find(f"{change_plan.node_id.hex}_priv")
+            public_material = pub_record.material() if pub_record is not None else None
+            private_material = priv_record.secret() if priv_record is not None else None
+
+        if public_material is None:
+            ctx.warn(
+                f"No public key material available to register alias {opts.admin_ref!r}; skipping."
+            )
+        else:
+            db.keys.upsert(
+                KeyRecord.from_material(
+                    opts.admin_ref, KeyType.ADMIN_PUBLIC, public_material, created_ts=now
+                )
+            )
+            if private_material is not None:
+                db.keys.upsert(
+                    KeyRecord.from_material(
+                        opts.admin_ref, KeyType.ADMIN_PRIVATE, private_material, created_ts=now
+                    )
+                )
+
+    persisted = apply.persist_result(
+        outcome,
+        nodes=db.nodes,
+        keys=db.keys,
+        keypair=keypair,
+        admin_key_refs=change_plan.key_plan.desired_admin_key_refs,
+        now=datetime.now(tz=UTC),
+    )
+    if persisted:
+        ctx.success(f"Database updated: {db.path}")
+    else:
+        ctx.error("Node is in an UNCERTAIN state; the database was NOT updated.")
+        for failure in outcome.failures():
+            label = f"{failure.section}.{failure.field}" if failure.field else failure.section
+            line = f"{label}: {failure.status.value}"
+            if failure.message:
+                line = f"{line} -- {failure.message}"
+            ctx.error(line)
+
+    return ProvisionResult(
+        node_id=change_plan.node_id,
+        detection=detection,
+        drifts=drifts,
+        plan=change_plan,
+        keypair=keypair,
+        outcome=outcome,
+        persisted=persisted,
+        exit_code=outcome.exit_code,
+    )
+
+
+@click.command(name="provision", context_settings=CONTEXT_SETTINGS)
+@click.option(
+    "--port", default=None, metavar="PATH", help="Explicit serial port, e.g. /dev/ttyUSB0."
+)
+@click.option("--ble-address", default=None, metavar="ADDR", help="Explicit BLE address.")
+@click.option("--ble-scan", is_flag=True, default=False, help="Force BLE and scan for devices.")
+@click.option(
+    "--host", default=None, metavar="HOST[:PORT]", help="Explicit TCP host to connect to."
+)
+@click.option(
+    "--interface",
+    type=click.Choice(list(connection.TRANSPORTS), case_sensitive=False),
+    default=None,
+    help="Force a transport, turning ambiguity into a hard error.",
+)
+@click.option(
+    "--timeout",
+    type=click.IntRange(min=1),
+    default=connection.DEFAULT_CONNECT_TIMEOUT,
+    show_default=True,
+    help="Connect timeout, in seconds.",
+)
+@click.option(
+    "--ble-scan-timeout",
+    type=click.FloatRange(min=0.1),
+    default=discovery.DEFAULT_BLE_SCAN_TIMEOUT,
+    show_default=True,
+    help="BLE scan duration, in seconds.",
+)
+@click.option(
+    "--dry-run", is_flag=True, default=False, help="Print the plan without writing anything."
+)
+@click.option("-y", "--yes", is_flag=True, default=False, help="Assume yes to every confirmation.")
+@click.option(
+    "--allow-lockdown",
+    is_flag=True,
+    default=False,
+    help="Explicitly authorize enabling security.is_managed when the safety gates pass.",
+)
+@click.option(
+    "--force-regenerate-key",
+    is_flag=True,
+    default=False,
+    help="Regenerate the node keypair unconditionally.",
+)
+@click.option(
+    "--rename", is_flag=True, default=False, help="Allow renaming an already-provisioned node."
+)
+@click.option(
+    "--no-reconnect",
+    is_flag=True,
+    default=False,
+    help="Verify writes against the in-memory interface only (weaker guarantee).",
+)
+@click.option(
+    "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of human text."
+)
+@pass_cli
+@handle_cli_errors
+def provision(
+    ctx: CliContext,
+    *,
+    port: str | None,
+    ble_address: str | None,
+    ble_scan: bool,
+    host: str | None,
+    interface: str | None,
+    timeout: int,
+    ble_scan_timeout: float,
+    dry_run: bool,
+    yes: bool,
+    allow_lockdown: bool,
+    force_regenerate_key: bool,
+    rename: bool,
+    no_reconnect: bool,
+    json_output: bool,
+) -> None:
+    """Provision a connected Meshtastic device from the configured template.
+
+    Connects over serial, BLE, or TCP; detects whether the device is
+    factory-default, already provisioned, or foreign; builds and prints
+    an exact change plan; and, unless ``--dry-run`` is passed, applies it
+    to the device and records the result in the ODS database.
+
+    Args:
+        ctx: The shared CLI context, injected by :data:`~meshprovision.
+            cli.common.pass_cli`.
+        port: Explicit serial port, from ``--port``.
+        ble_address: Explicit BLE address, from ``--ble-address``.
+        ble_scan: Whether to force BLE and scan, from ``--ble-scan``.
+        host: Explicit TCP host, from ``--host``.
+        interface: Forced transport name, from ``--interface``.
+        timeout: Connect timeout, in seconds, from ``--timeout``.
+        ble_scan_timeout: BLE scan duration, from ``--ble-scan-timeout``.
+        dry_run: Whether to skip all writes, from ``--dry-run``.
+        yes: Whether to assume yes to confirmations, from ``-y``/``--yes``.
+        allow_lockdown: Whether to authorize ``security.is_managed``, from
+            ``--allow-lockdown``.
+        force_regenerate_key: Whether to force key regeneration, from
+            ``--force-regenerate-key``.
+        rename: Whether renaming is allowed, from ``--rename``.
+        no_reconnect: Whether to skip the reconnect-verify step, from
+            ``--no-reconnect``.
+        json_output: Whether to emit JSON, from ``--json``.
+
+    Raises:
+        SystemExit: With the run's exit code, when it is non-zero.
+    """
+    ctx = ctx.with_assume_yes(yes)
+    transport_opts = TransportOptions(
+        interface=cast("connection.Transport | None", interface),
+        port=port,
+        ble_address=ble_address,
+        ble_scan=ble_scan,
+        host=host,
+        timeout=timeout,
+        ble_scan_timeout=ble_scan_timeout,
+    )
+    opts = ProvisionOptions(
+        dry_run=dry_run,
+        allow_lockdown=allow_lockdown,
+        force_regenerate_key=force_regenerate_key,
+        rename=rename,
+        no_reconnect=no_reconnect,
+        json_output=json_output,
+    )
+
+    template = ctx.load_template()
+    db = ctx.open_database()
+    backend = resolve_backend(ctx, transport_opts)
+    with device_session(ctx, backend, no_reconnect=no_reconnect) as session:
+        result = run_provision(ctx, session, db, template, opts)
+
+    if result.exit_code:
+        raise SystemExit(result.exit_code)

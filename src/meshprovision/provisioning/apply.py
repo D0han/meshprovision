@@ -1,0 +1,1088 @@
+"""Transactional plan execution against a live device, and the ODS write gate.
+
+This module is the only place in the project that *writes* protobuf
+config to a device (:mod:`meshprovision.provisioning.detect` is the only
+place that *reads* one). :func:`apply_plan` executes a
+:class:`~meshprovision.provisioning.plan.ChangePlan` with a
+write-then-read-back-verify guarantee: every section written is
+re-confirmed from a fresh reconnect before the ``Nodes``/``Keys`` sheets
+are ever touched, and :func:`persist_result` is the single gate that
+decides whether the ODS may be updated at all -- it refuses outright when
+any write is left in an uncertain state.
+
+This module also owns the BLE-PIN generator (:func:`generate_ble_pin`),
+since a PIN is provisioning-time-generated secret material with the same
+write-then-verify lifecycle as an admin key.
+
+Secret hygiene: nothing in this module ever logs, prints, or otherwise
+renders raw key bytes, base64 key strings, or a BLE PIN. Every
+human-facing representation of a secret field goes through
+:func:`meshprovision.crypto.redact.fingerprint` first; :class:`WriteResult`
+and :class:`~meshprovision.errors.WriteVerificationError` document
+``expected``/``actual`` as always-redacted strings.
+
+Exception discipline: the only broad ``except`` in this module is
+:data:`_DEVICE_EXCEPTIONS`, which exists specifically because
+``meshtastic.util.our_exit()`` -- called by ``Node.writeConfig`` and
+``Node.setOwner`` on a bad section name or an empty name -- raises
+``SystemExit``, and letting that propagate would kill the ``mesh``
+process mid-provision. Every catch converts to a
+:class:`~meshprovision.errors.ProvisioningError` subclass or a
+:class:`WriteResult`; nothing here ever does a bare ``except Exception``.
+"""
+
+from __future__ import annotations
+
+import base64
+import logging
+import math
+import secrets
+import time
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
+from typing import TYPE_CHECKING, Any, Final, Protocol
+
+from meshprovision.crypto import redact
+from meshprovision.crypto.keys import KeyPair
+from meshprovision.db.keys import KeyRecord, KeyRepository
+from meshprovision.db.nodes import NodeRecord, NodeRepository
+from meshprovision.db.schema import BLE_PIN_LENGTH
+from meshprovision.errors import (
+    ConnectionBackendError,
+    ConnectionFailedError,
+    EnumMappingError,
+    ExitCode,
+    PlanConflictError,
+    ProvisioningError,
+    WriteVerificationError,
+)
+from meshprovision.nodeid import NodeId
+from meshprovision.provisioning import detect
+from meshprovision.provisioning.connection import ConnectionBackend, close_interface
+from meshprovision.provisioning.plan import ChangePlan, KeyPlan, SectionChange
+
+if TYPE_CHECKING:
+    from meshtastic.mesh_interface import MeshInterface
+
+__all__ = [
+    "DEFAULT_RECONNECT_ATTEMPTS",
+    "DEFAULT_SETTLE_SECONDS",
+    "ApplyOutcome",
+    "DeviceSession",
+    "InPlaceSession",
+    "ReconnectingSession",
+    "WriteResult",
+    "WriteStatus",
+    "apply_field",
+    "apply_plan",
+    "generate_ble_pin",
+    "persist_result",
+    "verify_plan",
+    "write_section",
+]
+
+_logger = logging.getLogger(__name__)
+
+DEFAULT_SETTLE_SECONDS: Final[float] = 5.0
+"""Pause, in seconds, after a reboot-triggering write before re-reading."""
+
+DEFAULT_RECONNECT_ATTEMPTS: Final[int] = 3
+"""Default number of reconnect attempts :class:`ReconnectingSession` makes."""
+
+_RECONNECT_BACKOFF: Final[float] = 2.0
+"""Base backoff, in seconds, between reconnect attempts (multiplied by attempt number)."""
+
+_DEVICE_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
+    OSError,
+    ValueError,
+    TypeError,
+    RuntimeError,
+    SystemExit,
+)
+"""Broad-but-explicit tuple caught around every device write.
+
+``SystemExit`` is deliberate: ``meshtastic.util.our_exit()`` calls
+``sys.exit(1)``, and ``Node.writeConfig``/``Node.setOwner`` call it on an
+unknown section name or an empty name (verified in meshtastic 2.7.11
+``util.py``). Catching it here and converting it to a
+:class:`~meshprovision.errors.ProvisioningError` is what stops the
+library from killing the ``mesh`` process mid-provision.
+:class:`~meshtastic.mesh_interface.MeshInterface.MeshInterfaceError` is
+added at each call site via a lazy import, since importing ``meshtastic``
+at module level would violate this layer's protobuf-confinement rule for
+every *other* module that is not ``detect.py``/``apply.py``.
+"""
+
+
+class WriteStatus(StrEnum):
+    """Outcome of one write-and-verify step."""
+
+    CONFIRMED = "confirmed"
+    UNCONFIRMED = "unconfirmed"
+    """Written, but the post-write read-back did not match -- uncertain state."""
+    FAILED = "failed"
+    """The write call itself raised -- uncertain state."""
+    SKIPPED = "skipped"
+    """Dry-run, or nothing to do for this section."""
+
+
+@dataclass(frozen=True, slots=True)
+class WriteResult:
+    """The outcome of writing (and, unless skipped, verifying) one field or section.
+
+    Attributes:
+        section: Name of the config or module-config section this result
+            belongs to (or ``"owner"`` for the name phase, or
+            ``"<verify>"`` for a whole-plan verification failure such as
+            a lost reconnect).
+        status: The outcome of this write.
+        message: Human-readable, already-redacted description.
+        field: Name of the specific field, when this result is about one
+            field rather than a whole section.
+        expected: Already-redacted, human-readable representation of the
+            intended value, when relevant. Never raw key material.
+        actual: Already-redacted, human-readable representation of the
+            value read back from the device, when relevant. Never raw
+            key material.
+    """
+
+    section: str
+    status: WriteStatus
+    message: str
+    field: str | None = None
+    expected: str | None = None
+    actual: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Whether this result represents a successful (or skipped) write.
+
+        Returns:
+            ``True`` if :attr:`status` is :attr:`WriteStatus.CONFIRMED`
+            or :attr:`WriteStatus.SKIPPED`.
+        """
+        return self.status in (WriteStatus.CONFIRMED, WriteStatus.SKIPPED)
+
+    def as_error(self) -> WriteVerificationError:
+        """Build the :class:`~meshprovision.errors.WriteVerificationError` for this result.
+
+        Returns:
+            A :class:`~meshprovision.errors.WriteVerificationError`
+            carrying this result's already-redacted ``expected``/
+            ``actual`` strings.
+        """
+        return WriteVerificationError(
+            self.message,
+            section=self.section,
+            field=self.field,
+            expected=self.expected,
+            actual=self.actual,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyOutcome:
+    """The full outcome of one :func:`apply_plan` call.
+
+    Attributes:
+        node_id: The node the plan was applied to.
+        results: Every :class:`WriteResult` produced, in execution order.
+        dry_run: Whether this outcome came from a dry run (no device
+            writes were attempted).
+        verified: Whether a verification pass was actually run (``False``
+            only when the caller passed ``verify=False``, which is for
+            unit tests and never for a real run).
+        public_key_fingerprint: A redacted fingerprint of the public key
+            confirmed on the device, when a key was written and verified.
+        record: The :class:`~meshprovision.db.nodes.NodeRecord` to
+            persist, set only when :attr:`may_update_database` is
+            ``True``.
+    """
+
+    node_id: NodeId
+    results: tuple[WriteResult, ...]
+    dry_run: bool = False
+    verified: bool = True
+    public_key_fingerprint: str | None = None
+    record: NodeRecord | None = None
+
+    @property
+    def ok(self) -> bool:
+        """Whether every result in :attr:`results` succeeded (or was skipped).
+
+        Returns:
+            ``True`` if every :class:`WriteResult` is :attr:`WriteResult.ok`.
+        """
+        return all(result.ok for result in self.results)
+
+    @property
+    def uncertain(self) -> bool:
+        """Whether any write was left in an uncertain state.
+
+        Returns:
+            ``True`` if any result's status is
+            :attr:`WriteStatus.UNCONFIRMED` or :attr:`WriteStatus.FAILED`.
+        """
+        return any(
+            result.status in (WriteStatus.UNCONFIRMED, WriteStatus.FAILED)
+            for result in self.results
+        )
+
+    @property
+    def may_update_database(self) -> bool:
+        """Whether :func:`persist_result` is allowed to write the ODS.
+
+        Returns:
+            ``True`` when this outcome is not uncertain, every result is
+            ok, and it did not come from a dry run.
+        """
+        return (not self.uncertain) and self.ok and (not self.dry_run)
+
+    @property
+    def exit_code(self) -> int:
+        """The process exit code the ``mesh`` console script should return.
+
+        Returns:
+            :attr:`~meshprovision.errors.ExitCode.OK` when :attr:`ok`;
+            otherwise :attr:`~meshprovision.errors.ExitCode.PROVISIONING`.
+        """
+        return int(ExitCode.OK) if self.ok else int(ExitCode.PROVISIONING)
+
+    def failures(self) -> tuple[WriteResult, ...]:
+        """Return every result that did not succeed.
+
+        Returns:
+            The subset of :attr:`results` for which :attr:`WriteResult.ok`
+            is ``False``, in their original order.
+        """
+        return tuple(result for result in self.results if not result.ok)
+
+    def describe(self) -> tuple[str, ...]:
+        """Render every result as one operator-facing line.
+
+        Returns:
+            One already-redacted line per entry of :attr:`results`, for
+            example ``"security.public_key: unconfirmed -- mismatch"``.
+        """
+        lines: list[str] = []
+        for result in self.results:
+            label = f"{result.section}.{result.field}" if result.field else result.section
+            line = f"{label}: {result.status.value}"
+            if result.message:
+                line = f"{line} -- {result.message}"
+            lines.append(line)
+        return tuple(lines)
+
+    def raise_if_uncertain(self) -> None:
+        """Raise the first failure's error, if this outcome is uncertain.
+
+        Raises:
+            WriteVerificationError: The error built from the first entry
+                of :meth:`failures`, when any exists.
+        """
+        failures = self.failures()
+        if failures:
+            raise failures[0].as_error()
+
+
+class DeviceSession(Protocol):
+    """Structural protocol for a live connection :func:`apply_plan` can drive.
+
+    Deliberately a ``Protocol``: e2e tests satisfy this with a fake
+    session wrapping a fake ``MeshInterface``, with no inheritance
+    required.
+    """
+
+    @property
+    def interface(self) -> MeshInterface:
+        """The currently-open interface."""
+        ...
+
+    def describe(self) -> str:
+        """Return a one-line, operator-facing description of this session."""
+        ...
+
+    def refresh(self) -> MeshInterface:
+        """Return an interface whose config was read fresh from the device.
+
+        Returns:
+            The refreshed interface.
+        """
+        ...
+
+
+@dataclass(slots=True)
+class ReconnectingSession:
+    """The honest read-back session: closes and reopens the connection to verify.
+
+    A fresh :meth:`refresh` performs the full config handshake, so
+    ``localNode.localConfig`` genuinely comes from the device rather than
+    from the in-memory copy :func:`apply_plan` just wrote -- this is what
+    makes the write-then-read-back guarantee meaningful for issue #7449
+    (a restored key silently discarded on reboot).
+
+    Deliberately does not use
+    :func:`meshprovision.provisioning.connection.connected` -- that
+    context manager closes the interface on exit, and this session must
+    own the connection's lifecycle across multiple opens.
+
+    Attributes:
+        backend: The connection backend to (re)connect through.
+        settle_seconds: Pause before each reconnect attempt.
+        attempts: Number of reconnect attempts to make.
+        sleep: Sleep function, injectable for tests.
+    """
+
+    backend: ConnectionBackend
+    _iface: MeshInterface | None = None
+    settle_seconds: float = DEFAULT_SETTLE_SECONDS
+    attempts: int = DEFAULT_RECONNECT_ATTEMPTS
+    sleep: Callable[[float], None] = time.sleep
+
+    def open(self) -> MeshInterface:
+        """Open the initial connection.
+
+        Returns:
+            The connected interface.
+
+        Raises:
+            ConnectionFailedError: If the connection attempt fails.
+        """
+        self._iface = self.backend.connect()
+        return self._iface
+
+    @property
+    def interface(self) -> MeshInterface:
+        """The currently-open interface.
+
+        Returns:
+            The interface from the most recent :meth:`open`/:meth:`refresh`.
+
+        Raises:
+            ProvisioningError: If :meth:`open` has not been called yet.
+        """
+        if self._iface is None:
+            raise ProvisioningError("ReconnectingSession has not been opened; call open() first.")
+        return self._iface
+
+    def describe(self) -> str:
+        """Return a one-line, operator-facing description of this session.
+
+        Returns:
+            :meth:`ConnectionBackend.describe` of :attr:`backend`.
+        """
+        return self.backend.describe()
+
+    def refresh(self) -> MeshInterface:
+        """Close, settle, and reconnect, retrying up to :attr:`attempts` times.
+
+        Returns:
+            The freshly (re)connected interface.
+
+        Raises:
+            ConnectionFailedError: If every reconnect attempt fails.
+        """
+        if self._iface is not None:
+            close_interface(self._iface)
+            self._iface = None
+        self.sleep(self.settle_seconds)
+
+        last_error: ConnectionFailedError | None = None
+        for attempt in range(1, self.attempts + 1):
+            try:
+                self._iface = self.backend.connect()
+                return self._iface
+            except ConnectionBackendError as exc:
+                last_error = (
+                    exc
+                    if isinstance(exc, ConnectionFailedError)
+                    else ConnectionFailedError(
+                        str(exc), transport=self.backend.transport, target=self.backend.target
+                    )
+                )
+                if attempt < self.attempts:
+                    self.sleep(_RECONNECT_BACKOFF * attempt)
+        assert last_error is not None  # noqa: S101 -- loop always sets it before exhausting
+        raise last_error
+
+    def close(self) -> None:
+        """Close the current connection, if one is open."""
+        if self._iface is not None:
+            close_interface(self._iface)
+            self._iface = None
+
+    def __enter__(self) -> ReconnectingSession:
+        """Open the connection and return this session.
+
+        Returns:
+            ``self``.
+        """
+        self.open()
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        """Close the connection.
+
+        Args:
+            exc_type: Unused; part of the context-manager protocol.
+            exc: Unused; part of the context-manager protocol.
+            tb: Unused; part of the context-manager protocol.
+        """
+        del exc_type, exc, tb
+        self.close()
+
+
+@dataclass(slots=True)
+class InPlaceSession:
+    """A session that never reconnects -- verifies against the in-memory interface.
+
+    This provides a **weaker** guarantee than :class:`ReconnectingSession`:
+    it re-reads whatever ``iface.localNode.localConfig`` currently holds
+    in memory, which for a real device may still reflect the write this
+    process just made rather than what actually persisted across a
+    reboot (issue #7449). It exists for the e2e fake ``MeshInterface``
+    (whose ``writeConfig`` updates its own ``localConfig`` synchronously,
+    so there is nothing to reconnect to) and for a documented
+    ``--no-reconnect`` escape hatch that operators should use only when
+    they understand this tradeoff.
+
+    Attributes:
+        iface: The already-connected interface to use for every read and
+            write.
+    """
+
+    iface: MeshInterface
+
+    @property
+    def interface(self) -> MeshInterface:
+        """The wrapped interface.
+
+        Returns:
+            :attr:`iface`.
+        """
+        return self.iface
+
+    def describe(self) -> str:
+        """Return a one-line, operator-facing description of this session.
+
+        Returns:
+            A fixed string noting the weaker verification guarantee.
+        """
+        return "in-place session (no reconnect -- weaker verification)"
+
+    def refresh(self) -> MeshInterface:
+        """Return the same interface, unchanged.
+
+        Returns:
+            :attr:`iface`, without closing or reopening anything.
+        """
+        return self.iface
+
+
+def generate_ble_pin(*, rng: Callable[[int], int] = secrets.randbelow) -> str:
+    """Generate a fresh 6-digit BLE pairing PIN.
+
+    Uses :func:`secrets.randbelow` by default, never the ``random``
+    module (this is what a BLE fixed PIN is: a shared secret an attacker
+    within range could otherwise brute-force offline if it were
+    predictable). The caller passes the result into
+    ``PlanInputs.ble_pin`` so that
+    :func:`meshprovision.provisioning.plan.build_plan` stays a pure,
+    deterministic function of its inputs -- the PIN is generated here,
+    once, by the caller, not re-derived inside the pure planning layer.
+
+    Args:
+        rng: A function from an exclusive upper bound to a random ``int``
+            in ``[0, bound)``. Overridable for deterministic tests.
+
+    Returns:
+        A plain ``str`` of exactly :data:`~meshprovision.db.schema.BLE_PIN_LENGTH`
+        digits, including any leading zeros. Never logged; the caller
+        wraps it in a ``SecretStr``/``SecretBytes`` immediately.
+    """
+    return "".join(str(rng(10)) for _ in range(BLE_PIN_LENGTH))
+
+
+def apply_field(message: Any, field: str, value: object) -> None:
+    """Apply one field change onto a live protobuf config-section message.
+
+    Args:
+        message: A protobuf config or module-config section message (for
+            example ``iface.localNode.localConfig.lora``).
+        field: The field's name on ``message``.
+        value: The desired value: a ``str`` enum-member name for an enum
+            field, a numeric string for an integer field, or a plain
+            ``bool``/``int``/``float``/``str``/``bytes`` otherwise.
+
+    Raises:
+        PlanConflictError: If ``field`` does not exist on ``message``, or
+            ``value`` is of a type this function does not know how to
+            apply.
+        EnumMappingError: If ``field`` is an enum field and ``value`` is a
+            ``str`` that does not name a known enum member.
+    """
+    from google.protobuf.descriptor import FieldDescriptor
+
+    descriptor = message.DESCRIPTOR.fields_by_name.get(field)
+    if descriptor is None:
+        raise PlanConflictError(
+            f"Unknown field {field!r} on {message.DESCRIPTOR.full_name}", field=field
+        )
+
+    if descriptor.type == FieldDescriptor.TYPE_ENUM and isinstance(value, str):
+        enum_value = descriptor.enum_type.values_by_name.get(value)
+        if enum_value is None:
+            known = tuple(v.name for v in descriptor.enum_type.values)
+            raise EnumMappingError(
+                f"Unknown value {value!r} for enum field {field!r}",
+                enum_name=field,
+                value=value,
+                known=known,
+            )
+        setattr(message, field, enum_value.number)
+        return
+
+    int_field_types = (
+        FieldDescriptor.TYPE_INT32,
+        FieldDescriptor.TYPE_INT64,
+        FieldDescriptor.TYPE_UINT32,
+        FieldDescriptor.TYPE_UINT64,
+        FieldDescriptor.TYPE_SINT32,
+        FieldDescriptor.TYPE_SINT64,
+        FieldDescriptor.TYPE_FIXED32,
+        FieldDescriptor.TYPE_FIXED64,
+        FieldDescriptor.TYPE_SFIXED32,
+        FieldDescriptor.TYPE_SFIXED64,
+    )
+    if isinstance(value, bool):
+        setattr(message, field, value)
+        return
+    if isinstance(value, str) and descriptor.type in int_field_types:
+        stripped = value.strip()
+        if not (stripped.lstrip("-").isdigit()):
+            raise PlanConflictError(
+                f"Field {field!r} expects an integer, got {value!r}", field=field
+            )
+        setattr(message, field, int(stripped))
+        return
+    if isinstance(value, int | float | str):
+        setattr(message, field, value)
+        return
+    if isinstance(value, bytes | bytearray):
+        setattr(message, field, bytes(value))
+        return
+
+    raise PlanConflictError(
+        f"Cannot apply value of type {type(value).__name__} to field {field!r}", field=field
+    )
+
+
+def write_section(
+    iface: MeshInterface,
+    change: SectionChange,
+    *,
+    key_plan: KeyPlan | None = None,
+    keypair: KeyPair | None = None,
+) -> None:
+    """Write one config or module-config section to the device.
+
+    Args:
+        iface: The connected interface to write through.
+        change: The section's field changes to apply.
+        key_plan: The plan's key decisions, consulted only when
+            ``change.section == "security"``.
+        keypair: The freshly generated keypair, required when
+            ``key_plan.regenerate`` is set.
+
+    Raises:
+        PlanConflictError: If ``change.section`` is not a known config or
+            module-config section name, or a field within it cannot be
+            applied.
+        ProvisioningError: If the device write itself fails (including a
+            ``SystemExit`` raised by ``meshtastic.util.our_exit()``,
+            converted here rather than allowed to kill the process).
+    """
+    is_config = change.section in detect.CONFIG_SECTIONS
+    is_module = change.section in detect.MODULE_SECTIONS
+    if not is_config and not is_module:
+        raise PlanConflictError(f"Unknown config section {change.section!r}", field=change.section)
+
+    from meshtastic.mesh_interface import MeshInterface as _MeshInterface
+
+    root = iface.localNode.localConfig if is_config else iface.localNode.moduleConfig
+    msg = getattr(root, change.section)
+
+    for field_change in change.changes:
+        apply_field(msg, field_change.field, field_change.desired)
+
+    if change.section == "security" and key_plan is not None:
+        if key_plan.regenerate:
+            if keypair is None:
+                raise PlanConflictError(
+                    "Plan requires a fresh keypair but none was supplied",
+                    field="security.private_key",
+                )
+            msg.private_key = keypair.private.reveal()
+            msg.public_key = keypair.public
+        if key_plan.change_admin_keys:
+            del msg.admin_key[:]
+            msg.admin_key.extend(key_plan.desired_admin_keys)
+
+    try:
+        iface.localNode.writeConfig(change.section)
+    except (*_DEVICE_EXCEPTIONS, _MeshInterface.MeshInterfaceError) as exc:
+        raise ProvisioningError(
+            f"Failed to write config section {change.section!r}: {exc}"
+        ) from exc
+
+    _logger.info("Wrote config section %s (%d fields)", change.section, len(change.changes))
+
+
+def _values_equal(actual: object, desired: object) -> bool:
+    """Compare a live value against a desired value with type-tolerant semantics.
+
+    Args:
+        actual: The value read back from the device.
+        desired: The value the plan intended to write.
+
+    Returns:
+        ``True`` if the two values should be treated as equal: exact
+        equality for most types, a bool-vs-int-safe comparison, and
+        ``math.isclose`` (``rel_tol=1e-9``, ``abs_tol=1e-9``) for floats.
+    """
+    if isinstance(desired, bool) or isinstance(actual, bool):
+        return bool(actual) == bool(desired)
+    if isinstance(desired, float) or isinstance(actual, float):
+        try:
+            actual_f = float(actual)  # type: ignore[arg-type]
+            desired_f = float(desired)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return actual == desired
+        return math.isclose(actual_f, desired_f, rel_tol=1e-9, abs_tol=1e-9)
+    return actual == desired
+
+
+def _render_value(value: object, *, secret: bool) -> str:
+    """Render a plan/live value as an already-redacted, human-readable string.
+
+    Args:
+        value: The value to render.
+        secret: Whether this field is secret (per
+            :attr:`~meshprovision.provisioning.plan.FieldChange.secret`).
+
+    Returns:
+        The literal ``"<redacted>"`` when ``secret`` is ``True``;
+        otherwise ``str(value)``.
+    """
+    if secret:
+        return "<redacted>"
+    return str(value)
+
+
+def _verify_name(live: detect.LiveConfig, desired: str | None, *, field: str) -> WriteResult | None:
+    """Verify one name field (``short_name``/``long_name``) against its desired value.
+
+    Args:
+        live: The freshly re-read live configuration.
+        desired: The name the plan intended to write, or ``None`` if this
+            name was not part of the plan.
+        field: ``"short_name"`` or ``"long_name"``.
+
+    Returns:
+        ``None`` when ``desired`` is ``None`` (nothing to verify);
+        otherwise the :class:`WriteResult` for this name.
+    """
+    if desired is None:
+        return None
+    actual = live.short_name if field == "short_name" else live.long_name
+    if actual == desired:
+        return WriteResult("owner", WriteStatus.CONFIRMED, "confirmed", field=field)
+    if desired.startswith(actual) and len(actual.encode("utf-8")) < len(desired.encode("utf-8")):
+        return WriteResult(
+            "owner",
+            WriteStatus.CONFIRMED,
+            f"firmware truncated the name to {len(actual.encode('utf-8'))} bytes",
+            field=field,
+            expected=desired,
+            actual=actual,
+        )
+    return WriteResult(
+        "owner",
+        WriteStatus.UNCONFIRMED,
+        "name did not match after write",
+        field=field,
+        expected=desired,
+        actual=actual,
+    )
+
+
+def _verify_key_material(
+    plan: ChangePlan,
+    live_after: detect.LiveConfig,
+    *,
+    keypair: KeyPair | None,
+    device_public_key: object,
+) -> WriteResult | None:
+    """Verify a regenerated key pair, per the firmware issue #7449 requirement.
+
+    A key write is confirmed only when both the fresh ``LocalConfig`` read
+    and the independent NodeDB view (``iface.getPublicKey()``) agree with
+    ``keypair.public``.
+
+    Args:
+        plan: The executed plan.
+        live_after: The freshly re-read live configuration.
+        keypair: The freshly generated keypair, when one was written.
+        device_public_key: The raw value of ``iface.getPublicKey()``: a
+            base64 ``str`` (the common case -- it is produced by
+            ``google.protobuf.json_format.MessageToDict``), raw
+            ``bytes``, or ``None`` when the NodeDB entry is not yet
+            repopulated.
+
+    Returns:
+        ``None`` when the plan did not regenerate a key; otherwise the
+        :class:`WriteResult` for ``security.public_key``.
+    """
+    if not plan.key_plan.regenerate or keypair is None:
+        return None
+
+    local_config_ok = live_after.security.public_key == keypair.public
+
+    nodedb_available = device_public_key is not None
+    nodedb_bytes: bytes | None = None
+    if isinstance(device_public_key, bytes | bytearray):
+        nodedb_bytes = bytes(device_public_key)
+    elif isinstance(device_public_key, str):
+        try:
+            nodedb_bytes = base64.b64decode(device_public_key, validate=True)
+        except (ValueError, TypeError):
+            nodedb_bytes = None
+    nodedb_ok = nodedb_bytes is not None and nodedb_bytes == keypair.public
+
+    if local_config_ok and (nodedb_ok or not nodedb_available):
+        note = "" if nodedb_available else " (NodeDB cross-check unavailable)"
+        return WriteResult(
+            "security", WriteStatus.CONFIRMED, f"public key confirmed{note}", field="public_key"
+        )
+
+    actual_bytes = nodedb_bytes if nodedb_bytes is not None else live_after.security.public_key
+    actual_repr = redact.fingerprint(actual_bytes) if actual_bytes is not None else "<absent>"
+    return WriteResult(
+        "security",
+        WriteStatus.UNCONFIRMED,
+        "public key mismatch after write",
+        field="public_key",
+        expected=redact.fingerprint(keypair.public),
+        actual=actual_repr,
+    )
+
+
+def _verify_admin_keys(plan: ChangePlan, live_after: detect.LiveConfig) -> WriteResult | None:
+    """Verify the device's authorized admin keys against the plan's intent.
+
+    Args:
+        plan: The executed plan.
+        live_after: The freshly re-read live configuration.
+
+    Returns:
+        ``None`` when the plan did not change admin keys; otherwise the
+        :class:`WriteResult` for ``security.admin_key``.
+    """
+    if not plan.key_plan.change_admin_keys:
+        return None
+
+    desired = sorted(plan.key_plan.desired_admin_keys)
+    actual = sorted(live_after.security.admin_keys)
+    if desired == actual:
+        return WriteResult(
+            "security",
+            WriteStatus.CONFIRMED,
+            f"{len(actual)} admin key(s) confirmed",
+            field="admin_key",
+        )
+    expected_fps = ", ".join(redact.fingerprint(k) for k in desired)
+    actual_fps = ", ".join(redact.fingerprint(k) for k in actual)
+    return WriteResult(
+        "security",
+        WriteStatus.UNCONFIRMED,
+        f"admin key set mismatch: expected {len(desired)}, got {len(actual)}",
+        field="admin_key",
+        expected=expected_fps or "<none>",
+        actual=actual_fps or "<none>",
+    )
+
+
+def verify_plan(
+    plan: ChangePlan,
+    live_after: detect.LiveConfig,
+    *,
+    keypair: KeyPair | None,
+    device_public_key: object = None,
+) -> tuple[WriteResult, ...]:
+    """Compare a freshly re-read device state against a plan's intent.
+
+    This is the read-back half of the transactional write guarantee: it
+    never writes anything, only compares.
+
+    Args:
+        plan: The executed plan.
+        live_after: The freshly re-read live configuration (obtained
+            through :meth:`DeviceSession.refresh`, never the in-memory
+            copy the write phase used).
+        keypair: The freshly generated keypair, when the plan regenerated
+            one.
+        device_public_key: The raw value of ``iface.getPublicKey()``, as
+            documented on :func:`_verify_key_material`.
+
+    Returns:
+        One :class:`WriteResult` per verified field/section, covering the
+        name phase, every ordinary field change, and (when relevant) the
+        key-material and admin-key checks.
+    """
+    results: list[WriteResult] = []
+
+    short_result = _verify_name(live_after, plan.name_change.desired_short_name, field="short_name")
+    if short_result is not None:
+        results.append(short_result)
+    long_result = _verify_name(live_after, plan.name_change.desired_long_name, field="long_name")
+    if long_result is not None:
+        results.append(long_result)
+
+    for change in plan.sections:
+        for field_change in change.changes:
+            actual = live_after.value(change.section, field_change.field)
+            if _values_equal(actual, field_change.desired):
+                results.append(
+                    WriteResult(
+                        change.section, WriteStatus.CONFIRMED, "confirmed", field=field_change.field
+                    )
+                )
+            else:
+                results.append(
+                    WriteResult(
+                        change.section,
+                        WriteStatus.UNCONFIRMED,
+                        "value mismatch after write",
+                        field=field_change.field,
+                        expected=_render_value(field_change.desired, secret=field_change.secret),
+                        actual=_render_value(actual, secret=field_change.secret),
+                    )
+                )
+
+    key_result = _verify_key_material(
+        plan, live_after, keypair=keypair, device_public_key=device_public_key
+    )
+    if key_result is not None:
+        results.append(key_result)
+
+    admin_result = _verify_admin_keys(plan, live_after)
+    if admin_result is not None:
+        results.append(admin_result)
+
+    return tuple(results)
+
+
+def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | None:
+    """Execute the name (owner) phase of a plan.
+
+    Args:
+        iface: The connected interface to write through.
+        plan: The plan whose ``name_change`` should be applied.
+
+    Returns:
+        A :class:`WriteResult` describing a failure, or ``None`` when the
+        name phase was empty or succeeded (verification happens later,
+        in :func:`verify_plan`).
+    """
+    if plan.name_change.is_empty:
+        return None
+
+    from meshtastic.mesh_interface import MeshInterface as _MeshInterface
+
+    try:
+        iface.localNode.setOwner(
+            long_name=plan.name_change.desired_long_name,
+            short_name=plan.name_change.desired_short_name,
+        )
+    except (*_DEVICE_EXCEPTIONS, _MeshInterface.MeshInterfaceError) as exc:
+        return WriteResult("owner", WriteStatus.FAILED, f"Failed to set owner: {exc}")
+    return None
+
+
+def apply_plan(
+    plan: ChangePlan,
+    session: DeviceSession,
+    *,
+    keypair: KeyPair | None = None,
+    dry_run: bool = False,
+    verify: bool = True,
+    settle_seconds: float = DEFAULT_SETTLE_SECONDS,
+    sleep: Callable[[float], None] = time.sleep,
+) -> ApplyOutcome:
+    """Execute a change plan against a live device with a write-then-verify guarantee.
+
+    Never raises for a verification mismatch: the caller inspects
+    :attr:`ApplyOutcome.exit_code` or calls
+    :meth:`ApplyOutcome.raise_if_uncertain`. It does propagate a lost
+    reconnect as an uncertain outcome (never as an exception) -- a device
+    that cannot be re-read is by definition unverified, and the ODS must
+    not be written.
+
+    Args:
+        plan: The change plan to execute.
+        session: The device session to write and (unless ``verify`` is
+            ``False``) re-read through.
+        keypair: The freshly generated keypair, required when
+            ``plan.key_plan.regenerate`` is set.
+        dry_run: When ``True``, no device writes are attempted; every
+            result is :attr:`WriteStatus.SKIPPED`.
+        verify: When ``False``, skip the read-back verification pass
+            entirely. Only for unit tests -- never for a real run.
+        settle_seconds: Pause after a reboot-triggering write, and again
+            before the final verification reconnect.
+        sleep: Sleep function, injectable for tests.
+
+    Returns:
+        The full :class:`ApplyOutcome`.
+
+    Raises:
+        PlanConflictError: If ``plan.key_plan.regenerate`` is set but
+            ``keypair`` is ``None``. Raised before any write is attempted.
+    """
+    if plan.key_plan.regenerate and keypair is None:
+        raise PlanConflictError(
+            "Plan requires a fresh keypair but none was supplied", field="security.private_key"
+        )
+
+    if plan.is_empty:
+        # Nothing to write or verify -- but a real (non-dry-run) apply of an
+        # empty plan still counts as a successful, certain outcome, so the
+        # caller's persist_result can refresh the ODS's last_updated_ts.
+        return ApplyOutcome(
+            node_id=plan.node_id,
+            results=(),
+            dry_run=dry_run,
+            verified=False,
+            record=None if dry_run else plan.to_record(),
+        )
+
+    if dry_run:
+        skipped: list[WriteResult] = []
+        if not plan.name_change.is_empty:
+            skipped.append(WriteResult("owner", WriteStatus.SKIPPED, "dry run"))
+        for change in plan.sections:
+            skipped.append(WriteResult(change.section, WriteStatus.SKIPPED, "dry run"))
+        return ApplyOutcome(
+            node_id=plan.node_id, results=tuple(skipped), dry_run=True, verified=False
+        )
+
+    results: list[WriteResult] = []
+    iface = session.interface
+
+    name_failure = _run_name_phase(iface, plan)
+    if name_failure is not None:
+        results.append(name_failure)
+
+    for change in plan.sections:
+        try:
+            write_section(iface, change, key_plan=plan.key_plan, keypair=keypair)
+        except (ProvisioningError, PlanConflictError) as exc:
+            results.append(WriteResult(change.section, WriteStatus.FAILED, str(exc)))
+            continue
+        if change.reboots_device:
+            sleep(settle_seconds)
+
+    if not verify:
+        return ApplyOutcome(
+            node_id=plan.node_id, results=tuple(results), dry_run=False, verified=False
+        )
+
+    sleep(settle_seconds)
+    try:
+        fresh_iface = session.refresh()
+    except ConnectionBackendError:
+        results.append(
+            WriteResult("<verify>", WriteStatus.FAILED, "Could not reconnect to verify the writes")
+        )
+        return ApplyOutcome(
+            node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
+        )
+
+    live_after = detect.read_live_config(fresh_iface)
+    device_pub = fresh_iface.getPublicKey()
+    results.extend(verify_plan(plan, live_after, keypair=keypair, device_public_key=device_pub))
+
+    outcome = ApplyOutcome(
+        node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
+    )
+    if outcome.uncertain or not outcome.ok:
+        _logger.warning(
+            "Node %s left in an UNCERTAIN STATE: %s",
+            plan.node_id.display,
+            ", ".join(
+                f"{r.section}.{r.field}" if r.field else r.section for r in outcome.failures()
+            ),
+        )
+        return outcome
+
+    fingerprint = redact.fingerprint(keypair.public) if keypair is not None else None
+    return ApplyOutcome(
+        node_id=plan.node_id,
+        results=outcome.results,
+        dry_run=False,
+        verified=True,
+        public_key_fingerprint=fingerprint,
+        record=plan.to_record(),
+    )
+
+
+def persist_result(
+    outcome: ApplyOutcome,
+    *,
+    nodes: NodeRepository,
+    keys: KeyRepository,
+    keypair: KeyPair | None = None,
+    admin_key_refs: Sequence[str] = (),
+    now: datetime | None = None,
+) -> bool:
+    """The single gate deciding whether an apply outcome may update the ODS.
+
+    Args:
+        outcome: The result of :func:`apply_plan`.
+        nodes: The node repository to upsert into.
+        keys: The key repository to upsert into. Must share the same
+            :class:`~meshprovision.db.ods.OdsDatabase` session as
+            ``nodes`` -- this is what makes the final :meth:`save` atomic
+            across both sheets.
+        keypair: The freshly generated keypair, when one was confirmed on
+            the device.
+        admin_key_refs: Unused directly here (the confirmed record's
+            ``authorized_admin_keys`` already reflects the plan); kept as
+            part of this function's documented signature for callers that
+            want to pass it through for logging/audit purposes.
+        now: Timestamp to record. Defaults to the current time.
+
+    Returns:
+        ``True`` if the database was updated and saved; ``False`` if the
+        outcome was in an uncertain state and nothing was written.
+    """
+    del admin_key_refs
+    if not outcome.may_update_database or outcome.record is None:
+        _logger.warning(
+            "Skipping database update for %s: node is in an uncertain state",
+            outcome.node_id.display,
+        )
+        return False
+
+    if keypair is not None:
+        public_record, private_record = KeyRecord.for_keypair(
+            outcome.record.node_id, keypair, created_ts=now
+        )
+        keys.upsert(public_record)
+        keys.upsert(private_record)
+
+    nodes.upsert(outcome.record, now=now)
+    nodes.db.save()
+    return True

@@ -1,0 +1,128 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "meshprovision"
+version = "0.1.0"
+description = "Provisioning and read-only monitoring toolkit for Meshtastic mesh nodes."
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+license = "MIT"
+authors = [{ name = "meshprovision contributors" }]
+keywords = ["meshtastic", "lora", "mesh", "provisioning"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: System Administrators",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Communications :: Ham Radio",
+  "Typing :: Typed",
+]
+dependencies = [
+  "meshtastic>=2.7.11",
+  "cryptography",
+  "pydantic>=2",
+  "rich",
+  "click",
+  "structlog",
+  "httpx",
+  "odfpy",
+  "python-dotenv",
+  "platformdirs",
+]
+
+[project.optional-dependencies]
+# Documented alias only: meshtastic>=2.7.11 already depends on bleak directly,
+# so BLE works without this extra. Kept so `pip install "meshprovision[ble]"`
+# stays a valid, non-broken command.
+ble = ["meshtastic>=2.7.11"]
+dev = [
+  "pytest",
+  "pytest-cov",
+  "respx",
+  "responses",
+  "ruff",
+  "mypy",
+  "pre-commit",
+  "detect-secrets",
+]
+
+[project.scripts]
+mesh = "meshprovision.cli.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/meshprovision"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "config", "scripts", "README.md", "CHANGELOG.md", ".env.example"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+extend-exclude = [".venv"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM", "RET", "ARG", "PTH", "DTZ", "T20", "S", "ANN", "D", "RUF"]
+ignore = [
+  "D203",    # incompatible with D211
+  "D213",    # incompatible with D212
+  "ANN401",  # typing.Any is occasionally unavoidable at protobuf boundaries
+  "S603",    # subprocess calls are audited individually
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "D100", "D101", "D102", "D103", "D104", "ANN001", "ANN201", "ARG001"]
+"scripts/**" = ["T201"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+mypy_path = ["src"]
+packages = ["meshprovision"]
+warn_unreachable = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = ["meshtastic.*", "odf.*", "serial.*", "bleak.*", "responses.*", "pubsub.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+  "unit: fast, pure-logic tests with no I/O",
+  "e2e: end-to-end CLI tests against a fully mocked environment",
+]
+
+[tool.coverage.run]
+source = ["src/meshprovision"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "raise NotImplementedError",
+  "@overload",
+]

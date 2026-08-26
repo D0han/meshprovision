@@ -1,0 +1,88 @@
+# meshprovision provisioning template -- EXAMPLE.
+#
+# Copy this file to config/template.yaml and edit it there.
+# config/template.yaml is gitignored -- it is your operational template,
+# not something that belongs in version control.
+version: 1
+
+# Module options. Every enabled/disabled option is a Meshtastic module
+# name (lower_snake_case). An option may appear in at most ONE of these
+# two lists -- listing it in both is a template-load error. An option
+# meshprovision does not recognize is not an error either -- firmware
+# adds modules over time -- it just produces a load-time warning.
+enabled_options: [telemetry, neighbor_info]
+disabled_options: [mqtt, serial, range_test, store_forward, remote_hardware, paxcounter]
+
+# Naming. '{n}' is the ONLY placeholder; each occurrence consumes one
+# character from name_suffix_alphabet. Write a literal brace as '{{' or
+# '}}'. 'MT' is short for "Meshtastic" -- a deliberately generic prefix;
+# change it freely to suit your fleet.
+#
+# The rendered short_name must fit 4 UTF-8 BYTES and long_name 39 UTF-8
+# BYTES. The firmware truncates an over-length name SILENTLY rather than
+# rejecting it, so meshprovision refuses to load a template whose widest
+# possible rendering would overflow either limit. Non-ASCII characters
+# in a prefix or alphabet cost more than one byte each -- a single
+# accented or non-Latin character can consume the entire short_name
+# budget on its own.
+short_name_pattern: "MT{n}{n}" # widest rendering "MTZZ" = 4 bytes; capacity 36**2 = 1296
+long_name_pattern: "Meshtastic MT{n}{n}"
+name_suffix_alphabet: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ" # base36
+name_min_capacity: 100 # warn at template-load time if the pattern yields fewer names than this
+name_capacity_warn_utilization: 0.9 # warn on every run once 90% of the namespace is used
+name_capacity_strict: false # true turns the capacity-floor warning above into a hard load error
+
+# 0 to 3 admin node references (3 is the firmware's admin_key capacity
+# -- config.security.admin_key is a `repeated bytes` field limited to
+# three entries). Zero, or fewer than three, is a perfectly valid and
+# deliberate choice -- meshprovision never "repairs" this list toward
+# three admins on its own.
+#
+# Each ref here is just a short label (e.g. a node's short_name or any
+# name you choose) -- NOT a key. At provisioning time it must resolve to
+# a "<ref>_pub" row in the Keys sheet of your ODS database; meshprovision
+# appends "_pub"/"_priv" itself, so a ref must not already end in either.
+# Register one with `mesh admin bootstrap` (provisions a device and
+# records it as an admin) or `mesh admin import <REF>=<BASE64>`
+# (registers a public key you already hold).
+admin_nodes: []
+
+device:
+  role: CLIENT
+  # rebroadcast_mode, node_info_broadcast_secs, button_gpio, buzzer_gpio,
+  # double_tap_as_button_press, disable_triple_click,
+  # led_heartbeat_disabled, and tzdef are also available here; omitted
+  # fields are left at the device's current value rather than reset.
+
+lora:
+  # Meshtastic RegionCode. "EU_868" is the region used across Poland and
+  # most of the EU -- there is no separate "PL" region code in the
+  # protobuf, despite what the country code might suggest.
+  region: EU_868
+  use_preset: true
+  modem_preset: LONG_FAST
+  hop_limit: 3
+  tx_enabled: true
+
+position:
+  position_broadcast_secs: 900
+  position_broadcast_smart_enabled: true
+  fixed_position: false
+  # fixed_latitude / fixed_longitude / fixed_altitude are honored here
+  # too, but are applied via the device's dedicated fixed-position API
+  # rather than as part of this config section.
+
+power:
+  is_power_saving: false
+
+telemetry:
+  device_update_interval: 1800
+  environment_measurement_enabled: false
+
+security:
+  # Key material NEVER goes in this file -- a template containing
+  # private_key, public_key, or admin_key is refused outright. Admin
+  # keys are derived from admin_nodes above plus the Keys sheet; each
+  # node's own keypair is generated fresh by `mesh provision`.
+  is_managed: false # lockdown mode; requires 1-3 admin_nodes AND --allow-lockdown
+  admin_channel_enabled: false # must stay false -- the legacy admin channel is never used
