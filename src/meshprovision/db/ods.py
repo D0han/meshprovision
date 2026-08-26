@@ -1030,6 +1030,8 @@ class OdsDatabase:
                 does not release it within the resolved timeout.
             AtomicWriteError: If the sidecar lock file itself cannot be
                 created or acquired.
+            SettingsError: If ``MESHPROVISION_LOCK_TIMEOUT`` is set to a
+                malformed value.
         """
         if self._lock_cm is not None:
             return

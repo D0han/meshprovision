@@ -41,7 +41,7 @@ import time
 from types import ModuleType
 from typing import TYPE_CHECKING, Final
 
-from meshprovision.errors import AtomicWriteError, DatabaseLockedError
+from meshprovision.errors import AtomicWriteError, DatabaseLockedError, SettingsError
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -108,22 +108,31 @@ def _resolve_timeout(timeout: float | None) -> float:
             environment variable / default.
 
     Returns:
-        The timeout, in seconds. A malformed value -- an unparseable
-        string, or a non-finite one such as ``inf`` or ``nan``, which
-        would make the acquisition deadline unreachable -- falls back
-        to :data:`DEFAULT_LOCK_TIMEOUT` rather than raising.
+        The timeout, in seconds. An unset or empty
+        :data:`LOCK_TIMEOUT_ENV` resolves to
+        :data:`DEFAULT_LOCK_TIMEOUT`.
+
+    Raises:
+        SettingsError: If :data:`LOCK_TIMEOUT_ENV` is set to anything
+            other than a finite, non-negative number of seconds. This
+            matches :func:`~meshprovision.cache.http.resolve_ttl`'s
+            handling of ``MESHPROVISION_CACHE_TTL``: a malformed value
+            is an operator typo, and substituting a default for it
+            produces symptoms harder to diagnose than one loud refusal.
     """
     if timeout is not None:
         return timeout
     raw = os.environ.get(LOCK_TIMEOUT_ENV)
-    if raw is None:
+    if raw is None or not raw.strip():
         return DEFAULT_LOCK_TIMEOUT
     try:
         value = float(raw)
-    except ValueError:
-        return DEFAULT_LOCK_TIMEOUT
+    except ValueError as exc:
+        raise SettingsError(f"{LOCK_TIMEOUT_ENV} must be a number of seconds, got {raw!r}") from exc
     if not math.isfinite(value):
-        return DEFAULT_LOCK_TIMEOUT
+        raise SettingsError(f"{LOCK_TIMEOUT_ENV} must be a finite number of seconds, got {raw!r}")
+    if value < 0:
+        raise SettingsError(f"{LOCK_TIMEOUT_ENV} must not be negative, got {raw!r}")
     return value
 
 
@@ -194,7 +203,7 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
             on ``target``'s sidecar, derived via :func:`lock_path_for`.
         timeout: Seconds to poll before giving up. ``None`` (the
             default) resolves :data:`LOCK_TIMEOUT_ENV`, falling back to
-            :data:`DEFAULT_LOCK_TIMEOUT`.
+            :data:`DEFAULT_LOCK_TIMEOUT` when it is unset or empty.
 
     Yields:
         Nothing.
@@ -208,6 +217,11 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
             to contention, which polling cannot resolve.
         DatabaseLockedError: If another process holds the lock and does
             not release it within the resolved timeout.
+        SettingsError: If :data:`LOCK_TIMEOUT_ENV` is set to a malformed
+            value. Raised before the sidecar lock file is created, so a
+            misconfigured environment leaves nothing behind. Not raised
+            on a platform without ``fcntl``, where the lock is a no-op
+            and the timeout governs nothing.
     """
     if fcntl is None:
         _warn_no_fcntl_once()
@@ -215,6 +229,7 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
         return
 
     lock_path = lock_path_for(target)
+    resolved_timeout = _resolve_timeout(timeout)
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, _LOCK_FILE_MODE)
     except OSError as exc:
@@ -224,7 +239,7 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
         ) from exc
 
     try:
-        deadline = time.monotonic() + _resolve_timeout(timeout)
+        deadline = time.monotonic() + resolved_timeout
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

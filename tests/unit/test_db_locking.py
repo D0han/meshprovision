@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision.db import locking
-from meshprovision.errors import AtomicWriteError, DatabaseLockedError
+from meshprovision.errors import AtomicWriteError, DatabaseLockedError, SettingsError
 
 try:
     import fcntl
@@ -204,13 +204,35 @@ def test_resolve_timeout_prefers_explicit_argument_then_env_then_default(
     assert locking._resolve_timeout(None) == 1.5
     assert locking._resolve_timeout(3.0) == 3.0
 
-    monkeypatch.setenv(locking.LOCK_TIMEOUT_ENV, "not-a-number")
-    assert locking._resolve_timeout(None) == locking.DEFAULT_LOCK_TIMEOUT
+
+@pytest.mark.parametrize(
+    "raw", ["not-a-number", "inf", "-inf", "Infinity", "nan", "NaN", "-5", "10s"]
+)
+def test_resolve_timeout_rejects_a_malformed_env_value(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    monkeypatch.setenv(locking.LOCK_TIMEOUT_ENV, raw)
+    with pytest.raises(SettingsError) as excinfo:
+        locking._resolve_timeout(None)
+    assert locking.LOCK_TIMEOUT_ENV in str(excinfo.value)
 
 
-@pytest.mark.parametrize("raw", ["inf", "-inf", "Infinity", "nan", "NaN"])
-def test_resolve_timeout_falls_back_on_a_non_finite_env_value(
+@pytest.mark.parametrize("raw", ["", "   "])
+def test_resolve_timeout_treats_an_empty_env_value_as_unset(
     monkeypatch: pytest.MonkeyPatch, raw: str
 ) -> None:
     monkeypatch.setenv(locking.LOCK_TIMEOUT_ENV, raw)
     assert locking._resolve_timeout(None) == locking.DEFAULT_LOCK_TIMEOUT
+
+
+@_POSIX_ONLY
+def test_exclusive_lock_refuses_a_malformed_env_timeout_without_creating_the_lock_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(locking.LOCK_TIMEOUT_ENV, "inf")
+    target = tmp_path / "nodes_db.ods"
+
+    with pytest.raises(SettingsError), locking.exclusive_lock(target):
+        pass
+
+    assert not locking.lock_path_for(target).exists()

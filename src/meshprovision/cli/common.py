@@ -693,6 +693,11 @@ class CliContext:
                 recomputed value on load.
             DatabaseLockedError: If ``for_write`` is true and another
                 process holds the write lock past its timeout.
+            AtomicWriteError: If ``for_write`` is true and the sidecar
+                lock file cannot be created or acquired.
+            SettingsError: If ``for_write`` is true and
+                ``MESHPROVISION_LOCK_TIMEOUT`` is set to a malformed
+                value.
         """
         from meshprovision.db import ods as ods_module
         from meshprovision.db.keys import KeyRepository
