@@ -407,9 +407,11 @@ and exits non-zero.
 **Concurrent-write guarantee:** writers (`mesh provision`, `mesh admin
 bootstrap`/`import`) take an exclusive lock on `<db>.lock` for the whole
 load-modify-save cycle, including the device conversation and any
-confirmation prompt; commands that operate on raw files instead of
-`open_database` (`mesh db backup` today) take the same lock directly
-when they need it. A second write command that cannot acquire the lock
+confirmation prompt. `mesh db backup` deliberately takes no lock: it
+copies the raw file with `shutil.copy2`, which reads the inode it opened
+through to completion even if a concurrent writer replaces the path
+mid-copy, so a backup is always a complete snapshot of one version of
+the database. A second write command that cannot acquire the lock
 within `MESHPROVISION_LOCK_TIMEOUT` seconds (default 5) fails fast with
 exit code 4 and a message naming the holder's pid when known, rather
 than silently discarding whichever write loses the race. Read-only

@@ -8,13 +8,21 @@ inode at the target path on every write, so a lock taken on the target
 itself would be silently dropped by the very operation it is meant to
 guard.
 
-Only writers take this lock; commands that operate on raw files (``mesh
-db backup`` today) take :func:`exclusive_lock` directly instead of going
-through :meth:`~meshprovision.cli.common.CliContext.open_database` --
-this module makes no assumption that all callers arrive by that one path.
-Readers never need it at all: every write to the target replaces it with
-a single ``os.replace()``, so a reader's ``open()`` always resolves to a
-complete pre- or post-write file, never a torn one.
+Only writers take this lock, and today they all arrive by one path:
+:meth:`~meshprovision.cli.common.CliContext.open_database` with
+``for_write=True``. That is not an assumption this module makes -- a
+command that operates on raw files may call :func:`exclusive_lock`
+directly when it needs to, and ``mesh db restore`` is designed to do
+exactly that when it lands. What it must not be read to include is
+``mesh db backup``, which copies the raw file and deliberately takes no
+lock of any kind (see
+:func:`~meshprovision.cli.db_cmd.db_backup`). Readers and raw-file
+copiers do not need one: every write to the target installs a new inode
+with a single ``os.replace()``, so an ``open()`` that already resolved
+the path keeps reading the version it opened, through to completion.
+``shutil.copy2`` therefore always yields one complete, self-consistent
+version of the target -- the pre-write one or the post-write one, never
+a mixture -- with no lock involved.
 
 Advisory only, and POSIX only: on a platform without ``fcntl`` the lock
 degrades to a documented no-op, logged once at WARNING rather than
