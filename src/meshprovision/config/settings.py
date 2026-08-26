@@ -196,24 +196,33 @@ class Settings(BaseModel):
             raise MissingContactError()
         return self.contact
 
-    def user_agent(self, *, version: str | None = None) -> str:
+    def user_agent(self, *, version: str | None = None, require_contact: bool = True) -> str:
         """Build the ``User-Agent`` string sent to lorastats.pl.
 
         Args:
             version: Package version to embed. Defaults to
                 ``meshprovision.__version__``.
+            require_contact: Whether a missing :attr:`contact` should
+                raise. Set to ``False`` on paths that never query
+                lorastats, where contact-bearing identification is not
+                required.
 
         Returns:
-            A string of the form ``"meshprovision/<version> (+<contact>)"``.
+            A string of the form ``"meshprovision/<version> (+<contact>)"``,
+            or bare ``"meshprovision/<version>"`` when ``require_contact``
+            is ``False`` and no contact is configured.
 
         Raises:
-            MissingContactError: If :attr:`contact` is unset -- this is
-                the single startup gate lorastats.pl access requires.
+            MissingContactError: If :attr:`contact` is unset **and**
+                ``require_contact`` is ``True`` -- this is the single
+                startup gate lorastats.pl access requires.
         """
         if version is None:
             from meshprovision import __version__ as package_version
 
             version = package_version
+        if not require_contact and self.contact is None:
+            return f"meshprovision/{version}"
         contact = self.require_contact()
         return f"meshprovision/{version} (+{contact})"
 

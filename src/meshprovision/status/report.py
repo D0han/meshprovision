@@ -423,11 +423,12 @@ def run_status(
             dirty.
     """
     resolved_now = now if now is not None else datetime.now(tz=UTC)
-    contact = settings.require_contact()
+    needs_lorastats = SOURCE_LORASTATS in options.sources
+    lorastats_contact = settings.require_contact() if needs_lorastats else None
     owned_client = client is None
     active_client = client or CachedHTTPClient(
         cache_dir=settings.cache_dir,
-        user_agent=settings.user_agent(),
+        user_agent=settings.user_agent(require_contact=needs_lorastats),
         ttl=settings.cache_ttl,
         force_refresh=options.force_refresh,
     )
@@ -438,8 +439,10 @@ def run_status(
         sources: list[DataSource] = []
         if SOURCE_LORANET in options.sources:
             sources.append(LoranetSource(active_client))
-        if SOURCE_LORASTATS in options.sources:
-            sources.append(LorastatsSource(active_client, contact=contact, regions=options.regions))
+        if lorastats_contact is not None:
+            sources.append(
+                LorastatsSource(active_client, contact=lorastats_contact, regions=options.regions)
+            )
 
         observations, failures = collect_observations(
             sources, ids, force_refresh=options.force_refresh

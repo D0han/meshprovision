@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING
 import click
 
 from meshprovision.cli.common import CONTEXT_SETTINGS, handle_cli_errors, pass_cli
+from meshprovision.datasources.base import SOURCE_LORASTATS
 from meshprovision.datasources.lorastats import DEFAULT_REGIONS
 from meshprovision.errors import ExitCode, SettingsError
 from meshprovision.nodeid import NodeId
@@ -226,7 +227,8 @@ def status(
     Raises:
         SettingsError: If the resolved thresholds are not strictly
             ordered.
-        MissingContactError: If ``MESHPROVISION_CONTACT`` is unset.
+        MissingContactError: If ``MESHPROVISION_CONTACT`` is unset and
+            lorastats is one of the resolved sources.
         SystemExit: With the degraded exit code, when the run (or the
             last poll, for ``--watch``) is degraded.
     """
@@ -240,7 +242,7 @@ def status(
         force_refresh=ctx.force_refresh,
     )
 
-    with ctx.http_client() as client:
+    with ctx.http_client(require_contact=SOURCE_LORASTATS in options.sources) as client:
         if not watch:
             report = _run_once(ctx, options, client)
             _emit(ctx, report, json_output=json_output)

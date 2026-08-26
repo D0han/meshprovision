@@ -291,6 +291,37 @@ def test_source_filter_makes_zero_lorastats_requests(
         assert lorastats_route.call_count == 0
 
 
+def test_loranet_only_does_not_require_contact(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    env = dict(env)
+    del env["MESHPROVISION_CONTACT"]
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}) as router:
+        lorastats_route = next(r for r in router.routes if "lorastats.pl" in str(r.pattern))
+        result = invoke(runner, ["status", "--json", "--source", "loranet"], env)
+        assert result.exit_code == 0
+        assert lorastats_route.call_count == 0
+
+
+def test_lorastats_source_still_requires_contact(runner: CliRunner, env: dict[str, str]) -> None:
+    env = dict(env)
+    del env["MESHPROVISION_CONTACT"]
+
+    result = invoke(runner, ["status", "--json", "--source", "lorastats"], env)
+
+    assert result.exit_code == 2
+    assert "MESHPROVISION_CONTACT" in result.stderr
+
+
 def test_node_filter_restricts_the_report(
     runner: CliRunner,
     env: dict[str, str],

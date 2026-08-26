@@ -84,6 +84,17 @@ def test_user_agent_format() -> None:
     assert agent == "meshprovision/9.9.9 (+me@example.invalid)"
 
 
+def test_user_agent_omits_contact_when_not_required_and_unset() -> None:
+    settings = Settings(contact=None)
+    assert settings.user_agent(version="9.9.9", require_contact=False) == "meshprovision/9.9.9"
+
+
+def test_user_agent_still_includes_contact_when_set_and_not_required() -> None:
+    settings = Settings(contact="me@example.invalid")
+    agent = settings.user_agent(version="9.9.9", require_contact=False)
+    assert agent == "meshprovision/9.9.9 (+me@example.invalid)"
+
+
 def test_with_overrides_returns_new_revalidated_instance() -> None:
     settings = Settings(contact="me@example.invalid")
     updated = settings.with_overrides(log_level="debug")

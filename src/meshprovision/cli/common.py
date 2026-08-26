@@ -731,23 +731,29 @@ class CliContext:
 
         return DbSession(db=db, nodes=NodeRepository(db), keys=KeyRepository(db))
 
-    def http_client(self) -> CachedHTTPClient:
+    def http_client(self, *, require_contact: bool = True) -> CachedHTTPClient:
         """Build a :class:`~meshprovision.cache.http.CachedHTTPClient` from settings.
+
+        Args:
+            require_contact: Whether a missing ``MESHPROVISION_CONTACT``
+                should raise. Set to ``False`` on paths that never query
+                lorastats.
 
         Returns:
             A new cache-backed HTTP client, configured from
             :attr:`settings` and :attr:`force_refresh`.
 
         Raises:
-            MissingContactError: If ``MESHPROVISION_CONTACT`` is unset --
-                lorastats.pl requires identifiable contact information in
-                every request's ``User-Agent`` header.
+            MissingContactError: If ``MESHPROVISION_CONTACT`` is unset
+                and ``require_contact`` is ``True`` -- lorastats.pl
+                requires identifiable contact information in every
+                request's ``User-Agent`` header.
         """
         from meshprovision.cache.http import CachedHTTPClient
 
         return CachedHTTPClient(
             cache_dir=self.settings.cache_dir,
-            user_agent=self.settings.user_agent(),
+            user_agent=self.settings.user_agent(require_contact=require_contact),
             ttl=self.settings.cache_ttl,
             force_refresh=self.force_refresh,
         )
