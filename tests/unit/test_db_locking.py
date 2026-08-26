@@ -236,3 +236,15 @@ def test_exclusive_lock_refuses_a_malformed_env_timeout_without_creating_the_loc
         pass
 
     assert not locking.lock_path_for(target).exists()
+
+
+@_POSIX_ONLY
+def test_read_holder_pid_returns_none_when_the_lock_file_cannot_be_read(
+    tmp_path: Path,
+) -> None:
+    # A closed descriptor makes the lseek/read raise EBADF for real, with
+    # no monkeypatching -- the same degrade-to-None contract as an empty
+    # or garbage pid file, on the OS-failure path instead.
+    fd = os.open(tmp_path / "nodes_db.ods.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    os.close(fd)
+    assert locking._read_holder_pid(fd) is None
