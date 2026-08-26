@@ -1,17 +1,27 @@
-"""Tests for meshprovision.provisioning.discovery (pure parts only)."""
+"""Tests for meshprovision.provisioning.discovery.
+
+Covers both the pure parts (TCP target parsing, hostname validation, serial
+port enumeration) and the BLE scan path, which is exercised by monkeypatching
+``bleak.BleakScanner.discover`` at its call site.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import builtins
+from dataclasses import dataclass, field
+from typing import Any
 
+import bleak
 import pytest
+from bleak.exc import BleakError
 
-from meshprovision.errors import ConnectionBackendError
+from meshprovision.errors import ConnectionBackendError, UnsupportedTransportError
 from meshprovision.provisioning import discovery
 from meshprovision.provisioning.discovery import (
     BleDeviceInfo,
     SerialPortInfo,
     TcpTarget,
+    discover_ble_devices,
     discover_serial_ports,
     is_valid_hostname,
     parse_tcp_target,
@@ -223,3 +233,127 @@ def test_discover_serial_ports_oserror_raises_connection_backend_error(
     monkeypatch.setattr(discovery.list_ports, "comports", _raise)
     with pytest.raises(ConnectionBackendError):
         discover_serial_ports()
+
+
+# ---------------------------------------------------------------------------
+# discover_ble_devices, with bleak.BleakScanner.discover monkeypatched.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _FakeBleDevice:
+    address: str
+    name: str | None = None
+
+
+@dataclass
+class _FakeAdv:
+    rssi: int | None = None
+    local_name: str | None = None
+    service_uuids: tuple[str, ...] = field(default_factory=tuple)
+
+
+def _fake_discover_returning(
+    devices: list[tuple[_FakeBleDevice, _FakeAdv]],
+    captured: dict[str, Any] | None = None,
+) -> Any:
+    async def _fake_discover(*, timeout: float, **kwargs: Any) -> dict[str, Any]:
+        if captured is not None:
+            captured["timeout"] = timeout
+            captured.update(kwargs)
+        return {device.address: (device, adv) for device, adv in devices}
+
+    return _fake_discover
+
+
+def test_discover_ble_devices_sorts_by_strongest_signal_then_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    devices = [
+        (_FakeBleDevice("BB:BB:BB:BB:BB:BB"), _FakeAdv(rssi=-40)),
+        (_FakeBleDevice("11:11:11:11:11:11"), _FakeAdv(rssi=-90)),
+        (_FakeBleDevice("AA:AA:AA:AA:AA:AA"), _FakeAdv(rssi=-40)),
+    ]
+    monkeypatch.setattr(bleak.BleakScanner, "discover", _fake_discover_returning(devices))
+
+    result = discover_ble_devices(service_uuid=None)
+
+    assert [d.address for d in result] == [
+        "AA:AA:AA:AA:AA:AA",
+        "BB:BB:BB:BB:BB:BB",
+        "11:11:11:11:11:11",
+    ]
+
+
+def test_discover_ble_devices_sorts_unknown_rssi_last(monkeypatch: pytest.MonkeyPatch) -> None:
+    devices = [
+        (_FakeBleDevice("AA:AA:AA:AA:AA:AA"), _FakeAdv(rssi=None)),
+        (_FakeBleDevice("BB:BB:BB:BB:BB:BB"), _FakeAdv(rssi=-120)),
+    ]
+    monkeypatch.setattr(bleak.BleakScanner, "discover", _fake_discover_returning(devices))
+
+    result = discover_ble_devices(service_uuid=None)
+
+    assert [d.address for d in result] == ["BB:BB:BB:BB:BB:BB", "AA:AA:AA:AA:AA:AA"]
+
+
+def test_discover_ble_devices_passes_the_timeout_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+    monkeypatch.setattr(bleak.BleakScanner, "discover", _fake_discover_returning([], captured))
+
+    discover_ble_devices(timeout=2.5, service_uuid=None)
+    assert captured["timeout"] == 2.5
+
+    captured.clear()
+    discover_ble_devices(service_uuid=None)
+    assert captured["timeout"] == discovery.DEFAULT_BLE_SCAN_TIMEOUT
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [TimeoutError("t"), OSError("no adapter"), RuntimeError("loop"), BleakError("nope")],
+)
+def test_discover_ble_devices_wraps_scan_failures_as_connection_backend_error(
+    monkeypatch: pytest.MonkeyPatch, exc: Exception
+) -> None:
+    async def _fake_discover(*, timeout: float, **kwargs: Any) -> dict[str, Any]:
+        raise exc
+
+    monkeypatch.setattr(bleak.BleakScanner, "discover", _fake_discover)
+
+    with pytest.raises(ConnectionBackendError) as excinfo:
+        discover_ble_devices(service_uuid=None)
+    assert excinfo.value.transport == "ble"
+
+
+def test_discover_ble_devices_filters_by_service_uuid_case_insensitively(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    matching = _FakeBleDevice("AA:AA:AA:AA:AA:AA")
+    other = _FakeBleDevice("BB:BB:BB:BB:BB:BB")
+    devices = [
+        (matching, _FakeAdv(service_uuids=(discovery.MESHTASTIC_BLE_SERVICE_UUID.upper(),))),
+        (other, _FakeAdv(service_uuids=("12345678-0000-0000-0000-000000000000",))),
+    ]
+    monkeypatch.setattr(bleak.BleakScanner, "discover", _fake_discover_returning(devices))
+
+    result = discover_ble_devices()
+
+    assert [d.address for d in result] == ["AA:AA:AA:AA:AA:AA"]
+
+
+def test_discover_ble_devices_raises_unsupported_transport_when_bleak_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_import = builtins.__import__
+
+    def _fake_import(name: str, *args: Any, **kwargs: Any) -> Any:
+        if name == "bleak":
+            raise ImportError("simulated missing bleak")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _fake_import)
+
+    with pytest.raises(UnsupportedTransportError) as excinfo:
+        discover_ble_devices()
+    assert excinfo.value.transport == "ble"
