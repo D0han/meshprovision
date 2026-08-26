@@ -697,6 +697,15 @@ class CachedHTTPClient:
     def purge(self, *, older_than: float | None = None) -> int:
         """Delete cache entries older than a threshold, or all corrupt entries.
 
+        Also sweeps orphaned ``*.json.tmp-*`` temp files left behind by a
+        :meth:`_write_entry` that was interrupted mid-write. This can
+        delete a *live* concurrent writer's temp file, since two
+        processes may legitimately share a cache directory and this
+        method takes no lock; the consequence is bounded and benign --
+        the victim's own ``replace`` raises ``OSError``, which
+        :meth:`_write_entry` turns into a :class:`CacheError`, and the
+        HTTP response the caller already holds is unaffected.
+
         Args:
             older_than: Age threshold in seconds. Defaults to :attr:`ttl`.
                 An entry is deleted when it is corrupt, or when its age
@@ -720,10 +729,21 @@ class CachedHTTPClient:
                     deleted += 1
                 except OSError as exc:
                     _logger.debug("could not purge cache entry %s: %s", entry_path, exc)
+        for stray in self._cache_dir.rglob("*.json.tmp-*"):
+            try:
+                stray.unlink()
+                deleted += 1
+            except OSError as exc:
+                _logger.debug("could not remove stray cache temp %s: %s", stray, exc)
         return deleted
 
     def clear(self) -> int:
         """Delete every cache entry under :attr:`cache_dir`.
+
+        Also sweeps orphaned ``*.json.tmp-*`` temp files left behind by
+        an interrupted :meth:`_write_entry`; see :meth:`purge` for the
+        note on the (bounded, benign) concurrent-writer race this can
+        hit.
 
         Returns:
             The number of entries deleted.
@@ -735,6 +755,12 @@ class CachedHTTPClient:
                 deleted += 1
             except OSError as exc:
                 _logger.debug("could not clear cache entry %s: %s", entry_path, exc)
+        for stray in self._cache_dir.rglob("*.json.tmp-*"):
+            try:
+                stray.unlink()
+                deleted += 1
+            except OSError as exc:
+                _logger.debug("could not remove stray cache temp %s: %s", stray, exc)
         return deleted
 
     def close(self) -> None:
@@ -850,8 +876,8 @@ class CachedHTTPClient:
                 not swallowed, since a silently dead cache means every
                 run re-downloads the full dataset.
         """
-        path.parent.mkdir(parents=True, exist_ok=True)
         self._chmod_cache_root()
+        path.parent.mkdir(parents=True, exist_ok=True)
 
         entry = {
             "version": CACHE_ENTRY_VERSION,
@@ -883,6 +909,11 @@ class CachedHTTPClient:
         Ignores a ``PermissionError`` on platforms that do not support
         this (logged at debug); the cache still functions, just with
         looser filesystem permissions.
+
+        Callers must invoke this *before* creating any subdirectory
+        under the root: the root would otherwise be created at the
+        process umask by a ``mkdir(parents=True)`` and only tightened
+        afterwards.
         """
         if self._chmod_done:
             return

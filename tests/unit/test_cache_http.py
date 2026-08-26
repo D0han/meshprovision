@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 from pathlib import Path
 
 import httpx
@@ -349,6 +350,75 @@ def test_purge_and_clear(tmp_path: Path) -> None:
     client.get(URL)
     cleared = client.clear()
     assert cleared == 1
+
+
+@respx.mock
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_cache_root_is_owner_only_after_the_first_write(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    previous_umask = os.umask(0o000)
+    try:
+        client.get(URL)
+    finally:
+        os.umask(previous_umask)
+
+    assert client.cache_dir.stat().st_mode & 0o777 == 0o700
+
+
+@respx.mock
+def test_purge_removes_orphaned_temp_files(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+    client.get(URL)
+
+    key = cache_key("GET", URL)
+    path = client.path_for_key(key)
+    stray = path.with_name(f"{path.name}.tmp-999-deadbeef")
+    stray.write_bytes(b"partial")
+
+    purged = client.purge(older_than=1_000_000)
+    assert not stray.exists()
+    assert purged == 1
+
+
+@respx.mock
+def test_clear_removes_orphaned_temp_files(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+    client.get(URL)
+
+    key = cache_key("GET", URL)
+    path = client.path_for_key(key)
+    stray = path.with_name(f"{path.name}.tmp-999-deadbeef")
+    stray.write_bytes(b"partial")
+
+    cleared = client.clear()
+    assert not stray.exists()
+    assert cleared == 2
+
+
+@respx.mock
+def test_purge_leaves_unrelated_files_alone(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+    client.get(URL)
+
+    key = cache_key("GET", URL)
+    path = client.path_for_key(key)
+    notes = path.with_name("notes.txt")
+    notes.write_bytes(b"keep me")
+    foo_tmp = path.with_name("foo.tmp")
+    foo_tmp.write_bytes(b"keep me too")
+
+    client.purge(older_than=1_000_000)
+    assert notes.exists()
+    assert foo_tmp.exists()
 
 
 # ---------------------------------------------------------------------------
