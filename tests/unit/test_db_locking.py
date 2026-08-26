@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import logging
 import os
 from pathlib import Path
@@ -132,6 +133,40 @@ def test_lock_file_creation_failure_raises_atomic_write_error(
     ):
         pass
     assert excinfo.value.path == str(target)
+
+
+@_POSIX_ONLY
+def test_flock_failure_unrelated_to_contention_raises_atomic_write_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+    attempts = 0
+
+    def _fail_flock(fd: int, operation: int) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise OSError(errno.ENOLCK, "No locks available")
+
+    def _never_sleep(seconds: float) -> None:
+        raise AssertionError(
+            f"exclusive_lock polled after a non-contention flock failure "
+            f"({seconds}s); ENOLCK must fail immediately, not wait out the timeout"
+        )
+
+    monkeypatch.setattr(locking.fcntl, "flock", _fail_flock)
+    monkeypatch.setattr(locking.time, "sleep", _never_sleep)
+
+    # A deliberately long timeout: if the errno check regresses, the sleep
+    # tripwire fires on the first poll instead of the suite stalling for 30s.
+    with (
+        pytest.raises(AtomicWriteError) as excinfo,
+        locking.exclusive_lock(target, timeout=30.0),
+    ):
+        pass
+
+    assert excinfo.value.path == str(target)
+    assert attempts == 1
+    assert "No locks available" in str(excinfo.value)
 
 
 def test_lock_is_a_noop_without_fcntl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -33,6 +33,7 @@ is what a direct unit test wants without depending on ambient state.
 from __future__ import annotations
 
 import contextlib
+import errno
 import logging
 import math
 import os
@@ -73,6 +74,15 @@ LOCK_TIMEOUT_ENV: Final[str] = "MESHPROVISION_LOCK_TIMEOUT"
 
 _POLL_INTERVAL: Final[float] = 0.1
 _LOCK_FILE_MODE: Final[int] = 0o600
+
+_CONTENTION_ERRNOS: Final[frozenset[int]] = frozenset({errno.EAGAIN, errno.EWOULDBLOCK})
+"""Errnos a non-blocking ``flock`` uses to mean "another holder has it".
+
+Anything else -- ``ENOLCK`` from a filesystem out of lock records, ``EIO``,
+``EBADF`` -- is a real failure that polling cannot resolve, so it is raised
+immediately instead of waited out. ``EAGAIN`` and ``EWOULDBLOCK`` are the
+same value on Linux; both are named because POSIX does not require that.
+"""
 
 _warned_no_fcntl = False
 
@@ -190,10 +200,12 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
         Nothing.
 
     Raises:
-        AtomicWriteError: If the sidecar lock file itself cannot be
-            created or opened (a read-only filesystem, a missing parent
-            directory, a permissions error) -- a filesystem failure
-            unrelated to contention.
+        AtomicWriteError: If the sidecar lock file cannot be created or
+            opened (a read-only filesystem, a missing parent directory,
+            a permissions error), or if ``flock`` fails for any reason
+            other than contention (``ENOLCK`` on a filesystem out of
+            lock records, for example) -- a filesystem failure unrelated
+            to contention, which polling cannot resolve.
         DatabaseLockedError: If another process holds the lock and does
             not release it within the resolved timeout.
     """
@@ -217,7 +229,12 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 break
-            except OSError:
+            except OSError as exc:
+                if exc.errno not in _CONTENTION_ERRNOS:
+                    raise AtomicWriteError(
+                        f"Failed to acquire the database lock file {lock_path}: {exc}",
+                        path=str(target),
+                    ) from exc
                 if time.monotonic() >= deadline:
                     holder_pid = _read_holder_pid(fd)
                     raise DatabaseLockedError(

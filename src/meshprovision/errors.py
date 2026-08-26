@@ -635,11 +635,11 @@ class KeyNotFoundError(DbError):
 class AtomicWriteError(DbError):
     """The atomic write-and-replace of the database file failed.
 
-    Also covers a failure to create the sidecar write-lock file used by
-    :func:`meshprovision.db.locking.exclusive_lock` -- a filesystem
-    failure (read-only filesystem, missing parent, permissions) is a
-    different condition from lock contention and is never reported as
-    :class:`DatabaseLockedError`.
+    Also covers a failure to create or acquire the sidecar write-lock
+    file used by :func:`meshprovision.db.locking.exclusive_lock` -- a
+    filesystem failure (read-only filesystem, missing parent,
+    permissions) is a different condition from lock contention and is
+    never reported as :class:`DatabaseLockedError`.
 
     Attributes:
         path: Path to the database file being written.

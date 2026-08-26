@@ -1029,7 +1029,7 @@ class OdsDatabase:
             DatabaseLockedError: If another process holds the lock and
                 does not release it within the resolved timeout.
             AtomicWriteError: If the sidecar lock file itself cannot be
-                created.
+                created or acquired.
         """
         if self._lock_cm is not None:
             return
