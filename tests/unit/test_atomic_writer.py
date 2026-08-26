@@ -284,6 +284,133 @@ def test_failed_backup_copy_leaves_no_stray_temp_file(
     assert stray == []
 
 
+def test_prune_tolerates_a_backup_that_vanished(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+
+    for i in range(3):
+        target.write_bytes(f"v{i + 1}".encode())
+        create_backup(
+            target,
+            backup_dir=backup_dir,
+            retention=1000,
+            now=datetime(2026, 8, 25, 0, 0, i, tzinfo=UTC),
+        )
+
+    backups = list_backups(target, backup_dir=backup_dir)
+    assert len(backups) == 3
+    victim = backups[-1].path  # oldest -- first candidate for pruning
+
+    real_unlink = Path.unlink
+
+    def flaky_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self == victim:
+            raise FileNotFoundError(f"already gone: {self}")
+        real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+    removed = prune_backups(target, backup_dir=backup_dir, retention=1)
+
+    assert victim not in removed
+    assert len(removed) == 1
+
+
+def test_prune_still_raises_on_a_permission_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+
+    for i in range(2):
+        target.write_bytes(f"v{i + 1}".encode())
+        create_backup(
+            target,
+            backup_dir=backup_dir,
+            retention=1000,
+            now=datetime(2026, 8, 25, 0, 0, i, tzinfo=UTC),
+        )
+
+    def failing_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    with pytest.raises(AtomicWriteError):
+        prune_backups(target, backup_dir=backup_dir, retention=1)
+
+
+def test_atomic_write_completes_when_pruning_loses_a_race(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+
+    for i in range(2):
+        target.write_bytes(f"v{i + 1}".encode())
+        create_backup(
+            target,
+            backup_dir=backup_dir,
+            retention=1000,
+            now=datetime(2026, 8, 25, 0, 0, i, tzinfo=UTC),
+        )
+
+    def flaky_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("lost the race")
+
+    monkeypatch.setattr(Path, "unlink", flaky_unlink)
+
+    write_bytes_atomic(target, b"v3", backup=True, backup_dir=backup_dir, retention=1)
+
+    assert target.read_bytes() == b"v3"
+    stray = [p for p in tmp_path.iterdir() if p.name.startswith(f".{target.name}.tmp")]
+    assert stray == []
+
+
+def test_list_backups_skips_a_file_removed_mid_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+
+    for i in range(2):
+        target.write_bytes(f"v{i + 1}".encode())
+        create_backup(
+            target,
+            backup_dir=backup_dir,
+            retention=1000,
+            now=datetime(2026, 8, 25, 0, 0, i, tzinfo=UTC),
+        )
+
+    backups = list_backups(target, backup_dir=backup_dir)
+    assert len(backups) == 2
+    victim = backups[0].path
+
+    real_stat = Path.stat
+
+    def flaky_stat(self: Path, *args: object, **kwargs: object) -> os.stat_result:
+        if self == victim:
+            raise FileNotFoundError(f"vanished: {self}")
+        return real_stat(self, *args, **kwargs)
+
+    # Bypass is_file()'s own OSError-swallowing so the scan reaches the
+    # guarded stat() calls this test is pinning, rather than short-circuiting
+    # on the is_file() check first.
+    monkeypatch.setattr(Path, "is_file", lambda _self: True)
+    monkeypatch.setattr(Path, "stat", flaky_stat)
+
+    remaining = list_backups(target, backup_dir=backup_dir)
+
+    assert victim not in [info.path for info in remaining]
+    assert len(remaining) == 1
+
+
 def test_backup_preserves_source_mtime(tmp_path: Path) -> None:
     target = tmp_path / "data.txt"
     backup_dir = tmp_path / "backups"

@@ -312,21 +312,26 @@ def list_backups(target: Path, *, backup_dir: Path | None = None) -> tuple[Backu
     Returns:
         A tuple of :class:`BackupInfo`, newest first (see
         :func:`_backup_sort_key` for how same-second ties are broken).
-        Empty when the backup directory does not exist.
+        Empty when the backup directory does not exist. A backup deleted
+        by a concurrent pruner between the directory scan and its own
+        stat is silently omitted rather than raising.
     """
     resolved_dir = backup_dir_for(target, backup_dir)
     if not resolved_dir.is_dir():
         return ()
 
-    keyed = [
-        (path, _backup_sort_key(path, target))
-        for path in resolved_dir.glob(f"{target.stem}-*{target.suffix}")
-        if path.is_file()
-    ]
+    keyed: list[tuple[Path, tuple[datetime, float], int]] = []
+    for path in resolved_dir.glob(f"{target.stem}-*{target.suffix}"):
+        try:
+            if not path.is_file():
+                continue
+            keyed.append((path, _backup_sort_key(path, target), path.stat().st_size))
+        except FileNotFoundError:
+            continue
     keyed.sort(key=lambda item: item[1], reverse=True)
     return tuple(
-        BackupInfo(path=path, source=target, created_at=sort_key[0], size_bytes=path.stat().st_size)
-        for path, sort_key in keyed
+        BackupInfo(path=path, source=target, created_at=sort_key[0], size_bytes=size_bytes)
+        for path, sort_key, size_bytes in keyed
     )
 
 
@@ -344,9 +349,13 @@ def prune_backups(
 
     Returns:
         Paths of the backups that were deleted, in no particular order.
+        A backup already removed by a concurrent pruner is not included,
+        since this call did not delete it.
 
     Raises:
-        AtomicWriteError: If deleting a backup fails.
+        AtomicWriteError: If deleting a backup fails for any reason other
+            than the file having already been removed -- losing that race
+            to a concurrent writer is the expected outcome, not an error.
     """
     if retention <= 0:
         return ()
@@ -356,6 +365,12 @@ def prune_backups(
     for info in backups[retention:]:
         try:
             info.path.unlink()
+        except FileNotFoundError:
+            _logger.debug(
+                "backup %s was already removed, presumably by a concurrent writer",
+                info.path,
+            )
+            continue
         except OSError as exc:
             raise AtomicWriteError(
                 f"Failed to prune backup {info.path}: {exc}", path=str(info.path)
