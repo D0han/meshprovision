@@ -74,8 +74,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   production caller; `mesh provision` already covers drift repair via the
   functions that remain) along with a stale docstring warning that
   described a bug those functions no longer had.
+- A `MESHPROVISION_LOCK_TIMEOUT` set to a non-finite value (`inf`, `nan`)
+  no longer hangs `mesh provision`/`mesh admin` forever waiting on a
+  deadline that can never be reached; it is now rejected the same as any
+  other malformed value (see Security, below, for the follow-up that made
+  this and other malformed values fail loudly instead of falling back).
+- A genuine lock-acquisition failure unrelated to contention (e.g. the
+  filesystem running out of advisory-lock records) is no longer
+  mislabeled as "another mesh command is using the database" after
+  waiting out the full timeout, and no longer names a stale process id
+  left over from a previous, unrelated lock holder; it now fails
+  immediately with an accurate error.
+- `mesh db backup` runs that land within the same second (or race a
+  concurrent backup) can no longer silently overwrite one another's
+  output; backup filenames now carry microsecond resolution and a
+  genuine collision fails loudly instead of clobbering. Existing
+  second-resolution backup filenames still parse correctly.
+- `mesh db verify` no longer aborts with an unrelated provisioning error,
+  reporting zero database findings, when the configured template has more
+  than 3 `admin_nodes` entries; that condition now degrades to a warning
+  like every other template-loading failure, and verification of the
+  database itself still runs to completion.
+- `mesh status --source loranet` no longer requires `MESHPROVISION_CONTACT`
+  to be set, since lorastats.pl (the only source that needs a contact
+  string) is never queried on that path. Any invocation that resolves to
+  include lorastats, including the default with no `--source` filter,
+  still requires it exactly as before.
 
 ### Security
+
+- `MESHPROVISION_LOCK_TIMEOUT` set to an unparseable, negative, or
+  non-finite value now fails immediately with a clear error instead of
+  silently falling back to the 5-second default -- matching how every
+  other environment-driven numeric setting in this project already
+  behaves. A previously-tolerated malformed value (for example, a typo'd
+  unit suffix) will now need to be corrected; an empty or unset value is
+  still treated as "use the default." Not enforced on platforms without
+  `fcntl`, where the lock -- and therefore its timeout -- has no effect.
 
 - The `security.is_managed` lockdown safety gate's "admin key has a
   private counterpart" check now cryptographically verifies that the
