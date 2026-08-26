@@ -371,17 +371,16 @@ def db_verify(ctx: CliContext, *, strict: bool, json_output: bool) -> None:
     Raises:
         SystemExit: With the report's exit code, when it is non-zero.
     """
-    db_session = ctx.open_database()
+    with ctx.open_database() as db_session:
+        template: TemplateConfig | None
+        try:
+            template = ctx.load_template()
+        except ConfigError as exc:
+            ctx.warn(f"Could not load template for cross-checking: {exc.user_message}")
+            template = None
 
-    template: TemplateConfig | None
-    try:
-        template = ctx.load_template()
-    except ConfigError as exc:
-        ctx.warn(f"Could not load template for cross-checking: {exc.user_message}")
-        template = None
-
-    known_bad = weakkeys.load_known_bad_keys()
-    report = verify_database(db_session, template, known_bad=known_bad)
+        known_bad = weakkeys.load_known_bad_keys()
+        report = verify_database(db_session, template, known_bad=known_bad)
 
     if json_output:
         echo_json(report.to_json_dict())
@@ -442,7 +441,13 @@ def db_backup(
     """Create an on-demand backup of the ODS database, or list existing backups.
 
     Writes only into the backup directory; never rewrites the database
-    itself.
+    itself. Deliberately does not take the cross-process write lock (see
+    :mod:`meshprovision.db.locking`): ``shutil.copy2`` (used by
+    :func:`~meshprovision.db.atomic_writer.create_backup`) reads whichever
+    inode it opened through to completion even if a concurrent writer's
+    ``os.replace`` re-points the path mid-copy, so the backup is always a
+    consistent snapshot of some version of the database. Do not "fix"
+    this by adding a lock.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.

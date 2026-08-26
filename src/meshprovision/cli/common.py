@@ -382,6 +382,14 @@ class DbSession:
     the raw session (for ``db.save()``), the node repository, and the
     key repository without three separate lookups.
 
+    A context manager: ``with ctx.open_database(for_write=True) as db:``
+    releases the write lock (a no-op when ``for_write`` was false) on
+    exit, including on an exception. Explicit release matters here, not
+    just as hygiene -- ``tests/e2e/`` drives the CLI in-process via
+    ``click.testing.CliRunner``, so relying on process-exit fd cleanup
+    would leave the lock held across test cases and deadlock the next
+    one that needs it.
+
     Attributes:
         db: The open, loaded :class:`~meshprovision.db.ods.OdsDatabase`
             session.
@@ -403,6 +411,23 @@ class DbSession:
             ``self.db.path``.
         """
         return self.db.path
+
+    def __enter__(self) -> DbSession:
+        """Enter as a context manager.
+
+        Returns:
+            This instance.
+        """
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Release the write lock, if held.
+
+        Args:
+            *exc_info: The exception triple, unused -- the lock is
+                released the same way whether the block raised or not.
+        """
+        self.db.unlock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -627,7 +652,7 @@ class CliContext:
         """
         return template_module.load_template(self.settings.template_path)
 
-    def open_database(self, *, must_exist: bool = True) -> DbSession:
+    def open_database(self, *, must_exist: bool = True, for_write: bool = False) -> DbSession:
         """Open (and load) the configured ODS database.
 
         Imports the ``db`` layer function-locally so that
@@ -635,10 +660,25 @@ class CliContext:
         eagerly pull in the whole database layer -- keeping ``mesh
         status``'s import surface honest.
 
+        Read-only callers should leave ``for_write`` false: every write
+        to the database is a single ``os.replace``, so a reader always
+        sees a complete pre- or post-write file, and taking a lock would
+        only make a read-only command block behind a long-running write.
+        A caller that will modify the database and may run concurrently
+        with another ``mesh`` process must pass ``for_write=True`` and
+        use the returned :class:`DbSession` as a context manager so the
+        lock is held across the whole load-modify-save cycle and
+        released on every exit path.
+
         Args:
             must_exist: When ``True`` (the default), a missing database
                 file is a hard error. When ``False``, a missing file is
                 created as a brand-new, empty database instead.
+            for_write: Whether this session intends to modify the
+                database. When ``True``, acquires the cross-process
+                write lock before the database is read at all, closing
+                the load-then-overwrite race a lock taken only around
+                ``save()`` would leave open.
 
         Returns:
             A :class:`DbSession` bundling the open database and its two
@@ -651,26 +691,35 @@ class CliContext:
             DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
             DbIntegrityError: If a derived value disagrees with its
                 recomputed value on load.
+            DatabaseLockedError: If ``for_write`` is true and another
+                process holds the write lock past its timeout.
         """
+        from meshprovision.db import ods as ods_module
         from meshprovision.db.keys import KeyRepository
         from meshprovision.db.nodes import NodeRepository
         from meshprovision.db.ods import OdsDatabase
 
         path = self.settings.db_path
-        db: OdsDatabase
-        if path.is_file():
-            db = OdsDatabase(path)
-            db.load()
-        elif must_exist:
-            raise SchemaError(
-                f"Node database not found: {path}",
-                hint=(
-                    "Copy data/nodes_db.example.ods to data/nodes_db.ods, "
-                    "or set MESHPROVISION_DB_PATH."
-                ),
-            )
-        else:
-            db = OdsDatabase.create(path)
+        db = OdsDatabase(path)
+        if for_write:
+            db.lock()
+        try:
+            if path.is_file():
+                db.load()
+            elif must_exist:
+                raise SchemaError(
+                    f"Node database not found: {path}",
+                    hint=(
+                        "Copy data/nodes_db.example.ods to data/nodes_db.ods, "
+                        "or set MESHPROVISION_DB_PATH."
+                    ),
+                )
+            else:
+                ods_module.create_empty(path, backup=False)
+                db.load(force=True)
+        except BaseException:
+            db.unlock()
+            raise
 
         for warning in db.warnings:
             self.warn(warning.message())

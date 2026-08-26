@@ -38,6 +38,7 @@ __all__ = [
     "ConnectionFailedError",
     "CryptoError",
     "DataSourceError",
+    "DatabaseLockedError",
     "DbError",
     "DbIntegrityError",
     "DbValidationError",
@@ -634,6 +635,12 @@ class KeyNotFoundError(DbError):
 class AtomicWriteError(DbError):
     """The atomic write-and-replace of the database file failed.
 
+    Also covers a failure to create the sidecar write-lock file used by
+    :func:`meshprovision.db.locking.exclusive_lock` -- a filesystem
+    failure (read-only filesystem, missing parent, permissions) is a
+    different condition from lock contention and is never reported as
+    :class:`DatabaseLockedError`.
+
     Attributes:
         path: Path to the database file being written.
     """
@@ -654,6 +661,44 @@ class AtomicWriteError(DbError):
         """
         super().__init__(message, hint=hint)
         self.path = path
+
+
+class DatabaseLockedError(DbError):
+    """Another process holds the node database's write lock.
+
+    Raised by :func:`meshprovision.db.locking.exclusive_lock` when a
+    ``flock`` acquisition times out against its deadline -- a distinct
+    condition from :class:`AtomicWriteError`, which covers a failure to
+    even create the lock file. Read-only commands never raise this: only
+    a writer takes the lock.
+
+    Attributes:
+        path: Path to the database file whose lock could not be acquired.
+        holder_pid: The pid recorded in the lock file, when one could be
+            read. Advisory only: a holder killed between acquiring the
+            lock and recording its pid leaves this ``None``.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        path: str,
+        holder_pid: int | None = None,
+        hint: str | None = None,
+    ) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Human-readable description of what went wrong.
+            path: Path to the database file whose lock could not be
+                acquired.
+            holder_pid: The pid recorded in the lock file, when known.
+            hint: Optional actionable suggestion for resolving the error.
+        """
+        super().__init__(message, hint=hint)
+        self.path = path
+        self.holder_pid = holder_pid
 
 
 # ---------------------------------------------------------------------------

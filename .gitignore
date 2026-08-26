@@ -7,6 +7,8 @@ config/template.yaml
 .cache/
 data/backups/*
 !data/backups/.gitkeep
+data/*.lock
+data/.*.tmp-*
 *.ods.bak
 *.key
 *.pem

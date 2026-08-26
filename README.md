@@ -127,6 +127,7 @@ script is named `mesh`. It does not collide with the unrelated, abandoned
 | `MESHPROVISION_CONTACT` | (none -- REQUIRED) | Your contact address, sent in the `User-Agent` to lorastats.pl |
 | `MESHPROVISION_LOG_LEVEL` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` |
 | `MESHPROVISION_KNOWN_BAD_KEYS` | `data/known_bad_keys.txt` | Override path to the weak-key blocklist. Read directly by the crypto layer; not listed in `.env.example`. |
+| `MESHPROVISION_LOCK_TIMEOUT` | `5.0` | Seconds a write command polls the database write lock before giving up. Not listed in `.env.example`; mainly useful for scripting against a slow/contended database. |
 
 Precedence, highest to lowest: **CLI flag > environment variable > `.env`
 file > built-in default**. `.env` is found by searching upward from the
@@ -403,6 +404,19 @@ by reading the public key back off the device. Any unconfirmed write
 marks the node `UNCERTAIN`, leaves the ODS **unchanged**, logs a warning,
 and exits non-zero.
 
+**Concurrent-write guarantee:** writers (`mesh provision`, `mesh admin
+bootstrap`/`import`) take an exclusive lock on `<db>.lock` for the whole
+load-modify-save cycle, including the device conversation and any
+confirmation prompt; commands that operate on raw files instead of
+`open_database` (`mesh db backup` today) take the same lock directly
+when they need it. A second write command that cannot acquire the lock
+within `MESHPROVISION_LOCK_TIMEOUT` seconds (default 5) fails fast with
+exit code 4 and a message naming the holder's pid when known, rather
+than silently discarding whichever write loses the race. Read-only
+commands (`mesh status`, `mesh db verify`, `mesh db backup`) are never
+blocked by it. `--dry-run` does not take the lock. POSIX only: on a
+platform without `fcntl` the lock is a no-op, logged once at WARNING.
+
 ### `mesh status`
 
 Strictly read-only -- it never writes to the database or to any device.
@@ -511,6 +525,14 @@ mesh db backup --retention 20 --backup-dir /mnt/usb/mesh-backups
 | 130 | INTERRUPTED |
 
 (From `meshprovision.errors.ExitCode`.)
+
+Exit code 4 (`DB`) now also covers "another mesh command is running": a
+write command that could not acquire the database's write lock within
+`MESHPROVISION_LOCK_TIMEOUT` raises `DatabaseLockedError`, distinct from
+the pre-existing `AtomicWriteError` raised on a filesystem failure
+(read-only filesystem, missing parent) while creating the lock file
+itself -- both share exit code 4, since the message text is the intended
+disambiguation channel between them, not the exit code.
 
 ## Security
 

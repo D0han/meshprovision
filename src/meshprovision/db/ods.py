@@ -35,6 +35,7 @@ Two independent load-order requirements of the ODF format matter here:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import xml.parsers.expat
 import zipfile
@@ -53,7 +54,7 @@ from odf import text as odf_text
 from odf.element import Node
 from odf.opendocument import OpenDocumentSpreadsheet
 
-from meshprovision.db import schema
+from meshprovision.db import locking, schema
 from meshprovision.db.atomic_writer import DEFAULT_RETENTION, atomic_write
 from meshprovision.errors import DbIntegrityError, DuplicateNodeError, SchemaError
 
@@ -942,6 +943,15 @@ class OdsDatabase:
     ``nodes.py`` and ``keys.py`` both wrap the *same* :class:`OdsDatabase`
     instance so that a single :meth:`save` call writes both sheets
     atomically, in one file, in one backup.
+
+    Concurrency safety is opt-in via :meth:`lock`. A read-only session
+    never needs it: every write replaces ``path`` with a single
+    ``os.replace()`` (see :mod:`meshprovision.db.atomic_writer`), so a
+    reader's :meth:`load` always sees a complete pre- or post-write file,
+    never a torn one. A session that may run concurrently with another
+    ``mesh`` process holding a write intent must call :meth:`lock`
+    *before* :meth:`load` and hold it through :meth:`save` -- see
+    :meth:`lock` and :meth:`save` for why the span matters.
     """
 
     def __init__(
@@ -961,6 +971,7 @@ class OdsDatabase:
         self._is_dirty = False
         self._warnings: tuple[IntegrityWarning, ...] = ()
         self._rows: dict[str, tuple[Mapping[str, str], ...]] = {}
+        self._lock_cm: contextlib.AbstractContextManager[None] | None = None
 
     @property
     def path(self) -> Path:
@@ -988,6 +999,71 @@ class OdsDatabase:
             The warnings from the last :meth:`load`/:meth:`reload` call.
         """
         return self._warnings
+
+    @property
+    def locked(self) -> bool:
+        """Whether this session currently holds the cross-process write lock.
+
+        Returns:
+            ``True`` between a successful :meth:`lock` call and the
+            matching :meth:`unlock`.
+        """
+        return self._lock_cm is not None
+
+    def lock(self, *, timeout: float | None = None) -> None:
+        """Acquire the cross-process write lock for this database.
+
+        Must be called before :meth:`load` -- locking after the read
+        would leave a window in which another process's write lands
+        between the two, reintroducing the stale-snapshot race this
+        exists to close. A no-op if already held by this session.
+
+        Args:
+            timeout: Seconds to poll before giving up. ``None`` (the
+                default) defers to :func:`meshprovision.db.locking.
+                exclusive_lock`'s own resolution (an explicit argument,
+                then the ``MESHPROVISION_LOCK_TIMEOUT`` environment
+                variable, then a five-second default).
+
+        Raises:
+            DatabaseLockedError: If another process holds the lock and
+                does not release it within the resolved timeout.
+            AtomicWriteError: If the sidecar lock file itself cannot be
+                created.
+        """
+        if self._lock_cm is not None:
+            return
+        cm = locking.exclusive_lock(self._path, timeout=timeout)
+        cm.__enter__()
+        self._lock_cm = cm
+
+    def unlock(self) -> None:
+        """Release the cross-process write lock. Idempotent.
+
+        A no-op when the lock is not currently held by this session.
+        """
+        if self._lock_cm is None:
+            return
+        cm = self._lock_cm
+        self._lock_cm = None
+        cm.__exit__(None, None, None)
+
+    def __enter__(self) -> OdsDatabase:
+        """Enter as a context manager, unlocking on exit.
+
+        Returns:
+            This instance.
+        """
+        return self
+
+    def __exit__(self, *exc_info: object) -> None:
+        """Release the write lock, if held. Delegates to :meth:`unlock`.
+
+        Args:
+            *exc_info: The exception triple, unused -- the lock is
+                released the same way whether the block raised or not.
+        """
+        self.unlock()
 
     def load(self, *, force: bool = False) -> None:
         """Load the database from disk, unless already loaded.
@@ -1067,6 +1143,16 @@ class OdsDatabase:
 
     def save(self, *, backup: bool = True) -> None:
         """Write both sheets to disk atomically. A no-op when not dirty.
+
+        Does **not** acquire the write lock itself -- a caller that may
+        run concurrently with another ``mesh`` process must hold it
+        across the whole load-modify-save cycle via :meth:`lock`, not
+        just around this call: re-acquiring only here would leave this
+        session's in-memory state stale relative to a write that landed
+        after :meth:`load` but before :meth:`lock`, and locking again
+        while already held would need re-entrancy bookkeeping this class
+        does not have. :meth:`~meshprovision.cli.common.CliContext.
+        open_database` does this for you.
 
         Args:
             backup: Whether to back up the current file before replacing

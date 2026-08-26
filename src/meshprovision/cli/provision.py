@@ -904,10 +904,10 @@ def provision(
     )
 
     template = ctx.load_template()
-    db = ctx.open_database()
-    backend = resolve_backend(ctx, transport_opts)
-    with device_session(ctx, backend, no_reconnect=no_reconnect) as session:
-        result = run_provision(ctx, session, db, template, opts)
+    with ctx.open_database(for_write=not dry_run) as db:
+        backend = resolve_backend(ctx, transport_opts)
+        with device_session(ctx, backend, no_reconnect=no_reconnect) as session:
+            result = run_provision(ctx, session, db, template, opts)
 
     if result.exit_code:
         raise SystemExit(result.exit_code)

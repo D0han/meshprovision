@@ -220,6 +220,12 @@ class StatusReport:
 def load_records(db_path: Path) -> dict[NodeId, NodeRecord]:
     """Load every node record from the ODS database, strictly read-only.
 
+    Deliberately does not take the cross-process write lock (see
+    :mod:`meshprovision.db.locking`): every write replaces the database
+    with a single ``os.replace``, so a reader here always sees a complete
+    pre- or post-write file, and taking a lock would only make `mesh
+    status` block behind a long-running `mesh provision`.
+
     Args:
         db_path: Path to the ``.ods`` database file.
 

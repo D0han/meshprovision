@@ -340,67 +340,69 @@ def admin_bootstrap(
         _validate_admin_ref(normalized_ref)
 
     template = ctx.load_template()
-    db = ctx.open_database()
-    known_bad = weakkeys.load_known_bad_keys()
+    with ctx.open_database(for_write=not dry_run) as db:
+        known_bad = weakkeys.load_known_bad_keys()
 
-    transport_opts = TransportOptions(
-        interface=cast("connection.Transport | None", interface),
-        port=port,
-        ble_address=ble_address,
-        ble_scan=ble_scan,
-        host=host,
-        timeout=timeout,
-        ble_scan_timeout=ble_scan_timeout,
-    )
-    opts = ProvisionOptions(
-        dry_run=dry_run,
-        allow_lockdown=allow_lockdown,
-        force_regenerate_key=force_regenerate_key,
-        rename=False,
-        no_reconnect=no_reconnect,
-        json_output=json_output,
-        admin_ref=normalized_ref,
-    )
-
-    backend = resolve_backend(ctx, transport_opts)
-    with device_session(ctx, backend, no_reconnect=no_reconnect) as session:
-        result = run_provision(ctx, session, db, template, opts)
-
-    if result.persisted:
-        new_ref = normalized_ref if normalized_ref is not None else result.node_id.hex
-        authorized_here = tuple(result.plan.key_plan.desired_admin_key_refs)
-        summaries = collect_admins(db, template, known_bad=known_bad)
-        new_summary = next((s for s in summaries if s.ref == new_ref), None)
-
-        pending_hexes: set[str] = set(new_summary.pending_on) if new_summary is not None else set()
-        for other in summaries:
-            if (
-                other.ref != new_ref
-                and other.node_id is not None
-                and result.node_id.hex in other.pending_on
-            ):
-                pending_hexes.add(other.node_id)
-
-        pending_lines = tuple(
-            f"pending: authorize {new_ref}_pub on node {other_hex} "
-            "(run `mesh provision` with that device connected)"
-            for other_hex in sorted(pending_hexes)
+        transport_opts = TransportOptions(
+            interface=cast("connection.Transport | None", interface),
+            port=port,
+            ble_address=ble_address,
+            ble_scan=ble_scan,
+            host=host,
+            timeout=timeout,
+            ble_scan_timeout=ble_scan_timeout,
+        )
+        opts = ProvisionOptions(
+            dry_run=dry_run,
+            allow_lockdown=allow_lockdown,
+            force_regenerate_key=force_regenerate_key,
+            rename=False,
+            no_reconnect=no_reconnect,
+            json_output=json_output,
+            admin_ref=normalized_ref,
         )
 
-        if authorized_here:
-            ctx.warn(f"Authorized on {result.node_id.display}: {', '.join(authorized_here)}")
-        for line in pending_lines:
-            ctx.warn(line)
+        backend = resolve_backend(ctx, transport_opts)
+        with device_session(ctx, backend, no_reconnect=no_reconnect) as session:
+            result = run_provision(ctx, session, db, template, opts)
 
-        if json_output:
-            echo_json(
-                {
-                    "node_id": result.node_id.hex,
-                    "ref": new_ref,
-                    "authorized_on_this_node": list(authorized_here),
-                    "pending": list(pending_lines),
-                }
+        if result.persisted:
+            new_ref = normalized_ref if normalized_ref is not None else result.node_id.hex
+            authorized_here = tuple(result.plan.key_plan.desired_admin_key_refs)
+            summaries = collect_admins(db, template, known_bad=known_bad)
+            new_summary = next((s for s in summaries if s.ref == new_ref), None)
+
+            pending_hexes: set[str] = (
+                set(new_summary.pending_on) if new_summary is not None else set()
             )
+            for other in summaries:
+                if (
+                    other.ref != new_ref
+                    and other.node_id is not None
+                    and result.node_id.hex in other.pending_on
+                ):
+                    pending_hexes.add(other.node_id)
+
+            pending_lines = tuple(
+                f"pending: authorize {new_ref}_pub on node {other_hex} "
+                "(run `mesh provision` with that device connected)"
+                for other_hex in sorted(pending_hexes)
+            )
+
+            if authorized_here:
+                ctx.warn(f"Authorized on {result.node_id.display}: {', '.join(authorized_here)}")
+            for line in pending_lines:
+                ctx.warn(line)
+
+            if json_output:
+                echo_json(
+                    {
+                        "node_id": result.node_id.hex,
+                        "ref": new_ref,
+                        "authorized_on_this_node": list(authorized_here),
+                        "pending": list(pending_lines),
+                    }
+                )
 
     if result.exit_code:
         raise SystemExit(result.exit_code)
@@ -446,62 +448,64 @@ def admin_import(
         WeakKeyError: If a key fails the weak-key audit, or duplicates
             another registered key, and ``--force`` was not passed.
     """
-    db = ctx.open_database()
-    known_bad = weakkeys.load_known_bad_keys()
-
     registered: list[dict[str, object]] = []
     skipped: list[dict[str, object]] = []
 
-    for raw in assignments:
-        ref, b64 = parse_assignment(raw)
-        material = crypto_keys.decode_key(b64, field="public_key")
-        key_ref = schema.ref_for(ref, KeyType.ADMIN_PUBLIC)
+    with ctx.open_database(for_write=True) as db:
+        known_bad = weakkeys.load_known_bad_keys()
 
-        existing = db.keys.find(key_ref)
-        if existing is not None:
-            if existing.material() == material:
-                ctx.info(f"{key_ref} already registered with identical material; nothing to do.")
-                skipped.append({"ref": ref, "key_ref": key_ref, "reason": "identical"})
-                continue
-            if not force:
-                raise KeyVerificationError(
-                    f"{key_ref} already exists with different key material.",
+        for raw in assignments:
+            ref, b64 = parse_assignment(raw)
+            material = crypto_keys.decode_key(b64, field="public_key")
+            key_ref = schema.ref_for(ref, KeyType.ADMIN_PUBLIC)
+
+            existing = db.keys.find(key_ref)
+            if existing is not None:
+                if existing.material() == material:
+                    ctx.info(
+                        f"{key_ref} already registered with identical material; nothing to do."
+                    )
+                    skipped.append({"ref": ref, "key_ref": key_ref, "reason": "identical"})
+                    continue
+                if not force:
+                    raise KeyVerificationError(
+                        f"{key_ref} already exists with different key material.",
+                        key_ref=key_ref,
+                        hint="Pass --force to replace it.",
+                    )
+
+            audit = weakkeys.audit_public_key(material, key_ref=key_ref, known_bad=known_bad)
+            if audit.compromised and not force:
+                audit.raise_if_compromised()
+            elif audit.findings:
+                for line in audit.summary().splitlines():
+                    ctx.warn(line)
+
+            dupes = [
+                existing_ref
+                for existing_ref, existing_material in db.keys.public_key_map().items()
+                if existing_ref != key_ref and existing_material == material
+            ]
+            if dupes and not force:
+                raise WeakKeyError(
+                    f"That public key is already registered as {', '.join(dupes)}.",
+                    reason="duplicate public key",
                     key_ref=key_ref,
-                    hint="Pass --force to replace it.",
+                    severity="critical",
+                    fingerprint=redact.fingerprint(material),
+                    hint="Pass --force if this is a deliberate alias for the same physical node.",
                 )
 
-        audit = weakkeys.audit_public_key(material, key_ref=key_ref, known_bad=known_bad)
-        if audit.compromised and not force:
-            audit.raise_if_compromised()
-        elif audit.findings:
-            for line in audit.summary().splitlines():
-                ctx.warn(line)
-
-        dupes = [
-            existing_ref
-            for existing_ref, existing_material in db.keys.public_key_map().items()
-            if existing_ref != key_ref and existing_material == material
-        ]
-        if dupes and not force:
-            raise WeakKeyError(
-                f"That public key is already registered as {', '.join(dupes)}.",
-                reason="duplicate public key",
-                key_ref=key_ref,
-                severity="critical",
-                fingerprint=redact.fingerprint(material),
-                hint="Pass --force if this is a deliberate alias for the same physical node.",
+            db.keys.upsert(
+                KeyRecord.from_material(
+                    ref, KeyType.ADMIN_PUBLIC, material, created_ts=datetime.now(tz=UTC)
+                )
+            )
+            registered.append(
+                {"ref": ref, "key_ref": key_ref, "fingerprint": redact.fingerprint(material)}
             )
 
-        db.keys.upsert(
-            KeyRecord.from_material(
-                ref, KeyType.ADMIN_PUBLIC, material, created_ts=datetime.now(tz=UTC)
-            )
-        )
-        registered.append(
-            {"ref": ref, "key_ref": key_ref, "fingerprint": redact.fingerprint(material)}
-        )
-
-    db.db.save()
+        db.db.save()
 
     ctx.success(f"Registered {len(registered)} admin public key(s) in {db.path}")
     for entry in registered:
@@ -530,10 +534,10 @@ def admin_list(ctx: CliContext, *, json_output: bool) -> None:
             when a template-listed admin is missing from the ``Keys``
             sheet.
     """
-    db = ctx.open_database()
-    template = ctx.load_template()
-    known_bad = weakkeys.load_known_bad_keys()
-    summaries = collect_admins(db, template, known_bad=known_bad)
+    with ctx.open_database() as db:
+        template = ctx.load_template()
+        known_bad = weakkeys.load_known_bad_keys()
+        summaries = collect_admins(db, template, known_bad=known_bad)
 
     if json_output:
         echo_json({"admins": [s.to_json_dict() for s in summaries]})
