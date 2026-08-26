@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from meshprovision.cli.admin import admin_bootstrap
+from meshprovision.cli.provision import provision
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -82,3 +84,23 @@ def test_missing_database_file_exits_four_with_hint(
 
     assert result.exit_code == 4
     assert "nodes_db.example.ods" in result.stderr
+
+
+def test_provision_and_bootstrap_share_an_identical_transport_surface() -> None:
+    shared = {
+        "port",
+        "ble_address",
+        "ble_scan",
+        "host",
+        "interface",
+        "timeout",
+        "ble_scan_timeout",
+        "dry_run",
+        "yes",
+        "allow_lockdown",
+        "force_regenerate_key",
+        "no_reconnect",
+        "json_output",
+    }
+    for command in (provision, admin_bootstrap):
+        assert shared <= {param.name for param in command.params}

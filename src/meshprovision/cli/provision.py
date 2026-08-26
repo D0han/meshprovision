@@ -28,10 +28,10 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
 
 import click
 
@@ -65,13 +65,17 @@ __all__ = [
     "audit_node_key",
     "device_session",
     "provision",
+    "provisioning_options",
     "render_plan",
     "resolve_admin_keys",
     "resolve_backend",
     "run_provision",
+    "transport_options",
 ]
 
 _logger = logging.getLogger(__name__)
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +102,56 @@ class TransportOptions:
     host: str | None = None
     timeout: int = connection.DEFAULT_CONNECT_TIMEOUT
     ble_scan_timeout: float = discovery.DEFAULT_BLE_SCAN_TIMEOUT
+
+
+_TRANSPORT_OPTIONS: Final = (
+    click.option(
+        "--port", default=None, metavar="PATH", help="Explicit serial port, e.g. /dev/ttyUSB0."
+    ),
+    click.option("--ble-address", default=None, metavar="ADDR", help="Explicit BLE address."),
+    click.option("--ble-scan", is_flag=True, default=False, help="Force BLE and scan for devices."),
+    click.option(
+        "--host", default=None, metavar="HOST[:PORT]", help="Explicit TCP host to connect to."
+    ),
+    click.option(
+        "--interface",
+        type=click.Choice(list(connection.TRANSPORTS), case_sensitive=False),
+        default=None,
+        help="Force a transport, turning ambiguity into a hard error.",
+    ),
+    click.option(
+        "--timeout",
+        type=click.IntRange(min=1),
+        default=connection.DEFAULT_CONNECT_TIMEOUT,
+        show_default=True,
+        help="Connect timeout, in seconds.",
+    ),
+    click.option(
+        "--ble-scan-timeout",
+        type=click.FloatRange(min=0.1),
+        default=discovery.DEFAULT_BLE_SCAN_TIMEOUT,
+        show_default=True,
+        help="BLE scan duration, in seconds.",
+    ),
+)
+
+
+def transport_options(func: F) -> F:
+    """Apply the seven shared transport-selection options to a command.
+
+    Declared once and shared by ``mesh provision`` and ``mesh admin
+    bootstrap``: the two commands' transport surface must not drift, and
+    the option names correspond 1:1 to :class:`TransportOptions`'s fields.
+
+    Args:
+        func: The command function to decorate.
+
+    Returns:
+        ``func`` with every transport option attached, in help order.
+    """
+    for option in reversed(_TRANSPORT_OPTIONS):
+        func = option(func)
+    return func
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +182,60 @@ class ProvisionOptions:
     no_reconnect: bool = False
     json_output: bool = False
     admin_ref: str | None = None
+
+
+_PROVISIONING_OPTIONS: Final = (
+    click.option(
+        "--dry-run", is_flag=True, default=False, help="Print the plan without writing anything."
+    ),
+    click.option(
+        "-y", "--yes", is_flag=True, default=False, help="Assume yes to every confirmation."
+    ),
+    click.option(
+        "--allow-lockdown",
+        is_flag=True,
+        default=False,
+        help="Explicitly authorize enabling security.is_managed when the safety gates pass.",
+    ),
+    click.option(
+        "--force-regenerate-key",
+        is_flag=True,
+        default=False,
+        help="Regenerate the node keypair unconditionally.",
+    ),
+    click.option(
+        "--no-reconnect",
+        is_flag=True,
+        default=False,
+        help="Verify writes against the in-memory interface only (weaker guarantee).",
+    ),
+    click.option(
+        "--json",
+        "json_output",
+        is_flag=True,
+        default=False,
+        help="Emit JSON instead of human text.",
+    ),
+)
+
+
+def provisioning_options(func: F) -> F:
+    """Apply the six shared provisioning-behavior options to a command.
+
+    Declared once and shared by ``mesh provision`` and ``mesh admin
+    bootstrap``; the option names correspond 1:1 to
+    :class:`ProvisionOptions`'s fields (excluding ``admin_ref``, which
+    only ``admin bootstrap`` sets, via its own ``--ref`` option).
+
+    Args:
+        func: The command function to decorate.
+
+    Returns:
+        ``func`` with every provisioning option attached, in help order.
+    """
+    for option in reversed(_PROVISIONING_OPTIONS):
+        func = option(func)
+    return func
 
 
 @dataclass(frozen=True, slots=True)
@@ -720,61 +828,10 @@ def run_provision(
 
 
 @click.command(name="provision", context_settings=CONTEXT_SETTINGS)
-@click.option(
-    "--port", default=None, metavar="PATH", help="Explicit serial port, e.g. /dev/ttyUSB0."
-)
-@click.option("--ble-address", default=None, metavar="ADDR", help="Explicit BLE address.")
-@click.option("--ble-scan", is_flag=True, default=False, help="Force BLE and scan for devices.")
-@click.option(
-    "--host", default=None, metavar="HOST[:PORT]", help="Explicit TCP host to connect to."
-)
-@click.option(
-    "--interface",
-    type=click.Choice(list(connection.TRANSPORTS), case_sensitive=False),
-    default=None,
-    help="Force a transport, turning ambiguity into a hard error.",
-)
-@click.option(
-    "--timeout",
-    type=click.IntRange(min=1),
-    default=connection.DEFAULT_CONNECT_TIMEOUT,
-    show_default=True,
-    help="Connect timeout, in seconds.",
-)
-@click.option(
-    "--ble-scan-timeout",
-    type=click.FloatRange(min=0.1),
-    default=discovery.DEFAULT_BLE_SCAN_TIMEOUT,
-    show_default=True,
-    help="BLE scan duration, in seconds.",
-)
-@click.option(
-    "--dry-run", is_flag=True, default=False, help="Print the plan without writing anything."
-)
-@click.option("-y", "--yes", is_flag=True, default=False, help="Assume yes to every confirmation.")
-@click.option(
-    "--allow-lockdown",
-    is_flag=True,
-    default=False,
-    help="Explicitly authorize enabling security.is_managed when the safety gates pass.",
-)
-@click.option(
-    "--force-regenerate-key",
-    is_flag=True,
-    default=False,
-    help="Regenerate the node keypair unconditionally.",
-)
+@transport_options
+@provisioning_options
 @click.option(
     "--rename", is_flag=True, default=False, help="Allow renaming an already-provisioned node."
-)
-@click.option(
-    "--no-reconnect",
-    is_flag=True,
-    default=False,
-    help="Verify writes against the in-memory interface only (weaker guarantee).",
-)
-@click.option(
-    "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of human text."
 )
 @pass_cli
 @handle_cli_errors

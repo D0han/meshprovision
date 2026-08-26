@@ -29,8 +29,10 @@ from meshprovision.cli.provision import (
     ProvisionOptions,
     TransportOptions,
     device_session,
+    provisioning_options,
     resolve_backend,
     run_provision,
+    transport_options,
 )
 from meshprovision.config.template import admin_public_key_ref
 from meshprovision.crypto import keys as crypto_keys
@@ -40,7 +42,7 @@ from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyType
 from meshprovision.errors import ExitCode, KeyVerificationError, SettingsError, WeakKeyError
 from meshprovision.nodeid import NodeId
-from meshprovision.provisioning import connection, discovery
+from meshprovision.provisioning import connection
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext, DbSession
@@ -266,62 +268,13 @@ def admin() -> None:
 
 
 @admin.command(name="bootstrap")
-@click.option("--port", default=None, metavar="PATH", help="Explicit serial port.")
-@click.option("--ble-address", default=None, metavar="ADDR", help="Explicit BLE address.")
-@click.option("--ble-scan", is_flag=True, default=False, help="Force BLE and scan for devices.")
-@click.option(
-    "--host", default=None, metavar="HOST[:PORT]", help="Explicit TCP host to connect to."
-)
-@click.option(
-    "--interface",
-    type=click.Choice(list(connection.TRANSPORTS), case_sensitive=False),
-    default=None,
-    help="Force a transport, turning ambiguity into a hard error.",
-)
-@click.option(
-    "--timeout",
-    type=click.IntRange(min=1),
-    default=connection.DEFAULT_CONNECT_TIMEOUT,
-    show_default=True,
-    help="Connect timeout, in seconds.",
-)
-@click.option(
-    "--ble-scan-timeout",
-    type=click.FloatRange(min=0.1),
-    default=discovery.DEFAULT_BLE_SCAN_TIMEOUT,
-    show_default=True,
-    help="BLE scan duration, in seconds.",
-)
+@transport_options
+@provisioning_options
 @click.option(
     "--ref",
     default=None,
     metavar="REF",
     help="Admin reference to file this node's keys under. Defaults to the node's hex id.",
-)
-@click.option(
-    "--dry-run", is_flag=True, default=False, help="Print the plan without writing anything."
-)
-@click.option("-y", "--yes", is_flag=True, default=False, help="Assume yes to every confirmation.")
-@click.option(
-    "--allow-lockdown",
-    is_flag=True,
-    default=False,
-    help="Explicitly authorize enabling security.is_managed when the safety gates pass.",
-)
-@click.option(
-    "--force-regenerate-key",
-    is_flag=True,
-    default=False,
-    help="Regenerate the node keypair unconditionally.",
-)
-@click.option(
-    "--no-reconnect",
-    is_flag=True,
-    default=False,
-    help="Verify writes against the in-memory interface only (weaker guarantee).",
-)
-@click.option(
-    "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of human text."
 )
 @pass_cli
 @handle_cli_errors
