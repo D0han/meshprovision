@@ -120,37 +120,31 @@ Random 32 bytes have ~30 distinct values out of 256 possible.
 # the two files can never silently drift apart. p = 2**255 - 19; all
 # encodings are little-endian 32-byte.
 _SMALL_ORDER_ALL_ZERO = bytes.fromhex(
-    "0000000000000000000000000000000000000000000000000000000000000000"[:64]
+    "0000000000000000000000000000000000000000000000000000000000000000"
 )
 """The all-zero point (order 4). Also the firmware's own weak-key check."""
 
 _SMALL_ORDER_POINT_ONE = bytes.fromhex(
-    "0100000000000000000000000000000000000000000000000000000000000000"[:64]
+    "0100000000000000000000000000000000000000000000000000000000000000"
 )
 """The point 1 (order 1): 0x01 followed by 31 zero bytes."""
 
-_SMALL_ORDER_8_A = bytes.fromhex(
-    "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800"[:64]
-)
+_SMALL_ORDER_8_A = bytes.fromhex("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800")
 """Order-8 point #1 (libsodium blacklist entry 3)."""
 
-_SMALL_ORDER_8_B = bytes.fromhex(
-    "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157"[:64]
-)
+_SMALL_ORDER_8_B = bytes.fromhex("5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157")
 """Order-8 point #2 (libsodium blacklist entry 4)."""
 
 _SMALL_ORDER_P_MINUS_1 = bytes.fromhex(
-    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"[:64]
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
 )
 """p - 1 (order 2)."""
 
-_SMALL_ORDER_P = bytes.fromhex(
-    "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"[:64]
-)
+_SMALL_ORDER_P = bytes.fromhex("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")
 """p (order 4) -- the field modulus itself, a non-canonical encoding of 0."""
 
 _SMALL_ORDER_P_PLUS_1 = bytes.fromhex(
-    "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"[:64]
+    "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
 )
 """p + 1 (order 1) -- a non-canonical encoding of 1."""
 

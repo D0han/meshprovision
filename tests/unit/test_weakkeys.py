@@ -84,6 +84,21 @@ def test_small_order_points_are_32_bytes_and_detected() -> None:
     assert is_small_order(b"short") is False
 
 
+def test_lengthened_small_order_literal_fails_the_length_guard() -> None:
+    """Guards the direction the removed ``[:64]`` slice used to mask.
+
+    Without the slice, a hex literal accidentally lengthened by a future
+    edit decodes to more than X25519_KEY_SIZE bytes and is caught by the
+    same guard that already catches a shortened one -- the slice used to
+    silently absorb exactly this case.
+    """
+    from meshprovision.crypto.keys import X25519_KEY_SIZE
+
+    lengthened_hex = SMALL_ORDER_POINTS[0].hex() + "ff"
+    decoded = bytes.fromhex(lengthened_hex)
+    assert len(decoded) != X25519_KEY_SIZE
+
+
 def test_small_order_points_subset_of_loaded_blocklist(repo_root: Path, tmp_path: Path) -> None:
     known_file = repo_root / "data" / "known_bad_keys.txt"
     assert set(SMALL_ORDER_POINTS) <= load_known_bad_keys(known_file)
