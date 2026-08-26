@@ -345,6 +345,9 @@ class ResolvedAdminKey:
         fingerprint: A redacted fingerprint label for :attr:`public`,
             computed by the caller.
         audit_summary: Human-readable summary of the audit result.
+        private_mismatch: Whether a private counterpart row exists but does
+            not derive this public key. Distinct from ``has_private=False``,
+            which also covers simple absence.
     """
 
     ref: str
@@ -354,6 +357,7 @@ class ResolvedAdminKey:
     audit_ok: bool
     fingerprint: str
     audit_summary: str = ""
+    private_mismatch: bool = False
 
     def __repr__(self) -> str:
         """Return a repr that never exposes :attr:`public`'s raw bytes.
@@ -1139,11 +1143,12 @@ def _evaluate_lockdown(
 
     Raises:
         LockdownRefusedError: If the template opts into ``is_managed``
-            but zero admin keys would be authorized, none of the
-            authorized keys has its private counterpart on hand, or any
-            authorized key fails the weak-key audit. These are hard
-            refusals: they are the "lock yourself out" and "lock with a
-            compromised key" cases.
+            but zero admin keys would be authorized, any authorized key's
+            private counterpart does not correspond to its public key,
+            none of the authorized keys has its private counterpart on
+            hand, or any authorized key fails the weak-key audit. These
+            are hard refusals: they are the "lock yourself out" and "lock
+            with a compromised key" cases.
     """
     if not inputs.template.security.is_managed:
         gates = MappingProxyType(
@@ -1164,6 +1169,18 @@ def _evaluate_lockdown(
             hint=(
                 "Add 1-3 refs to admin_nodes and register them with `mesh admin bootstrap` "
                 "/ `mesh admin import`, or set security.is_managed to false."
+            ),
+        )
+    mismatched = tuple(k.key_ref for k in inputs.admin_keys if k.private_mismatch)
+    if mismatched:
+        raise LockdownRefusedError(
+            f"Admin key(s) have a private counterpart that does not match the "
+            f"registered public key: {', '.join(mismatched)}.",
+            reason="private_key_mismatch",
+            hint=(
+                "The _priv row exists but derives a different public key -- most often a "
+                "half-finished rotation or a paste from another admin's backup. Correct "
+                "the _priv value (or re-run `mesh admin bootstrap`) before locking down."
             ),
         )
     if not any(k.has_private for k in inputs.admin_keys):

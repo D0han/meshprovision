@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, SecretStr, field_validator, model_va
 
 from meshprovision.config.template import admin_private_key_ref, admin_public_key_ref
 from meshprovision.crypto import redact
-from meshprovision.crypto.keys import KeyPair, decode_key, encode_key
+from meshprovision.crypto.keys import KeyPair, decode_key, encode_key, public_key_matches
 from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db import schema
 from meshprovision.db.ods import OdsDatabase
@@ -450,7 +450,7 @@ class KeyRepository:
         return tuple(record for record in self.all() if record.key_type is key_type)
 
     def has_private(self, admin_ref: str) -> bool:
-        """Check whether the private counterpart of an admin ref is on hand.
+        """Check whether a usable private counterpart of an admin ref is on hand.
 
         Args:
             admin_ref: The admin node reference (as it appears in a
@@ -458,9 +458,39 @@ class KeyRepository:
 
         Returns:
             ``True`` if ``admin_private_key_ref(admin_ref)`` resolves to a
-            row in the ``Keys`` sheet.
+            row whose material derives ``admin_public_key_ref(admin_ref)``'s
+            material. ``False`` if the private row is absent, or present
+            but does not correspond (a copy-paste or half-finished-rotation
+            error). When no public row exists there is nothing to verify
+            against and mere presence is reported. Malformed material
+            reads as ``False``, never raises.
         """
-        return self.find(admin_private_key_ref(admin_ref)) is not None
+        try:
+            private = self.find(admin_private_key_ref(admin_ref))
+            if private is None:
+                return False
+            public = self.find(admin_public_key_ref(admin_ref))
+            if public is None:
+                return True
+            return public_key_matches(private.secret(), public.material())
+        except KeyMaterialError:
+            return False
+
+    def private_key_mismatch(self, admin_ref: str) -> bool:
+        """Check whether a present private counterpart fails to match its public key.
+
+        Args:
+            admin_ref: The admin node reference, not a ``key_ref``.
+
+        Returns:
+            ``True`` only when the ``_priv`` row exists but
+            :meth:`has_private` rejects it -- the "wrong 32 bytes pasted
+            into the spreadsheet" case, as distinct from the private key
+            simply being absent.
+        """
+        return self.find(admin_private_key_ref(admin_ref)) is not None and not self.has_private(
+            admin_ref
+        )
 
     def resolve_admin_refs(self, refs: Sequence[str]) -> tuple[KeyRecord, ...]:
         """Resolve a sequence of admin node references to their public-key rows.

@@ -329,7 +329,13 @@ def resolve_admin_keys(
 
     Returns:
         One :class:`~meshprovision.provisioning.plan.ResolvedAdminKey`
-        per entry in ``template.admin_nodes``, in template order.
+        per entry in ``template.admin_nodes``, in template order. Each
+        entry's ``has_private`` reflects cryptographic correspondence, not
+        mere row presence: a ``_priv`` row that does not derive its
+        ``_pub`` row is reported as unavailable (and flagged via
+        ``private_mismatch``), because the lockdown gate's only purpose is
+        to establish that someone can still administer the node
+        afterwards.
 
     Raises:
         AdminRefUnresolvedError: If any ``admin_nodes`` reference does
@@ -342,15 +348,26 @@ def resolve_admin_keys(
         audit = weakkeys.audit_public_key(material, key_ref=record.key_ref, known_bad=known_bad)
         if audit.findings and not audit.compromised:
             _logger.warning("admin key %s: %s", record.key_ref, audit.summary())
+        has_private = keys.has_private(ref)
+        private_mismatch = keys.private_key_mismatch(ref)
+        if private_mismatch:
+            _logger.warning(
+                "admin key %s: the %s_priv row does not derive %s -- treating the private "
+                "counterpart as unavailable",
+                record.key_ref,
+                ref,
+                record.key_ref,
+            )
         resolved.append(
             plan_mod.ResolvedAdminKey(
                 ref=ref,
                 key_ref=record.key_ref,
                 public=material,
-                has_private=keys.has_private(ref),
+                has_private=has_private,
                 audit_ok=not audit.compromised,
                 fingerprint=redact.fingerprint(material),
                 audit_summary=audit.summary(),
+                private_mismatch=private_mismatch,
             )
         )
     return tuple(resolved)

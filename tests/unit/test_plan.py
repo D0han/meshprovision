@@ -289,6 +289,24 @@ def test_lockdown_no_private_counterpart_refused(make_live, template, make_admin
     assert exc_info.value.reason == "no_private_counterpart"
 
 
+def test_lockdown_refused_when_private_counterpart_does_not_match(
+    make_live, template, make_admin_key
+) -> None:
+    admin = make_admin_key("ADMIN1", has_private=False, private_mismatch=True, audit_ok=True)
+    template2 = _with_admin_and_lockdown(template, "ADMIN1")
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+    )
+    with pytest.raises(LockdownRefusedError) as exc_info:
+        build_plan(inputs)
+    assert exc_info.value.reason == "private_key_mismatch"
+
+
 def test_lockdown_weak_admin_key_refused(make_live, template, make_admin_key) -> None:
     admin = make_admin_key("ADMIN1", audit_ok=False)
     template2 = _with_admin_and_lockdown(template, "ADMIN1")

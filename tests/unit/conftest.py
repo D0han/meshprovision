@@ -169,6 +169,7 @@ def _build_admin_key(
     public: bytes | None = None,
     has_private: bool = True,
     audit_ok: bool = True,
+    private_mismatch: bool = False,
 ) -> ResolvedAdminKey:
     """Build a :class:`ResolvedAdminKey` for tests.
 
@@ -178,6 +179,8 @@ def _build_admin_key(
             generated one, so distinct calls never collide.
         has_private: Whether the matching private key is on hand.
         audit_ok: Whether this key passed the weak-key audit.
+        private_mismatch: Whether a private counterpart row exists but
+            does not derive this public key.
 
     Returns:
         The constructed :class:`ResolvedAdminKey`.
@@ -190,6 +193,7 @@ def _build_admin_key(
         has_private=has_private,
         audit_ok=audit_ok,
         fingerprint=redact.fingerprint(resolved_public),
+        private_mismatch=private_mismatch,
     )
 
 

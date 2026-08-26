@@ -106,6 +106,37 @@ def test_db_verify_alias_public_key_is_a_warning_unless_strict(
     assert strict.exit_code == 4
 
 
+def test_db_verify_admin_key_mismatch_exits_four_without_strict(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    kp_a, kp_b = generate_keypair(), generate_keypair()
+    pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a)
+    _, priv = KeyRecord.for_keypair("ADMIN1", kp_b)
+    seed_db(keys=[pub, priv])
+
+    result = invoke(runner, ["db", "verify", "--json"], env)
+
+    assert result.exit_code == 4
+    document = json.loads(result.stdout)
+    problem = next(p for p in document["problems"] if p["kind"] == "admin_key_mismatch")
+    assert problem["severity"] == "error"
+
+
+def test_db_verify_does_not_report_an_orphan_private_key_as_a_mismatch(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    kp = generate_keypair()
+    _, priv = KeyRecord.for_keypair("ADMIN1", kp)
+    seed_db(keys=[priv])
+
+    result = invoke(runner, ["db", "verify", "--json"], env)
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    kinds = {problem["kind"] for problem in document["problems"]}
+    assert "admin_key_mismatch" not in kinds
+
+
 def test_db_backup_create_and_list(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:

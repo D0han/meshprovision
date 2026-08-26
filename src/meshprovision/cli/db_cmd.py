@@ -44,7 +44,8 @@ class DbProblem:
     Attributes:
         kind: One of ``"integrity_warning"``, ``"unresolved_admin_ref"``,
             ``"unresolved_template_ref"``, ``"duplicate_public_key"``,
-            ``"alias_public_key"``, or ``"weak_key"``.
+            ``"alias_public_key"``, ``"weak_key"``, or
+            ``"admin_key_mismatch"``.
         severity: ``"critical"``, ``"error"``, or ``"warning"``.
         message: Human-readable description of the finding.
         sheet: Name of the offending sheet, when known.
@@ -247,6 +248,24 @@ def verify_database(
                     kind="weak_key",
                     severity=finding.severity,
                     message=f"{finding.check.value}: {finding.reason}",
+                    sheet="Keys",
+                    ref=record.key_ref,
+                )
+            )
+
+    for record in db.keys.of_type(KeyType.ADMIN_PRIVATE):
+        admin_ref = record.key_ref.removesuffix("_priv")
+        if db.keys.find(admin_public_key_ref(admin_ref)) is None:
+            continue
+        if db.keys.private_key_mismatch(admin_ref):
+            problems.append(
+                DbProblem(
+                    kind="admin_key_mismatch",
+                    severity="error",
+                    message=(
+                        f"{record.key_ref} does not derive "
+                        f"{admin_public_key_ref(admin_ref)}; the pair is inconsistent."
+                    ),
                     sheet="Keys",
                     ref=record.key_ref,
                 )

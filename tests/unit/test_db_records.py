@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision.config.template import BASE36_ALPHABET, PatternSpec
+from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository, find_next_free_name
 from meshprovision.db.ods import OdsDatabase
@@ -264,6 +265,59 @@ def test_has_private(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
     keys.upsert(priv)
     db.save()
     assert keys.has_private("ADMIN1") is True
+
+
+def test_has_private_rejects_a_private_key_that_does_not_match_its_public(
+    keys: KeyRepository, keypair_factory, db: OdsDatabase
+) -> None:
+    kp_a, kp_b = keypair_factory(), keypair_factory()
+    pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a)
+    _, priv = KeyRecord.for_keypair("ADMIN1", kp_b)
+    keys.upsert(pub)
+    keys.upsert(priv)
+    db.save()
+    assert keys.has_private("ADMIN1") is False
+    assert keys.private_key_mismatch("ADMIN1") is True
+
+
+def test_has_private_accepts_a_matching_pair(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
+    pub, priv = KeyRecord.for_keypair("ADMIN1", keypair)
+    keys.upsert(pub)
+    keys.upsert(priv)
+    db.save()
+    assert keys.has_private("ADMIN1") is True
+    assert keys.private_key_mismatch("ADMIN1") is False
+
+
+def test_has_private_tolerates_malformed_private_material(
+    keys: KeyRepository, keypair, db: OdsDatabase
+) -> None:
+    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair)
+    keys.upsert(pub)
+    db.replace(
+        schema.KEYS_SHEET,
+        [
+            *db.rows(schema.KEYS_SHEET),
+            {
+                "key_ref": "ADMIN1_priv",
+                "owner_node_id": "ADMIN1",
+                "key_type": "admin_private",
+                "key_value": "not-valid-base64!!!",
+                "created_ts": "",
+            },
+        ],
+    )
+    assert keys.has_private("ADMIN1") is False
+
+
+def test_private_key_mismatch_is_false_when_no_private_row_exists(
+    keys: KeyRepository, keypair, db: OdsDatabase
+) -> None:
+    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair)
+    keys.upsert(pub)
+    db.save()
+    assert keys.has_private("ADMIN1") is False
+    assert keys.private_key_mismatch("ADMIN1") is False
 
 
 def test_keypair_for(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
