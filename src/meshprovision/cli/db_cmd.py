@@ -43,11 +43,11 @@ class DbProblem:
     """One finding surfaced by :func:`verify_database`.
 
     Attributes:
-        kind: One of ``"integrity_warning"``, ``"unresolved_admin_ref"``,
-            ``"unresolved_template_ref"``, ``"duplicate_public_key"``,
-            ``"alias_public_key"``, ``"weak_key"``,
-            ``"admin_key_mismatch"``, or ``"insecure_permissions"`` (POSIX
-            only).
+        kind: One of ``"integrity_warning"``, ``"coerced_cell"``,
+            ``"unresolved_admin_ref"``, ``"unresolved_template_ref"``,
+            ``"duplicate_public_key"``, ``"alias_public_key"``,
+            ``"weak_key"``, ``"admin_key_mismatch"``, or
+            ``"insecure_permissions"`` (POSIX only).
         severity: ``"critical"``, ``"error"``, or ``"warning"``.
         message: Human-readable description of the finding.
         sheet: Name of the offending sheet, when known.
@@ -195,7 +195,7 @@ def verify_database(
     for warning in db.db.warnings:
         problems.append(
             DbProblem(
-                kind="integrity_warning",
+                kind="coerced_cell" if warning.kind == "coerced_cell" else "integrity_warning",
                 severity="warning",
                 message=warning.message(),
                 sheet=warning.sheet,

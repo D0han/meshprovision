@@ -189,22 +189,27 @@ class DatabaseData:
 
 @dataclass(frozen=True, slots=True)
 class IntegrityWarning:
-    """A derived cell's cached value disagreed with its recomputed value.
+    """One non-fatal integrity problem found while loading a database.
 
     Attributes:
         sheet: Name of the sheet containing the cell.
         cell: The cell reference, for example ``"Nodes.O3"``.
-        column: Name of the derived column.
+        column: Name of the affected column.
         cached: The value that was cached in the cell.
         recomputed: The value recomputed from the row's source columns
             (and the value actually used).
+        kind: ``"recompute"`` (a derived cell's cached value disagreed
+            with its recomputed value) or ``"coerced_cell"`` (a
+            text-kind cell was not stored as text, so LibreOffice may
+            have coerced its content).
     """
 
     sheet: str
     cell: str
     column: str
-    cached: str
-    recomputed: str
+    cached: str = ""
+    recomputed: str = ""
+    kind: str = "recompute"
 
     def message(self) -> str:
         """Render a human-readable summary of this warning.
@@ -212,6 +217,11 @@ class IntegrityWarning:
         Returns:
             For example ``"Nodes.O3: cached private_key_ref value ... disagrees ..."``.
         """
+        if self.kind == "coerced_cell":
+            return (
+                f"{self.cell}: {self.column} is not formatted as text "
+                f"(value type {self.cached!r}); LibreOffice may have coerced its content"
+            )
         return (
             f"{self.cell}: cached {self.column} value {self.cached!r} disagrees with "
             f"recomputed value {self.recomputed!r}; using the recomputed value"
@@ -228,8 +238,8 @@ class LoadedDatabase:
             columns already recomputed.
         keys: Every ``Keys`` sheet row, validated and with derived
             columns already recomputed.
-        warnings: Every cached-vs-recomputed disagreement found while
-            loading, across both sheets.
+        warnings: Every integrity problem found while loading, across
+            both sheets.
     """
 
     path: Path
@@ -425,31 +435,37 @@ def _check_header(sheet_data: SheetData, sheet_spec: schema.SheetSpec) -> None:
 
 def _row_values(
     sheet_spec: schema.SheetSpec, cells: tuple[CellValue, ...], ods_row: int
-) -> dict[str, str]:
-    """Build a ``{column_name: text}`` map for one row, warning on likely coercion.
+) -> tuple[dict[str, str], list[IntegrityWarning]]:
+    """Build a ``{column_name: text}`` map for one row, flagging likely coercion.
 
     Args:
         sheet_spec: The sheet's column layout.
         cells: The row's raw cells, in column order.
         ods_row: The row's 1-based ODS row number, used only in the
-            coercion warning.
+            coercion warning's cell reference.
 
     Returns:
         A new ``dict`` of raw cell text, one entry per column in
-        ``sheet_spec``.
+        ``sheet_spec``, and the list of coercion warnings found in this
+        row (not yet logged -- the caller decides whether the row is
+        blank before doing that).
     """
     values: dict[str, str] = {}
+    coercions: list[IntegrityWarning] = []
     for index, col in enumerate(sheet_spec.columns):
         cell = cells[index] if index < len(cells) else CellValue(text="")
         if col.kind in _TEXT_LIKE_KINDS and cell.value_type in _COERCED_VALUE_TYPES:
-            _logger.warning(
-                "%s.%s%d: cell is not formatted as text; LibreOffice may have coerced it",
-                sheet_spec.name,
-                sheet_spec.letter(col.name),
-                ods_row,
+            coercions.append(
+                IntegrityWarning(
+                    sheet=sheet_spec.name,
+                    cell=f"{sheet_spec.name}.{sheet_spec.letter(col.name)}{ods_row}",
+                    column=col.name,
+                    cached=cell.value_type or "",
+                    kind="coerced_cell",
+                )
             )
         values[col.name] = cell.text
-    return values
+    return values, coercions
 
 
 def _apply_recompute(
@@ -518,10 +534,13 @@ def _load_sheet_rows(
     records: list[Mapping[str, str]] = []
     ods_row = sheet_data.first_data_row
     for cells in sheet_data.rows:
-        raw_values = _row_values(sheet_spec, cells, ods_row)
+        raw_values, coercions = _row_values(sheet_spec, cells, ods_row)
         if all(not value.strip() for value in raw_values.values()):
             ods_row += 1
             continue
+        for coercion in coercions:
+            warnings.append(coercion)
+            _logger.warning("%s", coercion.message())
         validated = schema.validate_row(sheet_spec, ods_row, raw_values)
         records.append(_apply_recompute(sheet_spec, validated, ods_row, warnings))
         ods_row += 1

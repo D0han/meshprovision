@@ -207,7 +207,15 @@ def make_admin_key() -> Callable[..., ResolvedAdminKey]:
     return _build_admin_key
 
 
-def edit_ods_cell(path: Path, sheet: str, column: str, ods_row: int, new_text: str) -> None:
+def edit_ods_cell(
+    path: Path,
+    sheet: str,
+    column: str,
+    ods_row: int,
+    new_text: str,
+    *,
+    value_type: str = "string",
+) -> None:
     """Hand-edit one ODS cell, simulating an operator edit in LibreOffice.
 
     Args:
@@ -216,6 +224,9 @@ def edit_ods_cell(path: Path, sheet: str, column: str, ods_row: int, new_text: s
         column: The schema column NAME to edit.
         ods_row: 1-based row number, with the header at row 1.
         new_text: The new cell text to write.
+        value_type: The cell's ``table:value-type`` attribute. Defaults
+            to ``"string"``; pass e.g. ``"float"`` to simulate
+            LibreOffice coercing a text-kind column to a numeric type.
     """
     doc = opendocument.load(str(path))
     table_elem = None
@@ -233,8 +244,9 @@ def edit_ods_cell(path: Path, sheet: str, column: str, ods_row: int, new_text: s
 
     for child in list(cell.childNodes):
         cell.removeChild(child)
-    cell.setAttribute("valuetype", "string")
-    cell.setAttribute("stringvalue", new_text)
+    cell.setAttribute("valuetype", value_type)
+    if value_type == "string":
+        cell.setAttribute("stringvalue", new_text)
     cell.addElement(odf_text.P(text=new_text))
 
     with path.open("wb") as fh:

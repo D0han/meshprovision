@@ -156,6 +156,26 @@ def test_db_verify_insecure_permissions_is_a_warning_unless_strict(
     assert strict.exit_code == 4
 
 
+def test_db_verify_coerced_cell_is_a_warning_unless_strict(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
+    seed_db(nodes=[node])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    edit_ods_cell(db_path, "Nodes", "notes", 2, "1234", value_type="float")
+
+    lenient = invoke(runner, ["db", "verify", "--json"], env)
+    assert lenient.exit_code == 0
+    lenient_doc = json.loads(lenient.stdout)
+    problem = next(p for p in lenient_doc["problems"] if p["kind"] == "coerced_cell")
+    assert problem["severity"] == "warning"
+
+    strict = invoke(runner, ["db", "verify", "--strict"], env)
+    assert strict.exit_code == 4
+
+
 def test_db_backup_create_and_list(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:

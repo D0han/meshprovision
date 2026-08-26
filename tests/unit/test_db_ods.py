@@ -232,6 +232,59 @@ def test_hex_node_id_looking_like_scientific_notation_survives(tmp_path: Path, k
     assert loaded.nodes[0]["node_id"] == "12345e78"
 
 
+def test_coerced_text_cell_warns_instead_of_raising(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    edit_ods_cell(path, "Nodes", "notes", 2, "1234", value_type="float")
+
+    loaded = ods.load_database(path)
+    assert len(loaded.warnings) == 1
+    warning = loaded.warnings[0]
+    assert warning.kind == "coerced_cell"
+    assert warning.sheet == "Nodes"
+    assert warning.column == "notes"
+    assert "notes" in warning.message()
+    assert loaded.nodes[0]["notes"] == "1234"
+
+
+def test_coerced_identity_column_still_raises_db_validation_error(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    path = _write_raw_row(tmp_path, keypair, {})
+    edit_ods_cell(path, "Nodes", "node_id", 2, "not-hex-zzz", value_type="float")
+
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.sheet == "Nodes"
+    assert exc_info.value.column == "node_id"
+
+
+def test_blank_trailing_row_with_coerced_cell_produces_no_warnings(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    node, pub, priv = _sample_records(keypair)
+    blank_row = {col.name: "" for col in schema.SHEET_SPECS["Nodes"].columns}
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path,
+        nodes=[node.to_row(), blank_row],
+        keys=[pub.to_row(), priv.to_row()],
+        backup=False,
+    )
+
+    edit_ods_cell(path, "Nodes", "notes", 3, "", value_type="float")
+
+    loaded = ods.load_database(path)
+    assert loaded.warnings == ()
+    assert len(loaded.nodes) == 1
+
+
 # ---------------------------------------------------------------------------
 # Validation errors on load.
 # ---------------------------------------------------------------------------
