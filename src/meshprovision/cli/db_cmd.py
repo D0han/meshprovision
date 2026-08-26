@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,7 +42,29 @@ if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext, DbSession
     from meshprovision.config.template import TemplateConfig
 
-__all__ = ["DbProblem", "VerifyReport", "db", "db_backup", "db_verify", "verify_database"]
+__all__ = [
+    "DbProblem",
+    "DbProblemKind",
+    "VerifyReport",
+    "db",
+    "db_backup",
+    "db_verify",
+    "verify_database",
+]
+
+
+class DbProblemKind(StrEnum):
+    """The category of one finding surfaced by :func:`verify_database`."""
+
+    INTEGRITY_WARNING = "integrity_warning"
+    COERCED_CELL = "coerced_cell"
+    UNRESOLVED_ADMIN_REF = "unresolved_admin_ref"
+    UNRESOLVED_TEMPLATE_REF = "unresolved_template_ref"
+    DUPLICATE_PUBLIC_KEY = "duplicate_public_key"
+    ALIAS_PUBLIC_KEY = "alias_public_key"
+    WEAK_KEY = "weak_key"
+    ADMIN_KEY_MISMATCH = "admin_key_mismatch"
+    INSECURE_PERMISSIONS = "insecure_permissions"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,18 +72,15 @@ class DbProblem:
     """One finding surfaced by :func:`verify_database`.
 
     Attributes:
-        kind: One of ``"integrity_warning"``, ``"coerced_cell"``,
-            ``"unresolved_admin_ref"``, ``"unresolved_template_ref"``,
-            ``"duplicate_public_key"``, ``"alias_public_key"``,
-            ``"weak_key"``, ``"admin_key_mismatch"``, or
-            ``"insecure_permissions"`` (POSIX only).
+        kind: The category of this finding. Serializes as its bare
+            string value, so the ``--json`` wire format is unchanged.
         severity: ``"critical"``, ``"error"``, or ``"warning"``.
         message: Human-readable description of the finding.
         sheet: Name of the offending sheet, when known.
         ref: Reference or cell identifying the offending row, when known.
     """
 
-    kind: str
+    kind: DbProblemKind
     severity: str
     message: str
     sheet: str | None = None
@@ -188,7 +208,7 @@ def verify_database(
         if mode & 0o077:
             problems.append(
                 DbProblem(
-                    kind="insecure_permissions",
+                    kind=DbProblemKind.INSECURE_PERMISSIONS,
                     severity="warning",
                     message=(
                         f"Database file mode is {mode:04o}; it holds private key material "
@@ -201,7 +221,11 @@ def verify_database(
     for warning in db.db.warnings:
         problems.append(
             DbProblem(
-                kind="coerced_cell" if warning.kind == "coerced_cell" else "integrity_warning",
+                kind=(
+                    DbProblemKind.COERCED_CELL
+                    if warning.kind == "coerced_cell"
+                    else DbProblemKind.INTEGRITY_WARNING
+                ),
                 severity="warning",
                 message=warning.message(),
                 sheet=warning.sheet,
@@ -213,7 +237,7 @@ def verify_database(
     for node_id, missing_refs in unresolved.items():
         problems.append(
             DbProblem(
-                kind="unresolved_admin_ref",
+                kind=DbProblemKind.UNRESOLVED_ADMIN_REF,
                 severity="error",
                 message=(
                     f"Node {node_id} authorizes unresolved admin key reference(s): "
@@ -230,7 +254,7 @@ def verify_database(
             if db.keys.find(key_ref) is None:
                 problems.append(
                     DbProblem(
-                        kind="unresolved_template_ref",
+                        kind=DbProblemKind.UNRESOLVED_TEMPLATE_REF,
                         severity="error",
                         message=(
                             f"Template admin_nodes entry {ref!r} does not resolve to a "
@@ -257,7 +281,7 @@ def verify_database(
         except KeyMaterialError:
             problems.append(
                 DbProblem(
-                    kind="weak_key",
+                    kind=DbProblemKind.WEAK_KEY,
                     severity="critical",
                     message="malformed key material",
                     sheet="Keys",
@@ -268,7 +292,7 @@ def verify_database(
         for finding in audit.findings:
             problems.append(
                 DbProblem(
-                    kind="weak_key",
+                    kind=DbProblemKind.WEAK_KEY,
                     severity=finding.severity,
                     message=f"{finding.check.value}: {finding.reason}",
                     sheet="Keys",
@@ -283,7 +307,7 @@ def verify_database(
         if db.keys.private_key_mismatch(admin_ref):
             problems.append(
                 DbProblem(
-                    kind="admin_key_mismatch",
+                    kind=DbProblemKind.ADMIN_KEY_MISMATCH,
                     severity="error",
                     message=(
                         f"{record.key_ref} does not derive "
@@ -314,7 +338,7 @@ def verify_database(
         if len(node_owners) >= 2:
             problems.append(
                 DbProblem(
-                    kind="duplicate_public_key",
+                    kind=DbProblemKind.DUPLICATE_PUBLIC_KEY,
                     severity="critical",
                     message=(
                         f"Public key shared across distinct nodes: "
@@ -328,7 +352,7 @@ def verify_database(
         else:
             problems.append(
                 DbProblem(
-                    kind="alias_public_key",
+                    kind=DbProblemKind.ALIAS_PUBLIC_KEY,
                     severity="warning",
                     message=(
                         f"{group[0]} shares its public key with {', '.join(rest)} "
