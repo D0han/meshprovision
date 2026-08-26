@@ -12,7 +12,7 @@ from meshprovision.crypto.keys import generate_keypair
 from meshprovision.db.keys import KeyRepository
 from meshprovision.db.nodes import NodeRepository
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.errors import EnumMappingError, PlanConflictError
+from meshprovision.errors import ConnectionBackendError, EnumMappingError, PlanConflictError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.apply import (
@@ -448,6 +448,55 @@ def test_apply_plan_success_confirmed_and_persist_result(tmp_path, make_live) ->
     assert nodes.exists("deadbe01")
     assert keys.find("deadbe01_pub") is not None
     assert keys.find("deadbe01_priv") is not None
+
+
+class _RefreshFailsSession:
+    """A session whose reconnect never succeeds -- pins the lost-reconnect path."""
+
+    def __init__(self, iface: _FakeIfaceForApply) -> None:
+        self._iface = iface
+
+    @property
+    def interface(self) -> _FakeIfaceForApply:
+        return self._iface
+
+    def describe(self) -> str:
+        return "fake (refresh always fails)"
+
+    def refresh(self) -> _FakeIfaceForApply:
+        raise ConnectionBackendError("link dropped", transport="serial")
+
+
+def test_apply_plan_reports_uncertain_when_the_reconnect_fails(tmp_path, make_live) -> None:
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    iface = _FakeIfaceForApply()
+    session = _RefreshFailsSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert outcome.dry_run is False
+    assert outcome.verified is True
+    assert outcome.uncertain is True
+    assert outcome.may_update_database is False
+
+    verify_results = [r for r in outcome.results if r.section == "<verify>"]
+    assert len(verify_results) == 1
+    assert verify_results[0].status == WriteStatus.FAILED
+    assert verify_results[0].message == "Could not reconnect to verify the writes"
+
+    db_path = tmp_path / "db.ods"
+    db = OdsDatabase.create(db_path)
+    nodes = NodeRepository(db)
+    keys = KeyRepository(db)
+    mtime_before = db_path.stat().st_mtime_ns
+    persisted = persist_result(outcome, nodes=nodes, keys=keys, keypair=kp)
+    assert persisted is False
+    assert db_path.stat().st_mtime_ns == mtime_before
+    assert nodes.exists("deadbe01") is False
 
 
 def test_persist_result_refuses_on_uncertain_outcome(tmp_path) -> None:
