@@ -171,3 +171,11 @@ def test_resolve_timeout_prefers_explicit_argument_then_env_then_default(
 
     monkeypatch.setenv(locking.LOCK_TIMEOUT_ENV, "not-a-number")
     assert locking._resolve_timeout(None) == locking.DEFAULT_LOCK_TIMEOUT
+
+
+@pytest.mark.parametrize("raw", ["inf", "-inf", "Infinity", "nan", "NaN"])
+def test_resolve_timeout_falls_back_on_a_non_finite_env_value(
+    monkeypatch: pytest.MonkeyPatch, raw: str
+) -> None:
+    monkeypatch.setenv(locking.LOCK_TIMEOUT_ENV, raw)
+    assert locking._resolve_timeout(None) == locking.DEFAULT_LOCK_TIMEOUT

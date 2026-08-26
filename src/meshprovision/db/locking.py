@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import os
 import time
 from types import ModuleType
@@ -97,9 +98,10 @@ def _resolve_timeout(timeout: float | None) -> float:
             environment variable / default.
 
     Returns:
-        The timeout, in seconds. A malformed
-        :data:`LOCK_TIMEOUT_ENV` value falls back to
-        :data:`DEFAULT_LOCK_TIMEOUT` rather than raising.
+        The timeout, in seconds. A malformed value -- an unparseable
+        string, or a non-finite one such as ``inf`` or ``nan``, which
+        would make the acquisition deadline unreachable -- falls back
+        to :data:`DEFAULT_LOCK_TIMEOUT` rather than raising.
     """
     if timeout is not None:
         return timeout
@@ -107,9 +109,12 @@ def _resolve_timeout(timeout: float | None) -> float:
     if raw is None:
         return DEFAULT_LOCK_TIMEOUT
     try:
-        return float(raw)
+        value = float(raw)
     except ValueError:
         return DEFAULT_LOCK_TIMEOUT
+    if not math.isfinite(value):
+        return DEFAULT_LOCK_TIMEOUT
+    return value
 
 
 def _warn_no_fcntl_once() -> None:
