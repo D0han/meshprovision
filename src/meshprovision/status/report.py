@@ -14,8 +14,10 @@ test.** Nothing in this module may reference
 ``KeyRepository.delete``, ``db.atomic_writer``, or anything in
 ``meshprovision.provisioning.apply`` or ``meshprovision.provisioning.
 repair``. An e2e test asserts the ODS file's mtime is unchanged across a
-full ``mesh status`` run, and a unit test greps this module's AST for
-those names -- both are expected to keep passing as this module changes.
+full ``mesh status`` run, and a unit test
+(``tests/unit/test_readonly_status_boundary.py``) walks this module's AST
+for those operations -- both are expected to keep passing as this module
+changes.
 :func:`load_records` additionally asserts, defensively, that merely
 loading the database never marks the in-memory session dirty.
 """
