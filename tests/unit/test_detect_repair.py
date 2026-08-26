@@ -331,19 +331,7 @@ def test_drift_describe() -> None:
     assert drift.describe() == "radio.role: recorded=CLIENT, observed=ROUTER"
 
 
-def test_reconcile_record_preserves_ble_pin_and_timestamps(make_live) -> None:
-    from meshprovision.config.template import load_template_text
-    from meshprovision.provisioning.plan import PlanInputs, build_plan
-
-    template = load_template_text("version: 1\n")
-    live = make_live(template, short_name="NEW1", long_name="New Name")
-    record = NodeRecord(node_id="deadbe01", ble_pin="012345")
-    plan = build_plan(
-        PlanInputs(
-            live=live, template=template, db_entry=record, state=detect.NodeState.PROVISIONED
-        )
-    )
-    reconciled = repair.reconcile_record(record, live, plan)
-    assert reconciled.ble_pin is not None
-    assert reconciled.ble_pin.get_secret_value() == "012345"
-    assert reconciled.short_name == "NEW1"
+def test_repair_module_exposes_only_the_drift_api() -> None:
+    assert set(repair.__all__) == {"Drift", "DriftKind", "diff_record"}
+    for removed in ("build_repair_plan", "repair_node", "RepairReport", "reconcile_record"):
+        assert not hasattr(repair, removed)

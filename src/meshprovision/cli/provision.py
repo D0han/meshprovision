@@ -6,19 +6,16 @@ admin-key resolution, weak-key audits, name allocation, plan build/render,
 apply, persist) that :mod:`meshprovision.cli.admin`'s ``mesh admin
 bootstrap`` reuses wholesale rather than duplicating.
 
-**CRITICAL -- do NOT use ``repair.build_repair_plan``.** It calls
-``plan.build_plan(live, template, db_entry=..., state=..., ...)`` with
-keyword arguments, but the shipped ``plan.build_plan`` takes a single
-:class:`~meshprovision.provisioning.plan.PlanInputs` argument. That
-function is broken as written and belongs to an earlier layer this group
-may not edit. :func:`run_provision` builds a ``PlanInputs`` itself and
-calls ``plan_mod.build_plan(inputs)`` for *both* the fresh-provision and
-the drift-repair path -- ``build_plan`` already implements the repair
-defaults (when ``desired_short_name``/``desired_long_name`` are ``None``
-and ``db_entry`` has names, the database's names win; the recorded BLE
-PIN is reused because the caller passes it in). From
-:mod:`meshprovision.provisioning.repair` this module uses only
-``diff_record`` and ``Drift``, which are correct.
+``mesh provision`` is also the drift-repair path: for an already-provisioned
+node :func:`run_provision` reports drift via
+:func:`meshprovision.provisioning.repair.diff_record`, then builds a single
+:class:`~meshprovision.provisioning.plan.PlanInputs` and applies it the same
+way it does for a fresh node. ``build_plan`` already implements the
+already-provisioned defaults: with ``desired_short_name``/``desired_long_name``
+left ``None`` (see :func:`allocate_names`) the database's names win, and the
+recorded BLE PIN is reused because this module passes it back in. From
+:mod:`meshprovision.provisioning.repair` this module uses ``diff_record``
+and ``Drift``.
 
 Secret hygiene: nothing here ever prints/logs a BLE PIN, a base64 key, or
 raw key bytes. Identification always goes through

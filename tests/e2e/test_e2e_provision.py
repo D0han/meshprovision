@@ -159,6 +159,50 @@ def test_drift_repair_renames_back_and_updates_role(
     assert bytes(iface.localNode.localConfig.security.public_key) == kp.public
 
 
+def test_repair_with_no_admin_nodes_template_preserves_existing_admin_keys(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    kp = keypair_factory()
+    admin_kp = keypair_factory()
+    node_record = NodeRecord(
+        node_id="deadbe01",
+        short_name="MT07",
+        long_name="Meshtastic MT07",
+        hw_model="RAK4631",
+        role="ROUTER",
+        region="EU_868",
+        authorized_admin_keys=("ADMIN1_pub",),
+    )
+    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp)
+    admin_pub_record, admin_priv_record = KeyRecord.for_keypair("ADMIN1", admin_kp)
+    seed_db(
+        nodes=[node_record],
+        keys=[pub_record, priv_record, admin_pub_record, admin_priv_record],
+    )
+
+    iface = bus.use(FakeMeshInterface("deadbe01", short_name="be01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+    iface.localNode.localConfig.security.admin_key.append(admin_kp.public)
+    iface.localNode.localConfig.device.role = 2  # ROUTER
+
+    # env's default template has admin_nodes: [] -- resolve_admin_keys therefore
+    # has no opinion, and ChangePlan.to_record() must leave the node's existing
+    # authorized_admin_keys untouched rather than wiping them.
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "Drift detected:" in result.stderr
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    persisted = NodeRecord.from_row(loaded.nodes[0])
+    assert persisted.authorized_admin_keys == ("ADMIN1_pub",)
+
+
 def test_dry_run_writes_nothing(runner: CliRunner, env: dict[str, str], bus: DeviceBus) -> None:
     iface = bus.use(FakeMeshInterface("deadbe01"))
     db_path = Path(env["MESHPROVISION_DB_PATH"])
