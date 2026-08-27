@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import base64
 import logging
-import math
 import secrets
 import time
 from collections.abc import Callable, Sequence
@@ -62,7 +61,7 @@ from meshprovision.errors import (
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.connection import ConnectionBackend, close_interface
-from meshprovision.provisioning.plan import ChangePlan, KeyPlan, SectionChange
+from meshprovision.provisioning.plan import ChangePlan, KeyPlan, SectionChange, values_equal
 
 if TYPE_CHECKING:
     from meshtastic.mesh_interface import MeshInterface
@@ -641,30 +640,6 @@ def write_section(
     _logger.info("Wrote config section %s (%d fields)", change.section, len(change.changes))
 
 
-def _values_equal(actual: object, desired: object) -> bool:
-    """Compare a live value against a desired value with type-tolerant semantics.
-
-    Args:
-        actual: The value read back from the device.
-        desired: The value the plan intended to write.
-
-    Returns:
-        ``True`` if the two values should be treated as equal: exact
-        equality for most types, a bool-vs-int-safe comparison, and
-        ``math.isclose`` (``rel_tol=1e-9``, ``abs_tol=1e-9``) for floats.
-    """
-    if isinstance(desired, bool) or isinstance(actual, bool):
-        return bool(actual) == bool(desired)
-    if isinstance(desired, float) or isinstance(actual, float):
-        try:
-            actual_f = float(actual)  # type: ignore[arg-type]
-            desired_f = float(desired)  # type: ignore[arg-type]
-        except (TypeError, ValueError):
-            return actual == desired
-        return math.isclose(actual_f, desired_f, rel_tol=1e-9, abs_tol=1e-9)
-    return actual == desired
-
-
 def _render_value(value: object, *, secret: bool) -> str:
     """Render a plan/live value as an already-redacted, human-readable string.
 
@@ -854,7 +829,7 @@ def verify_plan(
     for change in plan.sections:
         for field_change in change.changes:
             actual = live_after.value(change.section, field_change.field)
-            if _values_equal(actual, field_change.desired):
+            if values_equal(actual, field_change.desired):
                 results.append(
                     WriteResult(
                         change.section, WriteStatus.CONFIRMED, "confirmed", field=field_change.field

@@ -805,12 +805,19 @@ def test_module_diffing_telemetry_has_no_enabled_field(make_live, template) -> N
 
 
 def test_values_equal_bool_vs_int_and_float_tolerance() -> None:
-    from meshprovision.provisioning.plan import _values_equal
+    from meshprovision.provisioning.plan import values_equal
 
-    assert _values_equal(True, 1) is False
-    assert _values_equal(1.0000000001, 1.0) is True
-    assert _values_equal(1, 1) is True
-    assert _values_equal("a", "a") is True
+    assert values_equal(True, 1) is False
+    assert values_equal(1.0000000001, 1.0) is True
+    assert values_equal(1, 1) is True
+    assert values_equal("a", "a") is True
+
+
+def test_values_equal_string_never_coerced_to_float() -> None:
+    from meshprovision.provisioning.plan import values_equal
+
+    assert values_equal("1.5", 1.5) is False
+    assert values_equal(1.5, "1.5") is False
 
 
 # ---------------------------------------------------------------------------

@@ -215,6 +215,38 @@ def test_verify_plan_mismatch_unconfirmed_with_expected_actual(make_live) -> Non
     assert role_result.actual == "CLIENT"
 
 
+def test_apply_reuses_plan_values_equal() -> None:
+    from meshprovision.provisioning import apply as apply_mod
+    from meshprovision.provisioning import plan as plan_mod
+
+    assert apply_mod.values_equal is plan_mod.values_equal
+
+
+def test_verify_plan_int_one_against_desired_true_is_unconfirmed(make_live) -> None:
+    template = _template()
+    live = make_live(
+        template,
+        section_overrides={"lora": {"tx_enabled": False}},
+        security=make_security(empty=True),
+    )
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    tx_change = next(c for s in plan.sections for c in s.changes if c.field == "tx_enabled")
+    assert tx_change.desired is True
+
+    # The device reports the int 1 rather than the bool True.
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        section_overrides={"lora": {"tx_enabled": 1}},
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    tx_result = next(r for r in results if r.field == "tx_enabled")
+    assert tx_result.status == WriteStatus.UNCONFIRMED
+
+
 def test_verify_plan_secret_field_expected_actual_redacted(make_live) -> None:
     template = _template()
     live = make_live(template, security=make_security(empty=True))

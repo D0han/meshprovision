@@ -93,6 +93,7 @@ __all__ = [
     "ResolvedAdminKey",
     "SectionChange",
     "build_plan",
+    "values_equal",
 ]
 
 MODULE_ENABLED_FIELD: Final[str] = "enabled"
@@ -129,7 +130,7 @@ _BLE_PIN_LENGTH: Final[int] = 6
 import (see the module docstring's import restriction)."""
 
 
-def _values_equal(current: object, desired: object) -> bool:
+def values_equal(current: object, desired: object) -> bool:
     """Compare a live value against a desired value with type-tolerant semantics.
 
     Args:
@@ -931,7 +932,7 @@ def _diff_section(
         if section_name == "position" and field_name in _POSITION_FIXED_FIELDS:
             continue
         current_value = live.value(section_name, field_name)
-        if not _values_equal(current_value, desired_value):
+        if not values_equal(current_value, desired_value):
             changes.append(
                 FieldChange(
                     section=section_name,
@@ -1066,7 +1067,7 @@ def _plan_bluetooth_section(inputs: PlanInputs) -> SectionChange | None:
     changes: list[FieldChange] = []
     for field_name, desired_value in desired_fields.items():
         current_value = live.value("bluetooth", field_name)
-        if not _values_equal(current_value, desired_value):
+        if not values_equal(current_value, desired_value):
             changes.append(
                 FieldChange(
                     section="bluetooth",
@@ -1370,7 +1371,7 @@ def _plan_security_section(
     changes: list[FieldChange] = []
     for field_name, desired_value in desired.items():
         current_value = current[field_name]
-        if not _values_equal(current_value, desired_value):
+        if not values_equal(current_value, desired_value):
             reason = "forced" if field_name == "admin_channel_enabled" else "template"
             changes.append(
                 FieldChange(
