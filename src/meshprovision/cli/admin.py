@@ -18,7 +18,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final, cast
 
 import click
 from rich import box
@@ -40,7 +41,13 @@ from meshprovision.crypto import redact, weakkeys
 from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyType
-from meshprovision.errors import ExitCode, KeyVerificationError, SettingsError, WeakKeyError
+from meshprovision.errors import (
+    ExitCode,
+    KeyVerificationError,
+    SettingsError,
+    WeakKeyError,
+    WeakKeySeverity,
+)
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import connection
 
@@ -49,6 +56,8 @@ if TYPE_CHECKING:
     from meshprovision.config.template import TemplateConfig
 
 __all__ = [
+    "AUDIT_LABELS",
+    "AUDIT_STYLES",
     "AdminSummary",
     "admin",
     "admin_bootstrap",
@@ -57,6 +66,35 @@ __all__ = [
     "collect_admins",
     "parse_assignment",
 ]
+
+AUDIT_LABELS: Final[MappingProxyType[WeakKeySeverity, str]] = MappingProxyType(
+    {"critical": "compromised", "warning": "warning"}
+)
+"""Display label for the ``Audit`` column, by highest finding severity."""
+
+AUDIT_STYLES: Final[MappingProxyType[WeakKeySeverity, str]] = MappingProxyType(
+    {"critical": "red", "warning": "yellow"}
+)
+"""``rich`` style name applied to an admin's table row, by finding severity."""
+
+
+def _audit_cell(audit: weakkeys.AuditResult | None) -> tuple[str, str | None]:
+    """Render an admin's weak-key audit as a table cell and a row style.
+
+    Args:
+        audit: The admin's audit result, or ``None`` when no public key
+            row exists to audit.
+
+    Returns:
+        A ``(label, style)`` pair. ``style`` is ``None`` for the two
+        unremarkable states, leaving those rows unstyled.
+    """
+    if audit is None:
+        return "-", None
+    severity = audit.severity
+    if severity is None:
+        return "clean", None
+    return AUDIT_LABELS[severity], AUDIT_STYLES[severity]
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,7 +564,7 @@ def admin_import(
 @pass_cli
 @handle_cli_errors
 def admin_list(ctx: CliContext, *, json_output: bool) -> None:
-    """List configured admins, private-key custody, and pending cross-authorizations.
+    """List configured admins, key custody, weak-key audits, and pending cross-authorizations.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
@@ -553,9 +591,11 @@ def admin_list(ctx: CliContext, *, json_output: bool) -> None:
         table.add_column("Private held")
         table.add_column("In template")
         table.add_column("Node")
+        table.add_column("Audit")
         table.add_column("Authorized on")
         table.add_column("Pending on")
         for summary in summaries:
+            audit_label, audit_style = _audit_cell(summary.audit)
             table.add_row(
                 summary.ref,
                 "yes" if summary.present else "no",
@@ -563,8 +603,10 @@ def admin_list(ctx: CliContext, *, json_output: bool) -> None:
                 "yes" if summary.has_private else "no",
                 "yes" if summary.in_template else "no",
                 summary.node_id or "-",
+                audit_label,
                 ", ".join(summary.authorized_on) or "-",
                 ", ".join(summary.pending_on) or "-",
+                style=audit_style,
             )
         ctx.err.print(table)
 

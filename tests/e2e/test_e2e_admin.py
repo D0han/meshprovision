@@ -320,6 +320,37 @@ def test_admin_import_multiple_assignments_reports_registered_and_skipped(
     assert {"ADMIN_A_pub", "ADMIN_B_pub"} <= rows
 
 
+def test_admin_list_table_shows_the_weak_key_audit_result(
+    runner: CliRunner, env: dict[str, str], write_template: Callable[..., Path]
+) -> None:
+    bad_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[1]).decode("ascii")
+    assert (
+        invoke(runner, ["admin", "import", f"ADMIN_BAD={bad_b64}", "--force"], env).exit_code == 0
+    )
+
+    kp = generate_keypair()
+    assert invoke(runner, ["admin", "import", f"ADMIN_OK={kp.public_b64}"], env).exit_code == 0
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN_OK", "ADMIN_BAD"]))
+    result = invoke(runner, ["admin", "list"], env)
+
+    assert result.exit_code == 0
+    assert result.stdout == ""
+
+    lines = result.stderr.splitlines()
+    header = next(line for line in lines if "Ref" in line and "Fingerprint" in line)
+    assert "Audit" in header
+
+    bad_line = next(line for line in lines if "ADMIN_BAD" in line)
+    assert "compromised" in bad_line
+
+    ok_line = next(line for line in lines if "ADMIN_OK" in line)
+    assert "clean" in ok_line
+    assert "compromised" not in ok_line
+
+    assert not _BASE64_KEY_RE.search(result.stderr)
+
+
 def test_admin_list_with_unregistered_template_ref_exits_two(
     runner: CliRunner, env: dict[str, str], write_template: Callable[..., Path]
 ) -> None:
