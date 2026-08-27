@@ -170,6 +170,7 @@ def _build_admin_key(
     has_private: bool = True,
     audit_ok: bool = True,
     private_mismatch: bool = False,
+    audit_summary: str = "",
 ) -> ResolvedAdminKey:
     """Build a :class:`ResolvedAdminKey` for tests.
 
@@ -181,6 +182,7 @@ def _build_admin_key(
         audit_ok: Whether this key passed the weak-key audit.
         private_mismatch: Whether a private counterpart row exists but
             does not derive this public key.
+        audit_summary: Human-readable summary of the audit result.
 
     Returns:
         The constructed :class:`ResolvedAdminKey`.
@@ -193,6 +195,7 @@ def _build_admin_key(
         has_private=has_private,
         audit_ok=audit_ok,
         fingerprint=redact.fingerprint(resolved_public),
+        audit_summary=audit_summary,
         private_mismatch=private_mismatch,
     )
 

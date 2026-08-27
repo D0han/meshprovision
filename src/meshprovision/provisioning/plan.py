@@ -29,9 +29,20 @@ that means "no opinion" and the plan's desired set is ``kept`` --
 an empty ``admin_nodes`` list never means "strip whatever is on the
 device," and a node with zero admin keys is therefore never flagged as
 drift. If ``template.admin_nodes`` is *non-empty*, it is authoritative:
-the desired set is ``resolved`` and any live key not named in it is
+the desired set is every entry of ``resolved`` that **passed the
+weak-key audit** (``audit_ok``), and any live key not named in it is
 removed. Either way the sets are compared as **sorted** tuples, so a
 mere ordering difference is never churn.
+
+An entry that failed the weak-key audit is never authorized: it is
+excluded from the desired set, named in
+:attr:`KeyPlan.rejected_admin_key_refs`, and reported as a
+``"resolved_admin_key_rejected"`` warning. This exclusion holds
+**regardless of** ``security.is_managed`` -- it is not a lockdown-only
+behavior, so an ordinary (unmanaged) provisioning run will not write a
+known-compromised key to a device either. The stricter
+``is_managed=true`` path additionally refuses the whole run outright
+(see :func:`_evaluate_lockdown`).
 
 Secret hygiene: this module never imports :mod:`meshprovision.crypto`
 (digests are the caller's job), yet it still never lets raw key bytes
@@ -146,8 +157,9 @@ class PlanWarning:
         code: Machine-readable code. One of ``"lockdown_not_authorized"``,
             ``"module_has_no_enabled_field"``, ``"unknown_module"``,
             ``"device_key_differs_from_db"``, ``"foreign_node"``,
-            ``"live_admin_key_rejected"``, ``"region_change_reboots"``,
-            or ``"name_truncation_risk"``.
+            ``"live_admin_key_rejected"``,
+            ``"resolved_admin_key_rejected"``,
+            ``"region_change_reboots"``, or ``"name_truncation_risk"``.
         message: Human-readable description of the finding.
         section: Name of the associated config/module-config section,
             when known.
@@ -401,6 +413,11 @@ class KeyPlan:
         removed_admin_fingerprints: Positional labels
             (``"live-admin[0]"``, ...) for live admin keys dropped
             because the caller's weak-key audit flagged them.
+        rejected_admin_key_refs: The ``Keys`` sheet references named in
+            ``template.admin_nodes`` that this plan refuses to authorize
+            because the caller's weak-key audit flagged them. The
+            counterpart of :attr:`removed_admin_fingerprints` for keys
+            resolved from the template rather than read off the device.
     """
 
     regenerate: bool = False
@@ -410,6 +427,7 @@ class KeyPlan:
     desired_admin_keys: tuple[bytes, ...] = ()
     desired_admin_key_refs: tuple[str, ...] = ()
     removed_admin_fingerprints: tuple[str, ...] = ()
+    rejected_admin_key_refs: tuple[str, ...] = ()
 
     @property
     def is_empty(self) -> bool:
@@ -436,7 +454,8 @@ class KeyPlan:
             f"change_admin_keys={self.change_admin_keys!r}, "
             f"desired_admin_keys={redacted_keys!r}, "
             f"desired_admin_key_refs={self.desired_admin_key_refs!r}, "
-            f"removed_admin_fingerprints={self.removed_admin_fingerprints!r})"
+            f"removed_admin_fingerprints={self.removed_admin_fingerprints!r}, "
+            f"rejected_admin_key_refs={self.rejected_admin_key_refs!r})"
         )
 
 
@@ -672,6 +691,13 @@ class ChangePlan:
         if self.key_plan.removed_admin_fingerprints:
             removed = ", ".join(self.key_plan.removed_admin_fingerprints)
             lines.append(f"security.admin_key: remove [{removed}] (weak-key audit)")
+        # Deliberately its own top-level guard, not nested under change_admin_keys:
+        # when every named admin key is refused and none was live, desired and live
+        # are both empty, so change_admin_keys is False in exactly the case the
+        # operator most needs to see this line.
+        if self.key_plan.rejected_admin_key_refs:
+            refused = ", ".join(self.key_plan.rejected_admin_key_refs)
+            lines.append(f"security.admin_key: refuse [{refused}] (weak-key audit)")
         return tuple(lines)
 
     def summary(self) -> str:
@@ -731,6 +757,7 @@ class ChangePlan:
                 "admin_key_count": len(self.key_plan.desired_admin_keys),
                 "desired_admin_key_refs": list(self.key_plan.desired_admin_key_refs),
                 "removed_admin_fingerprints": list(self.key_plan.removed_admin_fingerprints),
+                "rejected_admin_key_refs": list(self.key_plan.rejected_admin_key_refs),
             },
             "lockdown": {
                 "enable": self.lockdown.enable,
@@ -758,11 +785,15 @@ class ChangePlan:
         Returns:
             The new :class:`~meshprovision.db.nodes.NodeRecord`.
             ``authorized_admin_keys`` is left untouched (preserving
-            whatever ``existing`` already had) unless
-            :attr:`key_plan`'s ``desired_admin_key_refs`` is non-empty,
-            since an empty ``admin_nodes`` template means "no opinion,"
-            never "clear the refs." ``ble_pin`` is set only when
-            :attr:`ble_pin_set`.
+            whatever ``existing`` already had) when :attr:`key_plan` has
+            neither ``desired_admin_key_refs`` nor
+            ``rejected_admin_key_refs``, since an empty ``admin_nodes``
+            template means "no opinion," never "clear the refs." When
+            every named ref was instead *rejected* by the weak-key audit
+            the refs are cleared to ``()``, because the device really
+            does end up holding no authorized admin key and the old row
+            would otherwise keep asserting a key this plan just refused.
+            ``ble_pin`` is set only when :attr:`ble_pin_set`.
         """
         from meshprovision.db.nodes import NodeRecord as _NodeRecord
 
@@ -778,7 +809,7 @@ class ChangePlan:
             "role": self.role,
             "region": self.region,
         }
-        if self.key_plan.desired_admin_key_refs:
+        if self.key_plan.desired_admin_key_refs or self.key_plan.rejected_admin_key_refs:
             changes["authorized_admin_keys"] = self.key_plan.desired_admin_key_refs
 
         if self.ble_pin_set:
@@ -1036,35 +1067,61 @@ def _plan_bluetooth_section(inputs: PlanInputs) -> SectionChange | None:
     return SectionChange(section="bluetooth", kind="config", changes=tuple(changes))
 
 
-def _plan_admin_key_material(
-    inputs: PlanInputs,
-) -> tuple[tuple[bytes, ...], tuple[str, ...], bool, tuple[str, ...], tuple[PlanWarning, ...]]:
+@dataclass(frozen=True, slots=True, repr=False)
+class _AdminKeyPlan:
+    """:func:`_plan_admin_key_material`'s result, bundled.
+
+    ``repr`` is suppressed rather than customized: :attr:`desired` holds
+    raw key bytes, and this private helper has no fingerprint of its own
+    to render in their place.
+
+    Attributes:
+        desired: The desired raw admin-key bytes, in write order.
+        desired_refs: The ``Keys`` sheet refs corresponding to
+            :attr:`desired`, empty when the desired set came from the
+            device's own live keys rather than a resolved
+            ``admin_nodes`` list.
+        change_admin_keys: Whether ``security.admin_key`` needs writing.
+        removed: Positional labels for live keys dropped by the audit.
+        rejected_refs: ``Keys`` sheet refs excluded from :attr:`desired`
+            because they failed the audit.
+        warnings: The corresponding rejection warnings.
+    """
+
+    desired: tuple[bytes, ...]
+    desired_refs: tuple[str, ...]
+    change_admin_keys: bool
+    removed: tuple[str, ...]
+    rejected_refs: tuple[str, ...]
+    warnings: tuple[PlanWarning, ...]
+
+
+def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
     """Decide the desired ``security.admin_key`` set (step 6).
 
-    See the module docstring for the exact rule this implements.
+    See the module docstring for the exact rule this implements,
+    including that an ``admin_nodes`` entry failing the weak-key audit is
+    excluded from the desired set regardless of ``security.is_managed``.
 
     Args:
         inputs: The plan inputs.
 
     Returns:
-        A 5-tuple: the desired raw admin-key bytes (write order), their
-        ``Keys`` sheet refs (empty when the desired set came from the
-        device's own live keys rather than a resolved ``admin_nodes``
-        list), whether a write is needed, positional labels for any
-        live key dropped by the weak-key audit, and the corresponding
-        ``"live_admin_key_rejected"`` warnings.
+        The :class:`_AdminKeyPlan`, carrying both the
+        ``"live_admin_key_rejected"`` warnings for live keys dropped by
+        the audit and the ``"resolved_admin_key_rejected"`` warnings for
+        template-named keys refused by it.
 
     Raises:
         AdminKeyCapacityError: If ``template.admin_nodes`` resolves to
             more keys than the firmware supports.
     """
     live_keys = inputs.live.security.admin_keys
-    resolved = tuple(k.public for k in inputs.admin_keys)
 
     dropped_indices = [i for i, k in enumerate(live_keys) if k in inputs.rejected_admin_keys]
     kept = tuple(k for i, k in enumerate(live_keys) if i not in dropped_indices)
     removed = tuple(f"live-admin[{i}]" for i in dropped_indices)
-    warnings = tuple(
+    warnings = [
         PlanWarning(
             "live_admin_key_rejected",
             f"Live admin key {label} failed the weak-key audit and will be removed.",
@@ -1072,24 +1129,48 @@ def _plan_admin_key_material(
             field="admin_key",
         )
         for label in removed
-    )
+    ]
 
+    rejected_refs: tuple[str, ...] = ()
     if not inputs.template.admin_nodes:
         desired = kept
         desired_refs: tuple[str, ...] = ()
     else:
-        desired = resolved
-        desired_refs = tuple(k.key_ref for k in inputs.admin_keys)
-        if len(desired) > MAX_ADMIN_KEYS:
+        # The capacity check reads the pre-filter count on purpose: "the template
+        # names more admins than the firmware holds" is a template error, and must
+        # not start or stop being reported depending on the blocklist's contents.
+        if len(inputs.admin_keys) > MAX_ADMIN_KEYS:
             raise AdminKeyCapacityError(
-                f"Plan requires {len(desired)} admin keys; the firmware supports at most "
-                f"{MAX_ADMIN_KEYS}.",
-                count=len(desired),
+                f"Plan requires {len(inputs.admin_keys)} admin keys; the firmware supports "
+                f"at most {MAX_ADMIN_KEYS}.",
+                count=len(inputs.admin_keys),
                 limit=MAX_ADMIN_KEYS,
             )
+        authorized = tuple(k for k in inputs.admin_keys if k.audit_ok)
+        rejected = tuple(k for k in inputs.admin_keys if not k.audit_ok)
+        desired = tuple(k.public for k in authorized)
+        desired_refs = tuple(k.key_ref for k in authorized)
+        rejected_refs = tuple(k.key_ref for k in rejected)
+        warnings.extend(
+            PlanWarning(
+                "resolved_admin_key_rejected",
+                f"Admin key {key.key_ref} failed the weak-key audit and will not be "
+                f"authorized: {key.audit_summary or 'flagged as compromised'}. Correct or "
+                f"replace that Keys sheet row (see `mesh admin import`).",
+                section="security",
+                field="admin_key",
+            )
+            for key in rejected
+        )
 
-    change_admin_keys = sorted(desired) != sorted(live_keys)
-    return desired, desired_refs, change_admin_keys, removed, warnings
+    return _AdminKeyPlan(
+        desired=desired,
+        desired_refs=desired_refs,
+        change_admin_keys=sorted(desired) != sorted(live_keys),
+        removed=removed,
+        rejected_refs=rejected_refs,
+        warnings=tuple(warnings),
+    )
 
 
 def _plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanWarning, ...]]:
@@ -1148,7 +1229,9 @@ def _evaluate_lockdown(
             none of the authorized keys has its private counterpart on
             hand, or any authorized key fails the weak-key audit. These
             are hard refusals: they are the "lock yourself out" and "lock
-            with a compromised key" cases.
+            with a compromised key" cases. The weak-key audit is checked
+            first, so a key that is both compromised and mismatched is
+            reported as ``"weak_admin_key"``.
     """
     if not inputs.template.security.is_managed:
         gates = MappingProxyType(
@@ -1161,6 +1244,17 @@ def _evaluate_lockdown(
         )
         return LockdownDecision(enable=False, reason="template_opt_out", gates=gates)
 
+    # Must precede the emptiness gate below: a fully compromised admin_nodes list
+    # filters down to desired_admin_keys == () in _plan_admin_key_material, which
+    # would otherwise be refused as "no_admin_keys" and hide the real cause. This
+    # reads the unfiltered inputs.admin_keys for exactly that reason.
+    weak_refs = tuple(k.key_ref for k in inputs.admin_keys if not k.audit_ok)
+    if weak_refs:
+        raise LockdownRefusedError(
+            f"Authorized admin key(s) failed the weak-key audit: {', '.join(weak_refs)}.",
+            reason="weak_admin_key",
+            hint="Replace the offending key(s) (see `mesh admin import`) and re-run.",
+        )
     if not desired_admin_keys:
         raise LockdownRefusedError(
             "is_managed=true with zero authorized admin keys would lock the node with "
@@ -1192,14 +1286,6 @@ def _evaluate_lockdown(
                 "the Keys sheet."
             ),
         )
-    weak_refs = tuple(k.key_ref for k in inputs.admin_keys if not k.audit_ok)
-    if weak_refs:
-        raise LockdownRefusedError(
-            f"Authorized admin key(s) failed the weak-key audit: {', '.join(weak_refs)}.",
-            reason="weak_admin_key",
-            hint="Replace the offending key(s) (see `mesh admin import`) and re-run.",
-        )
-
     gates = MappingProxyType(
         {
             "has_admin_keys": True,
@@ -1334,10 +1420,8 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
 
     bluetooth_section = _plan_bluetooth_section(inputs)
 
-    desired_admin_keys, desired_admin_key_refs, change_admin_keys, removed_fps, admin_warnings = (
-        _plan_admin_key_material(inputs)
-    )
-    warnings.extend(admin_warnings)
+    admin_plan = _plan_admin_key_material(inputs)
+    warnings.extend(admin_plan.warnings)
 
     regenerate, regenerate_reason, adopt_device_key, keypair_warnings = _plan_node_keypair(inputs)
     warnings.extend(keypair_warnings)
@@ -1346,13 +1430,14 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         regenerate=regenerate,
         regenerate_reason=regenerate_reason,
         adopt_device_key=adopt_device_key,
-        change_admin_keys=change_admin_keys,
-        desired_admin_keys=desired_admin_keys,
-        desired_admin_key_refs=desired_admin_key_refs,
-        removed_admin_fingerprints=removed_fps,
+        change_admin_keys=admin_plan.change_admin_keys,
+        desired_admin_keys=admin_plan.desired,
+        desired_admin_key_refs=admin_plan.desired_refs,
+        removed_admin_fingerprints=admin_plan.removed,
+        rejected_admin_key_refs=admin_plan.rejected_refs,
     )
 
-    lockdown = _evaluate_lockdown(inputs, desired_admin_keys)
+    lockdown = _evaluate_lockdown(inputs, admin_plan.desired)
     if lockdown.reason == "allow_lockdown_not_set":
         warnings.append(
             PlanWarning(

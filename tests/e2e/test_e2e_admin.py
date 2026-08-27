@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from meshprovision.crypto import weakkeys
 from meshprovision.crypto.keys import generate_keypair
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
@@ -214,6 +215,30 @@ def test_admin_import_all_zero_key_is_refused(runner: CliRunner, env: dict[str, 
     zero_b64 = base64.b64encode(bytes(32)).decode("ascii")
     result = invoke(runner, ["admin", "import", f"ADMIN9={zero_b64}"], env)
     assert result.exit_code == 6
+
+
+def test_provision_refuses_to_authorize_a_force_imported_weak_admin_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    small_order_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[2]).decode("ascii")
+    imported = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--force"], env)
+    assert imported.exit_code == 0
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN9"]))
+    bus.use(FakeMeshInterface("cccc0001"))
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--dry-run", "--json"], env)
+
+    assert result.exit_code == 0
+    key_plan = json.loads(result.stdout)["plan"]["key_plan"]
+    assert key_plan["rejected_admin_key_refs"] == ["ADMIN9_pub"]
+    assert key_plan["desired_admin_key_refs"] == []
+    assert key_plan["admin_key_count"] == 0
+
+    assert not _BASE64_KEY_RE.search(result.stdout)
+    assert not _BASE64_KEY_RE.search(result.stderr)
 
 
 def test_admin_import_malformed_assignment_missing_equals(

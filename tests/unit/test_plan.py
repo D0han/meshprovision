@@ -258,6 +258,192 @@ def test_admin_key_capacity_exceeded_raises(make_live, template, make_admin_key)
 
 
 # ---------------------------------------------------------------------------
+# Resolved admin keys that fail the weak-key audit.
+# ---------------------------------------------------------------------------
+
+
+def test_weak_resolved_admin_key_is_never_authorized_without_lockdown(
+    make_live, template, make_admin_key
+) -> None:
+    admin = make_admin_key("ADMIN1", audit_ok=False, audit_summary="small_order: known bad point")
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.desired_admin_keys == ()
+    assert plan.key_plan.desired_admin_key_refs == ()
+    assert plan.key_plan.rejected_admin_key_refs == ("ADMIN1_pub",)
+
+    rejections = [w for w in plan.warnings if w.code == "resolved_admin_key_rejected"]
+    assert len(rejections) == 1
+    assert "ADMIN1_pub" in rejections[0].message
+    assert "small_order: known bad point" in rejections[0].message
+    assert "security.admin_key: refuse [ADMIN1_pub] (weak-key audit)" in plan.describe()
+    document = json.loads(json.dumps(plan.to_json_dict()))
+    assert document["key_plan"]["rejected_admin_key_refs"] == ["ADMIN1_pub"]
+
+
+def test_weak_resolved_admin_key_partially_filters_keys_and_refs_in_lockstep(
+    make_live, template, make_admin_key
+) -> None:
+    weak = make_admin_key("WEAK", audit_ok=False)
+    good = make_admin_key("GOOD", audit_ok=True)
+    template2 = template.model_copy(update={"admin_nodes": ("WEAK", "GOOD")})
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(weak, good),
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.desired_admin_keys == (good.public,)
+    assert plan.key_plan.desired_admin_key_refs == ("GOOD_pub",)
+    assert plan.key_plan.rejected_admin_key_refs == ("WEAK_pub",)
+    assert plan.key_plan.change_admin_keys is True
+
+    rejections = [w for w in plan.warnings if w.code == "resolved_admin_key_rejected"]
+    assert len(rejections) == 1
+    assert "WEAK_pub" in rejections[0].message
+
+
+def test_all_weak_resolved_admin_keys_under_lockdown_report_weak_not_empty(
+    make_live, template, make_admin_key
+) -> None:
+    admin = make_admin_key("ADMIN1", audit_ok=False)
+    template2 = _with_admin_and_lockdown(template, "ADMIN1")
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+    )
+    with pytest.raises(LockdownRefusedError) as exc_info:
+        build_plan(inputs)
+    assert exc_info.value.reason == "weak_admin_key"
+    assert "ADMIN1_pub" in str(exc_info.value)
+
+
+def test_partially_weak_resolved_admin_keys_under_lockdown_name_only_the_weak_ref(
+    make_live, template, make_admin_key
+) -> None:
+    weak = make_admin_key("WEAK", audit_ok=False)
+    good = make_admin_key("GOOD", audit_ok=True)
+    template2 = _with_admin_and_lockdown(template, "WEAK", "GOOD")
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(weak, good),
+    )
+    with pytest.raises(LockdownRefusedError) as exc_info:
+        build_plan(inputs)
+    assert exc_info.value.reason == "weak_admin_key"
+    message = str(exc_info.value)
+    assert "WEAK_pub" in message
+    assert "GOOD_pub" not in message
+    assert message.count("WEAK_pub") == 1
+
+
+def test_weak_admin_key_outranks_private_key_mismatch(make_live, template, make_admin_key) -> None:
+    admin = make_admin_key("ADMIN1", audit_ok=False, has_private=False, private_mismatch=True)
+    template2 = _with_admin_and_lockdown(template, "ADMIN1")
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+    )
+    with pytest.raises(LockdownRefusedError) as exc_info:
+        build_plan(inputs)
+    assert exc_info.value.reason == "weak_admin_key"
+
+
+def test_to_record_clears_admin_keys_when_every_ref_was_rejected(
+    make_live, template, make_admin_key, keypair
+) -> None:
+    admin = make_admin_key("ADMIN1", audit_ok=False)
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(keypair=keypair))
+    record = NodeRecord(
+        node_id="deadbe01",
+        short_name=live.short_name,
+        long_name=live.long_name,
+        authorized_admin_keys=("ADMIN1_pub",),
+    )
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        admin_keys=(admin,),
+    )
+    new_record = build_plan(inputs).to_record()
+    assert new_record.authorized_admin_keys == ()
+
+
+def test_admin_key_capacity_counts_keys_before_the_audit_filter(
+    make_live, template, make_admin_key
+) -> None:
+    from meshprovision.errors import MAX_ADMIN_KEYS
+
+    refs = [f"ADMIN{i}" for i in range(MAX_ADMIN_KEYS + 1)]
+    admin_keys = tuple(make_admin_key(ref, audit_ok=(i != 0)) for i, ref in enumerate(refs))
+    template2 = template.model_copy(update={"admin_nodes": tuple(refs[:MAX_ADMIN_KEYS])})
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=admin_keys,
+    )
+    with pytest.raises(AdminKeyCapacityError) as exc_info:
+        build_plan(inputs)
+    assert exc_info.value.count == MAX_ADMIN_KEYS + 1
+
+
+def test_live_weak_admin_key_is_both_removed_and_refused(
+    make_live, template, make_admin_key, keypair_factory
+) -> None:
+    compromised = keypair_factory()
+    admin = make_admin_key("ADMIN1", public=compromised.public, audit_ok=False)
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(admin_keys=(compromised.public,)))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=NodeRecord(node_id="deadbe01"),
+        state=detect.NodeState.PROVISIONED,
+        admin_keys=(admin,),
+        rejected_admin_keys=frozenset({compromised.public}),
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.removed_admin_fingerprints == ("live-admin[0]",)
+    assert plan.key_plan.rejected_admin_key_refs == ("ADMIN1_pub",)
+    assert plan.key_plan.desired_admin_keys == ()
+    assert plan.key_plan.change_admin_keys is True
+    codes = {w.code for w in plan.warnings}
+    assert {"live_admin_key_rejected", "resolved_admin_key_rejected"} <= codes
+
+
+# ---------------------------------------------------------------------------
 # is_managed refusals.
 # ---------------------------------------------------------------------------
 
