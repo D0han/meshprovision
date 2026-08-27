@@ -701,10 +701,21 @@ class CachedHTTPClient:
         :meth:`_write_entry` that was interrupted mid-write. This can
         delete a *live* concurrent writer's temp file, since two
         processes may legitimately share a cache directory and this
-        method takes no lock; the consequence is bounded and benign --
-        the victim's own ``replace`` raises ``OSError``, which
-        :meth:`_write_entry` turns into a :class:`CacheError`, and the
-        HTTP response the caller already holds is unaffected.
+        method takes no lock. The consequence is not benign: the
+        victim's ``replace`` raises ``OSError``, which
+        :meth:`_write_entry` deliberately turns into a
+        :class:`CacheError` rather than swallowing it, and since
+        :meth:`request` writes the entry *before* returning, that error
+        surfaces out of the victim's own in-flight :meth:`request` call
+        -- discarding a fetch that had already succeeded.
+
+        No shipped CLI command reaches this method today. Whenever one
+        is wired up, this sweep should first grow an age guard of the
+        kind :mod:`meshprovision.db.atomic_writer` already applies to
+        its own orphaned temps: skip any temp file younger than some
+        threshold, so an in-flight write is never a sweep target. The
+        injectable ``self._clock()`` this class already carries makes
+        such a guard straightforward to test.
 
         Args:
             older_than: Age threshold in seconds. Defaults to :attr:`ttl`.
@@ -741,9 +752,15 @@ class CachedHTTPClient:
         """Delete every cache entry under :attr:`cache_dir`.
 
         Also sweeps orphaned ``*.json.tmp-*`` temp files left behind by
-        an interrupted :meth:`_write_entry`; see :meth:`purge` for the
-        note on the (bounded, benign) concurrent-writer race this can
-        hit.
+        an interrupted :meth:`_write_entry`. This shares the
+        concurrent-writer race described on :meth:`purge`: sweeping a
+        live writer's temp file makes that writer's own in-flight
+        :meth:`request` call raise :class:`CacheError` out of
+        :meth:`_write_entry`, throwing away an already-successful fetch.
+        Like :meth:`purge`, this method is not reachable from any
+        shipped CLI command, and should gain the same age guard --
+        leaving temp files younger than some threshold alone, timed off
+        the injectable ``self._clock()`` -- before one exposes it.
 
         Returns:
             The number of entries deleted.
