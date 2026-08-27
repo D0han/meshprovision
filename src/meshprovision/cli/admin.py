@@ -292,6 +292,7 @@ def admin_bootstrap(
     dry_run: bool,
     yes: bool,
     allow_lockdown: bool,
+    allow_weak_admin_key: bool,
     force_regenerate_key: bool,
     no_reconnect: bool,
     json_output: bool,
@@ -322,6 +323,8 @@ def admin_bootstrap(
         yes: Whether to assume yes to confirmations, from ``-y``/``--yes``.
         allow_lockdown: Whether to authorize ``security.is_managed``, from
             ``--allow-lockdown``.
+        allow_weak_admin_key: Whether to authorize admin keys that fail
+            the weak-key audit, from ``--allow-weak-admin-key``.
         force_regenerate_key: Whether to force key regeneration, from
             ``--force-regenerate-key``.
         no_reconnect: Whether to skip the reconnect-verify step, from
@@ -355,6 +358,7 @@ def admin_bootstrap(
         opts = ProvisionOptions(
             dry_run=dry_run,
             allow_lockdown=allow_lockdown,
+            allow_weak_admin_key=allow_weak_admin_key,
             force_regenerate_key=force_regenerate_key,
             rename=False,
             no_reconnect=no_reconnect,

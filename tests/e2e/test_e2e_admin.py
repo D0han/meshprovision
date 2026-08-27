@@ -241,6 +241,36 @@ def test_provision_refuses_to_authorize_a_force_imported_weak_admin_key(
     assert not _BASE64_KEY_RE.search(result.stderr)
 
 
+def test_provision_allow_weak_admin_key_authorizes_a_force_imported_weak_admin_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    small_order_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[2]).decode("ascii")
+    imported = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--force"], env)
+    assert imported.exit_code == 0
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN9"]))
+    bus.use(FakeMeshInterface("cccc0002"))
+    result = invoke(
+        runner,
+        ["provision", "--port", "/dev/ttyFAKE0", "--dry-run", "--json", "--allow-weak-admin-key"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)["plan"]
+    assert document["key_plan"]["desired_admin_key_refs"] == ["ADMIN9_pub"]
+    assert document["key_plan"]["rejected_admin_key_refs"] == []
+    forced = [w for w in document["warnings"] if w["code"] == "resolved_admin_key_forced"]
+    assert len(forced) == 1
+    assert "ADMIN9_pub" in forced[0]["message"]
+
+    assert not _BASE64_KEY_RE.search(result.stdout)
+    assert not _BASE64_KEY_RE.search(result.stderr)
+
+
 def test_admin_import_malformed_assignment_missing_equals(
     runner: CliRunner, env: dict[str, str]
 ) -> None:

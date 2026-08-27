@@ -163,6 +163,9 @@ class ProvisionOptions:
             the database, from ``--dry-run``.
         allow_lockdown: Whether ``security.is_managed`` may be enabled,
             from ``--allow-lockdown``.
+        allow_weak_admin_key: Whether admin keys that fail the weak-key
+            audit may still be authorized, from
+            ``--allow-weak-admin-key``.
         force_regenerate_key: Whether to regenerate the node keypair
             unconditionally, from ``--force-regenerate-key``.
         rename: Whether an already-provisioned node may be renamed, from
@@ -177,6 +180,7 @@ class ProvisionOptions:
 
     dry_run: bool = False
     allow_lockdown: bool = False
+    allow_weak_admin_key: bool = False
     force_regenerate_key: bool = False
     rename: bool = False
     no_reconnect: bool = False
@@ -196,6 +200,15 @@ _PROVISIONING_OPTIONS: Final = (
         is_flag=True,
         default=False,
         help="Explicitly authorize enabling security.is_managed when the safety gates pass.",
+    ),
+    click.option(
+        "--allow-weak-admin-key",
+        is_flag=True,
+        default=False,
+        help=(
+            "Authorize admin keys that fail the weak-key audit. "
+            "Does not relax the security.is_managed safety gate."
+        ),
     ),
     click.option(
         "--force-regenerate-key",
@@ -220,7 +233,7 @@ _PROVISIONING_OPTIONS: Final = (
 
 
 def provisioning_options(func: F) -> F:
-    """Apply the six shared provisioning-behavior options to a command.
+    """Apply the seven shared provisioning-behavior options to a command.
 
     Declared once and shared by ``mesh provision`` and ``mesh admin
     bootstrap``; the option names correspond 1:1 to
@@ -730,6 +743,7 @@ def run_provision(
         db_public_key=db_public_key,
         force_regenerate_key=opts.force_regenerate_key,
         allow_lockdown=opts.allow_lockdown,
+        allow_weak_admin_key=opts.allow_weak_admin_key,
     )
     change_plan = plan_mod.build_plan(inputs)
 
@@ -849,6 +863,7 @@ def provision(
     dry_run: bool,
     yes: bool,
     allow_lockdown: bool,
+    allow_weak_admin_key: bool,
     force_regenerate_key: bool,
     rename: bool,
     no_reconnect: bool,
@@ -875,6 +890,8 @@ def provision(
         yes: Whether to assume yes to confirmations, from ``-y``/``--yes``.
         allow_lockdown: Whether to authorize ``security.is_managed``, from
             ``--allow-lockdown``.
+        allow_weak_admin_key: Whether to authorize admin keys that fail
+            the weak-key audit, from ``--allow-weak-admin-key``.
         force_regenerate_key: Whether to force key regeneration, from
             ``--force-regenerate-key``.
         rename: Whether renaming is allowed, from ``--rename``.
@@ -898,6 +915,7 @@ def provision(
     opts = ProvisionOptions(
         dry_run=dry_run,
         allow_lockdown=allow_lockdown,
+        allow_weak_admin_key=allow_weak_admin_key,
         force_regenerate_key=force_regenerate_key,
         rename=rename,
         no_reconnect=no_reconnect,

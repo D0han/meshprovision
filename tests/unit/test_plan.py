@@ -444,6 +444,108 @@ def test_live_weak_admin_key_is_both_removed_and_refused(
 
 
 # ---------------------------------------------------------------------------
+# --allow-weak-admin-key: overriding the resolved-admin-key audit.
+# ---------------------------------------------------------------------------
+
+
+def test_allow_weak_admin_key_authorizes_the_weak_key_without_lockdown(
+    make_live, template, make_admin_key
+) -> None:
+    admin = make_admin_key("ADMIN1", audit_ok=False, audit_summary="small_order: known bad point")
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+        allow_weak_admin_key=True,
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.desired_admin_keys == (admin.public,)
+    assert plan.key_plan.desired_admin_key_refs == ("ADMIN1_pub",)
+    assert plan.key_plan.rejected_admin_key_refs == ()
+
+    forced = [w for w in plan.warnings if w.code == "resolved_admin_key_forced"]
+    assert len(forced) == 1
+    assert "ADMIN1_pub" in forced[0].message
+    assert "small_order: known bad point" in forced[0].message
+    assert not [w for w in plan.warnings if w.code == "resolved_admin_key_rejected"]
+
+
+def test_allow_weak_admin_key_does_not_relax_the_lockdown_gate(
+    make_live, template, make_admin_key
+) -> None:
+    admin = make_admin_key("ADMIN1", audit_ok=False)
+    template2 = _with_admin_and_lockdown(template, "ADMIN1")
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+        allow_weak_admin_key=True,
+    )
+    with pytest.raises(LockdownRefusedError) as exc_info:
+        build_plan(inputs)
+    assert exc_info.value.reason == "weak_admin_key"
+    assert "ADMIN1_pub" in str(exc_info.value)
+
+
+def test_allow_weak_admin_key_defaults_to_false_and_still_rejects(
+    make_live, template, make_admin_key
+) -> None:
+    admin = make_admin_key("ADMIN1", audit_ok=False)
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+    )
+    assert inputs.allow_weak_admin_key is False
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.desired_admin_key_refs == ()
+    assert plan.key_plan.rejected_admin_key_refs == ("ADMIN1_pub",)
+    assert [w.code for w in plan.warnings if w.code.startswith("resolved_admin_key")] == [
+        "resolved_admin_key_rejected"
+    ]
+
+
+def test_allow_weak_admin_key_forces_only_the_weak_key_of_a_mixed_set(
+    make_live, template, make_admin_key
+) -> None:
+    weak = make_admin_key("WEAK", audit_ok=False)
+    good = make_admin_key("GOOD", audit_ok=True)
+    template2 = template.model_copy(update={"admin_nodes": ("WEAK", "GOOD")})
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(weak, good),
+        allow_weak_admin_key=True,
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.desired_admin_keys == (weak.public, good.public)
+    assert plan.key_plan.desired_admin_key_refs == ("WEAK_pub", "GOOD_pub")
+    assert plan.key_plan.rejected_admin_key_refs == ()
+
+    forced = [w for w in plan.warnings if w.code == "resolved_admin_key_forced"]
+    assert len(forced) == 1
+    assert "WEAK_pub" in forced[0].message
+    assert "GOOD_pub" not in forced[0].message
+
+
+# ---------------------------------------------------------------------------
 # is_managed refusals.
 # ---------------------------------------------------------------------------
 
