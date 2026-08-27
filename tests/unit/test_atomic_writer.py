@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from meshprovision.db import atomic_writer
 from meshprovision.db.atomic_writer import (
     BackupInfo,
     _claim_backup_path,
@@ -486,3 +487,111 @@ def test_backup_preserves_source_mtime(tmp_path: Path) -> None:
 
     assert info is not None
     assert info.path.stat().st_mtime == pytest.approx(target.stat().st_mtime)
+
+
+def test_backup_sweeps_a_stale_orphan_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    backup_dir.mkdir()
+    orphan = (
+        backup_dir / f".{backup_name(target, datetime(2026, 1, 1, tzinfo=UTC))}.tmp-999-deadbeef"
+    )
+    orphan.write_bytes(b"half-copied")
+
+    monkeypatch.setattr(atomic_writer, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    info = create_backup(target, backup_dir=backup_dir)
+
+    assert not orphan.exists()
+    assert info is not None
+    assert info.path.read_bytes() == b"v1"
+
+
+def test_backup_preserves_a_live_concurrent_backup_temp(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    thirty_days_ago = datetime.now(tz=UTC).timestamp() - 30 * 24 * 60 * 60
+    os.utime(target, (thirty_days_ago, thirty_days_ago))
+    backup_dir.mkdir()
+
+    # Reproduce the real in-flight code path: copy2 restores the source's
+    # 30-day-old mtime onto the temp while leaving its ctime fresh, so an
+    # mtime-only staleness check would sweep this live file immediately.
+    live_temp = (
+        backup_dir / f".{backup_name(target, datetime(2026, 1, 1, tzinfo=UTC))}.tmp-999-deadbeef"
+    )
+    shutil.copy2(target, live_temp)
+    assert live_temp.stat().st_mtime == pytest.approx(thirty_days_ago)
+
+    create_backup(target, backup_dir=backup_dir)
+
+    assert live_temp.exists()
+
+
+def test_atomic_write_sweeps_a_stale_orphan_in_the_target_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    orphan = tmp_path / f".{target.name}.tmp-999-deadbeef"
+    orphan.write_bytes(b"half-written")
+
+    monkeypatch.setattr(atomic_writer, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    with atomic_write(target, backup=False) as tmp:
+        assert not orphan.exists()
+        assert tmp.exists()
+        tmp.write_bytes(b"v1")
+
+    assert target.read_bytes() == b"v1"
+
+
+def test_sweep_leaves_real_backups_and_other_targets_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    other = tmp_path / "other.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    backup_dir.mkdir()
+
+    real_backup = backup_dir / backup_name(target, datetime(2026, 1, 1, tzinfo=UTC))
+    real_backup.write_bytes(b"v0")
+    other_temp = (
+        backup_dir / f".{backup_name(other, datetime(2026, 1, 1, tzinfo=UTC))}.tmp-999-deadbeef"
+    )
+    other_temp.write_bytes(b"not mine")
+
+    monkeypatch.setattr(atomic_writer, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    create_backup(target, backup_dir=backup_dir, retention=0)
+
+    assert real_backup.exists()
+    assert other_temp.exists()
+
+
+def test_sweep_never_raises_on_an_undeletable_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    backup_dir.mkdir()
+    orphan = (
+        backup_dir / f".{backup_name(target, datetime(2026, 1, 1, tzinfo=UTC))}.tmp-999-deadbeef"
+    )
+    orphan.write_bytes(b"undeletable")
+
+    real_unlink = Path.unlink
+
+    def refusing_unlink(self: Path, *args: object, **kwargs: object) -> None:
+        if self == orphan:
+            raise PermissionError(f"refusing to unlink {self}")
+        real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(atomic_writer, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(Path, "unlink", refusing_unlink)
+
+    info = create_backup(target, backup_dir=backup_dir)
+
+    assert info is not None
+    assert info.path.read_bytes() == b"v1"
+    assert orphan.exists()

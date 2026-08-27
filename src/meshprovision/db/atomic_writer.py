@@ -19,6 +19,17 @@ it onto the target unchanged; each backup's temp copy is chmodded to the
 same mode before its own rename. There is no window in which a
 fully-written database or a complete backup of one sits at the process
 umask, and a brand-new database gets the same treatment as a rewrite.
+
+Both classes of temp file -- a backup's temp copy and a target's own
+write temp -- are swept opportunistically at their creation sites, since
+a SIGKILL between creating one and renaming it leaves an orphan nothing
+else on disk ever reclaims. The sweep is age-guarded, and the guard
+cannot key off mtime alone: ``shutil.copy2`` restores the *source*
+file's mtime onto a backup temp, so a temp created seconds ago from a
+month-old database looks a month old by mtime. Staleness is therefore
+``now - max(st_mtime, st_ctime)``, and ``st_ctime`` (which ``copystat``
+bumps and which no userspace call can set backwards) keeps a live
+concurrent backup's temp file from being swept out from under it.
 """
 
 from __future__ import annotations
@@ -73,6 +84,56 @@ back to mtime; never written.
 _BACKUP_DIR_MODE: Final[int] = 0o700
 
 _FILE_MODE: Final[int] = 0o600
+
+_STALE_TEMP_MIN_AGE_SECONDS: Final[float] = 24 * 60 * 60
+"""Minimum age an orphaned temp file must reach before a sweep removes it."""
+
+
+def _sweep_stale_temps(
+    directory: Path, pattern: str, *, min_age_seconds: float = _STALE_TEMP_MIN_AGE_SECONDS
+) -> int:
+    """Best-effort removal of orphaned temp files left by a killed writer.
+
+    Never raises: a temp file that vanishes mid-sweep (lost to another
+    sweeper) or cannot be stat'd or unlinked is logged at debug and
+    skipped, since failing to tidy up must never fail the write this
+    sweep is running alongside.
+
+    Age is measured as ``now - max(st_mtime, st_ctime)``, not by mtime
+    alone. ``shutil.copy2`` restores the source database's mtime onto a
+    backup temp, so an in-flight backup of a month-old database carries
+    a month-old mtime the moment it is created; ``st_ctime`` is bumped
+    by that same ``copystat`` and cannot be moved backwards from
+    userspace, so taking the newer of the two errs towards keeping a
+    file that might still be live.
+
+    Args:
+        directory: The directory to sweep.
+        pattern: A glob matching only the temp class being swept. Must
+            start with a literal ``"."`` to match these dot-prefixed
+            names -- unlike the stdlib ``glob`` module,
+            :meth:`pathlib.Path.glob` matches dotfiles when the pattern
+            does.
+        min_age_seconds: Minimum age, in seconds, before a match is
+            removed.
+
+    Returns:
+        The number of files actually removed. Both call sites ignore
+        this; it exists for tests and ad-hoc logging.
+    """
+    now = datetime.now(tz=UTC).timestamp()
+    removed = 0
+    for path in directory.glob(pattern):
+        try:
+            stat_result = path.stat()
+            if now - max(stat_result.st_mtime, stat_result.st_ctime) < min_age_seconds:
+                continue
+            path.unlink()
+        except OSError as exc:
+            _logger.debug("could not sweep stale temp file %s: %s", path, exc)
+            continue
+        removed += 1
+    return removed
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,6 +208,11 @@ def _claim_backup_path(directory: Path, name: str, source: Path) -> Path:
     silently lose one of the two copies. The link is made only after
     ``source`` is a complete, correctly-moded copy, so a partial backup
     can never appear under a final name.
+
+    A SIGKILL between the ``os.link`` and the ``source.unlink`` leaves
+    ``source`` behind as an orphaned temp under both names; a later
+    :func:`_sweep_stale_temps` run reclaims it once it ages past the
+    staleness guard.
 
     Args:
         directory: The backup directory.
@@ -223,6 +289,13 @@ def create_backup(
         resolved_dir.chmod(_BACKUP_DIR_MODE)
     except OSError as exc:
         _logger.debug("Failed to chmod backup directory %s: %s", resolved_dir, exc)
+
+    # Before this call's own temp exists, so it can never sweep it.
+    _sweep_stale_temps(
+        resolved_dir,
+        f".{target.stem}-*{target.suffix}.tmp-*",
+        min_age_seconds=_STALE_TEMP_MIN_AGE_SECONDS,
+    )
 
     when = _normalize_utc(now)
     name = backup_name(target, when)
@@ -453,6 +526,11 @@ def atomic_write(
         raise AtomicWriteError(
             f"Failed to create directory {target.parent}: {exc}", path=str(target)
         ) from exc
+
+    # Before this call's own temp exists, so it can never sweep it.
+    _sweep_stale_temps(
+        target.parent, f".{target.name}.tmp-*", min_age_seconds=_STALE_TEMP_MIN_AGE_SECONDS
+    )
 
     tmp_path = target.parent / f".{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
     try:
