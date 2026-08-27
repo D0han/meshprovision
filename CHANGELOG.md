@@ -100,9 +100,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string) is never queried on that path. Any invocation that resolves to
   include lorastats, including the default with no `--source` filter,
   still requires it exactly as before.
+- `mesh provision`'s post-write verification no longer certifies a write
+  as `CONFIRMED` for a device value the planner itself would consider a
+  real mismatch (for example a live `1` read back where the plan desired
+  `True`). The verification step now uses the same type-tolerant
+  comparison the planner already used when building the diff, instead of
+  a second, more permissive copy that had diverged from it and carried no
+  test coverage.
+- Orphaned backup and write temp files (`.{name}.tmp-{pid}-{uuid}`) left
+  behind by a killed `mesh provision`, `mesh admin`, or `mesh db backup`
+  process are now swept automatically, once they age past 24 hours,
+  every time a new backup or write runs. The sweep is age-guarded rather
+  than immediate so it can never remove a live, currently-in-progress
+  backup's temp file.
+- `mesh admin list`'s table now shows each admin's weak-key audit result
+  (`-`, `clean`, `warning`, or `compromised`, the last highlighted) in a
+  new `Audit` column. This information was already computed and already
+  present in `--json` output; only the default human-readable table
+  omitted it.
 
 ### Security
 
+- **Fixed a critical authorization bypass: an admin public key already
+  flagged as compromised by this project's own weak-key audit could be
+  authorized onto a device with no warning, no dry-run line, and no log
+  record.** This happened whenever `security.is_managed` was `false` --
+  the default, and the path every ordinary `mesh provision` run takes,
+  not an edge case -- because the weak-key audit on
+  `template.admin_nodes` entries was enforced only inside the
+  `security.is_managed=true` lockdown gate. An operator whose
+  `known_bad_keys.txt` blocklist grew to cover an admin key already named
+  in their template, or who provisioned before a compromise was known,
+  could unknowingly keep writing that key to every newly provisioned
+  device. Such keys are now excluded from the plan's desired admin-key
+  set regardless of `is_managed`; each exclusion is reported as a
+  `resolved_admin_key_rejected` plan warning naming the `Keys` sheet
+  reference and the audit finding, visible in both the interactive
+  confirmation prompt and `--dry-run --json`. A new
+  `--allow-weak-admin-key` flag overrides this exclusion for an operator
+  who deliberately wants to authorize a flagged key on an unlocked
+  device -- it never overrides the separate `is_managed=true` lockdown
+  refusal, which still hard-refuses the entire run if any admin key
+  fails the audit. Two related behavior changes operators should be
+  aware of: a template naming an admin ref that a blocklist update later
+  flags no longer authorizes that ref by default; and, under
+  `is_managed=true`, a fully-compromised `admin_nodes` list now correctly
+  reports `weak_admin_key` (previously it would have -- after a naive fix
+  -- misreported `no_admin_keys`), and a key that is both compromised and
+  has a mismatched private counterpart now reports `weak_admin_key`
+  rather than `private_key_mismatch`, since a compromised key is the more
+  severe finding and the one that must be fixed regardless.
 - `MESHPROVISION_LOCK_TIMEOUT` set to an unparseable, negative, or
   non-finite value now fails immediately with a clear error instead of
   silently falling back to the 5-second default -- matching how every
