@@ -388,6 +388,7 @@ mesh provision --dry-run --interface tcp --host 192.168.1.50 --json
 | `--dry-run` | Print the plan without writing anything |
 | `-y`, `--yes` | Assume yes to every confirmation |
 | `--allow-lockdown` | Explicitly authorize enabling `security.is_managed` when the safety gates pass |
+| `--allow-weak-admin-key` | Authorize admin keys that fail the weak-key audit; does not relax the `security.is_managed` safety gate |
 | `--force-regenerate-key` | Regenerate the node keypair unconditionally |
 | `--rename` | Allow renaming an already-provisioned node |
 | `--no-reconnect` | Verify writes against the in-memory interface only (weaker guarantee) |
@@ -484,8 +485,10 @@ mesh admin list --json
   unless `--force`.
 - `list` shows each admin's ref, whether the public key is present, a
   redacted fingerprint, whether the private counterpart is on hand,
-  whether it is in the template, which node it resolves to, which nodes
-  authorize it, and which authorizations are pending. Exits `2` if a
+  whether it is in the template, which node it resolves to, its weak-key
+  audit result (`-` when no key is present, else `clean`, `warning`, or
+  `compromised`), which nodes authorize it, and which authorizations are
+  pending. Exits `2` if a
   template-listed admin is missing from the `Keys` sheet.
 
 A REF is a label, never a key, and must not end in `_pub`/`_priv`/`_psk`.
@@ -569,6 +572,20 @@ safety gate passes. The gate refuses lockdown unless all three hold:
     the `Keys` sheet,
 (b) none of the admin keys fail the weak-key audit,
 (c) `--allow-lockdown` was passed explicitly.
+
+The weak-key check in (b) is **not** lockdown-only. On every run,
+regardless of `is_managed`, an admin key from `admin_nodes` that fails
+the weak-key audit is excluded from the desired `admin_key` set, so
+ordinary provisioning never writes a compromised admin key to a device.
+Lockdown adds a stricter reaction on top of that exclusion: under
+`is_managed=true`, a failing admin key hard-refuses the **whole run**
+rather than quietly dropping the key.
+
+`--allow-weak-admin-key` is deliberately asymmetric about those two
+behaviors. It overrides the plan-level exclusion, letting an operator
+authorize a flagged key on an unlocked device; it never overrides the
+lockdown refusal. A device can never be sealed with `is_managed=true`
+while a compromised admin key is authorized, flag or no flag.
 
 One hard interlock on top: `is_managed=true` with **zero** authorized
 admin keys is refused outright -- that combination locks the node with
