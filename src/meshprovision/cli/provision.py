@@ -454,8 +454,9 @@ def resolve_admin_keys(
         record = keys.resolve_admin_refs((ref,))[0]
         material = record.material()
         audit = weakkeys.audit_public_key(material, key_ref=record.key_ref, known_bad=known_bad)
-        if audit.findings and not audit.compromised:
-            _logger.warning("admin key %s: %s", record.key_ref, audit.summary())
+        if audit.findings:
+            log = _logger.error if audit.compromised else _logger.warning
+            log("admin key %s: %s", record.key_ref, audit.summary())
         has_private = keys.has_private(ref)
         private_mismatch = keys.private_key_mismatch(ref)
         if private_mismatch:
