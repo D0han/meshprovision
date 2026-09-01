@@ -13,7 +13,7 @@ as it does for a fresh node -- ``build_plan`` already implements the
 already-provisioned defaults (with ``desired_short_name``/``desired_long_name``
 left ``None`` the database's names win, and the caller passes the recorded BLE
 PIN back in). Name allocation lives in
-:func:`meshprovision.cli.provision.allocate_names` and record reconciliation in
+:func:`meshprovision.provisioning.pipeline.allocate_names` and record reconciliation in
 :meth:`meshprovision.provisioning.plan.ChangePlan.to_record`; this module
 deliberately does not duplicate either.
 """

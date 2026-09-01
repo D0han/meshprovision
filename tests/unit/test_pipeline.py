@@ -1,4 +1,4 @@
-"""Tests for admin-key resolution in meshprovision.cli.provision."""
+"""Tests for meshprovision.provisioning.pipeline."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from meshprovision.cli.provision import resolve_admin_keys, resolve_removed_admin_refs
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyType
+from meshprovision.provisioning.pipeline import resolve_admin_keys, resolve_removed_admin_refs
 
 if TYPE_CHECKING:
     from pathlib import Path
