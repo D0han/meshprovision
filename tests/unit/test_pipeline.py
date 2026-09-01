@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 
-_LOGGER_NAME = "meshprovision.cli.provision"
+_LOGGER_NAME = "meshprovision.provisioning.pipeline"
 
 _LOW_ENTROPY_PUBLIC = bytes([0x0F, 0x33, 0x55, 0x66]) * 8
 """Four distinct byte values -- trips the low-entropy check at warning severity only."""
