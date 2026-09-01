@@ -42,7 +42,7 @@ from meshprovision.config.template import (
 from meshprovision.db import schema
 from meshprovision.db.keys import KeyRepository
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import BLE_PIN_LENGTH, FirmwareType, KeyType
+from meshprovision.db.schema import BLE_PIN_LENGTH, FirmwareType, KeyType, ManagementMode
 from meshprovision.enums import hw_model_table, region_table, role_table
 from meshprovision.errors import NamespaceExhaustedError, NodeNotFoundError
 from meshprovision.nodeid import NodeId, NodeIdLike
@@ -122,6 +122,8 @@ class NodeRecord(BaseModel):
         ble_pin: 6-digit BLE pairing PIN (``bluetooth.fixed_pin``), or
             ``None`` if not yet provisioned. Stored as text so leading
             zeros survive; never logged or displayed.
+        management: Whether mesh provision enforces the template on this
+            node, or only observed it (see mesh adopt).
     """
 
     model_config = ConfigDict(
@@ -145,6 +147,7 @@ class NodeRecord(BaseModel):
     role: str = DEFAULT_ROLE
     region: str = DEFAULT_REGION
     ble_pin: SecretStr | None = None
+    management: ManagementMode = ManagementMode.TEMPLATE
 
     @field_validator("node_id")
     @classmethod
@@ -284,7 +287,7 @@ class NodeRecord(BaseModel):
         set via :meth:`with_updates` can never reach disk.
 
         Returns:
-            The full ``{column_name: text}`` row, covering exactly the 20
+            The full ``{column_name: text}`` row, covering exactly the 21
             :data:`~meshprovision.db.schema.NODES_SHEET_SPEC` columns.
         """
         return {
@@ -312,6 +315,7 @@ class NodeRecord(BaseModel):
             "region": self.region,
             "channel_psk_ref": self.channel_psk_ref,
             "ble_pin": "" if self.ble_pin is None else self.ble_pin.get_secret_value(),
+            "management": self.management.value,
         }
 
     @classmethod
@@ -357,6 +361,7 @@ class NodeRecord(BaseModel):
             role=row.get("role") or DEFAULT_ROLE,
             region=row.get("region") or DEFAULT_REGION,
             ble_pin=SecretStr(ble_pin_raw) if ble_pin_raw else None,
+            management=ManagementMode(row.get("management") or ManagementMode.TEMPLATE.value),
         )
 
     def with_updates(self, **changes: object) -> NodeRecord:

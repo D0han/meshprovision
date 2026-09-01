@@ -427,10 +427,19 @@ def _check_header(sheet_data: SheetData, sheet_spec: schema.SheetSpec) -> None:
     while trimmed and not trimmed[-1].strip():
         trimmed.pop()
     if tuple(trimmed) != expected:
+        hint: str | None = None
+        if len(trimmed) < len(expected) and expected[: len(trimmed)] == tuple(trimmed):
+            hint = (
+                f"Missing trailing column(s): {expected[len(trimmed) :]!r}. If this file "
+                f"predates a schema update, regenerate the example and re-apply your data, "
+                f"or add the missing header cell(s) by hand: "
+                f"`python scripts/generate_example_db.py` shows the current column layout."
+            )
         raise SchemaError(
             f"{sheet_spec.name} sheet header does not match the expected schema: "
             f"expected {expected!r}, found {tuple(trimmed)!r}",
             sheet=sheet_spec.name,
+            hint=hint,
         )
 
 

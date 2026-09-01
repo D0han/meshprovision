@@ -12,7 +12,7 @@ from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository, find_next_free_name
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import (
     AdminRefUnresolvedError,
     DbIntegrityError,
@@ -52,6 +52,15 @@ def test_node_record_round_trip_full(keypair) -> None:
         ble_pin="012345",
     )
     assert NodeRecord.from_row(record.to_row()) == record
+
+
+def test_from_row_missing_management_defaults_to_template() -> None:
+    row = NodeRecord(node_id="deadbe01").to_row()
+    del row["management"]
+    assert NodeRecord.from_row(row).management is ManagementMode.TEMPLATE
+
+    row["management"] = ""
+    assert NodeRecord.from_row(row).management is ManagementMode.TEMPLATE
 
 
 def test_to_row_always_recomputes_derived_columns() -> None:

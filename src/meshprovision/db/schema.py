@@ -85,6 +85,7 @@ __all__ = [
     "FirmwareType",
     "FormulaSpec",
     "KeyType",
+    "ManagementMode",
     "SheetSpec",
     "allowed_values",
     "column_letter",
@@ -134,6 +135,13 @@ class FirmwareType(StrEnum):
     VANILLA = "vanilla"
     LORANET = "loranet"
     OTHER = "other"
+
+
+class ManagementMode(StrEnum):
+    """Whether a node's config is enforced from the template, or merely observed."""
+
+    TEMPLATE = "template"
+    OBSERVED = "observed"
 
 
 class KeyType(StrEnum):
@@ -572,6 +580,19 @@ NODES_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
             kind=ColumnKind.PIN,
             width="0.8in",
             secret=True,
+        ),
+        ColumnSpec(
+            name="management",
+            description=(
+                "Whether mesh provision enforces the template on this node "
+                '("template") or only records what mesh adopt observed on the '
+                'device ("observed") -- an observed node is left alone by mesh '
+                "provision until it is explicitly enrolled with --enroll."
+            ),
+            kind=ColumnKind.ENUM,
+            allowed=tuple(ManagementMode),
+            validation_name="mp_management",
+            width="1.1in",
         ),
     ),
 )
