@@ -18,6 +18,7 @@ from meshprovision.cache.http import (
     resolve_ttl,
 )
 from meshprovision.errors import (
+    CacheError,
     HttpError,
     InvalidResponseError,
     MissingContactError,
@@ -419,6 +420,57 @@ def test_purge_leaves_unrelated_files_alone(tmp_path: Path) -> None:
     client.purge(older_than=1_000_000)
     assert notes.exists()
     assert foo_tmp.exists()
+
+
+@respx.mock
+def test_write_failure_raises_cache_error_and_removes_the_temp_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    def _fail_replace(self: Path, target: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(Path, "replace", _fail_replace)
+
+    with pytest.raises(CacheError) as excinfo:
+        client.get(URL)
+
+    path = client.path_for_key(cache_key("GET", URL))
+    assert excinfo.value.path == str(path)
+    assert "No space left on device" in str(excinfo.value)
+    assert excinfo.value.hint is not None
+    assert "MESHPROVISION_CACHE_DIR" in excinfo.value.hint
+    assert isinstance(excinfo.value.__cause__, OSError)
+
+    assert not path.exists()
+    assert list(path.parent.glob(f"{path.name}.tmp-*")) == []
+    assert client.stats.writes == 0
+
+
+@respx.mock
+def test_write_failure_before_the_temp_file_exists_still_raises_cache_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    def _fail_write_bytes(self: Path, data: object) -> int:
+        raise OSError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "write_bytes", _fail_write_bytes)
+
+    with pytest.raises(CacheError) as excinfo:
+        client.get(URL)
+
+    path = client.path_for_key(cache_key("GET", URL))
+    assert excinfo.value.path == str(path)
+    assert "Permission denied" in str(excinfo.value)
+    assert not path.exists()
+    assert list(path.parent.glob(f"{path.name}.tmp-*")) == []
 
 
 # ---------------------------------------------------------------------------
