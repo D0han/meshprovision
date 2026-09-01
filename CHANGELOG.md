@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin nodes, including pending cross-authorization reporting.
 - `mesh db verify | backup`: schema, cross-reference and weak-key verification,
   plus timestamped backups with retention.
+- `mesh adopt`: strictly read-only inventory of an already-configured,
+  already-deployed node -- connects like `mesh provision` but never writes
+  to the device, and records live names, admin keys, firmware version,
+  region, role, and BLE PIN as a new `management=observed` node. A new
+  `management` column on the `Nodes` sheet (`template`/`observed`, default
+  `template`) gates `mesh provision`/`mesh admin bootstrap`: touching an
+  observed node now requires an explicit `--enroll`, checked before any
+  admin-key resolution and before `--dry-run`'s early return. Unregistered
+  admin keys are reported by fingerprint only by default; `--show-admin-keys`
+  is the one deliberate exception, printing paste-ready `mesh admin import`
+  commands. Re-adopting fully replaces `authorized_admin_keys` with current
+  live reality (unlike `mesh provision`'s narrow-only rule for a
+  template-managed row); re-adopting an already-`management=template` node
+  is refused unless `--force`, with an explicit demotion warning.
 - Hand-editable ODS database (`Nodes` + `Keys` sheets) written with odfpy
   directly: OpenFormula formulas for every derived column, dropdown content
   validation generated from the installed protobuf enums, a frozen header row,
@@ -145,6 +159,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   going only to the structured log. Previously, a run at `--log-level
   ERROR` dropped a template warning entirely, while a database warning at
   the same level still reached the operator.
+- A live admin key that is healthy (passes the weak-key audit) but simply
+  not named in a non-empty `template.admin_nodes` is no longer silently
+  dropped from the device on apply. `mesh provision`'s plan now reports it
+  (`security.admin_key: revoke [...] (not in template.admin_nodes)`, both
+  in `--dry-run` output and `--json`), the same way a weak-key-audit
+  removal already was -- previously, an admin key an operator never asked
+  to remove (for example a trusted collaborator's) could be wiped with no
+  warning anywhere.
 
 ### Security
 

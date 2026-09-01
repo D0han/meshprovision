@@ -264,6 +264,7 @@ LibreOffice, not a CSV dump.
 | `region` | ENUM (dropdown `mp_region`) | LoRa region, from the installed `Config.LoRaConfig.RegionCode` protobuf enum |
 | `channel_psk_ref` | DERIVED, formula `=[.A{row}]&"_psk"` | Reference to this node's channel PSK row in the `Keys` sheet |
 | `ble_pin` | PIN, SECRET | 6-digit `bluetooth.fixed_pin`, stored as text so leading zeros survive; never logged or displayed |
+| `management` | ENUM (dropdown `mp_management`) | `template` (the default; `mesh provision` enforces the template on this node) or `observed` (`mesh adopt` recorded this node's live state as-is; `mesh provision` refuses to touch it until `--enroll`). Empty reads back as `template`, so every pre-existing row keeps its current behavior |
 
 ### Keys sheet
 
@@ -331,7 +332,7 @@ vary.
 
 ## Commands
 
-The toolkit installs **one** console script, `mesh`, with four subcommand
+The toolkit installs **one** console script, `mesh`, with five subcommand
 groups. **Global options go before the subcommand** -- for example
 `mesh --no-cache status --json`, not `mesh status --no-cache`.
 
@@ -379,6 +380,7 @@ mesh provision --interface serial --port /dev/ttyACM0 --rename
 mesh provision --port /dev/ttyUSB0 --force-regenerate-key
 mesh provision --port /dev/ttyUSB0 --allow-lockdown
 mesh provision --dry-run --interface tcp --host 192.168.1.50 --json
+mesh provision --port /dev/ttyUSB0 --enroll
 ```
 
 | Option | Meaning |
@@ -387,6 +389,7 @@ mesh provision --dry-run --interface tcp --host 192.168.1.50 --json
 | `--ble-scan-timeout` | BLE scan duration, in seconds |
 | `--dry-run` | Print the plan without writing anything |
 | `-y`, `--yes` | Assume yes to every confirmation |
+| `--enroll` | Bring an observed (`mesh adopt`-recorded) node under template management |
 | `--allow-lockdown` | Explicitly authorize enabling `security.is_managed` when the safety gates pass |
 | `--allow-weak-admin-key` | Authorize admin keys that fail the weak-key audit; does not relax the `security.is_managed` safety gate |
 | `--force-regenerate-key` | Regenerate the node keypair unconditionally |
@@ -398,6 +401,15 @@ mesh provision --dry-run --interface tcp --host 192.168.1.50 --json
 verified against the in-memory interface only. The default reconnects and
 re-reads, because of firmware issue #7449 (a restored private key could
 be discarded on reboot, with the device regenerating fresh keys).
+
+A node whose `Nodes` sheet row has `management=observed` (recorded by
+`mesh adopt`, below) is refused with exit code 5 unless `--enroll` is
+passed -- checked before any admin-key resolution runs, and before
+`--dry-run`'s early return, so an unenrolled node never even reaches a
+plan preview it didn't ask for. `mesh admin bootstrap` inherits the same
+gate, since it drives this same pipeline. `--enroll` graduates the row to
+`management=template` on a successful apply; it is a one-time flag --
+once enrolled, ordinary `mesh provision` runs need it again.
 
 **Transactional guarantee:** after each `writeConfig(section)` the config
 is re-read and compared to intent; key writes are additionally verified
@@ -419,6 +431,61 @@ than silently discarding whichever write loses the race. Read-only
 commands (`mesh status`, `mesh db verify`, `mesh db backup`) are never
 blocked by it. `--dry-run` does not take the lock. POSIX only: on a
 platform without `fcntl` the lock is a no-op, logged once at WARNING.
+
+### `mesh adopt`
+
+For a node that is already configured and already in service -- the
+normal case for an existing fleet you're bringing into meshprovision for
+the first time. Connects the same way `mesh provision` does, but is
+**strictly read-only toward the device**: it never calls `writeConfig`,
+never diffs against the template, and never renames, reconfigures, or
+regenerates anything on the node. It records the device's actual live
+state -- names, admin keys, firmware version, region, role, BLE PIN --
+into the database as `management=observed`, so `mesh provision` leaves
+it alone until you explicitly decide otherwise with `--enroll`.
+
+```bash
+mesh adopt --port /dev/ttyUSB0
+mesh adopt --dry-run --interface tcp --host 192.168.1.50
+mesh adopt --port /dev/ttyUSB0 --yes --show-admin-keys
+mesh adopt --port /dev/ttyUSB0 --force
+```
+
+| Option | Meaning |
+|---|---|
+| `--dry-run` | Print the report without writing to the database |
+| `-y`, `--yes` | Assume yes to every confirmation |
+| `--json` | Emit JSON instead of human text |
+| `--force` | Re-adopt (demote) a node that is currently `management=template` |
+| `--show-admin-keys` | Print paste-ready `mesh admin import` commands for admin keys the device reports that aren't in the `Keys` sheet |
+
+An admin key already on the device but not yet in your `Keys` sheet --
+for example a trusted friend's admin key, whose private half you never
+hold and never need to -- is reported by fingerprint only by default,
+never its raw material. `--show-admin-keys` is the one deliberate,
+narrow exception to that rule: it prints the actual base64 so you can
+register it yourself with `mesh admin import <REF>=<base64>`, choosing
+your own meaningful ref (e.g. `FRIEND`). `mesh adopt` never invents a ref
+or writes a `Keys` sheet row on your behalf.
+
+Re-adopting an already-`observed` node **replaces** `authorized_admin_keys`
+with exactly what's currently live -- unlike `mesh provision`'s
+narrow-only rule for a template-managed row, an observed row has no
+desired state to preserve against, so it mirrors reality every time,
+including dropping a ref for a key that's no longer on the device.
+Re-adopting a `management=template` row is refused unless `--force` is
+passed, and the confirmation prompt names the demotion explicitly.
+
+**Typical workflow for an existing fleet:**
+
+```bash
+mesh adopt --port /dev/ttyUSB0                    # record what's actually there
+mesh admin import FRIEND=<base64-from-the-report>  # only if it reports an unregistered key you want to keep
+mesh provision --port /dev/ttyUSB0 --enroll        # only when you're ready for template enforcement
+```
+
+The last step is optional and per-node -- a fleet can stay `observed`
+indefinitely; `mesh status` and `mesh db verify` work the same either way.
 
 ### `mesh status`
 
@@ -539,6 +606,12 @@ the pre-existing `AtomicWriteError` raised on a filesystem failure
 itself -- both share exit code 4, since the message text is the intended
 disambiguation channel between them, not the exit code.
 
+Exit code 5 (`PROVISIONING`) also covers two `mesh adopt`/`--enroll`
+refusals: `NodeNotEnrolledError` (a `management=observed` node touched by
+`mesh provision` without `--enroll`) and `AdoptionRefusedError` (a
+`management=template` node re-adopted without `--force`) -- again
+disambiguated by message text, not exit code.
+
 ## Security
 
 ### Key generation
@@ -658,6 +731,11 @@ regeneration:
 - Tracebacks use a plain formatter, never rich's `show_locals=True`, so a
   crash cannot dump local variables holding key bytes into the log.
 - The 6-digit BLE PIN is treated as a secret like any other.
+- `mesh adopt`'s `--show-admin-keys` is the one deliberate, narrow
+  exception: it prints raw base64 public key material, and only for an
+  admin key the device reports that isn't yet in the `Keys` sheet. It is
+  off by default; without it, an unregistered admin key is reported by
+  fingerprint only, in both human and `--json` output.
 
 ### Sensitive vs example files
 
