@@ -639,7 +639,12 @@ class CliContext:
 
         Returns:
             The validated :class:`~meshprovision.config.template.
-            TemplateConfig`.
+            TemplateConfig`. Every
+            :class:`~meshprovision.config.template.TemplateWarning` the
+            template raises is printed through :meth:`warn` first, so a
+            template problem is surfaced the same way a database
+            integrity warning is -- always on stderr, regardless of
+            ``--log-level``.
 
         Raises:
             TemplateValidationError: If the template fails validation.
@@ -650,7 +655,10 @@ class CliContext:
             AdminKeyCapacityError: If more than three admin nodes are
                 configured.
         """
-        return template_module.load_template(self.settings.template_path)
+        template = template_module.load_template(self.settings.template_path)
+        for warning in template.collect_warnings():
+            self.warn(warning.message)
+        return template
 
     def open_database(self, *, must_exist: bool = True, for_write: bool = False) -> DbSession:
         """Open (and load) the configured ODS database.
