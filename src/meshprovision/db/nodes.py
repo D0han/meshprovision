@@ -111,7 +111,9 @@ class NodeRecord(BaseModel):
         authorized_admin_keys: ``Keys`` sheet references of the admin
             public keys authorized on this node's ``security.adminKey``.
             Zero entries is a valid, deliberate configuration -- never
-            drift.
+            drift. Refs are dropped when a provisioning run revokes the
+            live key they name; the list is never reconstructed from the
+            device, so it is last-known state, not a mirror.
         notes: Free-form operator notes.
         role: Device role, canonicalized against the installed ``Role``
             protobuf enum when non-empty.
