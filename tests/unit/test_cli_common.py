@@ -6,11 +6,13 @@ import io
 from collections.abc import Callable
 from pathlib import Path
 
+import click
 import pytest
 from rich.console import Console
 
-from meshprovision.cli.common import CliContext
+from meshprovision.cli.common import CliContext, handle_cli_errors
 from meshprovision.config.settings import Settings
+from meshprovision.errors import ExitCode
 
 pytestmark = pytest.mark.unit
 
@@ -59,3 +61,39 @@ def test_load_template_is_quiet_for_a_clean_template(
     ctx.load_template()
 
     assert buf.getvalue() == ""
+
+
+def test_click_abort_prints_aborted_and_exits_interrupted(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``click.Abort`` is reported on stderr and mapped to INTERRUPTED."""
+
+    @handle_cli_errors
+    def _command() -> None:
+        raise click.Abort
+
+    with pytest.raises(SystemExit) as excinfo:
+        _command()
+
+    assert excinfo.value.code == int(ExitCode.INTERRUPTED)
+    captured = capsys.readouterr()
+    assert "Aborted." in captured.err
+    assert captured.out == ""
+
+
+def test_keyboard_interrupt_exits_interrupted_silently(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``KeyboardInterrupt`` maps to INTERRUPTED without printing anything."""
+
+    @handle_cli_errors
+    def _command() -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(SystemExit) as excinfo:
+        _command()
+
+    assert excinfo.value.code == int(ExitCode.INTERRUPTED)
+    captured = capsys.readouterr()
+    assert captured.err == ""
+    assert captured.out == ""

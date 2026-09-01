@@ -127,6 +127,26 @@ def test_provision_reports_a_failed_database_save_as_divergence(
     _assert_no_secrets(result.stderr)
 
 
+def test_declining_the_apply_prompt_aborts_before_any_write(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    # --interactive is mandatory here: CliRunner's stdin is not a TTY, so the
+    # prompt would otherwise become a NonInteractiveError instead of a decline.
+    result = invoke(
+        runner, ["--interactive", "provision", "--port", "/dev/ttyFAKE0"], env, input="n\n"
+    )
+
+    assert result.exit_code == int(ExitCode.INTERRUPTED)
+    assert "Aborted." in result.stderr
+    assert iface.localNode.written_sections == []
+    assert bytes(iface.localNode.localConfig.security.public_key) == b""
+    assert db_fingerprint(db_path) == before
+
+
 def test_zero_admin_keys_is_a_valid_outcome_never_repaired(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

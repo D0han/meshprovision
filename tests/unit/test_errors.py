@@ -25,6 +25,18 @@ from meshprovision.errors import (
 pytestmark = pytest.mark.unit
 
 
+def test_exit_code_values_are_pinned() -> None:
+    assert ExitCode.OK.value == 0
+    assert ExitCode.ERROR.value == 1
+    assert ExitCode.CONFIG.value == 2
+    assert ExitCode.DATASOURCE.value == 3
+    assert ExitCode.DB.value == 4
+    assert ExitCode.PROVISIONING.value == 5
+    assert ExitCode.CRYPTO.value == 6
+    assert ExitCode.STATUS_DEGRADED.value == 7
+    assert ExitCode.INTERRUPTED.value == 130
+
+
 def test_branch_exit_codes() -> None:
     assert ConfigError("x").exit_code == ExitCode.CONFIG
     assert DataSourceError("x").exit_code == ExitCode.DATASOURCE
