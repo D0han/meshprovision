@@ -336,7 +336,12 @@ def handle_cli_errors(func: Callable[P, R]) -> Callable[P, R | None]:
     - ``click.Abort``: prints ``"Aborted."`` and exits
       :attr:`~meshprovision.errors.ExitCode.INTERRUPTED`.
     - ``KeyboardInterrupt``: exits
-      :attr:`~meshprovision.errors.ExitCode.INTERRUPTED` silently.
+      :attr:`~meshprovision.errors.ExitCode.INTERRUPTED` silently. This
+      arm is the default backstop, not the only pattern: a command whose
+      Ctrl-C has domain-specific meaning catches it locally instead and
+      never reaches here -- ``mesh status --watch`` converts Ctrl-C into
+      the last observed fleet's exit code, because stopping a monitor
+      loop is the expected way to end it, not an abnormal interruption.
     - ``OSError``: prints ``f"{type(exc).__name__}: {exc}"`` and exits
       :attr:`~meshprovision.errors.ExitCode.ERROR`.
 
