@@ -677,6 +677,35 @@ def test_live_weak_admin_key_is_both_removed_and_refused(
 # ---------------------------------------------------------------------------
 
 
+def test_allow_weak_admin_key_on_a_live_weak_key_reports_no_removal(
+    make_live, template, make_admin_key, keypair_factory
+) -> None:
+    compromised = keypair_factory()
+    admin = make_admin_key("ADMIN1", public=compromised.public, audit_ok=False)
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(admin_keys=(compromised.public,)))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=NodeRecord(node_id="deadbe01"),
+        state=detect.NodeState.PROVISIONED,
+        admin_keys=(admin,),
+        rejected_admin_keys=frozenset({compromised.public}),
+        allow_weak_admin_key=True,
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.change_admin_keys is False
+    assert plan.key_plan.removed_admin_fingerprints == ()
+    assert plan.key_plan.revoked_admin_fingerprints == ()
+    assert plan.key_plan.desired_admin_keys == (compromised.public,)
+    codes = {w.code for w in plan.warnings}
+    assert "live_admin_key_rejected" not in codes
+    assert "resolved_admin_key_forced" in codes
+    assert not any("will be removed" in warning.message for warning in plan.warnings)
+    assert not any("security.admin_key" in line for line in plan.describe())
+
+
 def test_allow_weak_admin_key_authorizes_the_weak_key_without_lockdown(
     make_live, template, make_admin_key
 ) -> None:

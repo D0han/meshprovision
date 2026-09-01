@@ -272,16 +272,7 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
 
     dropped_indices = [i for i, k in enumerate(live_keys) if k in inputs.rejected_admin_keys]
     kept = tuple(k for i, k in enumerate(live_keys) if i not in dropped_indices)
-    removed = tuple(f"live-admin[{i}]" for i in dropped_indices)
-    warnings = [
-        PlanWarning(
-            "live_admin_key_rejected",
-            f"Live admin key {label} failed the weak-key audit and will be removed.",
-            section="security",
-            field="admin_key",
-        )
-        for label in removed
-    ]
+    warnings: list[PlanWarning] = []
 
     rejected_refs: tuple[str, ...] = ()
     revoked: tuple[str, ...] = ()
@@ -346,6 +337,20 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
             )
             for label in revoked
         )
+
+    # A live key the audit flagged is only really removed if the desired set does
+    # not put it straight back: --allow-weak-admin-key re-authorizes exactly such
+    # a key, and the preview must never claim a removal that will not happen.
+    removed = tuple(f"live-admin[{i}]" for i in dropped_indices if live_keys[i] not in desired)
+    warnings = [
+        PlanWarning(
+            "live_admin_key_rejected",
+            f"Live admin key {label} failed the weak-key audit and will be removed.",
+            section="security",
+            field="admin_key",
+        )
+        for label in removed
+    ] + warnings
 
     return _AdminKeyPlan(
         desired=desired,
