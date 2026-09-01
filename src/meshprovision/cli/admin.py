@@ -329,6 +329,7 @@ def admin_bootstrap(
     ref: str | None,
     dry_run: bool,
     yes: bool,
+    enroll: bool,
     allow_lockdown: bool,
     allow_weak_admin_key: bool,
     force_regenerate_key: bool,
@@ -359,6 +360,8 @@ def admin_bootstrap(
             Defaults to the connected node's own hex id.
         dry_run: Whether to skip all writes, from ``--dry-run``.
         yes: Whether to assume yes to confirmations, from ``-y``/``--yes``.
+        enroll: Whether to bring an observed node under template
+            management, from --enroll.
         allow_lockdown: Whether to authorize ``security.is_managed``, from
             ``--allow-lockdown``.
         allow_weak_admin_key: Whether to authorize admin keys that fail
@@ -395,6 +398,7 @@ def admin_bootstrap(
         )
         opts = ProvisionOptions(
             dry_run=dry_run,
+            enroll=enroll,
             allow_lockdown=allow_lockdown,
             allow_weak_admin_key=allow_weak_admin_key,
             force_regenerate_key=force_regenerate_key,

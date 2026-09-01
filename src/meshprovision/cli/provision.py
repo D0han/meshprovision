@@ -44,8 +44,8 @@ from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
 from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db.keys import KeyRecord
-from meshprovision.db.schema import KeyType
-from meshprovision.errors import DeviceNotFoundError, ExitCode
+from meshprovision.db.schema import KeyType, ManagementMode
+from meshprovision.errors import DeviceNotFoundError, ExitCode, NodeNotEnrolledError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import apply, connection, detect, discovery, repair
 from meshprovision.provisioning import plan as plan_mod
@@ -177,6 +177,8 @@ class ProvisionOptions:
             human text, from ``--json``.
         admin_ref: Set only by ``mesh admin bootstrap``: the reference to
             additionally file this node's keys under.
+        enroll: Whether to bring an observed node under template
+            management, from --enroll.
     """
 
     dry_run: bool = False
@@ -187,6 +189,7 @@ class ProvisionOptions:
     no_reconnect: bool = False
     json_output: bool = False
     admin_ref: str | None = None
+    enroll: bool = False
 
 
 _PROVISIONING_OPTIONS: Final = (
@@ -195,6 +198,12 @@ _PROVISIONING_OPTIONS: Final = (
     ),
     click.option(
         "-y", "--yes", is_flag=True, default=False, help="Assume yes to every confirmation."
+    ),
+    click.option(
+        "--enroll",
+        is_flag=True,
+        default=False,
+        help="Bring an observed (mesh adopt-recorded) node under template management.",
     ),
     click.option(
         "--allow-lockdown",
@@ -234,7 +243,7 @@ _PROVISIONING_OPTIONS: Final = (
 
 
 def provisioning_options(func: F) -> F:
-    """Apply the seven shared provisioning-behavior options to a command.
+    """Apply the eight shared provisioning-behavior options to a command.
 
     Declared once and shared by ``mesh provision`` and ``mesh admin
     bootstrap``; the option names correspond 1:1 to
@@ -522,6 +531,9 @@ def run_provision(
             satisfied.
         NamespaceExhaustedError: If a name pattern's namespace is
             exhausted while allocating a new name.
+        NodeNotEnrolledError: If the node's database record has
+            ``management == ManagementMode.OBSERVED`` and ``opts.enroll``
+            is not set.
         click.Abort: If the operator declines the confirmation prompt.
     """
     iface = session.interface
@@ -530,6 +542,13 @@ def run_provision(
     record = db.nodes.find(live.node_id)
     detection = detect.classify(live, db_entry=record)
     ctx.info(detection.summary())
+
+    if record is not None and record.management is ManagementMode.OBSERVED and not opts.enroll:
+        raise NodeNotEnrolledError(
+            f"Node {live.node_id.display} was recorded by `mesh adopt` and is not yet "
+            "under template management.",
+            node_id=live.node_id.display,
+        )
 
     known_bad = weakkeys.load_known_bad_keys()
 
@@ -699,6 +718,7 @@ def provision(
     ble_scan_timeout: float,
     dry_run: bool,
     yes: bool,
+    enroll: bool,
     allow_lockdown: bool,
     allow_weak_admin_key: bool,
     force_regenerate_key: bool,
@@ -725,6 +745,8 @@ def provision(
         ble_scan_timeout: BLE scan duration, from ``--ble-scan-timeout``.
         dry_run: Whether to skip all writes, from ``--dry-run``.
         yes: Whether to assume yes to confirmations, from ``-y``/``--yes``.
+        enroll: Whether to bring an observed node under template
+            management, from --enroll.
         allow_lockdown: Whether to authorize ``security.is_managed``, from
             ``--allow-lockdown``.
         allow_weak_admin_key: Whether to authorize admin keys that fail
@@ -751,6 +773,7 @@ def provision(
     )
     opts = ProvisionOptions(
         dry_run=dry_run,
+        enroll=enroll,
         allow_lockdown=allow_lockdown,
         allow_weak_admin_key=allow_weak_admin_key,
         force_regenerate_key=force_regenerate_key,

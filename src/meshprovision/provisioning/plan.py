@@ -658,9 +658,14 @@ class ChangePlan:
             ``existing``: the "no opinion" template still may not keep
             asserting a live key the weak-key audit just revoked. The row
             is only ever narrowed on that path, never rebuilt.
-            ``ble_pin`` is set only when :attr:`ble_pin_set`.
+            ``ble_pin`` is set only when :attr:`ble_pin_set`. ``management``
+            is always set to :attr:`~meshprovision.db.schema.ManagementMode.TEMPLATE`
+            in the returned record, since reaching this point means the
+            plan is being applied under full template management (whether
+            newly enrolled or already there).
         """
         from meshprovision.db.nodes import NodeRecord as _NodeRecord
+        from meshprovision.db.schema import ManagementMode
 
         base = existing if existing is not None else self.db_entry
         if base is None:
@@ -673,6 +678,7 @@ class ChangePlan:
             "firmware_version": self.firmware_version,
             "role": self.role,
             "region": self.region,
+            "management": ManagementMode.TEMPLATE,
         }
         if self.key_plan.desired_admin_key_refs or self.key_plan.rejected_admin_key_refs:
             changes["authorized_admin_keys"] = self.key_plan.desired_admin_key_refs

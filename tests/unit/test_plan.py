@@ -8,6 +8,7 @@ import pytest
 
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import AdminKeyCapacityError, LockdownRefusedError
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan import (
@@ -579,6 +580,50 @@ def test_to_record_clears_admin_keys_when_every_ref_was_rejected(
     )
     new_record = build_plan(inputs).to_record()
     assert new_record.authorized_admin_keys == ()
+
+
+def test_to_record_graduates_an_observed_node_to_template_management(
+    make_live, template, keypair
+) -> None:
+    live = make_live(template, security=make_security(keypair=keypair))
+    record = NodeRecord(
+        node_id="deadbe01",
+        short_name=live.short_name,
+        long_name=live.long_name,
+        management=ManagementMode.OBSERVED,
+    )
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        admin_keys=(),
+        db_public_key=None,
+    )
+    new_record = build_plan(inputs).to_record()
+    assert new_record.management is ManagementMode.TEMPLATE
+
+
+def test_to_record_leaves_an_already_template_node_as_template(
+    make_live, template, keypair
+) -> None:
+    live = make_live(template, security=make_security(keypair=keypair))
+    record = NodeRecord(
+        node_id="deadbe01",
+        short_name=live.short_name,
+        long_name=live.long_name,
+        management=ManagementMode.TEMPLATE,
+    )
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        admin_keys=(),
+        db_public_key=None,
+    )
+    new_record = build_plan(inputs).to_record()
+    assert new_record.management is ManagementMode.TEMPLATE
 
 
 def test_admin_key_capacity_counts_keys_before_the_audit_filter(

@@ -13,6 +13,9 @@ import pytest
 
 from meshprovision.crypto.keys import generate_keypair
 from meshprovision.db import ods
+from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.schema import ManagementMode
+from meshprovision.errors import ExitCode
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -158,6 +161,41 @@ def test_transactional_write_failure_drop_security_keys(
 
     backups_dir = tmp_path / "data" / "backups"
     assert not backups_dir.exists() or not any(backups_dir.iterdir())
+
+
+def test_observed_node_is_refused_without_enroll(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    record = NodeRecord(node_id="deadbe01", management=ManagementMode.OBSERVED)
+    seed_db(nodes=[record])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "--enroll" in result.stderr
+    assert iface.localNode.written_sections == []
+    assert db_fingerprint(db_path) == before
+
+
+def test_observed_node_is_refused_without_enroll_under_dry_run(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    record = NodeRecord(node_id="deadbe01", management=ManagementMode.OBSERVED)
+    seed_db(nodes=[record])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--dry-run"], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "--enroll" in result.stderr
+    assert "Planned changes:" not in result.stdout
+    assert iface.localNode.written_sections == []
+    assert db_fingerprint(db_path) == before
 
 
 def test_post_reconnect_verify_read_failure_leaves_the_database_untouched(

@@ -59,6 +59,7 @@ __all__ = [
     "NamePatternError",
     "NamespaceExhaustedError",
     "NodeIdError",
+    "NodeNotEnrolledError",
     "NodeNotFoundError",
     "NonInteractiveError",
     "PlanConflictError",
@@ -105,6 +106,11 @@ ADMIN_REF_HINT: Final = (
     "Register the admin key first with `mesh admin bootstrap` (provisions a device and "
     "records it as an admin) or `mesh admin import <REF>=<BASE64>` (registers a public "
     "key you already hold)."
+)
+
+ENROLL_HINT: Final = (
+    "Re-run with --enroll to bring this node under mesh provision's template "
+    "management. Until then it is left exactly as mesh adopt recorded it."
 )
 
 MISSING_CONTACT_MESSAGE: Final = (
@@ -873,6 +879,31 @@ class NonInteractiveError(ProvisioningError):
 
 class DetectionError(ProvisioningError):
     """A connected node's provisioning state could not be determined."""
+
+
+class NodeNotEnrolledError(ProvisioningError):
+    """A node recorded by ``mesh adopt`` was not enrolled with ``--enroll``.
+
+    Attributes:
+        node_id: The node's id, for display.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        node_id: str,
+        hint: str | None = ENROLL_HINT,
+    ) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Human-readable description of what went wrong.
+            node_id: The node's id, for display.
+            hint: Actionable suggestion; defaults to pointing at --enroll.
+        """
+        super().__init__(message, hint=hint)
+        self.node_id = node_id
 
 
 class PlanConflictError(ProvisioningError):

@@ -22,6 +22,9 @@ from meshprovision.crypto import weakkeys
 from meshprovision.crypto.keys import generate_keypair
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
+from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.schema import ManagementMode
+from meshprovision.errors import ExitCode
 from tests.e2e.conftest import FakeMeshInterface, invoke
 
 if TYPE_CHECKING:
@@ -141,6 +144,19 @@ def test_full_admin_bootstrap_sequence_and_consumption(
 
     assert not _BASE64_KEY_RE.search(admin_list.stdout)
     assert not _BASE64_KEY_RE.search(admin_list.stderr)
+
+
+def test_admin_bootstrap_inherits_the_enroll_gate(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    record = NodeRecord(node_id="deadbe01", management=ManagementMode.OBSERVED)
+    seed_db(nodes=[record])
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "--enroll" in result.stderr
 
 
 def test_admin_import_registers_a_held_public_key(runner: CliRunner, env: dict[str, str]) -> None:

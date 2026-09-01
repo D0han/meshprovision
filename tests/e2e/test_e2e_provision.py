@@ -17,7 +17,7 @@ from meshprovision.crypto import weakkeys
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import ExitCode
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
@@ -99,6 +99,35 @@ def test_factory_provisioning_end_to_end(
 
     _assert_no_secrets(result.stdout)
     _assert_no_secrets(result.stderr)
+
+
+def test_enroll_graduates_an_observed_node_to_template_management(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    record = NodeRecord(node_id="deadbe01", management=ManagementMode.OBSERVED)
+    seed_db(nodes=[record])
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--enroll"], env)
+
+    assert result.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    persisted = NodeRecord.from_row(loaded.nodes[0])
+    assert persisted.management is ManagementMode.TEMPLATE
+
+
+def test_template_managed_node_is_unaffected_by_the_enroll_gate(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    record = NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE)
+    seed_db(nodes=[record])
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "--enroll" not in result.stderr
 
 
 def test_provision_reports_a_failed_database_save_as_divergence(
