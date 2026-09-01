@@ -118,6 +118,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new `Audit` column. This information was already computed and already
   present in `--json` output; only the default human-readable table
   omitted it.
+- A live admin key revoked by the weak-key audit while `template.admin_nodes`
+  is empty (the project's documented default template shape) no longer leaves
+  `mesh provision` reporting the same `admin_keys` drift on every subsequent
+  run, permanently, nor `mesh admin list` crediting the revoked key with
+  authority over the node. The `Nodes` row's `authorized_admin_keys` is now
+  narrowed to drop the revoked ref instead of being left stale -- not
+  rebuilt, since a live admin key with no `Keys` sheet row still cannot be
+  named. `--json` output gains a new `key_plan.removed_admin_key_refs`
+  field. (Clearing the field wholesale on every run was considered and
+  rejected: it would have reported zero admins on a node that still has
+  two working, healthy administrators.)
+- If a device write during `mesh provision` succeeded and was verified, but
+  the database save that should have recorded it then failed (the realistic
+  case being the disk filling up while serializing the `.ods`), the run now
+  reports that the device and the database disagree for that node, rather
+  than surfacing only the underlying `OSError`. The message states plainly
+  that the device write was confirmed, the database was not saved, and the
+  two now disagree; when the run also generated a new node keypair, the
+  message additionally names `--force-regenerate-key`, since a later run
+  will never adopt a device key the database has never seen. **This save
+  failure now exits with code `4` instead of `1`.**
+- Template warnings (for example, an option named in both
+  `enabled_options` and `disabled_options`) are now routed through the
+  same styled warning path as database integrity warnings, instead of
+  going only to the structured log. Previously, a run at `--log-level
+  ERROR` dropped a template warning entirely, while a database warning at
+  the same level still reached the operator.
 
 ### Security
 
