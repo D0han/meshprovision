@@ -1,9 +1,10 @@
 """Pure adoption logic: an already-deployed device's live state -> a record of it.
 
-The pure half of a not-yet-built ``mesh adopt`` command, which will connect
-to a device that is already configured and already in service and record
-its *actual* live state into the database -- the opposite of ``mesh
-provision``: no desired-state diff against a template (unlike
+The pure half of the ``mesh adopt`` command (see
+:mod:`meshprovision.cli.adopt`), which connects to a device that is
+already configured and already in service and records its *actual* live
+state into the database -- the opposite of ``mesh provision``: no
+desired-state diff against a template (unlike
 :mod:`meshprovision.provisioning.plan`), and no device write anywhere in
 this package. :func:`build_adoption_report` turns an already-read
 :class:`~meshprovision.provisioning.detect.LiveConfig`, an optional

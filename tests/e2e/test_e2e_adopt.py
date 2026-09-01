@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,6 +13,7 @@ import pytest
 from meshprovision.db import ods
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import ManagementMode
+from meshprovision.errors import ExitCode
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -161,3 +163,52 @@ def test_adopt_then_enroll_round_trip(
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     managed = NodeRecord.from_row(loaded.nodes[0])
     assert managed.management is ManagementMode.TEMPLATE
+
+
+def test_adopt_json_output_reports_the_expected_fields(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    bus.use(FakeMeshInterface("deadbe01", short_name="AB01", long_name="Adopted Node 01"))
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert document["node_id"] == "deadbe01"
+    assert document["existing_management"] is None
+    assert document["ble_pin_captured"] is False
+    assert isinstance(document["warnings"], list)
+
+
+def test_adopt_warns_on_a_duplicate_name_and_folds_it_into_json_warnings(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="cafe0001", short_name="AB01", long_name="Adopted Node 01")])
+    bus.use(FakeMeshInterface("deadbe01", short_name="AB01", long_name="Adopted Node 01"))
+
+    text_result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert text_result.exit_code == 0
+    assert "short_name 'AB01'" in text_result.stderr
+    assert "long_name 'Adopted Node 01'" in text_result.stderr
+    assert "cafe0001" in text_result.stderr
+
+    json_result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+    assert json_result.exit_code == 0
+    document = json.loads(json_result.stdout)
+    assert any("short_name 'AB01'" in warning for warning in document["warnings"])
+    assert any("long_name 'Adopted Node 01'" in warning for warning in document["warnings"])
+
+
+def test_declining_the_adopt_prompt_writes_nothing(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["--interactive", "adopt", "--port", "/dev/ttyFAKE0"], env, input="n\n")
+
+    assert result.exit_code == int(ExitCode.INTERRUPTED)
+    assert "Aborted." in result.stderr
+    assert iface.localNode.written_sections == []
+    assert db_fingerprint(db_path) == before
