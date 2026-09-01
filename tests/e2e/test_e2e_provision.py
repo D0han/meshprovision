@@ -13,9 +13,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from meshprovision.crypto import weakkeys
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.schema import KeyType
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -201,6 +203,64 @@ def test_repair_with_no_admin_nodes_template_preserves_existing_admin_keys(
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     persisted = NodeRecord.from_row(loaded.nodes[0])
     assert persisted.authorized_admin_keys == ("ADMIN1_pub",)
+
+
+def test_revoked_live_admin_key_is_dropped_from_the_record(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    kp = keypair_factory()
+    admin2_kp = keypair_factory()
+    weak_public = weakkeys.SMALL_ORDER_POINTS[3]
+    node_record = NodeRecord(
+        node_id="deadbe01",
+        short_name="MT07",
+        long_name="Meshtastic MT07",
+        hw_model="RAK4631",
+        role="ROUTER",
+        region="EU_868",
+        authorized_admin_keys=("ADMIN1_pub", "ADMIN2_pub"),
+    )
+    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp)
+    admin2_pub, admin2_priv = KeyRecord.for_keypair("ADMIN2", admin2_kp)
+    seed_db(
+        nodes=[node_record],
+        keys=[
+            pub_record,
+            priv_record,
+            KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, weak_public),
+            admin2_pub,
+            admin2_priv,
+        ],
+    )
+
+    iface = bus.use(FakeMeshInterface("deadbe01", short_name="be01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+    iface.localNode.localConfig.security.admin_key.append(weak_public)
+    iface.localNode.localConfig.security.admin_key.append(admin2_kp.public)
+    iface.localNode.localConfig.device.role = 2  # ROUTER
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    _assert_no_secrets(result.stderr)
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    persisted = NodeRecord.from_row(loaded.nodes[0])
+    assert persisted.authorized_admin_keys == ("ADMIN2_pub",)
+    assert [bytes(k) for k in iface.localNode.localConfig.security.admin_key] == [admin2_kp.public]
+
+    # The headline symptom: a second run must no longer report admin_keys drift
+    # between the (now narrowed) row and the (now cleaned) device.
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--dry-run"], env)
+
+    assert second.exit_code == 0
+    _assert_no_secrets(second.stderr)
+    assert "admin_keys" not in second.stderr
 
 
 def test_dry_run_writes_nothing(runner: CliRunner, env: dict[str, str], bus: DeviceBus) -> None:

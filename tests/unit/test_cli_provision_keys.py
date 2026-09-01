@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from meshprovision.cli.provision import resolve_admin_keys
+from meshprovision.cli.provision import resolve_admin_keys, resolve_removed_admin_refs
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.db.keys import KeyRecord, KeyRepository
+from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyType
 
@@ -69,3 +70,42 @@ def test_compromised_admin_key_logs_an_error(
     records = _audit_records(caplog)
     assert [record.levelno for record in records] == [logging.ERROR]
     assert "[critical]" in records[0].getMessage()
+
+
+_MAP = {"A_pub": b"a" * 32, "B_pub": b"b" * 32}
+
+
+@pytest.mark.parametrize(
+    ("record", "rejected", "expected"),
+    [
+        pytest.param(None, frozenset({b"a" * 32}), (), id="no-record"),
+        pytest.param(
+            NodeRecord(node_id="deadbe01", authorized_admin_keys=("A_pub", "B_pub")),
+            frozenset(),
+            (),
+            id="nothing-rejected",
+        ),
+        pytest.param(
+            NodeRecord(node_id="deadbe01", authorized_admin_keys=("A_pub", "B_pub")),
+            frozenset({b"b" * 32}),
+            ("B_pub",),
+            id="one-of-two-rejected",
+        ),
+        pytest.param(
+            NodeRecord(node_id="deadbe01", authorized_admin_keys=("A_pub", "GHOST_pub")),
+            frozenset({b"a" * 32}),
+            ("A_pub",),
+            id="unknown-ref-skipped",
+        ),
+        pytest.param(
+            NodeRecord(node_id="deadbe01", authorized_admin_keys=("B_pub", "A_pub")),
+            frozenset({b"a" * 32, b"b" * 32}),
+            ("B_pub", "A_pub"),
+            id="both-rejected-order-preserved",
+        ),
+    ],
+)
+def test_resolve_removed_admin_refs(
+    record: NodeRecord | None, rejected: frozenset[bytes], expected: tuple[str, ...]
+) -> None:
+    assert resolve_removed_admin_refs(record, _MAP, rejected) == expected

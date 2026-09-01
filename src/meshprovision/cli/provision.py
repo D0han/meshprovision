@@ -28,7 +28,7 @@ from __future__ import annotations
 import contextlib
 import dataclasses
 import logging
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
@@ -69,6 +69,7 @@ __all__ = [
     "render_plan",
     "resolve_admin_keys",
     "resolve_backend",
+    "resolve_removed_admin_refs",
     "run_provision",
     "transport_options",
 ]
@@ -520,6 +521,37 @@ def audit_live_admin_keys(
     return frozenset(rejected)
 
 
+def resolve_removed_admin_refs(
+    record: NodeRecord | None,
+    public_key_map: Mapping[str, bytes],
+    rejected: frozenset[bytes],
+) -> tuple[str, ...]:
+    """Find which of a node's recorded admin-key refs name a rejected live key.
+
+    Resolves ``ref -> material`` rather than ``material -> ref`` on
+    purpose: one public key may legitimately be filed under two refs
+    (``mesh admin bootstrap --ref LABEL`` does exactly that), so the
+    inverse map is lossy, while ``key_ref`` is the ``Keys`` sheet's
+    primary key and resolves unambiguously.
+
+    Args:
+        record: The node's existing ``Nodes`` row, or ``None``.
+        public_key_map: The ``{key_ref: material}`` map from
+            :meth:`~meshprovision.db.keys.KeyRepository.public_key_map`.
+        rejected: The live admin keys :func:`audit_live_admin_keys`
+            flagged for removal.
+
+    Returns:
+        The subset of ``record.authorized_admin_keys`` whose material
+        is in ``rejected``, in recorded order. Empty when ``record``
+        is ``None``, when nothing was rejected, or when no recorded
+        ref resolves to rejected material.
+    """
+    if record is None or not rejected:
+        return ()
+    return tuple(ref for ref in record.authorized_admin_keys if public_key_map.get(ref) in rejected)
+
+
 def audit_node_key(live: detect.LiveConfig, *, known_bad: frozenset[bytes]) -> tuple[bool, str]:
     """Audit a live device's own keypair for the CVE-2025-52464 weak-key condition.
 
@@ -701,16 +733,20 @@ def run_provision(
 
     known_bad = weakkeys.load_known_bad_keys()
 
+    rejected = audit_live_admin_keys(live, known_bad=known_bad)
+
     drifts: tuple[repair.Drift, ...]
+    removed_admin_key_refs: tuple[str, ...]
     if record is not None:
         pubmap = db.keys.public_key_map()
         by_material = {material: key_ref for key_ref, material in pubmap.items()}
         drifts = repair.diff_record(live, record, admin_key_refs=by_material)
+        removed_admin_key_refs = resolve_removed_admin_refs(record, pubmap, rejected)
     else:
         drifts = ()
+        removed_admin_key_refs = ()
 
     admin_keys = resolve_admin_keys(db.keys, template, known_bad=known_bad)
-    rejected = audit_live_admin_keys(live, known_bad=known_bad)
     node_key_compromised, node_key_reason = audit_node_key(live, known_bad=known_bad)
 
     db_public_key: bytes | None = None
@@ -735,6 +771,7 @@ def run_provision(
         state=detection.state,
         admin_keys=admin_keys,
         rejected_admin_keys=rejected,
+        removed_admin_key_refs=removed_admin_key_refs,
         desired_short_name=desired_short,
         desired_long_name=desired_long,
         ble_pin=ble_pin,

@@ -28,7 +28,15 @@ caller-flagged weak key removed. If ``template.admin_nodes`` is *empty*,
 that means "no opinion" and the plan's desired set is ``kept`` --
 an empty ``admin_nodes`` list never means "strip whatever is on the
 device," and a node with zero admin keys is therefore never flagged as
-drift. If ``template.admin_nodes`` is *non-empty*, it is authoritative:
+drift. "No opinion" governs what is *written to the device*; it does
+not license the database to keep asserting a key the same run just
+revoked. When the live weak-key audit drops a key the ``Nodes`` row
+named, that ref is removed from
+:attr:`~meshprovision.db.nodes.NodeRecord.authorized_admin_keys` -- see
+:attr:`KeyPlan.removed_admin_key_refs`. The row is only ever *narrowed*
+on this path, never rebuilt: a live admin key with no ``Keys`` sheet row
+cannot be named, so the row remains last-known state rather than a
+device mirror. If ``template.admin_nodes`` is *non-empty*, it is authoritative:
 the desired set is every entry of ``resolved`` that **passed the
 weak-key audit** (``audit_ok``), and any live key not named in it is
 removed. Either way the sets are compared as **sorted** tuples, so a
@@ -421,6 +429,15 @@ class KeyPlan:
         removed_admin_fingerprints: Positional labels
             (``"live-admin[0]"``, ...) for live admin keys dropped
             because the caller's weak-key audit flagged them.
+        removed_admin_key_refs: The ``Keys`` sheet references on the
+            existing ``Nodes`` row whose material the caller's weak-key
+            audit flagged for removal -- the database-record counterpart
+            of :attr:`removed_admin_fingerprints`, which names the same
+            keys positionally for the device write. Resolved by the
+            caller, which alone can map a ref to key material. **Not**
+            index-aligned with :attr:`removed_admin_fingerprints`: a
+            removed live key with no ``Keys`` sheet row contributes
+            nothing here.
         rejected_admin_key_refs: The ``Keys`` sheet references named in
             ``template.admin_nodes`` that this plan refuses to authorize
             because the caller's weak-key audit flagged them. The
@@ -435,6 +452,7 @@ class KeyPlan:
     desired_admin_keys: tuple[bytes, ...] = ()
     desired_admin_key_refs: tuple[str, ...] = ()
     removed_admin_fingerprints: tuple[str, ...] = ()
+    removed_admin_key_refs: tuple[str, ...] = ()
     rejected_admin_key_refs: tuple[str, ...] = ()
 
     @property
@@ -463,6 +481,7 @@ class KeyPlan:
             f"desired_admin_keys={redacted_keys!r}, "
             f"desired_admin_key_refs={self.desired_admin_key_refs!r}, "
             f"removed_admin_fingerprints={self.removed_admin_fingerprints!r}, "
+            f"removed_admin_key_refs={self.removed_admin_key_refs!r}, "
             f"rejected_admin_key_refs={self.rejected_admin_key_refs!r})"
         )
 
@@ -502,6 +521,12 @@ class PlanInputs:
             ``template.admin_nodes``, in template order.
         rejected_admin_keys: Live admin keys the caller's weak-key audit
             flagged for removal.
+        removed_admin_key_refs: The subset of
+            ``db_entry.authorized_admin_keys`` whose ``Keys`` sheet
+            material appears in :attr:`rejected_admin_keys`, resolved by
+            the caller (this module cannot map a ref to key material).
+            Non-empty implies those keys are live on the device and this
+            plan is removing them.
         desired_short_name: An externally allocated ``short_name``
             (e.g. from ``NodeRepository.next_free_name``), or ``None``
             to keep the database's (or, failing that, the device's)
@@ -534,6 +559,7 @@ class PlanInputs:
     state: detect.NodeState = detect.NodeState.FACTORY
     admin_keys: tuple[ResolvedAdminKey, ...] = ()
     rejected_admin_keys: frozenset[bytes] = frozenset()
+    removed_admin_key_refs: tuple[str, ...] = ()
     desired_short_name: str | None = None
     desired_long_name: str | None = None
     ble_pin: str | None = None
@@ -559,6 +585,7 @@ class PlanInputs:
             f"db_entry={self.db_entry!r}, state={self.state!r}, "
             f"admin_keys={self.admin_keys!r}, "
             f"rejected_admin_keys=<{len(self.rejected_admin_keys)} redacted key(s)>, "
+            f"removed_admin_key_refs={self.removed_admin_key_refs!r}, "
             f"desired_short_name={self.desired_short_name!r}, "
             f"desired_long_name={self.desired_long_name!r}, ble_pin={ble_pin_repr!r}, "
             f"node_key_compromised={self.node_key_compromised!r}, "
@@ -772,6 +799,7 @@ class ChangePlan:
                 "admin_key_count": len(self.key_plan.desired_admin_keys),
                 "desired_admin_key_refs": list(self.key_plan.desired_admin_key_refs),
                 "removed_admin_fingerprints": list(self.key_plan.removed_admin_fingerprints),
+                "removed_admin_key_refs": list(self.key_plan.removed_admin_key_refs),
                 "rejected_admin_key_refs": list(self.key_plan.rejected_admin_key_refs),
             },
             "lockdown": {
@@ -808,6 +836,11 @@ class ChangePlan:
             the refs are cleared to ``()``, because the device really
             does end up holding no authorized admin key and the old row
             would otherwise keep asserting a key this plan just refused.
+            Failing both, any ref named in
+            :attr:`KeyPlan.removed_admin_key_refs` is subtracted from
+            ``existing``: the "no opinion" template still may not keep
+            asserting a live key the weak-key audit just revoked. The row
+            is only ever narrowed on that path, never rebuilt.
             ``ble_pin`` is set only when :attr:`ble_pin_set`.
         """
         from meshprovision.db.nodes import NodeRecord as _NodeRecord
@@ -826,6 +859,11 @@ class ChangePlan:
         }
         if self.key_plan.desired_admin_key_refs or self.key_plan.rejected_admin_key_refs:
             changes["authorized_admin_keys"] = self.key_plan.desired_admin_key_refs
+        elif self.key_plan.removed_admin_key_refs:
+            dropped = frozenset(self.key_plan.removed_admin_key_refs)
+            changes["authorized_admin_keys"] = tuple(
+                ref for ref in base.authorized_admin_keys if ref not in dropped
+            )
 
         if self.ble_pin_set:
             bluetooth = self.section("bluetooth")
@@ -1098,6 +1136,8 @@ class _AdminKeyPlan:
             ``admin_nodes`` list.
         change_admin_keys: Whether ``security.admin_key`` needs writing.
         removed: Positional labels for live keys dropped by the audit.
+        removed_refs: ``Keys`` sheet refs on the existing ``Nodes`` row
+            naming a removed live key, passed through from the caller.
         rejected_refs: ``Keys`` sheet refs excluded from :attr:`desired`
             because they failed the audit.
         warnings: The corresponding rejection warnings.
@@ -1107,6 +1147,7 @@ class _AdminKeyPlan:
     desired_refs: tuple[str, ...]
     change_admin_keys: bool
     removed: tuple[str, ...]
+    removed_refs: tuple[str, ...]
     rejected_refs: tuple[str, ...]
     warnings: tuple[PlanWarning, ...]
 
@@ -1202,6 +1243,7 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
         desired_refs=desired_refs,
         change_admin_keys=sorted(desired) != sorted(live_keys),
         removed=removed,
+        removed_refs=inputs.removed_admin_key_refs,
         rejected_refs=rejected_refs,
         warnings=tuple(warnings),
     )
@@ -1468,6 +1510,7 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         desired_admin_keys=admin_plan.desired,
         desired_admin_key_refs=admin_plan.desired_refs,
         removed_admin_fingerprints=admin_plan.removed,
+        removed_admin_key_refs=admin_plan.removed_refs,
         rejected_admin_key_refs=admin_plan.rejected_refs,
     )
 

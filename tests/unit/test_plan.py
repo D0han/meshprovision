@@ -241,6 +241,107 @@ def test_rejected_admin_key_removed_with_positional_label(
     assert plan.key_plan.change_admin_keys is True
 
 
+def test_revoked_live_key_ref_is_dropped_from_the_record(
+    make_live, template, keypair_factory
+) -> None:
+    kp1, kp2 = keypair_factory(), keypair_factory()
+    live = make_live(template, security=make_security(admin_keys=(kp1.public, kp2.public)))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub", "ADMIN2_pub"))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        rejected_admin_keys=frozenset({kp1.public}),
+        removed_admin_key_refs=("ADMIN1_pub",),
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.change_admin_keys is True
+    assert plan.key_plan.removed_admin_fingerprints == ("live-admin[0]",)
+    assert plan.key_plan.desired_admin_key_refs == ()
+    assert plan.key_plan.rejected_admin_key_refs == ()
+    assert plan.to_record().authorized_admin_keys == ("ADMIN2_pub",)
+
+
+def test_named_admin_refs_win_over_removed_refs(make_live, template, make_admin_key) -> None:
+    admin1 = make_admin_key("ADMIN1")
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(empty=True))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("OLD_pub",))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        admin_keys=(admin1,),
+        removed_admin_key_refs=("OLD_pub",),
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.desired_admin_key_refs == ("ADMIN1_pub",)
+    assert plan.to_record().authorized_admin_keys == ("ADMIN1_pub",)
+
+
+def test_removing_every_recorded_ref_empties_the_record(
+    make_live, template, keypair_factory
+) -> None:
+    kp1 = keypair_factory()
+    live = make_live(template, security=make_security(admin_keys=(kp1.public,)))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        rejected_admin_keys=frozenset({kp1.public}),
+        removed_admin_key_refs=("ADMIN1_pub",),
+    )
+    plan = build_plan(inputs)
+
+    assert plan.to_record().authorized_admin_keys == ()
+
+
+def test_removed_ref_absent_from_baseline_is_a_no_op(make_live, template, keypair_factory) -> None:
+    kp1 = keypair_factory()
+    live = make_live(template, security=make_security(admin_keys=(kp1.public,)))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        rejected_admin_keys=frozenset({kp1.public}),
+        removed_admin_key_refs=("ADMIN1_pub",),
+    )
+    plan = build_plan(inputs)
+
+    other = NodeRecord(node_id="deadbe01", authorized_admin_keys=("OTHER_pub",))
+    assert plan.to_record(existing=other).authorized_admin_keys == ("OTHER_pub",)
+
+
+def test_removed_admin_key_refs_surface_in_json_and_repr(
+    make_live, template, keypair_factory
+) -> None:
+    kp1 = keypair_factory()
+    live = make_live(template, security=make_security(admin_keys=(kp1.public,)))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        rejected_admin_keys=frozenset({kp1.public}),
+        removed_admin_key_refs=("ADMIN1_pub",),
+    )
+    plan = build_plan(inputs)
+
+    key_plan_json = plan.to_json_dict()["key_plan"]
+    assert isinstance(key_plan_json, dict)
+    assert key_plan_json["removed_admin_key_refs"] == ["ADMIN1_pub"]
+    assert "removed_admin_key_refs=('ADMIN1_pub',)" in repr(plan.key_plan)
+
+
 def test_admin_key_capacity_exceeded_raises(make_live, template, make_admin_key) -> None:
     refs = ["ADMIN1", "ADMIN2", "ADMIN3", "ADMIN4"]
     admin_keys = tuple(make_admin_key(ref) for ref in refs)
