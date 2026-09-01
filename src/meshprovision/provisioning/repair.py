@@ -26,7 +26,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from meshprovision.crypto import redact
-from meshprovision.provisioning import detect
+from meshprovision.provisioning import detect, pipeline
 
 if TYPE_CHECKING:
     from meshprovision.db.nodes import NodeRecord
@@ -97,11 +97,17 @@ def _drift_if_differs(kind: DriftKind, field: str, recorded: str, observed: str)
     return Drift(kind=kind, field=field, recorded=recorded, observed=observed)
 
 
+def _preferred_ref(material: bytes, public_keys: Mapping[str, bytes]) -> str:
+    """Render one live admin key as its preferred ``Keys`` sheet ref."""
+    refs = pipeline.match_admin_key_refs(material, public_keys)
+    return refs[0] if refs else f"<unknown:{redact.fingerprint(material)}>"
+
+
 def diff_record(
     live: detect.LiveConfig,
     record: NodeRecord,
     *,
-    admin_key_refs: Mapping[bytes, str] | None = None,
+    public_keys: Mapping[str, bytes] | None = None,
 ) -> tuple[Drift, ...]:
     """Compare a recorded :class:`NodeRecord` against a live device. Pure -- no I/O.
 
@@ -112,20 +118,21 @@ def diff_record(
     Args:
         live: The device's freshly read live configuration.
         record: The ODS's recorded state for this node.
-        admin_key_refs: A ``{public_key_bytes: key_ref}`` map (built by
-            the caller from
-            :meth:`~meshprovision.db.keys.KeyRepository.public_key_map`),
+        public_keys: The ``{key_ref: raw public key}`` map from
+            :meth:`~meshprovision.db.keys.KeyRepository.public_key_map`,
             used to render the device's live admin keys back into
             ``Keys``-sheet references for comparison against
-            ``record.authorized_admin_keys``. An unknown live key renders
-            as ``"<unknown:<fingerprint>>"``.
+            ``record.authorized_admin_keys``. Passed in this direction
+            (never inverted to ``{material: ref}``) because one key may
+            be filed under several refs. An unknown live key renders as
+            ``"<unknown:<fingerprint>>"``.
 
     Returns:
         One :class:`Drift` per detected mismatch, in a fixed order: name,
         hardware, firmware, radio (role then region), admin keys, key
         material, then security flags.
     """
-    refs = admin_key_refs or {}
+    known = public_keys or {}
     drifts: list[Drift] = []
 
     short_drift = _drift_if_differs(
@@ -157,12 +164,7 @@ def diff_record(
     if region_drift is not None:
         drifts.append(region_drift)
 
-    live_admin_refs = tuple(
-        sorted(
-            refs.get(key, f"<unknown:{redact.fingerprint(key)}>")
-            for key in live.security.admin_keys
-        )
-    )
+    live_admin_refs = tuple(sorted(_preferred_ref(key, known) for key in live.security.admin_keys))
     recorded_admin_refs = tuple(sorted(record.authorized_admin_keys))
     if recorded_admin_refs and live_admin_refs != recorded_admin_refs:
         drifts.append(

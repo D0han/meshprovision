@@ -37,15 +37,14 @@ was captured.
 from __future__ import annotations
 
 import base64
-import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from meshprovision import enums
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import BLE_PIN_LENGTH, ManagementMode
-from meshprovision.provisioning import detect
+from meshprovision.provisioning import detect, pipeline
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -64,27 +63,6 @@ __all__ = [
     "classify_live_admin_keys",
 ]
 
-_NODE_ID_SHAPE_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{8}")
-"""Matches an owner portion shaped like a raw node id (e.g. ``"deadbe01"``)."""
-
-
-def _ref_sort_key(ref: str) -> tuple[bool, str]:
-    """Sort key implementing :func:`classify_live_admin_keys`'s ``PREFERRED`` order.
-
-    Args:
-        ref: A ``Keys`` sheet public-key reference (always ``<owner>_pub``
-            for the entries this module sorts).
-
-    Returns:
-        ``(owner_looks_like_a_node_id, ref)``. Sorting ascending on this
-        key puts a human-labeled ref (``"ADMIN1_pub"``) before a
-        node-id-shaped ref (``"deadbe01_pub"``), and breaks ties within
-        each group lexicographically.
-    """
-    owner = ref[:-4] if ref.endswith("_pub") else ref
-    looks_like_node_id = bool(_NODE_ID_SHAPE_RE.fullmatch(owner))
-    return (looks_like_node_id, ref)
-
 
 @dataclass(frozen=True, slots=True)
 class LiveAdminKey:
@@ -94,7 +72,8 @@ class LiveAdminKey:
         material: The raw 32-byte public key, as reported live.
         fingerprint: A redacted fingerprint label for ``material``.
         refs: Every ``Keys`` sheet reference whose material matches this
-            key, sorted per :func:`classify_live_admin_keys`'s
+            key, sorted per
+            :func:`meshprovision.provisioning.pipeline.match_admin_key_refs`'s
             deterministic ``PREFERRED`` order. Empty when this key is not
             registered under any reference.
         preferred_ref: ``refs[0]``, or ``None`` when ``refs`` is empty.
@@ -142,12 +121,7 @@ def classify_live_admin_keys(
     """
     result: list[LiveAdminKey] = []
     for material in live.security.admin_keys:
-        matching_refs = tuple(
-            sorted(
-                (ref for ref, candidate in public_keys.items() if candidate == material),
-                key=_ref_sort_key,
-            )
-        )
+        matching_refs = pipeline.match_admin_key_refs(material, public_keys)
         result.append(
             LiveAdminKey(
                 material=material,

@@ -296,8 +296,8 @@ def test_diff_record_admin_key_rendering_with_unknown_key(make_live, keypair_fac
         security=make_security(admin_keys=(kp1.public, kp2.public)),
     )
     record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",))
-    admin_key_refs = {kp1.public: "ADMIN1_pub"}
-    drifts = repair.diff_record(live, record, admin_key_refs=admin_key_refs)
+    public_keys = {"ADMIN1_pub": kp1.public}
+    drifts = repair.diff_record(live, record, public_keys=public_keys)
     admin_drift = next(d for d in drifts if d.kind is repair.DriftKind.ADMIN_KEYS)
     assert admin_drift.recorded == "ADMIN1_pub"
     assert f"<unknown:{redact.fingerprint(kp2.public)}>" in admin_drift.observed
@@ -322,6 +322,22 @@ def test_diff_record_public_key_present_ref_always_derived_from_node_id(
     assert record.public_key_ref == "deadbe01_pub"
     drifts = repair.diff_record(live, record)
     assert not any(d.kind is repair.DriftKind.KEY_MATERIAL for d in drifts)
+
+
+def test_diff_record_aliased_admin_key_is_not_drift(make_live, keypair_factory) -> None:
+    from meshprovision.config.template import load_template_text
+    from tests.unit.conftest import make_security
+
+    template = load_template_text("version: 1\n")
+    kp = keypair_factory()
+    live = make_live(template, security=make_security(admin_keys=(kp.public,)))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",))
+    for public_keys in (
+        {"deadbe01_pub": kp.public, "ADMIN1_pub": kp.public},
+        {"ADMIN1_pub": kp.public, "deadbe01_pub": kp.public},
+    ):
+        drifts = repair.diff_record(live, record, public_keys=public_keys)
+        assert not any(d.kind is repair.DriftKind.ADMIN_KEYS for d in drifts), public_keys
 
 
 def test_drift_describe() -> None:

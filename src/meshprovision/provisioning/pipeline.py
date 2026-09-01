@@ -19,7 +19,8 @@ goes through :func:`meshprovision.crypto.redact.fingerprint`.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+import re
+from typing import TYPE_CHECKING, Final
 
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.errors import KeyMaterialError, NamespaceExhaustedError
@@ -37,11 +38,58 @@ __all__ = [
     "allocate_names",
     "audit_live_admin_keys",
     "audit_node_key",
+    "match_admin_key_refs",
     "resolve_admin_keys",
     "resolve_removed_admin_refs",
 ]
 
 _logger = logging.getLogger(__name__)
+
+_NODE_ID_SHAPE_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{8}")
+"""Matches an owner portion shaped like a raw node id (e.g. ``"deadbe01"``)."""
+
+
+def _ref_sort_key(ref: str) -> tuple[bool, str]:
+    """Sort key implementing :func:`match_admin_key_refs`'s ``PREFERRED`` order.
+
+    Args:
+        ref: A ``Keys`` sheet public-key reference (always ``<owner>_pub``
+            for the entries this module sorts).
+
+    Returns:
+        ``(owner_looks_like_a_node_id, ref)``. Sorting ascending on this
+        key puts a human-labeled ref (``"ADMIN1_pub"``) before a
+        node-id-shaped ref (``"deadbe01_pub"``), and breaks ties within
+        each group lexicographically.
+    """
+    owner = ref[:-4] if ref.endswith("_pub") else ref
+    looks_like_node_id = bool(_NODE_ID_SHAPE_RE.fullmatch(owner))
+    return (looks_like_node_id, ref)
+
+
+def match_admin_key_refs(material: bytes, public_keys: Mapping[str, bytes]) -> tuple[str, ...]:
+    """Find every ``Keys`` sheet ref registering one raw admin public key.
+
+    Resolved ``ref -> material``, never the inverse: ``mesh admin bootstrap
+    --ref LABEL`` deliberately files one key under both ``<node_id>_pub`` and
+    ``<LABEL>_pub``, so a ``{material: ref}`` map silently drops the alias.
+
+    Args:
+        material: The raw public key to match.
+        public_keys: ``{key_ref: raw public key}``, as returned by
+            :meth:`~meshprovision.db.keys.KeyRepository.public_key_map`.
+
+    Returns:
+        Every matching ref, ordered so a human-labeled ref (``"ADMIN1_pub"``)
+        precedes a node-id-shaped one (``"deadbe01_pub"``), ties broken
+        lexicographically. Empty when the key is registered nowhere.
+    """
+    return tuple(
+        sorted(
+            (ref for ref, candidate in public_keys.items() if candidate == material),
+            key=_ref_sort_key,
+        )
+    )
 
 
 def resolve_admin_keys(

@@ -558,8 +558,7 @@ def run_provision(
     removed_admin_key_refs: tuple[str, ...]
     if record is not None:
         pubmap = db.keys.public_key_map()
-        by_material = {material: key_ref for key_ref, material in pubmap.items()}
-        drifts = repair.diff_record(live, record, admin_key_refs=by_material)
+        drifts = repair.diff_record(live, record, public_keys=pubmap)
         removed_admin_key_refs = resolve_removed_admin_refs(record, pubmap, rejected)
     else:
         drifts = ()
