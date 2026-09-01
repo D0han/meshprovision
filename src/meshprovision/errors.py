@@ -30,6 +30,7 @@ __all__ = [
     "AdminKeyCapacityError",
     "AdminKeyError",
     "AdminRefUnresolvedError",
+    "AdoptionRefusedError",
     "AmbiguousDeviceError",
     "AtomicWriteError",
     "CacheError",
@@ -111,6 +112,11 @@ ADMIN_REF_HINT: Final = (
 ENROLL_HINT: Final = (
     "Re-run with --enroll to bring this node under mesh provision's template "
     "management. Until then it is left exactly as mesh adopt recorded it."
+)
+
+FORCE_ADOPT_HINT: Final = (
+    "Pass --force to re-adopt it anyway. This demotes it to observed, and "
+    "mesh provision will not manage it again until it is re-enrolled with --enroll."
 )
 
 MISSING_CONTACT_MESSAGE: Final = (
@@ -901,6 +907,31 @@ class NodeNotEnrolledError(ProvisioningError):
             message: Human-readable description of what went wrong.
             node_id: The node's id, for display.
             hint: Actionable suggestion; defaults to pointing at --enroll.
+        """
+        super().__init__(message, hint=hint)
+        self.node_id = node_id
+
+
+class AdoptionRefusedError(ProvisioningError):
+    """``mesh adopt`` refused to overwrite a template-managed node's record.
+
+    Attributes:
+        node_id: The node's id, for display.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        node_id: str,
+        hint: str | None = FORCE_ADOPT_HINT,
+    ) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Human-readable description of what went wrong.
+            node_id: The node's id, for display.
+            hint: Actionable suggestion; defaults to pointing at --force.
         """
         super().__init__(message, hint=hint)
         self.node_id = node_id
