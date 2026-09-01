@@ -62,7 +62,8 @@ from meshprovision.errors import (
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.connection import ConnectionBackend, close_interface
-from meshprovision.provisioning.plan import ChangePlan, KeyPlan, SectionChange, values_equal
+from meshprovision.provisioning.plan import ChangePlan, SectionChange, values_equal
+from meshprovision.provisioning.plan_admin_keys import KeyPlan
 
 if TYPE_CHECKING:
     from meshtastic.mesh_interface import MeshInterface

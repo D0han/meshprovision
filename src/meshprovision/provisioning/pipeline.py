@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.errors import KeyMaterialError, NamespaceExhaustedError
 from meshprovision.provisioning import detect
-from meshprovision.provisioning import plan as plan_mod
+from meshprovision.provisioning.plan_admin_keys import ResolvedAdminKey
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -46,7 +46,7 @@ _logger = logging.getLogger(__name__)
 
 def resolve_admin_keys(
     keys: KeyRepository, template: TemplateConfig, *, known_bad: frozenset[bytes]
-) -> tuple[plan_mod.ResolvedAdminKey, ...]:
+) -> tuple[ResolvedAdminKey, ...]:
     """Resolve and audit every configured admin node's public key.
 
     Deliberately audits with
@@ -68,7 +68,7 @@ def resolve_admin_keys(
             run.
 
     Returns:
-        One :class:`~meshprovision.provisioning.plan.ResolvedAdminKey`
+        One :class:`~meshprovision.provisioning.plan_admin_keys.ResolvedAdminKey`
         per entry in ``template.admin_nodes``, in template order. Each
         entry's ``has_private`` reflects cryptographic correspondence, not
         mere row presence: a ``_priv`` row that does not derive its
@@ -81,7 +81,7 @@ def resolve_admin_keys(
         AdminRefUnresolvedError: If any ``admin_nodes`` reference does
             not resolve to a ``Keys`` sheet row.
     """
-    resolved: list[plan_mod.ResolvedAdminKey] = []
+    resolved: list[ResolvedAdminKey] = []
     for ref in template.admin_nodes:
         record = keys.resolve_admin_refs((ref,))[0]
         material = record.material()
@@ -100,7 +100,7 @@ def resolve_admin_keys(
                 record.key_ref,
             )
         resolved.append(
-            plan_mod.ResolvedAdminKey(
+            ResolvedAdminKey(
                 ref=ref,
                 key_ref=record.key_ref,
                 public=material,

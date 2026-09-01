@@ -27,7 +27,7 @@ from meshprovision.crypto.keys import KeyPair, generate_keypair
 from meshprovision.db import schema
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.detect import LiveConfig, LiveSecurity
-from meshprovision.provisioning.plan import ResolvedAdminKey
+from meshprovision.provisioning.plan_admin_keys import ResolvedAdminKey
 
 pytestmark = pytest.mark.unit
 

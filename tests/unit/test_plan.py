@@ -965,7 +965,7 @@ def test_plan_inputs_repr_redacts_secrets(make_live, template) -> None:
 
 
 def test_key_plan_repr_redacts_admin_keys() -> None:
-    from meshprovision.provisioning.plan import KeyPlan
+    from meshprovision.provisioning.plan_admin_keys import KeyPlan
 
     kp = KeyPlan(desired_admin_keys=(b"\x01" * 32,))
     text = repr(kp)
