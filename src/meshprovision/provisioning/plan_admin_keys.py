@@ -28,8 +28,10 @@ cannot be named, so the row remains last-known state rather than a
 device mirror. If ``template.admin_nodes`` is *non-empty*, it is authoritative:
 the desired set is every entry of ``resolved`` that **passed the
 weak-key audit** (``audit_ok``), and any live key not named in it is
-removed. Either way the sets are compared as **sorted** tuples, so a
-mere ordering difference is never churn.
+removed and reported as a ``"live_admin_key_revoked"`` warning (see
+:attr:`KeyPlan.revoked_admin_fingerprints`), distinct from a live key
+dropped by the weak-key audit itself. Either way the sets are compared
+as **sorted** tuples, so a mere ordering difference is never churn.
 
 An entry that failed the weak-key audit is never authorized: it is
 excluded from the desired set, named in
@@ -141,6 +143,12 @@ class KeyPlan:
         removed_admin_fingerprints: Positional labels
             (``"live-admin[0]"``, ...) for live admin keys dropped
             because the caller's weak-key audit flagged them.
+        revoked_admin_fingerprints: Positional labels
+            (``"live-admin[0]"``, ...) for live admin keys dropped only
+            because ``template.admin_nodes`` is non-empty and does not
+            name them -- the counterpart of
+            :attr:`removed_admin_fingerprints` for keys that passed the
+            weak-key audit but were simply not asked for.
         removed_admin_key_refs: The ``Keys`` sheet references on the
             existing ``Nodes`` row whose material the caller's weak-key
             audit flagged for removal -- the database-record counterpart
@@ -164,6 +172,7 @@ class KeyPlan:
     desired_admin_keys: tuple[bytes, ...] = ()
     desired_admin_key_refs: tuple[str, ...] = ()
     removed_admin_fingerprints: tuple[str, ...] = ()
+    revoked_admin_fingerprints: tuple[str, ...] = ()
     removed_admin_key_refs: tuple[str, ...] = ()
     rejected_admin_key_refs: tuple[str, ...] = ()
 
@@ -193,6 +202,7 @@ class KeyPlan:
             f"desired_admin_keys={redacted_keys!r}, "
             f"desired_admin_key_refs={self.desired_admin_key_refs!r}, "
             f"removed_admin_fingerprints={self.removed_admin_fingerprints!r}, "
+            f"revoked_admin_fingerprints={self.revoked_admin_fingerprints!r}, "
             f"removed_admin_key_refs={self.removed_admin_key_refs!r}, "
             f"rejected_admin_key_refs={self.rejected_admin_key_refs!r})"
         )
@@ -214,6 +224,8 @@ class _AdminKeyPlan:
             ``admin_nodes`` list.
         change_admin_keys: Whether ``security.admin_key`` needs writing.
         removed: Positional labels for live keys dropped by the audit.
+        revoked: Positional labels for live keys dropped only because
+            they are absent from a non-empty ``template.admin_nodes``.
         removed_refs: ``Keys`` sheet refs on the existing ``Nodes`` row
             naming a removed live key, passed through from the caller.
         rejected_refs: ``Keys`` sheet refs excluded from :attr:`desired`
@@ -225,6 +237,7 @@ class _AdminKeyPlan:
     desired_refs: tuple[str, ...]
     change_admin_keys: bool
     removed: tuple[str, ...]
+    revoked: tuple[str, ...]
     removed_refs: tuple[str, ...]
     rejected_refs: tuple[str, ...]
     warnings: tuple[PlanWarning, ...]
@@ -244,10 +257,12 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
     Returns:
         The :class:`_AdminKeyPlan`, carrying the
         ``"live_admin_key_rejected"`` warnings for live keys dropped by
-        the audit and, for template-named keys the audit flagged, either
-        ``"resolved_admin_key_rejected"`` warnings or -- under
-        ``inputs.allow_weak_admin_key`` -- ``"resolved_admin_key_forced"``
-        ones.
+        the audit, ``"live_admin_key_revoked"`` warnings for live keys
+        dropped only for being absent from a non-empty
+        ``template.admin_nodes``, and, for template-named keys the audit
+        flagged, either ``"resolved_admin_key_rejected"`` warnings or --
+        under ``inputs.allow_weak_admin_key`` --
+        ``"resolved_admin_key_forced"`` ones.
 
     Raises:
         AdminKeyCapacityError: If ``template.admin_nodes`` resolves to
@@ -269,6 +284,7 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
     ]
 
     rejected_refs: tuple[str, ...] = ()
+    revoked: tuple[str, ...] = ()
     if not inputs.template.admin_nodes:
         desired = kept
         desired_refs: tuple[str, ...] = ()
@@ -316,11 +332,27 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
         desired_refs = tuple(k.key_ref for k in authorized)
         rejected_refs = tuple(k.key_ref for k in rejected)
 
+        revoked_indices = [
+            i for i, k in enumerate(live_keys) if i not in dropped_indices and k not in desired
+        ]
+        revoked = tuple(f"live-admin[{i}]" for i in revoked_indices)
+        warnings.extend(
+            PlanWarning(
+                "live_admin_key_revoked",
+                f"Live admin key {label} is authorized on the device but not named in "
+                f"template.admin_nodes; it will be removed.",
+                section="security",
+                field="admin_key",
+            )
+            for label in revoked
+        )
+
     return _AdminKeyPlan(
         desired=desired,
         desired_refs=desired_refs,
         change_admin_keys=sorted(desired) != sorted(live_keys),
         removed=removed,
+        revoked=revoked,
         removed_refs=inputs.removed_admin_key_refs,
         rejected_refs=rejected_refs,
         warnings=tuple(warnings),

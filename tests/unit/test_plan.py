@@ -222,6 +222,89 @@ def test_admin_key_ordering_difference_is_not_drift(make_live, template, make_ad
     assert plan.key_plan.change_admin_keys is False
 
 
+# ---------------------------------------------------------------------------
+# Live admin keys absent from a non-empty template.admin_nodes (revocation).
+# ---------------------------------------------------------------------------
+
+
+def test_live_admin_key_absent_from_template_is_revoked_with_warning(
+    make_live, template, make_admin_key, keypair_factory
+) -> None:
+    admin1 = make_admin_key("ADMIN1")
+    friend = keypair_factory()
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(admin_keys=(admin1.public, friend.public)))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin1,),
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.revoked_admin_fingerprints == ("live-admin[1]",)
+    assert any(w.code == "live_admin_key_revoked" for w in plan.warnings)
+    assert (
+        "security.admin_key: revoke [live-admin[1]] (not in template.admin_nodes)"
+        in plan.describe()
+    )
+    document = json.loads(json.dumps(plan.to_json_dict()))
+    assert document["key_plan"]["revoked_admin_fingerprints"] == ["live-admin[1]"]
+
+
+def test_live_admin_key_named_in_template_is_not_revoked(
+    make_live, template, make_admin_key
+) -> None:
+    admin1 = make_admin_key("ADMIN1")
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(admin_keys=(admin1.public,)))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin1,),
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.revoked_admin_fingerprints == ()
+    assert not any(w.code == "live_admin_key_revoked" for w in plan.warnings)
+
+
+def test_weak_key_removal_does_not_also_count_as_revoked(
+    make_live, template, make_admin_key, keypair_factory
+) -> None:
+    admin1 = make_admin_key("ADMIN1")
+    weak = keypair_factory()
+    other = keypair_factory()
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(admin_keys=(weak.public, other.public)))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin1,),
+        rejected_admin_keys=frozenset({weak.public}),
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.removed_admin_fingerprints == ("live-admin[0]",)
+    assert plan.key_plan.revoked_admin_fingerprints == ("live-admin[1]",)
+
+
+def test_empty_admin_nodes_never_revokes_live_keys(make_live, template, keypair_factory) -> None:
+    kp1, kp2 = keypair_factory(), keypair_factory()
+    live = make_live(template, security=make_security(admin_keys=(kp1.public, kp2.public)))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.revoked_admin_fingerprints == ()
+    assert not any(w.code == "live_admin_key_revoked" for w in plan.warnings)
+    assert set(plan.key_plan.desired_admin_keys) == {kp1.public, kp2.public}
+
+
 def test_rejected_admin_key_removed_with_positional_label(
     make_live, template, keypair_factory
 ) -> None:

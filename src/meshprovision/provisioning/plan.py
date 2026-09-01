@@ -546,6 +546,9 @@ class ChangePlan:
         if self.key_plan.removed_admin_fingerprints:
             removed = ", ".join(self.key_plan.removed_admin_fingerprints)
             lines.append(f"security.admin_key: remove [{removed}] (weak-key audit)")
+        if self.key_plan.revoked_admin_fingerprints:
+            revoked = ", ".join(self.key_plan.revoked_admin_fingerprints)
+            lines.append(f"security.admin_key: revoke [{revoked}] (not in template.admin_nodes)")
         # Deliberately its own top-level guard, not nested under change_admin_keys:
         # when every named admin key is refused and none was live, desired and live
         # are both empty, so change_admin_keys is False in exactly the case the
@@ -612,6 +615,7 @@ class ChangePlan:
                 "admin_key_count": len(self.key_plan.desired_admin_keys),
                 "desired_admin_key_refs": list(self.key_plan.desired_admin_key_refs),
                 "removed_admin_fingerprints": list(self.key_plan.removed_admin_fingerprints),
+                "revoked_admin_fingerprints": list(self.key_plan.revoked_admin_fingerprints),
                 "removed_admin_key_refs": list(self.key_plan.removed_admin_key_refs),
                 "rejected_admin_key_refs": list(self.key_plan.rejected_admin_key_refs),
             },
@@ -1194,6 +1198,7 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         desired_admin_keys=admin_plan.desired,
         desired_admin_key_refs=admin_plan.desired_refs,
         removed_admin_fingerprints=admin_plan.removed,
+        revoked_admin_fingerprints=admin_plan.revoked,
         removed_admin_key_refs=admin_plan.removed_refs,
         rejected_admin_key_refs=admin_plan.rejected_refs,
     )
