@@ -1097,7 +1097,9 @@ def persist_result(
         hint = (
             "Fix the write problem (free space, permissions) and re-run "
             "`mesh provision` for this node: the next run re-reads the device's "
-            "live configuration and rewrites the row."
+            "live configuration and rewrites the row. Because that row was never "
+            "saved, a node `mesh adopt` first recorded is still marked observed -- "
+            "pass --enroll again on the re-run."
         )
         if keypair is not None:
             hint = (

@@ -725,3 +725,4 @@ def test_persist_result_omits_the_keypair_hint_when_no_key_was_generated(
 
     assert "--force-regenerate-key" not in excinfo.value.user_message
     assert "re-run `mesh provision`" in excinfo.value.user_message
+    assert "--enroll" in excinfo.value.user_message
