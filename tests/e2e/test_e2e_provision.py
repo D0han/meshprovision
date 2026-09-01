@@ -18,6 +18,7 @@ from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType
+from meshprovision.errors import ExitCode
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -97,6 +98,32 @@ def test_factory_provisioning_end_to_end(
     assert by_ref["deadbe01_priv"].material() == private_key
 
     _assert_no_secrets(result.stdout)
+    _assert_no_secrets(result.stderr)
+
+
+def test_provision_reports_a_failed_database_save_as_divergence(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    def _raise(*args: object, **kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(ods, "write_database", _raise)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.DB)
+    assert "written and verified on the device" in result.stderr
+    assert "disagree" in result.stderr
+
+    assert iface.localNode.localConfig.lora.region == 3  # EU_868
+    assert iface.localNode.written_sections[-1] == "security"
+
+    monkeypatch.undo()
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert loaded.nodes == ()
+
     _assert_no_secrets(result.stderr)
 
 

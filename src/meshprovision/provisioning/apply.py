@@ -49,6 +49,7 @@ from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.schema import BLE_PIN_LENGTH
 from meshprovision.errors import (
+    AtomicWriteError,
     ConnectionBackendError,
     ConnectionFailedError,
     DetectionError,
@@ -1057,7 +1058,21 @@ def persist_result(
 
     Returns:
         ``True`` if the database was updated and saved; ``False`` if the
-        outcome was in an uncertain state and nothing was written.
+        outcome was in an uncertain state and nothing was written. The
+        two failure modes are deliberately different shapes: an uncertain
+        outcome is a *refusal* the caller renders (see
+        ``cli/provision.py``'s "UNCERTAIN state" message), while a failed
+        save is an *error*, because by then the device has already
+        changed and the database has not.
+
+    Raises:
+        AtomicWriteError: If saving the database fails after the device
+            write was already confirmed. Raised in place of the
+            underlying filesystem error -- including a bare ``OSError``
+            from serializing into the temp file, which ``atomic_write``
+            does not itself wrap -- so the operator is told that the
+            device and the database now disagree for this node, rather
+            than only that a file could not be written.
     """
     del admin_key_refs
     if not outcome.may_update_database or outcome.record is None:
@@ -1075,5 +1090,26 @@ def persist_result(
         keys.upsert(private_record)
 
     nodes.upsert(outcome.record, now=now)
-    nodes.db.save()
+    try:
+        nodes.db.save()
+    except (AtomicWriteError, OSError) as exc:
+        hint = (
+            "Fix the write problem (free space, permissions) and re-run "
+            "`mesh provision` for this node: the next run re-reads the device's "
+            "live configuration and rewrites the row."
+        )
+        if keypair is not None:
+            hint = (
+                f"{hint} This run also generated a new node keypair that was never "
+                "recorded, and a later run will not adopt a device key the database "
+                "has never seen -- pass --force-regenerate-key on the re-run to put "
+                "a recorded key back on the device."
+            )
+        raise AtomicWriteError(
+            f"Node {outcome.node_id.display} was written and verified on the "
+            f"device, but the database could not be saved ({exc}); the device and "
+            "the database now disagree for this node.",
+            path=str(nodes.db.path),
+            hint=hint,
+        ) from exc
     return True
