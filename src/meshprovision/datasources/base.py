@@ -60,7 +60,9 @@ class DataSource(Protocol):
         """Return this source's short name (for example ``"loranet"``)."""
         ...
 
-    def fetch_nodes(self, ids: Collection[NodeId]) -> dict[NodeId, NodeObservation]:
+    def fetch_nodes(
+        self, ids: Collection[NodeId], *, force_refresh: bool | None = None
+    ) -> dict[NodeId, NodeObservation]:
         """Fetch normalized observations for the given node ids.
 
         Args:
@@ -68,6 +70,8 @@ class DataSource(Protocol):
                 efficiently than one request per id where its API allows
                 it (loranet fetches one bulk dump); a source that must
                 query per node (lorastats) issues one request per id.
+            force_refresh: When true, bypasses a cached response for this
+                fetch without disabling the cache for later calls.
 
         Returns:
             A mapping from each requested id that was found to its

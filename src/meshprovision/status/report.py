@@ -316,11 +316,7 @@ def collect_observations(
     failures: list[SourceFailure] = []
     for source in sources:
         try:
-            # The `DataSource` protocol does not declare `force_refresh` (it
-            # is an extension both concrete sources -- LoranetSource and
-            # LorastatsSource -- share), so this call is validated at
-            # runtime rather than by the protocol's static signature.
-            fetched = source.fetch_nodes(ids, force_refresh=force_refresh)  # type: ignore[call-arg]
+            fetched = source.fetch_nodes(ids, force_refresh=force_refresh)
         except DataSourceError as exc:
             failures.append(SourceFailure(source=source.name, message=exc.message, hint=exc.hint))
             _logger.warning("%s data source failed: %s", source.name, exc.message)
