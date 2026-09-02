@@ -5,12 +5,14 @@ from __future__ import annotations
 import base64
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 
 from meshprovision.db import ods
+from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import ExitCode
@@ -19,6 +21,7 @@ from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import respx
     from click.testing import CliRunner
 
     from meshprovision.crypto.keys import KeyPair
@@ -145,6 +148,101 @@ def test_unregistered_admin_key_show_admin_keys_prints_import_command(
     assert base64.b64encode(admin_kp.public).decode("ascii") in result.stderr
 
 
+def test_adopt_recognizes_a_pre_imported_friends_admin_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    friend_kp = keypair_factory()
+    import_result = invoke(
+        runner,
+        ["admin", "import", f"FRIEND={base64.b64encode(friend_kp.public).decode()}"],
+        env,
+    )
+    assert import_result.exit_code == 0
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(friend_kp.public)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert document["admin_keys"][0]["refs"] == ["FRIEND_pub"]
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert NodeRecord.from_row(loaded.nodes[0]).authorized_admin_keys == ("FRIEND_pub",)
+
+
+def test_adopt_discover_then_import_then_reconcile_a_friends_admin_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    friend_kp = keypair_factory()
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(friend_kp.public)
+
+    first = invoke(
+        runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json", "--show-admin-keys"], env
+    )
+    assert first.exit_code == 0
+    first_doc = json.loads(first.stdout)
+    assert first_doc["admin_keys"][0]["refs"] == []
+    revealed_b64 = first_doc["admin_keys"][0]["material"]
+    assert base64.b64decode(revealed_b64) == friend_kp.public
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert NodeRecord.from_row(loaded.nodes[0]).authorized_admin_keys == ()
+
+    import_result = invoke(runner, ["admin", "import", f"FRIEND={revealed_b64}"], env)
+    assert import_result.exit_code == 0
+
+    bus.use(iface)
+    second = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+    assert second.exit_code == 0
+    assert json.loads(second.stdout)["admin_keys"][0]["refs"] == ["FRIEND_pub"]
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert NodeRecord.from_row(loaded.nodes[0]).authorized_admin_keys == ("FRIEND_pub",)
+
+
+def test_adopt_zero_admin_keys_is_clean(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    bus.use(FakeMeshInterface("deadbe01", short_name="MT01", long_name="Meshtastic MT01"))
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert document["admin_keys"] == []
+    assert document["warnings"] == []
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert NodeRecord.from_row(loaded.nodes[0]).authorized_admin_keys == ()
+
+
+def test_adopt_single_unregistered_admin_key_reports_one_present_zero_recognized(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    stray_kp = keypair_factory()
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(stray_kp.public)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert len(document["admin_keys"]) == 1
+    assert document["admin_keys"][0]["refs"] == []
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert NodeRecord.from_row(loaded.nodes[0]).authorized_admin_keys == ()
+
+
 def test_adopt_then_enroll_round_trip(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:
@@ -212,3 +310,137 @@ def test_declining_the_adopt_prompt_writes_nothing(
     assert "Aborted." in result.stderr
     assert iface.localNode.written_sections == []
     assert db_fingerprint(db_path) == before
+
+
+@dataclass(frozen=True)
+class _FleetSpec:
+    node_id: str
+    short_name: str
+    long_name: str
+    firmware: str
+    admin_key: str | None
+    fits_pattern: bool
+
+
+_FLEET_SPECS: tuple[_FleetSpec, ...] = (
+    _FleetSpec("10000001", "MT01", "Meshtastic MT01", "2.7.11", None, True),
+    _FleetSpec("10000002", "MT02", "Meshtastic MT02", "2.7.11", "a", True),
+    _FleetSpec("10000003", "RTR3", "East Ridge Repeater", "2.7.11", "a", False),
+    _FleetSpec("10000004", "MT04", "Meshtastic MT04", "2.4.0", None, True),
+    _FleetSpec("10000005", "GW05", "Garage Gateway", "2.5.0", "b", False),
+    _FleetSpec("10000006", "MT06", "Meshtastic MT06", "2.6.10", "b", True),
+    _FleetSpec("20000abc", "HM", "", "2.6.11", None, False),
+    _FleetSpec("20000def", "MT08", "Meshtastic MT08", "2.7.5", "a", True),
+    _FleetSpec("30001111", "NODE9", "Backyard Sensor Node", "2.3.11", "c", False),
+    _FleetSpec("30002222", "MT10", "Meshtastic MT10", "2.7.11", "a", True),
+    _FleetSpec("4a5b6c7d", "EDGE", "Edge Case Node", "2.6.9", None, False),
+    _FleetSpec("deadffff", "MT12", "Meshtastic MT12", "2.7.11", None, True),
+)
+
+
+def test_fleet_adopt_heterogeneous_batch(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    kp_a = keypair_factory()
+    kp_b = keypair_factory()
+    kp_c = keypair_factory()
+    key_lookup = {"a": kp_a.public, "b": kp_b.public, "c": kp_c.public}
+
+    pub_a, priv_a = KeyRecord.for_keypair("FRIENDA", kp_a)
+    seed_db(nodes=[], keys=[pub_a, priv_a])
+
+    fleet_results: dict[str, dict[str, object]] = {}
+    for spec in _FLEET_SPECS:
+        iface = FakeMeshInterface(
+            spec.node_id,
+            short_name=spec.short_name,
+            long_name=spec.long_name,
+            firmware_version=spec.firmware,
+        )
+        if spec.admin_key is not None:
+            iface.localNode.localConfig.security.admin_key.append(key_lookup[spec.admin_key])
+        bus.use(iface)
+        result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+        assert result.exit_code == 0
+        fleet_results[spec.node_id] = json.loads(result.stdout)
+
+    for spec in _FLEET_SPECS:
+        assert fleet_results[spec.node_id]["node_id"] == spec.node_id
+        assert fleet_results[spec.node_id]["existing_management"] is None
+
+    for spec in _FLEET_SPECS:
+        has_warning = any(
+            "does not match the configured pattern" in w
+            for w in fleet_results[spec.node_id]["warnings"]
+        )
+        assert has_warning == (not spec.fits_pattern)
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = {row["node_id"]: NodeRecord.from_row(row) for row in loaded.nodes}
+    assert set(nodes) == {spec.node_id for spec in _FLEET_SPECS}
+    assert len(nodes) == len(_FLEET_SPECS)
+    assert all(n.management is ManagementMode.OBSERVED for n in nodes.values())
+    for spec in _FLEET_SPECS:
+        assert nodes[spec.node_id].short_name == spec.short_name
+        assert nodes[spec.node_id].long_name == spec.long_name
+        assert nodes[spec.node_id].firmware_version == spec.firmware
+
+    for spec in _FLEET_SPECS:
+        if spec.admin_key == "a":
+            assert nodes[spec.node_id].authorized_admin_keys == ("FRIENDA_pub",)
+        else:
+            assert nodes[spec.node_id].authorized_admin_keys == ()
+
+    verify_result = invoke(runner, ["db", "verify", "--json"], env)
+    verify_doc = json.loads(verify_result.stdout)
+    assert verify_result.exit_code == 0, verify_doc["problems"]
+    assert verify_doc["node_count"] == 12
+    assert verify_doc["key_count"] == 2
+    assert verify_doc["problems"] == []
+
+    before = db_fingerprint(Path(env["MESHPROVISION_DB_PATH"]))
+    with mock_sources(nodes={}):
+        status_result = invoke(runner, ["status", "--json"], env)
+    assert status_result.exit_code == 0
+    assert db_fingerprint(Path(env["MESHPROVISION_DB_PATH"])) == before
+    assert len(json.loads(status_result.stdout)["nodes"]) == 12
+
+    assert fleet_results["10000005"]["firmware_vulnerable"] is True
+    assert fleet_results["10000006"]["firmware_vulnerable"] is True
+    assert fleet_results["10000001"]["firmware_vulnerable"] is False
+    assert fleet_results["10000004"]["firmware_vulnerable"] is False
+
+
+def test_adopt_batch_flags_only_the_vulnerable_firmware_nodes(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    specs = [
+        ("aaaa0001", "2.4.9"),
+        ("bbbb0002", "2.5.0"),
+        ("cccc0003", "2.6.10"),
+        ("dddd0004", "2.6.11"),
+        ("eeee0005", "2.7.11"),
+    ]
+    reports: dict[str, dict[str, object]] = {}
+    for node_id, firmware in specs:
+        bus.use(FakeMeshInterface(node_id, firmware_version=firmware))
+        result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+        assert result.exit_code == 0
+        reports[node_id] = json.loads(result.stdout)
+
+    assert reports["aaaa0001"]["firmware_vulnerable"] is False
+    assert reports["bbbb0002"]["firmware_vulnerable"] is True
+    assert reports["cccc0003"]["firmware_vulnerable"] is True
+    assert reports["dddd0004"]["firmware_vulnerable"] is False
+    assert reports["eeee0005"]["firmware_vulnerable"] is False
+    assert reports["aaaa0001"]["firmware_vulnerable"] != reports["bbbb0002"]["firmware_vulnerable"]
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = {row["node_id"]: NodeRecord.from_row(row) for row in loaded.nodes}
+    assert set(nodes) == {n for n, _ in specs}
+    assert all(n.management is ManagementMode.OBSERVED for n in nodes.values())
