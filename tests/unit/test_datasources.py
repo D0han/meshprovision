@@ -375,6 +375,50 @@ def test_loranet_seen_by_derives_neighbor_count_and_last_seen(tmp_path: Path) ->
 
 
 @respx.mock
+def test_loranet_last_seen_prefers_the_most_recent_of_all_three_activity_signals(
+    tmp_path: Path,
+) -> None:
+    """Regression test: last_seen must reflect ALL of a node's activity signals.
+
+    last_seen is documented as "the node's most recent activity," not
+    "the most recent seenBy relay" -- a device-metrics or map report is
+    just as much activity, and ignoring them could report a node
+    STALE/OFFLINE minutes after it was genuinely active.
+    """
+    nid = NodeId.from_hex("deadbe01")
+    payload = {
+        nid.decimal: {
+            "seenBy": {"gw1": 1_700_000_000},  # oldest
+            "lastMapReport": 1_700_000_500,  # middle
+            "lastDeviceMetrics": 1_700_000_900,  # most recent -- must win
+        }
+    }
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_all()
+    obs = result[nid]
+    assert obs.last_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
+    assert obs.last_device_metrics == datetime.fromtimestamp(1_700_000_900, tz=UTC)
+    assert obs.last_map_report == datetime.fromtimestamp(1_700_000_500, tz=UTC)
+
+
+@respx.mock
+def test_loranet_last_seen_falls_back_to_device_metrics_with_no_seen_by(tmp_path: Path) -> None:
+    nid = NodeId.from_hex("deadbe01")
+    payload = {nid.decimal: {"lastDeviceMetrics": 1_700_000_900}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_all()
+    obs = result[nid]
+    assert obs.neighbor_count is None
+    assert obs.last_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
+
+
+@respx.mock
 def test_loranet_malformed_entry_skipped_not_fatal(tmp_path: Path) -> None:
     good_nid = NodeId.from_hex("deadbe01")
     payload = {

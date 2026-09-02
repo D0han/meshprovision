@@ -318,7 +318,21 @@ def parse_node(
         latitude = None
         longitude = None
 
-    neighbor_count, seen_by, last_seen = _parse_seen_by(payload.get("seenBy"))
+    neighbor_count, seen_by, seen_by_last_seen = _parse_seen_by(payload.get("seenBy"))
+    last_device_metrics = parse_epoch(payload.get("lastDeviceMetrics"))
+    last_map_report = parse_epoch(payload.get("lastMapReport"))
+    # last_seen is documented as "the node's most recent activity," not
+    # "the most recent seenBy relay" -- a device-metrics or map report is
+    # just as much activity as being relayed by an MQTT gateway topic, and
+    # ignoring them can report a node STALE/OFFLINE minutes after it was
+    # genuinely active. last_boot is deliberately excluded: it's a
+    # different signal (when the node last rebooted, not when it was last
+    # seen) and lorastats' own last_boot is never folded into its last_seen
+    # either.
+    last_seen = max(
+        (ts for ts in (seen_by_last_seen, last_device_metrics, last_map_report) if ts is not None),
+        default=None,
+    )
 
     raw_hw_model = payload.get("hwModel")
     raw_role = payload.get("role")
@@ -351,6 +365,6 @@ def parse_node(
         neighbor_count=neighbor_count,
         seen_by=seen_by,
         last_seen=last_seen,
-        last_device_metrics=parse_epoch(payload.get("lastDeviceMetrics")),
-        last_map_report=parse_epoch(payload.get("lastMapReport")),
+        last_device_metrics=last_device_metrics,
+        last_map_report=last_map_report,
     )
