@@ -44,6 +44,7 @@ from meshprovision import enums
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import BLE_PIN_LENGTH, ManagementMode
+from meshprovision.errors import KeyMaterialError
 from meshprovision.provisioning import detect, pipeline
 
 if TYPE_CHECKING:
@@ -236,7 +237,9 @@ class AdoptionReport:
         ble_pin: The captured fixed BLE PIN, or ``None``. Never rendered
             by :meth:`describe` or :meth:`to_json_dict`.
         warnings: Non-fatal findings, in a fixed order: name-pattern-fit
-            warnings, then an unmappable-region warning (if any), then an
+            warnings, then one weak-key-audit warning per flagged live
+            admin key (device order), then a firmware-version warning (if
+            any), then an unmappable-region warning (if any), then an
             unmappable-role warning (if any).
     """
 
@@ -357,11 +360,8 @@ def build_adoption_report(
             :meth:`~meshprovision.db.keys.KeyRepository.public_key_map`.
         template: The provisioning template supplying the name patterns
             this device's live names are checked against.
-        known_bad: The loaded weak-key blocklist. Accepted for
-            signature-compatibility with the rest of this package and
-            reserved for a future per-admin-key weak-key audit during
-            adopt; **unused** by this batch's logic, which only wires up
-            the firmware-window and name-pattern checks.
+        known_bad: The loaded weak-key blocklist, checked against every
+            live admin key (see :attr:`AdoptionReport.warnings`).
 
     Returns:
         The constructed :class:`AdoptionReport`. ``region``/``role`` are
@@ -369,14 +369,24 @@ def build_adoption_report(
         unmappable value is never silently defaulted, only warned about
         via :attr:`AdoptionReport.warnings`.
     """
-    del known_bad
-
     state = detect.classify(live, db_entry=existing).state
     admin_keys = classify_live_admin_keys(live, public_keys)
 
     warnings: list[str] = list(
         check_name_pattern_fit(template, short_name=live.short_name, long_name=live.long_name)
     )
+
+    for key in admin_keys:
+        label = key.preferred_ref or key.fingerprint
+        try:
+            audit = weakkeys.audit_public_key(
+                key.material, key_ref=key.preferred_ref, known_bad=known_bad
+            )
+        except KeyMaterialError:
+            warnings.append(f"admin key {label} is malformed key material.")
+            continue
+        if audit.findings:
+            warnings.append(f"admin key {label} failed the weak-key audit: {audit.summary()}")
 
     if not live.firmware_version.strip():
         firmware_vulnerable = False

@@ -276,6 +276,50 @@ def test_build_adoption_report_is_managed_reflected(make_live, template) -> None
     assert report.is_managed is True
 
 
+def test_build_adoption_report_warns_on_weak_live_admin_key(make_live, template) -> None:
+    """Regression test: mesh adopt must actually audit live admin keys.
+
+    known_bad was previously loaded by the caller and threaded all the
+    way into build_adoption_report, then explicitly discarded
+    (`del known_bad`) -- an inventory command that reports firmware
+    vulnerability but says nothing about a structurally broken admin key
+    is an incomplete "should I trust this device" picture.
+    """
+    live = make_live(template, security=make_security(admin_keys=(bytes(32),)))
+
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    assert any("admin key" in w and "weak-key audit" in w for w in report.warnings)
+
+
+def test_build_adoption_report_healthy_live_admin_key_no_warning(
+    make_live, template, keypair_factory
+) -> None:
+    key = keypair_factory().public
+    live = make_live(template, security=make_security(admin_keys=(key,)))
+
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    assert not any("weak-key audit" in w for w in report.warnings)
+
+
+def test_build_adoption_report_warns_on_blocklisted_live_admin_key(
+    make_live, template, keypair_factory
+) -> None:
+    key = keypair_factory().public
+    live = make_live(template, security=make_security(admin_keys=(key,)))
+
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset({key})
+    )
+
+    assert any("admin key" in w and "weak-key audit" in w for w in report.warnings)
+
+
 # ---------------------------------------------------------------------------
 # adopted_record
 # ---------------------------------------------------------------------------
