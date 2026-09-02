@@ -315,7 +315,7 @@ class LockdownDecision:
     """
 
     enable: bool
-    reason: str
+    reason: Literal["template_opt_out", "authorized", "allow_lockdown_not_set"]
     gates: Mapping[str, bool]
 
 

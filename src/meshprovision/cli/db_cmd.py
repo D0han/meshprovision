@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import click
 
@@ -81,7 +81,7 @@ class DbProblem:
     """
 
     kind: DbProblemKind
-    severity: str
+    severity: Literal["critical", "error", "warning"]
     message: str
     sheet: str | None = None
     ref: str | None = None

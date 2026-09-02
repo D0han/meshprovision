@@ -42,7 +42,7 @@ import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from odf import config as odf_config
 from odf import number as odf_number
@@ -210,7 +210,7 @@ class IntegrityWarning:
     column: str
     cached: str = ""
     recomputed: str = ""
-    kind: str = "recompute"
+    kind: Literal["recompute", "coerced_cell"] = "recompute"
 
     def message(self) -> str:
         """Render a human-readable summary of this warning.
