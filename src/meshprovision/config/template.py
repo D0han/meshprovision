@@ -956,13 +956,13 @@ class TemplateConfig(BaseModel):
                     "an alphanumeric).",
                     field="admin_nodes",
                 )
-            if ref.endswith("_pub") or ref.endswith("_priv"):
+            if ref.endswith(("_pub", "_priv", "_psk")):
                 raise TemplateValidationError(
-                    f"admin_nodes entry {ref!r} must not end in '_pub' or '_priv'.",
+                    f"admin_nodes entry {ref!r} must not end in '_pub', '_priv', or '_psk'.",
                     field="admin_nodes",
                     hint=(
                         "admin_nodes holds node references; meshprovision appends "
-                        "_pub/_priv itself when it looks up the Keys sheet."
+                        "these suffixes itself when it looks up the Keys sheet."
                     ),
                 )
 

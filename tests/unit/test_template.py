@@ -206,7 +206,7 @@ def test_four_admin_nodes_raises_capacity_error() -> None:
     assert exc_info.value.limit == 3
 
 
-@pytest.mark.parametrize("ref", ["A1_pub", "A1_priv"])
+@pytest.mark.parametrize("ref", ["A1_pub", "A1_priv", "A1_psk"])
 def test_admin_nodes_entry_with_reserved_suffix_raises(ref: str) -> None:
     with pytest.raises(TemplateValidationError):
         TemplateConfig(admin_nodes=[ref])
