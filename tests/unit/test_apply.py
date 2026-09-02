@@ -33,7 +33,7 @@ from meshprovision.provisioning.apply import (
     verify_plan,
     write_section,
 )
-from meshprovision.provisioning.plan import PlanInputs, SectionChange, build_plan
+from meshprovision.provisioning.plan import ChangePlan, PlanInputs, SectionChange, build_plan
 from tests.unit.conftest import make_security
 
 pytestmark = pytest.mark.unit
@@ -361,7 +361,7 @@ def test_verify_plan_key_none_device_public_key_confirmed_with_note(make_live) -
     assert "NodeDB cross-check unavailable" in key_result.message
 
 
-def _adopt_device_key_plan(make_live, kp: KeyPair, other_kp: KeyPair):
+def _adopt_device_key_plan(make_live, kp: KeyPair, other_kp: KeyPair) -> ChangePlan:
     """Build a plan whose key_plan.adopt_device_key is True (db key differs from live)."""
     template = _template()
     live = make_live(template, security=make_security(keypair=kp))
@@ -395,11 +395,12 @@ def test_verify_plan_adopt_device_key_confirmed_when_still_present(
 def test_verify_plan_adopt_device_key_unconfirmed_when_key_reverts_across_reboot(
     make_live, keypair_factory
 ) -> None:
-    """Regression test: firmware issue #7449 -- the adopted key must be
+    """Regression test for firmware issue #7449.
 
-    re-verified after this run's writes, not assumed to still be present.
-    An earlier section's write in the same plan can trigger a reboot that
-    silently reverts a key that was never even written this run.
+    The adopted key must be re-verified after this run's writes, not
+    assumed to still be present. An earlier section's write in the same
+    plan can trigger a reboot that silently reverts a key that was never
+    even written this run.
     """
     kp = keypair_factory()
     other_kp = keypair_factory()

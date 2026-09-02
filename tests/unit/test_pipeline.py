@@ -9,10 +9,14 @@ import pytest
 
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.db.keys import KeyRecord, KeyRepository
-from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyType
-from meshprovision.provisioning.pipeline import resolve_admin_keys, resolve_removed_admin_refs
+from meshprovision.provisioning.pipeline import (
+    allocate_names,
+    resolve_admin_keys,
+    resolve_removed_admin_refs,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -32,6 +36,19 @@ def keys(empty_ods: Path) -> KeyRepository:
     db = OdsDatabase(empty_ods)
     db.load()
     return KeyRepository(db)
+
+
+@pytest.fixture
+def nodes(empty_ods: Path) -> NodeRepository:
+    db = OdsDatabase(empty_ods)
+    db.load()
+    return NodeRepository(db)
+
+
+def _naming_template() -> TemplateConfig:
+    return load_template_text(
+        'short_name_pattern: "MT{n}{n}"\nlong_name_pattern: "Meshtastic {n}{n}"\n'
+    )
 
 
 def _template_with_admin(*refs: str) -> TemplateConfig:
@@ -109,3 +126,39 @@ def test_resolve_removed_admin_refs(
     record: NodeRecord | None, rejected: frozenset[bytes], expected: tuple[str, ...]
 ) -> None:
     assert resolve_removed_admin_refs(record, _MAP, rejected) == expected
+
+
+def test_allocate_names_returns_none_when_existing_and_not_renaming(nodes: NodeRepository) -> None:
+    existing = NodeRecord(node_id="deadbe01", short_name="MT00", long_name="Meshtastic 00")
+    assert allocate_names(nodes, _naming_template(), existing=existing, rename=False) == (
+        None,
+        None,
+    )
+
+
+def test_allocate_names_picks_same_index_for_short_and_long_when_free(
+    nodes: NodeRepository,
+) -> None:
+    short, long = allocate_names(nodes, _naming_template(), existing=None, rename=False)
+    assert short == "MT00"
+    assert long == "Meshtastic 00"
+
+
+def test_allocate_names_avoids_long_name_collision_when_namespaces_diverge(
+    nodes: NodeRepository,
+) -> None:
+    """Regression test: the short and long namespaces are searched independently.
+
+    A node whose long_name was recorded out of lockstep with the current
+    pattern's index scheme (older template, hand-edited row, imported
+    legacy record) must not cause a fresh allocation to hand out a
+    long_name that's already in use, even though the short_name at that
+    same index is free.
+    """
+    nodes.upsert(NodeRecord(node_id="00000001", short_name="ZZ99", long_name="Meshtastic 00"))
+
+    short, long = allocate_names(nodes, _naming_template(), existing=None, rename=False)
+
+    assert short == "MT00"
+    assert long != "Meshtastic 00"
+    assert long.casefold() not in {n.casefold() for n in nodes.used_long_names()}

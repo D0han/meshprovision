@@ -273,7 +273,14 @@ def allocate_names(
         then keeps the database's (or, failing that, the device's)
         current names. Otherwise a freshly allocated
         ``(short_name, long_name)`` pair, using the same namespace index
-        for both when the two patterns' slot counts allow it.
+        for both when the two patterns' slot counts allow it and the
+        rendered long name isn't already taken by another node's recorded
+        ``long_name`` -- the short and long namespaces are checked
+        independently, so a node whose names fell out of lockstep with
+        the current pattern's index scheme (an older template, a
+        hand-edited row, an imported legacy record) can leave a lower
+        index's long name already in use even though its short name at
+        that same index is free.
 
     Raises:
         NamespaceExhaustedError: If the short-name pattern's namespace
@@ -291,4 +298,8 @@ def allocate_names(
         long = long_spec.render(index)
     except NamespaceExhaustedError:
         long = nodes.next_free_name(long_spec, is_long=True)[1]
+    else:
+        used_long = {name.casefold() for name in nodes.used_long_names()}
+        if long.casefold() in used_long:
+            long = nodes.next_free_name(long_spec, is_long=True, start=index)[1]
     return short, long
