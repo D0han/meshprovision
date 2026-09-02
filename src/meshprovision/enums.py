@@ -43,16 +43,10 @@ __all__ = [
     "EnumSource",
     "EnumTable",
     "enum_tables",
-    "hw_model_name",
     "hw_model_table",
-    "hw_model_value",
     "normalize_enum_name",
-    "region_name",
     "region_table",
-    "region_value",
-    "role_name",
     "role_table",
-    "role_value",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -556,93 +550,3 @@ def enum_tables() -> Mapping[str, EnumTable]:
             "region": region_table(),
         }
     )
-
-
-def role_name(value: int | str) -> str:
-    """Resolve a Role value or string to its canonical name.
-
-    Args:
-        value: A numeric role value, digit string, or name string.
-
-    Returns:
-        The canonical role name.
-
-    Raises:
-        EnumMappingError: If ``value`` cannot be resolved.
-    """
-    return role_table().to_name(value)
-
-
-def role_value(name: str | int) -> int:
-    """Resolve a Role name or value to its numeric value.
-
-    Args:
-        name: A role name string, or a numeric value already.
-
-    Returns:
-        The numeric role value.
-
-    Raises:
-        EnumMappingError: If ``name`` cannot be resolved.
-    """
-    return role_table().to_value(name)
-
-
-def hw_model_name(value: int | str) -> str:
-    """Resolve a HardwareModel value or string to its canonical name.
-
-    Args:
-        value: A numeric hw_model value, digit string, or name string.
-
-    Returns:
-        The canonical hardware model name.
-
-    Raises:
-        EnumMappingError: If ``value`` cannot be resolved.
-    """
-    return hw_model_table().to_name(value)
-
-
-def hw_model_value(name: str | int) -> int:
-    """Resolve a HardwareModel name or value to its numeric value.
-
-    Args:
-        name: A hardware model name string, or a numeric value already.
-
-    Returns:
-        The numeric hw_model value.
-
-    Raises:
-        EnumMappingError: If ``name`` cannot be resolved.
-    """
-    return hw_model_table().to_value(name)
-
-
-def region_name(value: int | str) -> str:
-    """Resolve a RegionCode value or string to its canonical name.
-
-    Args:
-        value: A numeric region value, digit string, or name string.
-
-    Returns:
-        The canonical region name.
-
-    Raises:
-        EnumMappingError: If ``value`` cannot be resolved.
-    """
-    return region_table().to_name(value)
-
-
-def region_value(name: str | int) -> int:
-    """Resolve a RegionCode name or value to its numeric value.
-
-    Args:
-        name: A region name string, or a numeric value already.
-
-    Returns:
-        The numeric region value.
-
-    Raises:
-        EnumMappingError: If ``name`` cannot be resolved.
-    """
-    return region_table().to_value(name)

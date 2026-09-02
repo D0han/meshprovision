@@ -381,51 +381,6 @@ class KeyRepository:
         """
         return self.get(key_ref).material()
 
-    def public_key(self, key_ref: str) -> bytes:
-        """Resolve a ``key_ref`` to raw public-key bytes.
-
-        Args:
-            key_ref: The ``key_ref`` to resolve.
-
-        Returns:
-            The decoded 32 raw public-key bytes.
-
-        Raises:
-            KeyNotFoundError: If no key with this reference exists.
-            KeyMaterialError: If the referenced row is not an
-                :attr:`~meshprovision.db.schema.KeyType.ADMIN_PUBLIC` row.
-        """
-        record = self.get(key_ref)
-        if record.key_type is not KeyType.ADMIN_PUBLIC:
-            raise KeyMaterialError(
-                f"{key_ref} is not a public key",
-                reason=f"key_type is {record.key_type.value!r}, expected 'admin_public'",
-            )
-        return record.material()
-
-    def private_key(self, key_ref: str) -> SecretBytes:
-        """Resolve a ``key_ref`` to private-key material.
-
-        Args:
-            key_ref: The ``key_ref`` to resolve.
-
-        Returns:
-            The private key, wrapped as :class:`SecretBytes`.
-
-        Raises:
-            KeyNotFoundError: If no key with this reference exists.
-            KeyMaterialError: If the referenced row is not an
-                :attr:`~meshprovision.db.schema.KeyType.ADMIN_PRIVATE`
-                row.
-        """
-        record = self.get(key_ref)
-        if record.key_type is not KeyType.ADMIN_PRIVATE:
-            raise KeyMaterialError(
-                f"{key_ref} is not a private key",
-                reason=f"key_type is {record.key_type.value!r}, expected 'admin_private'",
-            )
-        return record.secret()
-
     def for_owner(self, owner: str) -> tuple[KeyRecord, ...]:
         """Return every key row belonging to one owner.
 

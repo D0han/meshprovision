@@ -17,7 +17,6 @@ from meshprovision.errors import (
     AdminRefUnresolvedError,
     DbIntegrityError,
     EnumMappingError,
-    KeyMaterialError,
     KeyNotFoundError,
     NamespaceExhaustedError,
     NodeNotFoundError,
@@ -246,44 +245,6 @@ def test_node_repo_get_missing_raises(nodes: NodeRepository) -> None:
 def test_key_repo_get_missing_raises(keys: KeyRepository) -> None:
     with pytest.raises(KeyNotFoundError):
         keys.get("deadbe01_pub")
-
-
-def test_key_repo_public_key_on_private_row_raises(
-    keys: KeyRepository, keypair, db: OdsDatabase
-) -> None:
-    _pub, priv = KeyRecord.for_keypair("deadbe01", keypair)
-    keys.upsert(priv)
-    db.save()
-    with pytest.raises(KeyMaterialError):
-        keys.public_key(priv.key_ref)
-
-
-def test_key_repo_private_key_on_public_row_raises(
-    keys: KeyRepository, keypair, db: OdsDatabase
-) -> None:
-    pub, _ = KeyRecord.for_keypair("deadbe01", keypair)
-    keys.upsert(pub)
-    db.save()
-    with pytest.raises(KeyMaterialError):
-        keys.private_key(pub.key_ref)
-
-
-def test_key_repo_public_key_returns_material(
-    keys: KeyRepository, keypair, db: OdsDatabase
-) -> None:
-    pub, _ = KeyRecord.for_keypair("deadbe01", keypair)
-    keys.upsert(pub)
-    db.save()
-    assert keys.public_key(pub.key_ref) == keypair.public
-
-
-def test_key_repo_private_key_returns_material(
-    keys: KeyRepository, keypair, db: OdsDatabase
-) -> None:
-    _, priv = KeyRecord.for_keypair("deadbe01", keypair)
-    keys.upsert(priv)
-    db.save()
-    assert keys.private_key(priv.key_ref).reveal() == keypair.private.reveal()
 
 
 def test_resolve_admin_refs_unknown_ref_hint_mentions_both_bootstrap_commands(
