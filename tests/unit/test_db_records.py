@@ -63,6 +63,39 @@ def test_from_row_missing_management_defaults_to_template() -> None:
     assert NodeRecord.from_row(row).management is ManagementMode.TEMPLATE
 
 
+def test_from_row_empty_role_region_stays_empty_for_an_observed_row() -> None:
+    """Regression test: an OBSERVED row's blank role/region must round-trip blank.
+
+    Defaulting an empty cell to CLIENT/EU_868 on every reload would
+    silently re-fabricate the exact "never guess" state
+    provisioning.adopt.adopted_record() takes care not to write in the
+    first place.
+    """
+    record = NodeRecord(node_id="deadbe01", management=ManagementMode.OBSERVED, role="", region="")
+    row = record.to_row()
+    assert row["role"] == ""
+    assert row["region"] == ""
+
+    reloaded = NodeRecord.from_row(row)
+    assert reloaded.role == ""
+    assert reloaded.region == ""
+
+
+def test_from_row_empty_role_region_defaults_for_a_template_row() -> None:
+    """A TEMPLATE row's blank role/region cell still safety-nets to defaults.
+
+    build_plan always resolves a real value, so an empty cell here is
+    anomalous, unlike the OBSERVED case above.
+    """
+    row = NodeRecord(node_id="deadbe01").to_row()
+    row["role"] = ""
+    row["region"] = ""
+
+    reloaded = NodeRecord.from_row(row)
+    assert reloaded.role == "CLIENT"
+    assert reloaded.region == "EU_868"
+
+
 def test_to_row_always_recomputes_derived_columns() -> None:
     record = NodeRecord(node_id="deadbe01", hw_model="RAK4631")
     stale = record.with_updates(main_chipset="totally wrong")

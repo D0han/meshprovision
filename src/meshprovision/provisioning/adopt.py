@@ -463,10 +463,20 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
         ``report.existing`` (or a fresh record for ``report.node_id`` when
         ``existing`` is ``None``), with ``management`` set to
         :attr:`~meshprovision.db.schema.ManagementMode.OBSERVED`.
+        On a **re-adopt** (``report.existing`` was not ``None``),
         ``role``/``region`` are only overwritten when
         :attr:`AdoptionReport.role`/:attr:`AdoptionReport.region` are
-        non-empty (i.e. the live value validated) -- otherwise the base
-        record's existing value (or its default) is left untouched.
+        non-empty (i.e. the live value validated) -- otherwise the
+        existing recorded value is left untouched, since an unmapped live
+        value is "no new information," not "clear what we already know."
+        On a **first-time adopt** (``report.existing`` is ``None``),
+        ``role``/``region`` are always set explicitly to
+        :attr:`AdoptionReport.role`/:attr:`AdoptionReport.region` --
+        including the empty string when unmapped -- so an unrecognized
+        live value is recorded as genuinely unknown rather than silently
+        picking up :class:`~meshprovision.db.nodes.NodeRecord`'s
+        template-oriented ``"CLIENT"``/``"EU_868"`` class defaults as if
+        they had been observed.
         ``ble_pin`` is only overwritten when
         :attr:`AdoptionReport.ble_pin` is not ``None``.
     """
@@ -484,9 +494,9 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
         ),
         "management": ManagementMode.OBSERVED,
     }
-    if report.role:
+    if report.role or report.existing is None:
         changes["role"] = report.role
-    if report.region:
+    if report.region or report.existing is None:
         changes["region"] = report.region
     if report.ble_pin is not None:
         changes["ble_pin"] = report.ble_pin

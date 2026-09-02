@@ -116,9 +116,14 @@ class NodeRecord(BaseModel):
             device, so it is last-known state, not a mirror.
         notes: Free-form operator notes.
         role: Device role, canonicalized against the installed ``Role``
-            protobuf enum when non-empty.
+            protobuf enum when non-empty. An empty cell round-trips as
+            empty (genuinely unknown) for an ``OBSERVED`` row, but
+            defaults to :data:`DEFAULT_ROLE` for a ``TEMPLATE`` row --
+            see :meth:`from_row`.
         region: LoRa region, canonicalized against the installed
-            ``RegionCode`` protobuf enum when non-empty.
+            ``RegionCode`` protobuf enum when non-empty. Same
+            ``OBSERVED``-vs-``TEMPLATE`` empty-cell handling as
+            :attr:`role`.
         ble_pin: 6-digit BLE pairing PIN (``bluetooth.fixed_pin``), or
             ``None`` if not yet provisioned. Stored as text so leading
             zeros survive; never logged or displayed.
@@ -343,6 +348,16 @@ class NodeRecord(BaseModel):
         first_added_raw = row.get("first_added_ts", "")
         last_updated_raw = row.get("last_updated_ts", "")
         ble_pin_raw = row.get("ble_pin", "")
+        management = ManagementMode(row.get("management") or ManagementMode.TEMPLATE.value)
+        # An empty role/region cell is anomalous for a TEMPLATE row (build_plan
+        # always resolves a real value from the template) and defaults to the
+        # template's own factory defaults as a safety net. For an OBSERVED row
+        # (mesh adopt) an empty cell is a deliberate, meaningful "unrecognized
+        # live value, never guessed" -- defaulting it here would silently
+        # re-fabricate the exact state adopted_record() takes care not to
+        # write in the first place, every time the row is reloaded.
+        role_default = DEFAULT_ROLE if management is ManagementMode.TEMPLATE else ""
+        region_default = DEFAULT_REGION if management is ManagementMode.TEMPLATE else ""
         return cls(
             node_id=row.get("node_id", ""),
             short_name=row.get("short_name", ""),
@@ -358,10 +373,10 @@ class NodeRecord(BaseModel):
             last_updated_ts=schema.parse_timestamp(last_updated_raw) if last_updated_raw else None,
             authorized_admin_keys=schema.normalize_ref_list(row.get("authorized_admin_keys", "")),
             notes=row.get("notes", ""),
-            role=row.get("role") or DEFAULT_ROLE,
-            region=row.get("region") or DEFAULT_REGION,
+            role=row.get("role") or role_default,
+            region=row.get("region") or region_default,
             ble_pin=SecretStr(ble_pin_raw) if ble_pin_raw else None,
-            management=ManagementMode(row.get("management") or ManagementMode.TEMPLATE.value),
+            management=management,
         )
 
     def with_updates(self, **changes: object) -> NodeRecord:

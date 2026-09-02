@@ -347,6 +347,33 @@ def test_adopted_record_leaves_role_region_untouched_when_unmapped(
     assert record.region == "US"
 
 
+def test_adopted_record_first_time_adopt_with_unmapped_role_region_stays_blank(
+    make_live, template
+) -> None:
+    """Regression test: a first-time adopt must not fabricate CLIENT/EU_868.
+
+    With no existing row, adopted_record() starts from a fresh
+    NodeRecord(), whose class defaults are role="CLIENT"/region="EU_868".
+    When the live role/region is unrecognized (report.role/region == ""),
+    those defaults must not be left in place as if they were observed --
+    the record must end up genuinely blank, matching AdoptionReport's own
+    "never guess" contract.
+    """
+    live = make_live(
+        template, section_overrides={"lora": {"region": "MARS"}, "device": {"role": "SUPERVISOR"}}
+    )
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+    assert report.role == ""
+    assert report.region == ""
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert record.role == ""
+    assert record.region == ""
+
+
 def test_adopted_record_captures_ble_pin(make_live, template) -> None:
     live = make_live(
         template, section_overrides={"bluetooth": {"mode": "FIXED_PIN", "fixed_pin": 42}}
