@@ -180,6 +180,14 @@ class SecretBytes:
         result; only pass it to a destination that is itself trusted with
         the secret (a config write, an encrypted store, ...).
 
+        Unlike :func:`meshprovision.crypto.keys.encode_key`, this does
+        not validate that the wrapped material is exactly
+        ``X25519_KEY_SIZE`` bytes -- :mod:`meshprovision.crypto.keys`
+        imports :class:`SecretBytes` from this module, so delegating
+        here would be circular. Every current caller only ever wraps a
+        32-byte X25519 key, but that is an invariant held by convention
+        across call sites, not enforced by this method itself.
+
         Returns:
             The base64-encoded secret.
         """
