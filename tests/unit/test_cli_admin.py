@@ -10,6 +10,7 @@ from click.testing import CliRunner
 from meshprovision.cli import admin
 from meshprovision.cli.main import cli
 from meshprovision.crypto.weakkeys import AuditResult, WeakKeyCheck, WeakKeyFinding
+from meshprovision.errors import WeakKeySeverity
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -21,13 +22,19 @@ _CLEAN = AuditResult(findings=())
 _WARNING = AuditResult(
     findings=(
         WeakKeyFinding(
-            check=WeakKeyCheck.LOW_ENTROPY, severity="warning", reason="low Hamming weight"
+            check=WeakKeyCheck.LOW_ENTROPY,
+            severity=WeakKeySeverity.WARNING,
+            reason="low Hamming weight",
         ),
     )
 )
 _CRITICAL = AuditResult(
     findings=(
-        WeakKeyFinding(check=WeakKeyCheck.BLOCKLIST, severity="critical", reason="known-bad key"),
+        WeakKeyFinding(
+            check=WeakKeyCheck.BLOCKLIST,
+            severity=WeakKeySeverity.CRITICAL,
+            reason="known-bad key",
+        ),
     )
 )
 

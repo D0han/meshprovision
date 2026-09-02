@@ -68,12 +68,12 @@ __all__ = [
 ]
 
 AUDIT_LABELS: Final[MappingProxyType[WeakKeySeverity, str]] = MappingProxyType(
-    {"critical": "compromised", "warning": "warning"}
+    {WeakKeySeverity.CRITICAL: "compromised", WeakKeySeverity.WARNING: "warning"}
 )
 """Display label for the ``Audit`` column, by highest finding severity."""
 
 AUDIT_STYLES: Final[MappingProxyType[WeakKeySeverity, str]] = MappingProxyType(
-    {"critical": "red", "warning": "yellow"}
+    {WeakKeySeverity.CRITICAL: "red", WeakKeySeverity.WARNING: "yellow"}
 )
 """``rich`` style name applied to an admin's table row, by finding severity."""
 
@@ -537,7 +537,7 @@ def admin_import(
                     f"That public key is already registered as {', '.join(dupes)}.",
                     reason="duplicate public key",
                     key_ref=key_ref,
-                    severity="critical",
+                    severity=WeakKeySeverity.CRITICAL,
                     fingerprint=redact.fingerprint(material),
                     hint="Pass --force if this is a deliberate alias for the same physical node.",
                 )

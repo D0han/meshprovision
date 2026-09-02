@@ -35,6 +35,7 @@ from meshprovision.errors import (
     ConfigError,
     ExitCode,
     KeyMaterialError,
+    WeakKeySeverity,
 )
 from meshprovision.nodeid import NodeId
 
@@ -293,7 +294,9 @@ def verify_database(
             problems.append(
                 DbProblem(
                     kind=DbProblemKind.WEAK_KEY,
-                    severity=finding.severity,
+                    severity=(
+                        "critical" if finding.severity is WeakKeySeverity.CRITICAL else "warning"
+                    ),
                     message=f"{finding.check.value}: {finding.reason}",
                     sheet="Keys",
                     ref=record.key_ref,

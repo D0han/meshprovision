@@ -18,6 +18,7 @@ from meshprovision.errors import (
     NodeIdError,
     ProvisioningError,
     WeakKeyError,
+    WeakKeySeverity,
     WriteVerificationError,
     exit_code_for,
 )
@@ -98,7 +99,7 @@ def test_weak_key_error_attribute_plumbing() -> None:
         reason="all zero",
         node_id="!deadbe01",
         key_ref="deadbe01_pub",
-        severity="warning",
+        severity=WeakKeySeverity.WARNING,
         fingerprint="sha256:ab12",
     )
     assert exc.reason == "all zero"

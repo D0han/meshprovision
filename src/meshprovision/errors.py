@@ -22,8 +22,8 @@ in this module accepts or stores key bytes.
 
 from __future__ import annotations
 
-from enum import IntEnum
-from typing import ClassVar, Final, Literal
+from enum import IntEnum, StrEnum
+from typing import ClassVar, Final
 
 __all__ = [
     "MAX_ADMIN_KEYS",
@@ -96,8 +96,12 @@ class ExitCode(IntEnum):
     INTERRUPTED = 130
 
 
-WeakKeySeverity = Literal["warning", "critical"]
-"""Severity of a weak-key finding: ``"warning"`` or ``"critical"``."""
+class WeakKeySeverity(StrEnum):
+    """Severity of a weak-key finding."""
+
+    WARNING = "warning"
+    CRITICAL = "critical"
+
 
 MAX_ADMIN_KEYS: Final[int] = 3
 """Firmware capacity of ``config.security.admin_key`` (a ``repeated bytes``
@@ -1203,7 +1207,7 @@ class WeakKeyError(CryptoError):
         reason: str,
         node_id: str | None = None,
         key_ref: str | None = None,
-        severity: WeakKeySeverity = "critical",
+        severity: WeakKeySeverity = WeakKeySeverity.CRITICAL,
         fingerprint: str | None = None,
         hint: str | None = None,
     ) -> None:

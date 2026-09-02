@@ -173,7 +173,10 @@ if any(len(point) != keys.X25519_KEY_SIZE for point in SMALL_ORDER_POINTS):
 
 _FIRMWARE_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 
-_SEVERITY_RANK: Final[dict[WeakKeySeverity, int]] = {"critical": 0, "warning": 1}
+_SEVERITY_RANK: Final[dict[WeakKeySeverity, int]] = {
+    WeakKeySeverity.CRITICAL: 0,
+    WeakKeySeverity.WARNING: 1,
+}
 
 _blocklist_cache: dict[tuple[Path, int, int], frozenset[bytes]] = {}
 """Module-private cache of parsed blocklist files, keyed by (path, mtime_ns, size).
@@ -275,7 +278,7 @@ class AuditResult:
         Returns:
             ``True`` if any finding has ``severity == "critical"``.
         """
-        return any(f.severity == "critical" for f in self.findings)
+        return any(f.severity is WeakKeySeverity.CRITICAL for f in self.findings)
 
     @property
     def severity(self) -> WeakKeySeverity | None:
@@ -285,10 +288,10 @@ class AuditResult:
             ``"critical"`` if any finding is critical, else ``"warning"``
             if any finding is a warning, else ``None``.
         """
-        if any(f.severity == "critical" for f in self.findings):
-            return "critical"
-        if any(f.severity == "warning" for f in self.findings):
-            return "warning"
+        if any(f.severity is WeakKeySeverity.CRITICAL for f in self.findings):
+            return WeakKeySeverity.CRITICAL
+        if any(f.severity is WeakKeySeverity.WARNING for f in self.findings):
+            return WeakKeySeverity.WARNING
         return None
 
     def summary(self) -> str:
@@ -312,7 +315,7 @@ class AuditResult:
             WeakKeyError: If :attr:`compromised` is ``True``.
         """
         for f in self.findings:
-            if f.severity == "critical":
+            if f.severity is WeakKeySeverity.CRITICAL:
                 raise f.as_error()
 
 
@@ -667,7 +670,7 @@ def _structural_findings(
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.ALL_ZERO,
-                severity="critical",
+                severity=WeakKeySeverity.CRITICAL,
                 reason=f"{material} key is all-zero",
                 fingerprint=fp,
                 node_id=node_id,
@@ -678,7 +681,7 @@ def _structural_findings(
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.SMALL_ORDER,
-                severity="critical",
+                severity=WeakKeySeverity.CRITICAL,
                 reason=f"{material} key is a degenerate small-order curve point",
                 fingerprint=fp,
                 node_id=node_id,
@@ -689,7 +692,7 @@ def _structural_findings(
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.REPEATED_BYTE,
-                severity="critical",
+                severity=WeakKeySeverity.CRITICAL,
                 reason=f"{material} key consists of a single repeated byte value",
                 fingerprint=fp,
                 node_id=node_id,
@@ -700,7 +703,7 @@ def _structural_findings(
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.MONOTONIC,
-                severity="critical",
+                severity=WeakKeySeverity.CRITICAL,
                 reason=f"{material} key bytes form a monotonic run",
                 fingerprint=fp,
                 node_id=node_id,
@@ -709,7 +712,7 @@ def _structural_findings(
         )
     if is_low_entropy(raw):
         weight = hamming_weight(raw)
-        severity: WeakKeySeverity = "critical" if weight < LOW_HAMMING_MIN else "warning"
+        severity = WeakKeySeverity.CRITICAL if weight < LOW_HAMMING_MIN else WeakKeySeverity.WARNING
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.LOW_ENTROPY,
@@ -763,7 +766,7 @@ def audit_public_key(
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.BLOCKLIST,
-                severity="critical",
+                severity=WeakKeySeverity.CRITICAL,
                 reason="public key matches an entry in the known-bad key blocklist",
                 fingerprint=fp,
                 node_id=node_id,
@@ -837,7 +840,7 @@ def audit_private_key(
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.BLOCKLIST,
-                severity="critical",
+                severity=WeakKeySeverity.CRITICAL,
                 reason="private key matches an entry in the known-bad key blocklist",
                 fingerprint=fp,
                 node_id=node_id,
@@ -858,7 +861,7 @@ def audit_private_key(
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.UNCLAMPED,
-                severity="warning",
+                severity=WeakKeySeverity.WARNING,
                 reason=(
                     "private key is not X25519-clamped; this is normal for some "
                     "OpenSSL-family backends, which can store the unclamped scalar and "
@@ -927,7 +930,7 @@ def audit_keypair(
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.CONSISTENCY,
-                severity="critical",
+                severity=WeakKeySeverity.CRITICAL,
                 reason=(
                     "public key does not match the public key derived from the private "
                     "key (corruption or partial restore; see firmware issue #7449)"
@@ -1029,7 +1032,7 @@ def audit_node(
             findings.append(
                 WeakKeyFinding(
                     check=WeakKeyCheck.FIRMWARE_WINDOW,
-                    severity="warning",
+                    severity=WeakKeySeverity.WARNING,
                     reason=(
                         "firmware version could not be parsed; the CVE-2025-52464 window "
                         "could not be evaluated"
@@ -1044,7 +1047,7 @@ def audit_node(
             findings.append(
                 WeakKeyFinding(
                     check=WeakKeyCheck.FIRMWARE_WINDOW,
-                    severity="critical",
+                    severity=WeakKeySeverity.CRITICAL,
                     reason=(
                         f"firmware {firmware_version} is inside the CVE-2025-52464 window "
                         "[2.5.0, 2.6.11); the key is presumptively compromised regardless "
@@ -1067,7 +1070,7 @@ def audit_node(
             findings.append(
                 WeakKeyFinding(
                     check=WeakKeyCheck.DUPLICATE,
-                    severity="critical",
+                    severity=WeakKeySeverity.CRITICAL,
                     reason=(
                         "public key is shared with another node in this fleet -- the "
                         "CVE-2025-52464 vendor key-cloning failure mode"
