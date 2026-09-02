@@ -24,6 +24,16 @@ def test_to_name_to_value_round_trip(table_fn) -> None:
         assert table.to_name(value) == name
         assert table.to_value(name) == value
         assert table.to_name(str(value)) == name
+        assert table.to_value(value) == value
+
+
+@pytest.mark.parametrize("bad", [None, 3.5, [], object()])
+def test_to_name_to_value_wrong_type_raises(bad) -> None:
+    table = enums.role_table()
+    with pytest.raises(EnumMappingError):
+        table.to_name(bad)
+    with pytest.raises(EnumMappingError):
+        table.to_value(bad)
 
 
 def test_digit_string_resolves_like_int() -> None:

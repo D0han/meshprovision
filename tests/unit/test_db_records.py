@@ -268,6 +268,24 @@ def test_key_repo_private_key_on_public_row_raises(
         keys.private_key(pub.key_ref)
 
 
+def test_key_repo_public_key_returns_material(
+    keys: KeyRepository, keypair, db: OdsDatabase
+) -> None:
+    pub, _ = KeyRecord.for_keypair("deadbe01", keypair)
+    keys.upsert(pub)
+    db.save()
+    assert keys.public_key(pub.key_ref) == keypair.public
+
+
+def test_key_repo_private_key_returns_material(
+    keys: KeyRepository, keypair, db: OdsDatabase
+) -> None:
+    _, priv = KeyRecord.for_keypair("deadbe01", keypair)
+    keys.upsert(priv)
+    db.save()
+    assert keys.private_key(priv.key_ref).reveal() == keypair.private.reveal()
+
+
 def test_resolve_admin_refs_unknown_ref_hint_mentions_both_bootstrap_commands(
     keys: KeyRepository,
 ) -> None:
@@ -366,6 +384,7 @@ def test_keypair_for(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
     material_absent = keys.keypair_for("deadbe01")
     assert material_absent.public is None
     assert material_absent.private is None
+    assert material_absent.fingerprint() is None
 
     pub, priv = KeyRecord.for_keypair("deadbe01", keypair)
     keys.upsert(pub)
