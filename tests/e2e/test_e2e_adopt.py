@@ -148,6 +148,29 @@ def test_unregistered_admin_key_show_admin_keys_prints_import_command(
     assert base64.b64encode(admin_kp.public).decode("ascii") in result.stderr
 
 
+def test_show_admin_keys_never_crashes_on_a_malformed_length_admin_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+) -> None:
+    """Regression test: a malformed admin key must degrade, never crash the command.
+
+    detect.py applies no length check when reading security.admin_key
+    off the device, so a device reporting a corrupted (non-32-byte)
+    admin key is reachable in practice. crypto.keys.encode_key()
+    validates length and raises on a mismatch -- --show-admin-keys must
+    catch that per key, not let it abort the whole report.
+    """
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(b"\x01\x02\x03")
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--show-admin-keys"], env)
+
+    assert result.exit_code == 0
+    assert "cannot render an import command" in result.stderr
+    assert "mesh admin import" not in result.stderr
+
+
 def test_adopt_recognizes_a_pre_imported_friends_admin_key(
     runner: CliRunner,
     env: dict[str, str],

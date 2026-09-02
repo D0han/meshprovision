@@ -31,7 +31,7 @@ from meshprovision.cli.provision import TransportOptions, resolve_backend, trans
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
 from meshprovision.db.schema import ManagementMode
-from meshprovision.errors import AdoptionRefusedError
+from meshprovision.errors import AdoptionRefusedError, KeyMaterialError
 from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning import connection, detect
 
@@ -86,17 +86,31 @@ def _render_admin_key_lines(
 
     Returns:
         One paste-ready ``mesh admin import`` line per unregistered key
-        when ``show_admin_keys`` is set; otherwise a single count hint
-        line, or nothing when every key is already registered.
+        when ``show_admin_keys`` is set (or, for a key whose material is
+        not exactly 32 bytes -- reachable from a device reporting
+        malformed data, ``detect.py`` applies no length check -- a
+        ``#``-prefixed line noting it can't be rendered rather than a
+        crash or a silently wrong encoding; the report's own warnings
+        already flag the malformed key separately); otherwise a single
+        count hint line, or nothing when every key is already
+        registered.
     """
     unregistered = [key for key in report.admin_keys if not key.refs]
     if not unregistered:
         return ()
     if show_admin_keys:
-        return tuple(
-            f"mesh admin import <REF>={crypto_keys.encode_key(key.material)}"
-            for key in unregistered
-        )
+        lines: list[str] = []
+        for key in unregistered:
+            try:
+                encoded = crypto_keys.encode_key(key.material)
+            except KeyMaterialError:
+                lines.append(
+                    f"# admin key {key.fingerprint}: cannot render an import command "
+                    "(malformed key material)"
+                )
+                continue
+            lines.append(f"mesh admin import <REF>={encoded}")
+        return tuple(lines)
     return (
         f"{len(unregistered)} admin key(s) not registered in the Keys sheet; "
         "re-run with --show-admin-keys for import commands.",

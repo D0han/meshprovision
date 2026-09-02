@@ -36,11 +36,11 @@ was captured.
 
 from __future__ import annotations
 
-import base64
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from meshprovision import enums
+from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import BLE_PIN_LENGTH, ManagementMode
@@ -309,6 +309,12 @@ class AdoptionReport:
                 (``refs == ()``). A registered key's material is already
                 discoverable via ``mesh admin list``/the ``Keys`` sheet,
                 so it is never included here regardless of this flag.
+                When the material is not exactly 32 bytes -- reachable
+                from a device reporting malformed data, since
+                ``detect.py`` applies no length check -- ``"material"``
+                is omitted and ``"material_error"`` is set instead,
+                rather than emitting a silently-wrong encoding or
+                raising and aborting the whole report.
 
         Returns:
             The report as a plain dict. ``"ble_pin_captured"`` is always a
@@ -319,7 +325,10 @@ class AdoptionReport:
         for key in self.admin_keys:
             entry: dict[str, object] = {"fingerprint": key.fingerprint, "refs": list(key.refs)}
             if show_key_material and not key.refs:
-                entry["material"] = base64.b64encode(key.material).decode("ascii")
+                try:
+                    entry["material"] = crypto_keys.encode_key(key.material)
+                except KeyMaterialError:
+                    entry["material_error"] = "malformed key material"
             admin_keys.append(entry)
 
         return {

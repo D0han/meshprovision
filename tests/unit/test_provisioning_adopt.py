@@ -498,6 +498,30 @@ def test_to_json_dict_show_key_material_only_for_unregistered(
     assert decoded == unregistered
 
 
+def test_to_json_dict_malformed_admin_key_reports_material_error_not_crash(
+    make_live, template
+) -> None:
+    """Regression test: a malformed-length admin key must degrade, never crash.
+
+    detect.py applies no length check when reading security.admin_key
+    off the device, so a malformed key is reachable in practice.
+    encode_key() validates length and raises on mismatch --
+    to_json_dict(show_key_material=True) must catch that per key rather
+    than propagating and aborting the whole report, and must never
+    silently emit a wrong/truncated encoding either.
+    """
+    live = make_live(template, security=make_security(admin_keys=(b"\x01\x02\x03",)))
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    payload = report.to_json_dict(show_key_material=True)
+
+    entry = payload["admin_keys"][0]
+    assert "material" not in entry
+    assert entry["material_error"] == "malformed key material"
+
+
 def test_ble_pin_never_appears_in_json_or_describe(make_live, template) -> None:
     live = make_live(
         template, section_overrides={"bluetooth": {"mode": "FIXED_PIN", "fixed_pin": 123456}}
