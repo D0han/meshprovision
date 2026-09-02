@@ -91,8 +91,8 @@ class NodeRecord(BaseModel):
         node_id: Primary key: 8 lowercase hex digits, no leading ``!``.
         short_name: Device short name (<=4 bytes UTF-8), as sent to the
             node.
-        long_name: Device long name (<=39 bytes UTF-8), as sent to the
-            node.
+        long_name: Device long name (<=25 bytes UTF-8, firmware 2.8's
+            limit), as sent to the node.
         hw_model: Hardware model, canonicalized against the installed
             ``HardwareModel`` protobuf enum when non-empty.
         main_chipset: Main MCU/SoC for :attr:`hw_model`. Always a cache:

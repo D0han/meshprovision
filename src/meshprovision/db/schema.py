@@ -419,7 +419,9 @@ NODES_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
         ),
         ColumnSpec(
             name="long_name",
-            description="Device long name (<=39 bytes UTF-8), as sent to the node.",
+            description=(
+                "Device long name (<=25 bytes UTF-8, firmware 2.8's limit), as sent to the node."
+            ),
             kind=ColumnKind.TEXT,
             width="2.2in",
         ),
