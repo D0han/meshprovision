@@ -12,6 +12,7 @@ import pytest
 from meshprovision.crypto.keys import generate_keypair
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.schema import KeyType
 from tests.e2e.conftest import invoke
 
 if TYPE_CHECKING:
@@ -34,6 +35,33 @@ def test_db_verify_clean_database_ok(
 
     assert result.exit_code == 0
     assert "Database OK." in result.stderr
+
+
+def test_db_verify_all_zero_admin_key_exits_six(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """Regression test: mesh db verify's weak-key audit wiring is exercised end to end.
+
+    verify_database calls weakkeys.audit_public_key/audit_private_key on
+    every Keys sheet row directly -- distinct from, and never exercised
+    by, the duplicate-key or admin-key-mismatch checks that already have
+    e2e coverage. A bug here (e.g. swapping which key_type gets audited,
+    or known_bad not actually reaching the call) would let a
+    structurally broken key sit in the database with `mesh db verify`
+    still reporting "Database OK."
+    """
+    node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
+    weak_pub = KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, bytes(32))
+    seed_db(nodes=[node], keys=[weak_pub])
+
+    result = invoke(runner, ["db", "verify", "--json"], env)
+
+    assert result.exit_code == 6
+    document = json.loads(result.stdout)
+    weak_key_problems = [p for p in document["problems"] if p["kind"] == "weak_key"]
+    assert weak_key_problems
+    assert any(p["severity"] == "critical" for p in weak_key_problems)
+    assert any("all_zero" in p["message"] for p in weak_key_problems)
 
 
 def test_db_verify_unresolved_admin_ref_exits_four(

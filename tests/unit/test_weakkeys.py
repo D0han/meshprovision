@@ -64,6 +64,41 @@ def test_audit_private_key_all_zero() -> None:
     assert WeakKeyCheck.SMALL_ORDER not in checks
 
 
+def test_audit_public_key_monotonic_run_is_critical() -> None:
+    """Regression test: MONOTONIC must actually reach audit_public_key, not just is_monotonic_run.
+
+    bytes(range(32)) has a normal Hamming weight (80, well inside
+    [32, 224]) and 32 distinct byte values, so it trips MONOTONIC alone
+    -- never ALL_ZERO/LOW_ENTROPY/REPEATED_BYTE -- confirming the finding
+    reaches the full audit path with the right severity, not just the
+    pure boolean check.
+    """
+    raw = bytes(range(32))
+    result = weakkeys.audit_public_key(raw)
+    monotonic = [f for f in result.findings if f.check == WeakKeyCheck.MONOTONIC]
+    assert len(monotonic) == 1
+    assert monotonic[0].severity == "critical"
+    assert result.compromised is True
+
+
+def test_audit_public_key_repeated_byte_is_critical_standalone() -> None:
+    """Regression test: REPEATED_BYTE must reach audit_public_key on its own.
+
+    test_audit_public_key_all_zero only ever exercises REPEATED_BYTE as
+    a side effect of the all-zero case. bytes([0x7F]) * 32 is a distinct,
+    non-zero repeated byte (Hamming weight 224, exactly at
+    LOW_HAMMING_MAX -- not > it, so it doesn't trip the weight-based
+    LOW_ENTROPY path either) that confirms REPEATED_BYTE itself is wired
+    through with the right severity.
+    """
+    raw = bytes([0x7F]) * 32
+    result = weakkeys.audit_public_key(raw)
+    repeated = [f for f in result.findings if f.check == WeakKeyCheck.REPEATED_BYTE]
+    assert len(repeated) == 1
+    assert repeated[0].severity == "critical"
+    assert result.compromised is True
+
+
 # ---------------------------------------------------------------------------
 # The 7 committed small-order points.
 # ---------------------------------------------------------------------------
