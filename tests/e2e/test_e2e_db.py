@@ -98,6 +98,13 @@ def test_db_verify_degrades_when_the_template_exceeds_the_admin_key_limit(
 def test_db_verify_degrades_when_the_template_is_unparseable(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:
+    """A failed template load must be a visible, --json-observable degradation.
+
+    Regression test: this used to report "Database OK." even though the
+    template cross-check never ran -- a --json consumer had no way to
+    tell "ran clean" apart from "never ran." It now surfaces as its own
+    warning problem, both in text mode and in --json.
+    """
     seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
     broken = tmp_path / "broken.yaml"
     broken.write_text("not: [a valid: template", encoding="utf-8")
@@ -107,7 +114,14 @@ def test_db_verify_degrades_when_the_template_is_unparseable(
 
     assert result.exit_code == 0
     assert "Could not load template for cross-checking" in result.stderr
-    assert "Database OK." in result.stderr
+    assert "Database OK." not in result.stderr
+    assert "Template cross-check skipped" in result.stderr
+
+    json_result = invoke(runner, ["db", "verify", "--json"], env)
+    assert json_result.exit_code == 0
+    document = json.loads(json_result.stdout)
+    kinds = {problem["kind"] for problem in document["problems"]}
+    assert "template_unavailable" in kinds
 
 
 def test_db_verify_duplicate_public_key_across_nodes_exits_six(

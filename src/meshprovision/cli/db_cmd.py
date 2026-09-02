@@ -66,6 +66,7 @@ class DbProblemKind(StrEnum):
     WEAK_KEY = "weak_key"
     ADMIN_KEY_MISMATCH = "admin_key_mismatch"
     INSECURE_PERMISSIONS = "insecure_permissions"
+    TEMPLATE_UNAVAILABLE = "template_unavailable"
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +178,11 @@ class VerifyReport:
 
 
 def verify_database(
-    db: DbSession, template: TemplateConfig | None, *, known_bad: frozenset[bytes]
+    db: DbSession,
+    template: TemplateConfig | None,
+    *,
+    known_bad: frozenset[bytes],
+    template_error: str | None = None,
 ) -> VerifyReport:
     """Run every cross-reference and weak-key check over an already-loaded database.
 
@@ -198,11 +203,33 @@ def verify_database(
             ``None`` skips the template-reference cross-check -- verifying
             a database must work even without a template on disk.
         known_bad: The loaded weak-key blocklist.
+        template_error: Set (to anything) by the caller when ``template``
+            is ``None`` because loading it raised, as opposed to no
+            template being configured at all. When set, a
+            ``TEMPLATE_UNAVAILABLE`` problem is added so a ``--json``
+            consumer can tell "the template cross-check ran clean" apart
+            from "the template cross-check never ran" -- the problem's
+            message deliberately doesn't repeat the caller's full error
+            text (which the caller has typically already printed to
+            stderr on its own) to avoid a duplicated wall of text in
+            ``mesh db verify``'s plain-text output.
 
     Returns:
         The full :class:`VerifyReport`.
     """
     problems: list[DbProblem] = []
+
+    if template is None and template_error is not None:
+        problems.append(
+            DbProblem(
+                kind=DbProblemKind.TEMPLATE_UNAVAILABLE,
+                severity="warning",
+                message=(
+                    "Template cross-check skipped: the template failed to load "
+                    "(admin_nodes references were not verified against the Keys sheet)."
+                ),
+            )
+        )
 
     if os.name == "posix":
         mode = db.path.stat().st_mode & 0o777
@@ -406,6 +433,7 @@ def db_verify(ctx: CliContext, *, strict: bool, json_output: bool) -> None:
     """
     with ctx.open_database() as db_session:
         template: TemplateConfig | None
+        template_error: str | None = None
         try:
             template = ctx.load_template()
         # Any template failure must degrade to a warning, never abort: verifying
@@ -419,9 +447,12 @@ def db_verify(ctx: CliContext, *, strict: bool, json_output: bool) -> None:
         except (ConfigError, AdminKeyCapacityError) as exc:
             ctx.warn(f"Could not load template for cross-checking: {exc.user_message}")
             template = None
+            template_error = exc.user_message
 
         known_bad = weakkeys.load_known_bad_keys()
-        report = verify_database(db_session, template, known_bad=known_bad)
+        report = verify_database(
+            db_session, template, known_bad=known_bad, template_error=template_error
+        )
 
     if json_output:
         echo_json(report.to_json_dict())
