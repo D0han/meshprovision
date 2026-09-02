@@ -156,8 +156,10 @@ def build_table(report: StatusReport) -> Table:
     availability. A caption is attached below the table:
     :meth:`~meshprovision.status.report.StatusReport.summary`, plus --
     when the report has any source failures -- one dim red line per
-    failure. A database with zero nodes renders a header-only table with
-    a single ``"No nodes in the database"`` caption instead.
+    failure, plus -- when any source skipped an unparsable entry -- one
+    dim yellow line per affected source. A database with zero nodes
+    renders a header-only table with a single ``"No nodes in the
+    database"`` caption instead.
 
     Args:
         report: The report to render.
@@ -206,6 +208,9 @@ def build_table(report: StatusReport) -> Table:
     for failure in report.failures:
         caption.append("\n")
         caption.append(f"{failure.source}: {failure.message}", style="dim red")
+    for source, count in report.skipped_entries.items():
+        caption.append("\n")
+        caption.append(f"{source}: {count} entrie(s) could not be parsed", style="dim yellow")
     table.caption = caption
     return table
 
@@ -252,6 +257,7 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
                 "counts": {"online": 3, "stale": 1, "offline": 0, "unknown": 2},
                 "cache": {"hits": 2, "misses": 1, "network_requests": 1},
                 "failures": [{"source": "lorastats", "message": "...", "hint": None}],
+                "skipped_entries": {"loranet": 12},
                 "nodes": [...],
             }
     """
@@ -269,6 +275,7 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
             "misses": report.cache_misses,
             "network_requests": report.network_requests,
         },
+        "skipped_entries": dict(report.skipped_entries),
         "failures": [
             {"source": failure.source, "message": failure.message, "hint": failure.hint}
             for failure in report.failures

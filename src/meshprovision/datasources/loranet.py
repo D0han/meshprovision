@@ -127,7 +127,8 @@ class LoranetSource(BaseHTTPDataSource):
         """Parse every entry in the dump into a normalized observation.
 
         A single malformed key or entry is logged and skipped rather than
-        failing the whole 13k-entry batch.
+        failing the whole 13k-entry batch; :attr:`last_fetch_skipped` is
+        set to how many were skipped by this call.
 
         Args:
             force_refresh: Forwarded to :meth:`raw_index`.
@@ -139,13 +140,18 @@ class LoranetSource(BaseHTTPDataSource):
         index = self.raw_index(force_refresh=force_refresh)
         observed_at = datetime.now(tz=UTC)
         result: dict[NodeId, NodeObservation] = {}
+        skipped = 0
         for key, payload in index.items():
             node_id = self._parse_key(key)
             if node_id is None:
+                skipped += 1
                 continue
             observation = self._parse_entry(node_id, key, payload, observed_at=observed_at)
-            if observation is not None:
-                result[node_id] = observation
+            if observation is None:
+                skipped += 1
+                continue
+            result[node_id] = observation
+        self._last_fetch_skipped = skipped
         return result
 
     def fetch_nodes(
@@ -156,7 +162,9 @@ class LoranetSource(BaseHTTPDataSource):
         Fetches the dump once (memoized) regardless of how many ids are
         requested, then looks each one up by its decimal form. An id
         absent from the dump is simply omitted from the result -- never
-        an error.
+        an error, and never counted in :attr:`last_fetch_skipped` (which
+        this call resets and sets to the number of *requested* ids whose
+        entry was present but failed to parse).
 
         Args:
             ids: The node ids to look up.
@@ -169,6 +177,7 @@ class LoranetSource(BaseHTTPDataSource):
         index = self.raw_index(force_refresh=force_refresh)
         observed_at = datetime.now(tz=UTC)
         result: dict[NodeId, NodeObservation] = {}
+        skipped = 0
         for node_id in ids:
             payload = index.get(node_id.decimal)
             if payload is None:
@@ -176,8 +185,11 @@ class LoranetSource(BaseHTTPDataSource):
             observation = self._parse_entry(
                 node_id, node_id.decimal, payload, observed_at=observed_at
             )
-            if observation is not None:
-                result[node_id] = observation
+            if observation is None:
+                skipped += 1
+                continue
+            result[node_id] = observation
+        self._last_fetch_skipped = skipped
         return result
 
     @staticmethod

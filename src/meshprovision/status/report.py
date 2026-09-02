@@ -126,6 +126,13 @@ class StatusReport:
         nodes: Every reported node's merged view, in database row order.
         thresholds: The age boundaries used to classify availability.
         failures: Data sources that failed during collection, if any.
+        skipped_entries: Per-source count of entries a *successful*
+            source fetched but could not parse, keyed by source name.
+            Omits any source with a count of zero. Distinct from
+            :attr:`failures`: the source ran and returned real data, it
+            just silently dropped some of it -- without this, a mass
+            parse-failure (an upstream schema change, for example) is
+            indistinguishable from those nodes simply being offline.
         cache_hits: Cache hits accumulated by the underlying HTTP client
             during this run.
         cache_misses: Cache misses accumulated by the underlying HTTP
@@ -138,6 +145,7 @@ class StatusReport:
     nodes: tuple[MergedNode, ...]
     thresholds: Thresholds
     failures: tuple[SourceFailure, ...] = ()
+    skipped_entries: Mapping[str, int] = field(default_factory=dict)
     cache_hits: int = 0
     cache_misses: int = 0
     network_requests: int = 0
@@ -181,17 +189,19 @@ class StatusReport:
         """Whether this report represents a degraded run.
 
         Returns:
-            ``True`` if :attr:`has_offline` or any source failed.
+            ``True`` if :attr:`has_offline`, any source failed, or any
+            source skipped an entry it could not parse.
         """
-        return self.has_offline or bool(self.failures)
+        return self.has_offline or bool(self.failures) or bool(self.skipped_entries)
 
     def exit_code(self, *, fail_on_offline: bool = True) -> int:
         """Compute the process exit code the ``mesh status`` CLI should return.
 
-        A source failure always degrades the exit code, since a status
-        report built from an incomplete set of sources is not fully
-        trustworthy. An offline node only does so when ``fail_on_offline``
-        is true.
+        A source failure, or a source silently skipping an entry it
+        could not parse, always degrades the exit code, since a status
+        report built from an incomplete or partially-dropped source is
+        not fully trustworthy either way. An offline node only does so
+        when ``fail_on_offline`` is true.
 
         Args:
             fail_on_offline: Whether an offline node should count as
@@ -201,7 +211,11 @@ class StatusReport:
             :attr:`~meshprovision.errors.ExitCode.STATUS_DEGRADED` when
             degraded; :attr:`~meshprovision.errors.ExitCode.OK` otherwise.
         """
-        is_degraded = bool(self.failures) or (fail_on_offline and self.has_offline)
+        is_degraded = (
+            bool(self.failures)
+            or bool(self.skipped_entries)
+            or (fail_on_offline and self.has_offline)
+        )
         return int(ExitCode.STATUS_DEGRADED) if is_degraded else int(ExitCode.OK)
 
     def summary(self) -> str:
@@ -209,13 +223,20 @@ class StatusReport:
 
         Returns:
             For example ``"5 node(s): 3 online, 1 stale, 0 offline, 1
-            unknown; 1 source failure(s)"``.
+            unknown; 1 source failure(s); 12 unparsable entrie(s) from
+            loranet"``.
         """
         counts = self.counts
         breakdown = ", ".join(f"{counts[avail]} {avail.value}" for avail in _ALL_AVAILABILITIES)
         text = f"{len(self.nodes)} node(s): {breakdown}"
         if self.failures:
             text += f"; {len(self.failures)} source failure(s)"
+        if self.skipped_entries:
+            parts = ", ".join(
+                f"{count} from {source}" for source, count in self.skipped_entries.items()
+            )
+            total = sum(self.skipped_entries.values())
+            text += f"; {total} unparsable entrie(s) ({parts})"
         return text
 
 
@@ -286,7 +307,7 @@ def load_node_ids(db_path: Path) -> tuple[NodeId, ...]:
 
 def collect_observations(
     sources: Sequence[DataSource], ids: Sequence[NodeId], *, force_refresh: bool = False
-) -> tuple[dict[str, dict[NodeId, NodeObservation]], tuple[SourceFailure, ...]]:
+) -> tuple[dict[str, dict[NodeId, NodeObservation]], tuple[SourceFailure, ...], dict[str, int]]:
     """Query every source for the given node ids, tolerating a failing source.
 
     A source that raises :class:`~meshprovision.errors.DataSourceError`
@@ -300,6 +321,14 @@ def collect_observations(
     caught here: an unset ``MESHPROVISION_CONTACT`` is a configuration
     failure the operator must fix, so it propagates to the caller.
 
+    A source that *succeeds* but cannot parse every entry it fetched
+    (see :attr:`~meshprovision.datasources.base.DataSource.last_fetch_skipped`)
+    is a different, quieter failure mode than a `SourceFailure` -- the
+    source runs, returns real data, and just silently drops some of it.
+    Without surfacing that count, a mass parse-failure (an upstream
+    schema change, for example) looks identical to those nodes simply
+    being offline.
+
     Args:
         sources: The data sources to query, in the order they were
             configured.
@@ -307,13 +336,17 @@ def collect_observations(
         force_refresh: Forwarded to each source's ``fetch_nodes`` call.
 
     Returns:
-        A ``(observations_by_source, failures)`` pair: the first maps
-        each source's name to its ``{node_id: observation}`` result
-        (sources that failed entirely are simply absent); the second
-        lists every source that failed, in the order they were queried.
+        An ``(observations_by_source, failures, skipped_by_source)``
+        triple: the first maps each source's name to its
+        ``{node_id: observation}`` result (sources that failed entirely
+        are simply absent); the second lists every source that failed,
+        in the order they were queried; the third maps each
+        *successful* source's name to how many entries it could not
+        parse, omitting any source with a count of zero.
     """
     observations: dict[str, dict[NodeId, NodeObservation]] = {}
     failures: list[SourceFailure] = []
+    skipped: dict[str, int] = {}
     for source in sources:
         try:
             fetched = source.fetch_nodes(ids, force_refresh=force_refresh)
@@ -322,7 +355,9 @@ def collect_observations(
             _logger.warning("%s data source failed: %s", source.name, exc.message)
             continue
         observations[source.name] = fetched
-    return observations, tuple(failures)
+        if source.last_fetch_skipped:
+            skipped[source.name] = source.last_fetch_skipped
+    return observations, tuple(failures), skipped
 
 
 def build_report(
@@ -440,7 +475,7 @@ def run_status(
                 LorastatsSource(active_client, contact=lorastats_contact, regions=options.regions)
             )
 
-        observations, failures = collect_observations(
+        observations, failures, skipped = collect_observations(
             sources, ids, force_refresh=options.force_refresh
         )
         stats = active_client.stats
@@ -457,6 +492,7 @@ def run_status(
             nodes=report.nodes,
             thresholds=report.thresholds,
             failures=report.failures,
+            skipped_entries=skipped,
             cache_hits=stats.hits,
             cache_misses=stats.misses,
             network_requests=stats.network_requests,

@@ -151,7 +151,8 @@ class LorastatsSource(BaseHTTPDataSource):
 
         Issues one per-node request per id (the whole point of the
         server-side ``?node=`` filter -- see the module docstring), never
-        a region bulk dump.
+        a region bulk dump. Resets :attr:`last_fetch_skipped` and sums
+        each :meth:`fetch_node` call's contribution into it.
 
         Args:
             ids: The node ids to look up.
@@ -162,10 +163,13 @@ class LorastatsSource(BaseHTTPDataSource):
             one configured region to its observation.
         """
         result: dict[NodeId, NodeObservation] = {}
+        skipped = 0
         for node_id in ids:
             observation = self.fetch_node(node_id, force_refresh=force_refresh)
+            skipped += self._last_fetch_skipped
             if observation is not None:
                 result[node_id] = observation
+        self._last_fetch_skipped = skipped
         return result
 
     def fetch_node(
@@ -190,7 +194,11 @@ class LorastatsSource(BaseHTTPDataSource):
             The observation, or ``None`` when the node was not found in
             any candidate region (a legitimate, non-error outcome:
             lorastats.pl returns ``[]`` with HTTP 200 for an unknown
-            node).
+            node). Also sets :attr:`last_fetch_skipped` to the number of
+            candidate records across every queried region that could not
+            even be inspected for a match (see :func:`_match_record`) --
+            never counting a record that simply belonged to a different
+            node, only one this call could not parse at all.
 
         Raises:
             meshprovision.errors.NodeIdError: If ``node_id`` cannot be
@@ -203,6 +211,7 @@ class LorastatsSource(BaseHTTPDataSource):
         """
         nid = NodeId.parse(node_id)
         candidates = validate_regions((region,)) if region is not None else self._regions
+        skipped = 0
 
         for candidate in candidates:
             url = f"{self._base_url}{LORASTATS_NODES_PATH.format(region=candidate)}"
@@ -210,7 +219,8 @@ class LorastatsSource(BaseHTTPDataSource):
             records = require_json_list(payload, url=url, source=self.name)
             if not records:
                 continue
-            record = _match_record(records, nid)
+            record, record_skipped = _match_record(records, nid)
+            skipped += record_skipped
             if record is None:
                 continue
             observation = parse_node(record, region=candidate, observed_at=datetime.now(tz=UTC))
@@ -223,7 +233,9 @@ class LorastatsSource(BaseHTTPDataSource):
                     nid.hex,
                 )
                 continue
+            self._last_fetch_skipped = skipped
             return observation
+        self._last_fetch_skipped = skipped
         return None
 
     def node_status(self, node_id: NodeIdLike, *, force_refresh: bool | None = None) -> bool | None:
@@ -268,7 +280,7 @@ class LorastatsSource(BaseHTTPDataSource):
         return True
 
 
-def _match_record(records: list[Any], nid: NodeId) -> Mapping[str, Any] | None:
+def _match_record(records: list[Any], nid: NodeId) -> tuple[Mapping[str, Any] | None, int]:
     """Pick the record whose ``NodeId`` matches ``nid``.
 
     Args:
@@ -276,25 +288,34 @@ def _match_record(records: list[Any], nid: NodeId) -> Mapping[str, Any] | None:
         nid: The id being looked up.
 
     Returns:
-        The exactly-matching record, or ``None`` when no record's
-        ``NodeId`` parses to ``nid`` (logged at DEBUG). A record for a
-        *different* node is never returned: filing another node's
-        telemetry under the requested id is worse than reporting the
-        node as not found.
+        A ``(record, skipped)`` pair. ``record`` is the exactly-matching
+        record, or ``None`` when no record's ``NodeId`` parses to ``nid``
+        (logged at DEBUG). A record for a *different* node is never
+        returned: filing another node's telemetry under the requested id
+        is worse than reporting the node as not found. ``skipped`` counts
+        candidate records that could not even be inspected for a match
+        (not a dict, missing/unparsable ``NodeId``) -- distinct from a
+        record that was inspected and simply belonged to a different
+        node, which is the expected, non-error case for every response
+        with more than one node in it.
     """
+    skipped = 0
     for record in records:
         if not isinstance(record, dict):
+            skipped += 1
             continue
         raw = record.get("NodeId")
         if not isinstance(raw, str):
+            skipped += 1
             continue
         try:
             if NodeId.from_hex(raw) == nid:
-                return record
+                return record, skipped
         except NodeIdError:
+            skipped += 1
             continue
     _logger.debug("lorastats returned no record matching NodeId %s", nid.hex)
-    return None
+    return None, skipped
 
 
 def parse_node(

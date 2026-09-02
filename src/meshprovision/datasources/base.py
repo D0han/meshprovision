@@ -60,6 +60,26 @@ class DataSource(Protocol):
         """Return this source's short name (for example ``"loranet"``)."""
         ...
 
+    @property
+    def last_fetch_skipped(self) -> int:
+        """Return how many entries the most recent ``fetch_nodes`` call could not parse.
+
+        Distinct from an id simply absent from the source's data (never
+        an error, never counted here): this counts an entry that *was*
+        present but failed to parse -- a malformed key, an unexpected
+        payload shape, an unparsable field. A per-entry parse failure is
+        already logged at WARNING/DEBUG by the implementation, but that
+        alone gives an operator no way to notice a *mass* failure (for
+        example an upstream schema change silently dropping a large
+        fraction of the fleet) without tailing logs; this makes the count
+        visible to :func:`~meshprovision.status.report.collect_observations`
+        and, from there, the assembled
+        :class:`~meshprovision.status.report.StatusReport`. Resets to 0 at
+        the start of each ``fetch_nodes`` call -- this is "how many did
+        the *last* fetch skip," not a lifetime total.
+        """
+        ...
+
     def fetch_nodes(
         self, ids: Collection[NodeId], *, force_refresh: bool | None = None
     ) -> dict[NodeId, NodeObservation]:
@@ -106,6 +126,7 @@ class BaseHTTPDataSource:
         """
         self._client = client
         self._source_name = source_name
+        self._last_fetch_skipped = 0
 
     @property
     def name(self) -> str:
@@ -115,6 +136,18 @@ class BaseHTTPDataSource:
             The ``source_name`` passed to the constructor.
         """
         return self._source_name
+
+    @property
+    def last_fetch_skipped(self) -> int:
+        """How many entries the most recent ``fetch_nodes`` call could not parse.
+
+        Returns:
+            See :attr:`DataSource.last_fetch_skipped`. A concrete
+            subclass's ``fetch_nodes`` is responsible for resetting and
+            updating ``self._last_fetch_skipped``; this base class only
+            initializes it to 0.
+        """
+        return self._last_fetch_skipped
 
     @property
     def client(self) -> CachedHTTPClient:

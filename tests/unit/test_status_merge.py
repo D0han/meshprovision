@@ -228,9 +228,40 @@ def test_status_report_exit_code_with_source_failure() -> None:
     assert report.exit_code() != 0
 
 
+def test_status_report_degraded_and_exit_code_with_skipped_entries() -> None:
+    """Regression test: a mass parse-failure must not look identical to "all clean".
+
+    Without this, a source that runs successfully but silently drops a
+    large fraction of its entries is indistinguishable from a report
+    where every node genuinely responded -- the operator has no signal
+    at all unless they tail WARNING logs.
+    """
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        skipped_entries={"loranet": 12},
+    )
+    assert report.degraded is True
+    assert report.exit_code(fail_on_offline=False) != 0
+
+
 def test_status_report_summary_text() -> None:
     report = build_report(records={}, observations_by_source={}, node_ids=[], now=NOW)
     assert "0 node(s)" in report.summary()
+
+
+def test_status_report_summary_mentions_skipped_entries() -> None:
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        skipped_entries={"loranet": 12, "lorastats": 1},
+    )
+    summary = report.summary()
+    assert "13 unparsable entrie(s)" in summary
+    assert "12 from loranet" in summary
+    assert "1 from lorastats" in summary
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +283,7 @@ class _FailingSource:
 
 class _OkSource:
     name = "lorastats"
+    last_fetch_skipped = 0
 
     def fetch_nodes(
         self,
@@ -274,12 +306,37 @@ class _MissingContactSource:
         raise MissingContactError()
 
 
+class _PartiallySkippingSource:
+    name = "loranet"
+    last_fetch_skipped = 7
+
+    def fetch_nodes(
+        self,
+        ids,  # noqa: ARG002
+        *,
+        force_refresh=False,  # noqa: ARG002
+    ) -> dict[NodeId, NodeObservation]:
+        return {NID: _obs("loranet")}
+
+
 def test_collect_observations_tolerates_one_failure() -> None:
-    observations, failures = collect_observations([_FailingSource(), _OkSource()], [NID])
+    observations, failures, skipped = collect_observations([_FailingSource(), _OkSource()], [NID])
     assert "loranet" not in observations
     assert "lorastats" in observations
     assert len(failures) == 1
     assert failures[0].source == "loranet"
+    assert skipped == {}
+
+
+def test_collect_observations_reports_skipped_entries_for_a_successful_source() -> None:
+    """A source that succeeds but skipped entries must be visible, not silently absent."""
+    observations, failures, skipped = collect_observations(
+        [_PartiallySkippingSource(), _OkSource()], [NID]
+    )
+    assert failures == ()
+    assert "loranet" in observations
+    assert skipped == {"loranet": 7}
+    assert "lorastats" not in skipped
 
 
 def test_collect_observations_does_not_catch_missing_contact_error() -> None:
@@ -321,9 +378,37 @@ def test_report_to_json_dict_shape() -> None:
         "counts",
         "cache",
         "failures",
+        "skipped_entries",
         "nodes",
     }
     assert payload["generated_at"] == "2026-08-25T12:00:00Z"
+
+
+def test_report_to_json_dict_includes_skipped_entries() -> None:
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        skipped_entries={"loranet": 12},
+    )
+    payload = render.report_to_json_dict(report)
+    assert payload["skipped_entries"] == {"loranet": 12}
+
+
+def test_build_table_caption_mentions_skipped_entries() -> None:
+    obs = _obs(SOURCE_LORANET, last_seen=NOW)
+    base_report = build_report(
+        records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
+    )
+    report = StatusReport(
+        generated_at=base_report.generated_at,
+        nodes=base_report.nodes,
+        thresholds=base_report.thresholds,
+        skipped_entries={"loranet": 12},
+    )
+    table = render.build_table(report)
+    assert table.caption is not None
+    assert "12 entrie(s) could not be parsed" in str(table.caption)
 
 
 def test_build_table_returns_expected_columns() -> None:

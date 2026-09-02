@@ -238,6 +238,36 @@ def test_lorastats_fetch_node_tries_next_region_after_a_malformed_record(tmp_pat
     obs = source.fetch_node("deadbe01")
     assert obs is not None
     assert obs.short_name == "found"
+    assert source.last_fetch_skipped == 1
+
+
+@respx.mock
+def test_lorastats_fetch_nodes_last_fetch_skipped_sums_across_ids_and_resets(
+    tmp_path: Path,
+) -> None:
+    """Regression test: last_fetch_skipped sums per-id skips and resets between calls."""
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(200, json=[{"ShortName": "no id"}]))
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='XX')}"
+    ).mock(return_value=httpx.Response(200, json=[{"NodeId": "deadbe01", "ShortName": "found"}]))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+
+    # Neither id is found (the only PL record is malformed), but each of
+    # the two lookups still skips exactly one malformed record while
+    # scanning for its match -- 1 + 1 = 2.
+    result = source.fetch_nodes([NodeId.from_hex("deadbe01"), NodeId.from_hex("deadbe02")])
+    assert result == {}
+    assert source.last_fetch_skipped == 2
+
+    # A subsequent clean lookup (region XX, one well-formed matching
+    # record, matched on the first record scanned) must reset the
+    # counter to 0, not accumulate on top of the dirty call above.
+    clean = source.fetch_node("deadbe01", region="XX")
+    assert clean is not None
+    assert source.last_fetch_skipped == 0
 
 
 @respx.mock
@@ -433,6 +463,38 @@ def test_loranet_malformed_entry_skipped_not_fatal(tmp_path: Path) -> None:
     result = source.fetch_all()
     assert good_nid in result
     assert len(result) == 1
+    assert source.last_fetch_skipped == 2
+
+
+@respx.mock
+def test_loranet_fetch_nodes_last_fetch_skipped_resets_and_excludes_absent_ids(
+    tmp_path: Path,
+) -> None:
+    """Regression test: last_fetch_skipped counts parse failures, not absent ids.
+
+    An id simply missing from the dump is never a parse failure -- it
+    must not be counted -- and the counter must reset between calls
+    rather than accumulate forever.
+    """
+    good_nid = NodeId.from_hex("deadbe01")
+    absent_nid = NodeId.from_hex("deadbe02")
+    malformed_nid = NodeId.from_hex("deadbe03")
+    payload = {
+        good_nid.decimal: {"shortName": "good"},
+        malformed_nid.decimal: "not-a-dict",
+    }
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_nodes([good_nid, absent_nid, malformed_nid])
+    assert set(result) == {good_nid}
+    assert source.last_fetch_skipped == 1
+
+    # A second, all-clean fetch must reset the counter, not accumulate.
+    clean_result = source.fetch_nodes([good_nid])
+    assert set(clean_result) == {good_nid}
+    assert source.last_fetch_skipped == 0
 
 
 @respx.mock
