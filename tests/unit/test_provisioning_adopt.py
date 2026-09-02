@@ -345,6 +345,32 @@ def test_adopted_record_fresh_adopt(make_live, template, keypair_factory) -> Non
     assert record.last_updated_ts == now
 
 
+def test_adopted_record_deduplicates_a_key_reported_twice_by_the_device(
+    make_live, template, keypair_factory
+) -> None:
+    """Regression test: a duplicate live report must not persist a duplicate ref.
+
+    classify_live_admin_keys() deliberately never dedupes (a device
+    reporting the same key twice yields two LiveAdminKey entries), but
+    the persisted authorized_admin_keys cell must not assert the same
+    ref twice.
+    """
+    key = keypair_factory().public
+    live = make_live(template, security=make_security(admin_keys=(key, key)))
+    report = build_adoption_report(
+        live,
+        existing=None,
+        public_keys={"ADMIN1_pub": key},
+        template=template,
+        known_bad=frozenset(),
+    )
+    assert len(report.admin_keys) == 2
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert record.authorized_admin_keys == ("ADMIN1_pub",)
+
+
 def test_adopted_record_reuse_drops_stale_ref_and_preserves_history(
     make_live, template, keypair_factory
 ) -> None:

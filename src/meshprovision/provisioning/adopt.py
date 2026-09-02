@@ -494,14 +494,25 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
         report.existing if report.existing is not None else NodeRecord(node_id=report.node_id.hex)
     )
 
+    # De-duplicated, first-seen order -- classify_live_admin_keys()
+    # deliberately never dedupes (a device reporting the same key twice
+    # yields two LiveAdminKey entries), but the persisted cell must not
+    # assert the same ref twice; schema.normalize_ref_list() would
+    # silently clean this up on the next load anyway, so writing it
+    # clean here just avoids a transient, self-correcting duplicate.
+    seen_refs: set[str] = set()
+    admin_key_refs: list[str] = []
+    for key in report.admin_keys:
+        if key.preferred_ref is not None and key.preferred_ref not in seen_refs:
+            seen_refs.add(key.preferred_ref)
+            admin_key_refs.append(key.preferred_ref)
+
     changes: dict[str, object] = {
         "short_name": report.short_name,
         "long_name": report.long_name,
         "hw_model": report.hw_model,
         "firmware_version": report.firmware_version,
-        "authorized_admin_keys": tuple(
-            key.preferred_ref for key in report.admin_keys if key.preferred_ref is not None
-        ),
+        "authorized_admin_keys": tuple(admin_key_refs),
         "management": ManagementMode.OBSERVED,
     }
     if report.role or report.existing is None:
