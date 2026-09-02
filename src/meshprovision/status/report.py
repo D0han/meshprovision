@@ -188,6 +188,18 @@ class StatusReport:
     def degraded(self) -> bool:
         """Whether this report represents a degraded run.
 
+        No magnitude threshold on :attr:`skipped_entries`: even a single
+        skipped entry marks the run degraded, deliberately matching how
+        :attr:`has_offline`/:attr:`failures` already work -- neither
+        distinguishes "one offline node" from "the whole fleet is
+        offline" either. This module's :func:`collect_observations` is
+        always called with the operator's own (often small) fleet's ids,
+        never a source's full upstream dump, so one skipped entry is
+        already a meaningfully large fraction for a typical fleet size,
+        not noise to be filtered. The exact counts remain visible in
+        :attr:`skipped_entries` for a caller that wants to judge
+        magnitude itself (a `--json` consumer, for example).
+
         Returns:
             ``True`` if :attr:`has_offline`, any source failed, or any
             source skipped an entry it could not parse.
@@ -200,7 +212,8 @@ class StatusReport:
         A source failure, or a source silently skipping an entry it
         could not parse, always degrades the exit code, since a status
         report built from an incomplete or partially-dropped source is
-        not fully trustworthy either way. An offline node only does so
+        not fully trustworthy either way -- see :attr:`degraded` for why
+        this has no magnitude threshold. An offline node only does so
         when ``fail_on_offline`` is true.
 
         Args:

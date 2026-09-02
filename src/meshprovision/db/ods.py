@@ -1032,7 +1032,8 @@ class OdsDatabase:
                 default) defers to :func:`meshprovision.db.locking.
                 exclusive_lock`'s own resolution (an explicit argument,
                 then the ``MESHPROVISION_LOCK_TIMEOUT`` environment
-                variable, then a five-second default).
+                variable, then
+                :data:`~meshprovision.db.locking.DEFAULT_LOCK_TIMEOUT`).
 
         Raises:
             DatabaseLockedError: If another process holds the lock and
