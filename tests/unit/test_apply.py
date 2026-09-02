@@ -10,7 +10,7 @@ from meshtastic.protobuf import localonly_pb2
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.crypto.keys import KeyPair, generate_keypair
 from meshprovision.db.keys import KeyRepository
-from meshprovision.db.nodes import NodeRepository
+from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.errors import (
     AtomicWriteError,
@@ -359,6 +359,60 @@ def test_verify_plan_key_none_device_public_key_confirmed_with_note(make_live) -
     key_result = next(r for r in results if r.field == "public_key")
     assert key_result.status == WriteStatus.CONFIRMED
     assert "NodeDB cross-check unavailable" in key_result.message
+
+
+def _adopt_device_key_plan(make_live, kp: KeyPair, other_kp: KeyPair):
+    """Build a plan whose key_plan.adopt_device_key is True (db key differs from live)."""
+    template = _template()
+    live = make_live(template, security=make_security(keypair=kp))
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        db_public_key=other_kp.public,
+    )
+    plan = build_plan(inputs)
+    assert plan.key_plan.adopt_device_key is True
+    assert plan.key_plan.regenerate is False
+    return plan
+
+
+def test_verify_plan_adopt_device_key_confirmed_when_still_present(
+    make_live, keypair_factory
+) -> None:
+    kp = keypair_factory()
+    other_kp = keypair_factory()
+    plan = _adopt_device_key_plan(make_live, kp, other_kp)
+
+    live_after = make_live(_template(), security=make_security(keypair=kp))
+    results = verify_plan(plan, live_after, keypair=kp, device_public_key=kp.public_b64)
+    key_result = next(r for r in results if r.field == "public_key")
+    assert key_result.status == WriteStatus.CONFIRMED
+
+
+def test_verify_plan_adopt_device_key_unconfirmed_when_key_reverts_across_reboot(
+    make_live, keypair_factory
+) -> None:
+    """Regression test: firmware issue #7449 -- the adopted key must be
+
+    re-verified after this run's writes, not assumed to still be present.
+    An earlier section's write in the same plan can trigger a reboot that
+    silently reverts a key that was never even written this run.
+    """
+    kp = keypair_factory()
+    other_kp = keypair_factory()
+    reverted_kp = keypair_factory()
+    plan = _adopt_device_key_plan(make_live, kp, other_kp)
+
+    # Simulates the device's key reverting across a reboot triggered by some
+    # other section write earlier in the same plan -- kp was on the device
+    # when detected, but is no longer there by the time this run verifies.
+    live_after = make_live(_template(), security=make_security(keypair=reverted_kp))
+    results = verify_plan(plan, live_after, keypair=kp, device_public_key=reverted_kp.public_b64)
+    key_result = next(r for r in results if r.field == "public_key")
+    assert key_result.status == WriteStatus.UNCONFIRMED
 
 
 def test_verify_plan_admin_keys_compared_sorted(make_live, make_admin_key) -> None:

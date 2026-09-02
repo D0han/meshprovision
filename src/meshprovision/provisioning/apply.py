@@ -703,16 +703,25 @@ def _verify_key_material(
     keypair: KeyPair | None,
     device_public_key: object,
 ) -> WriteResult | None:
-    """Verify a regenerated key pair, per the firmware issue #7449 requirement.
+    """Verify the node's own keypair, per the firmware issue #7449 requirement.
 
-    A key write is confirmed only when both the fresh ``LocalConfig`` read
-    and the independent NodeDB view (``iface.getPublicKey()``) agree with
-    ``keypair.public``.
+    Runs for both ``key_plan.regenerate`` (a freshly written keypair must
+    actually have taken) and ``key_plan.adopt_device_key`` (the keypair
+    ``persist_result`` is about to record as the device's own must still
+    genuinely be on the device after this run's writes and reboot --
+    #7449 is exactly "a restored key can silently fail to persist", and an
+    unrelated section write earlier in this same plan can still trigger
+    that reboot). A key write is confirmed only when both the fresh
+    ``LocalConfig`` read and the independent NodeDB view
+    (``iface.getPublicKey()``) agree with ``keypair.public``.
 
     Args:
         plan: The executed plan.
         live_after: The freshly re-read live configuration.
-        keypair: The freshly generated keypair, when one was written.
+        keypair: The keypair to confirm -- freshly generated when
+            ``regenerate`` is set, or the device's pre-existing keypair
+            (as read before this run's writes) when ``adopt_device_key``
+            is set.
         device_public_key: The raw value of ``iface.getPublicKey()``: a
             base64 ``str`` (the common case -- it is produced by
             ``google.protobuf.json_format.MessageToDict``), raw
@@ -720,10 +729,10 @@ def _verify_key_material(
             repopulated.
 
     Returns:
-        ``None`` when the plan did not regenerate a key; otherwise the
-        :class:`WriteResult` for ``security.public_key``.
+        ``None`` when the plan neither regenerated nor adopted a key;
+        otherwise the :class:`WriteResult` for ``security.public_key``.
     """
-    if not plan.key_plan.regenerate or keypair is None:
+    if keypair is None or not (plan.key_plan.regenerate or plan.key_plan.adopt_device_key):
         return None
 
     local_config_ok = live_after.security.public_key == keypair.public
