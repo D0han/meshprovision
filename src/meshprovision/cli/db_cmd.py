@@ -28,6 +28,7 @@ from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_err
 from meshprovision.config.template import admin_public_key_ref
 from meshprovision.crypto import weakkeys
 from meshprovision.db import atomic_writer, schema
+from meshprovision.db.ods import IntegrityWarningKind
 from meshprovision.db.schema import KeyType
 from meshprovision.errors import (
     AdminKeyCapacityError,
@@ -293,7 +294,7 @@ def verify_database(
             DbProblem(
                 kind=(
                     DbProblemKind.COERCED_CELL
-                    if warning.kind == "coerced_cell"
+                    if warning.kind == IntegrityWarningKind.COERCED_CELL
                     else DbProblemKind.INTEGRITY_WARNING
                 ),
                 severity=ProblemSeverity.WARNING,

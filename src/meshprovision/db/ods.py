@@ -41,8 +41,9 @@ import xml.parsers.expat
 import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, Final
 
 from odf import config as odf_config
 from odf import number as odf_number
@@ -68,6 +69,7 @@ __all__ = [
     "CellValue",
     "DatabaseData",
     "IntegrityWarning",
+    "IntegrityWarningKind",
     "LoadedDatabase",
     "OdsDatabase",
     "SheetData",
@@ -188,6 +190,17 @@ class DatabaseData:
     sheets: Mapping[str, SheetData]
 
 
+class IntegrityWarningKind(StrEnum):
+    """What kind of non-fatal integrity problem an :class:`IntegrityWarning` reports."""
+
+    RECOMPUTE = "recompute"
+    """A derived cell's cached value disagreed with its recomputed value."""
+
+    COERCED_CELL = "coerced_cell"
+    """A text-kind cell was not stored as text, so LibreOffice may have
+    coerced its content."""
+
+
 @dataclass(frozen=True, slots=True)
 class IntegrityWarning:
     """One non-fatal integrity problem found while loading a database.
@@ -199,10 +212,7 @@ class IntegrityWarning:
         cached: The value that was cached in the cell.
         recomputed: The value recomputed from the row's source columns
             (and the value actually used).
-        kind: ``"recompute"`` (a derived cell's cached value disagreed
-            with its recomputed value) or ``"coerced_cell"`` (a
-            text-kind cell was not stored as text, so LibreOffice may
-            have coerced its content).
+        kind: See :class:`IntegrityWarningKind`.
     """
 
     sheet: str
@@ -210,7 +220,7 @@ class IntegrityWarning:
     column: str
     cached: str = ""
     recomputed: str = ""
-    kind: Literal["recompute", "coerced_cell"] = "recompute"
+    kind: IntegrityWarningKind = IntegrityWarningKind.RECOMPUTE
 
     def message(self) -> str:
         """Render a human-readable summary of this warning.
@@ -218,7 +228,7 @@ class IntegrityWarning:
         Returns:
             For example ``"Nodes.O3: cached private_key_ref value ... disagrees ..."``.
         """
-        if self.kind == "coerced_cell":
+        if self.kind == IntegrityWarningKind.COERCED_CELL:
             return (
                 f"{self.cell}: {self.column} is not formatted as text "
                 f"(value type {self.cached!r}); LibreOffice may have coerced its content"
@@ -471,7 +481,7 @@ def _row_values(
                     cell=f"{sheet_spec.name}.{sheet_spec.letter(col.name)}{ods_row}",
                     column=col.name,
                     cached=cell.value_type or "",
-                    kind="coerced_cell",
+                    kind=IntegrityWarningKind.COERCED_CELL,
                 )
             )
         values[col.name] = cell.text
