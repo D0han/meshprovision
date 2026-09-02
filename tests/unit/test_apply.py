@@ -543,6 +543,39 @@ def test_apply_plan_success_confirmed_and_persist_result(tmp_path, make_live) ->
     assert keys.find("deadbe01_priv") is not None
 
 
+def test_apply_plan_persists_the_truncated_name_not_the_desired_one(tmp_path, make_live) -> None:
+    """A truncated-but-CONFIRMED name write must persist what's really on the device.
+
+    Persisting the longer desired value instead would make the next run
+    re-diff against a name the device doesn't have, re-plan the same
+    rewrite, get truncated again, and never converge.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_long_name="Meshtastic ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    )
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    iface = _FakeIfaceTruncatesLongName()
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert outcome.ok is True, outcome.describe()
+    long_result = next(r for r in outcome.results if r.field == "long_name")
+    assert long_result.status == WriteStatus.CONFIRMED
+    assert "truncated" in long_result.message
+
+    assert outcome.record is not None
+    assert outcome.record.long_name == plan.name_change.desired_long_name[:20]
+    assert outcome.record.long_name != plan.name_change.desired_long_name
+
+
 class _RefreshFailsSession:
     """A session whose reconnect never succeeds -- pins the lost-reconnect path."""
 
@@ -600,6 +633,29 @@ class _FakeIfaceRaisesOnPublicKey(_FakeIfaceForApply):
 
     def getPublicKey(self) -> str | None:  # noqa: N802 -- real MeshInterface method name
         raise RuntimeError("serial read timed out")
+
+
+class _FakeLocalNodeTruncatesLongName(_FakeLocalNode):
+    """Simulates firmware silently truncating an over-length long_name on write."""
+
+    def setOwner(  # noqa: N802 -- real MeshInterface method name
+        self,
+        long_name: str | None = None,
+        short_name: str | None = None,
+        **_kw: object,
+    ) -> None:
+        if short_name is not None:
+            self._iface.user["shortName"] = short_name
+        if long_name is not None:
+            self._iface.user["longName"] = long_name[:20]
+
+
+class _FakeIfaceTruncatesLongName(_FakeIfaceForApply):
+    """An interface whose firmware truncates every long_name write to 20 bytes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.localNode = _FakeLocalNodeTruncatesLongName(self)
 
 
 class _ReadFailsAfterReconnectSession:

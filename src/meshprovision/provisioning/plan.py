@@ -631,7 +631,13 @@ class ChangePlan:
             "ble_pin_set": self.ble_pin_set,
         }
 
-    def to_record(self, *, existing: NodeRecord | None = None) -> NodeRecord:
+    def to_record(
+        self,
+        *,
+        existing: NodeRecord | None = None,
+        confirmed_short_name: str | None = None,
+        confirmed_long_name: str | None = None,
+    ) -> NodeRecord:
         """Build the ``Nodes`` sheet row this plan intends to persist.
 
         Pure: builds a new, fully re-validated record and never mutates
@@ -641,6 +647,14 @@ class ChangePlan:
             existing: The row to start from. Defaults to :attr:`db_entry`
                 (the row :func:`build_plan` was given), and falls back to
                 a fresh record for this node id when neither is set.
+            confirmed_short_name: The short name actually confirmed on the
+                device after a real (non-dry-run) apply, when firmware
+                truncated it -- overrides :attr:`name_change`'s desired
+                value so the record matches what the device really holds,
+                not what was asked for. ``None`` (the default, and always
+                for a dry-run preview) keeps the desired value.
+            confirmed_long_name: The long-name counterpart of
+                ``confirmed_short_name``.
 
         Returns:
             The new :class:`~meshprovision.db.nodes.NodeRecord`.
@@ -672,8 +686,16 @@ class ChangePlan:
             base = _NodeRecord(node_id=self.node_id.hex)
 
         changes: dict[str, object] = {
-            "short_name": self.name_change.desired_short_name,
-            "long_name": self.name_change.desired_long_name,
+            "short_name": (
+                confirmed_short_name
+                if confirmed_short_name is not None
+                else self.name_change.desired_short_name
+            ),
+            "long_name": (
+                confirmed_long_name
+                if confirmed_long_name is not None
+                else self.name_change.desired_long_name
+            ),
             "hw_model": self.hw_model,
             "firmware_version": self.firmware_version,
             "role": self.role,

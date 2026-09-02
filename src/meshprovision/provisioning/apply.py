@@ -696,6 +696,34 @@ def _verify_name(live: detect.LiveConfig, desired: str | None, *, field: str) ->
     )
 
 
+def _confirmed_name(results: Sequence[WriteResult], field: str) -> str | None:
+    """Find the truncated name a CONFIRMED ``owner`` write actually landed as.
+
+    ``persist_result`` must record what firmware confirmed is really on
+    the device, not what the plan wanted -- a name write that firmware
+    silently truncated is reported CONFIRMED (see :func:`_verify_name`)
+    since the write genuinely succeeded, but the plan's own *desired*
+    value is longer than what the device actually holds. Persisting the
+    desired value instead of the confirmed one would make the next run
+    re-diff against a name the device doesn't have, re-plan the same
+    rewrite, get truncated again, and never converge.
+
+    Args:
+        results: The verified write results from :func:`verify_plan`.
+        field: ``"short_name"`` or ``"long_name"``.
+
+    Returns:
+        The truncated name actually confirmed on the device, or ``None``
+        when this field's write was an exact match (or wasn't part of the
+        plan at all) -- callers fall back to the plan's desired value in
+        that case.
+    """
+    for result in results:
+        if result.section == "owner" and result.field == field and result.actual is not None:
+            return result.actual
+    return None
+
+
 def _verify_key_material(
     plan: ChangePlan,
     live_after: detect.LiveConfig,
@@ -1041,7 +1069,10 @@ def apply_plan(
         dry_run=False,
         verified=True,
         public_key_fingerprint=fingerprint,
-        record=plan.to_record(),
+        record=plan.to_record(
+            confirmed_short_name=_confirmed_name(outcome.results, "short_name"),
+            confirmed_long_name=_confirmed_name(outcome.results, "long_name"),
+        ),
     )
 
 
