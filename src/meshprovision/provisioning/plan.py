@@ -40,8 +40,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final
 
 from meshprovision.config.template import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.errors import LockdownRefusedError
@@ -66,6 +67,7 @@ __all__ = [
     "ChangePlan",
     "FieldChange",
     "LockdownDecision",
+    "LockdownReason",
     "NameChange",
     "PlanInputs",
     "PlanWarning",
@@ -301,27 +303,38 @@ class NameChange:
         return self.current_long_name != self.desired_long_name
 
 
+class LockdownReason(StrEnum):
+    """Why a :class:`LockdownDecision` came out the way it did."""
+
+    TEMPLATE_OPT_OUT = "template_opt_out"
+    """The template does not request ``security.is_managed``."""
+
+    AUTHORIZED = "authorized"
+    """Every gate passed and ``--allow-lockdown`` was given."""
+
+    ALREADY_LOCKED = "already_locked"
+    """Every gate passed, the explicit opt-in flag was not given this
+    run, but the live device is already locked down -- ``enable`` stays
+    ``True`` so this run does not silently unlock it."""
+
+    ALLOW_LOCKDOWN_NOT_SET = "allow_lockdown_not_set"
+    """Every hard gate passed, the device is not yet locked, and the
+    explicit opt-in flag was not given."""
+
+
 @dataclass(frozen=True, slots=True)
 class LockdownDecision:
     """The outcome of evaluating whether ``security.is_managed`` may be enabled.
 
     Attributes:
         enable: Whether ``is_managed`` should end up ``True``.
-        reason: ``"template_opt_out"`` (the template does not request
-            it), ``"authorized"`` (every gate passed and
-            ``--allow-lockdown`` was given), ``"already_locked"``
-            (every gate passed, the explicit opt-in flag was not given
-            this run, but the live device is already locked down --
-            ``enable`` stays ``True`` so this run does not silently
-            unlock it), or ``"allow_lockdown_not_set"`` (every hard
-            gate passed, the device is not yet locked, and the
-            explicit opt-in flag was not given).
+        reason: See :class:`LockdownReason`.
         gates: ``{"has_admin_keys": ..., "has_private_counterpart": ...,
             "audit_clean": ..., "explicit_intent": ...}``.
     """
 
     enable: bool
-    reason: Literal["template_opt_out", "authorized", "allow_lockdown_not_set", "already_locked"]
+    reason: LockdownReason
     gates: Mapping[str, bool]
 
 
@@ -1055,7 +1068,7 @@ def _evaluate_lockdown(
                 "explicit_intent": inputs.allow_lockdown,
             }
         )
-        return LockdownDecision(enable=False, reason="template_opt_out", gates=gates)
+        return LockdownDecision(enable=False, reason=LockdownReason.TEMPLATE_OPT_OUT, gates=gates)
 
     # Must precede the emptiness gate below: a fully compromised admin_nodes list
     # filters down to desired_admin_keys == () in plan_admin_keys._plan_admin_key_material, which
@@ -1109,9 +1122,11 @@ def _evaluate_lockdown(
     )
     if not inputs.allow_lockdown:
         if inputs.live.security.is_managed:
-            return LockdownDecision(enable=True, reason="already_locked", gates=gates)
-        return LockdownDecision(enable=False, reason="allow_lockdown_not_set", gates=gates)
-    return LockdownDecision(enable=True, reason="authorized", gates=gates)
+            return LockdownDecision(enable=True, reason=LockdownReason.ALREADY_LOCKED, gates=gates)
+        return LockdownDecision(
+            enable=False, reason=LockdownReason.ALLOW_LOCKDOWN_NOT_SET, gates=gates
+        )
+    return LockdownDecision(enable=True, reason=LockdownReason.AUTHORIZED, gates=gates)
 
 
 def _plan_security_section(
@@ -1258,7 +1273,7 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
     )
 
     lockdown = _evaluate_lockdown(inputs, admin_plan.desired)
-    if lockdown.reason == "allow_lockdown_not_set":
+    if lockdown.reason == LockdownReason.ALLOW_LOCKDOWN_NOT_SET:
         warnings.append(
             PlanWarning(
                 "lockdown_not_authorized",
