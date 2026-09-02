@@ -112,6 +112,34 @@ def test_table_run_shows_short_name_and_online_label(
     assert result.stderr == ""
 
 
+def test_table_run_never_interprets_a_node_name_as_rich_markup(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+    hostile_name = "[bold red]INJECTED[/bold red][link=file:///etc/passwd]click[/link]"
+    # Force a wide console so the cell isn't word-wrapped across lines --
+    # Rich reads COLUMNS when it can't detect a real terminal (as under
+    # CliRunner), and a wrap would otherwise interleave other columns'
+    # text between the two halves of this cell in the captured output.
+    wide_env = {**env, "COLUMNS": "300"}
+
+    with mock_sources(nodes={node_hex: {"shortName": hostile_name, "seenBy": {"gw1": recent}}}):
+        result = invoke(runner, ["status"], wide_env)
+
+    assert result.exit_code == 0
+    # Rendered literally -- the console must not parse a device-reported
+    # name (sourced from third-party mesh aggregators, not this operator)
+    # as Rich markup, which could otherwise produce a spoofed terminal
+    # hyperlink or swallow the tag as invisible styling.
+    assert hostile_name in result.stdout
+
+
 def test_offline_node_exit_code_and_no_fail_on_offline(
     runner: CliRunner,
     env: dict[str, str],

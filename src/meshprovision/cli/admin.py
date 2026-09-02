@@ -612,7 +612,7 @@ def admin_list(ctx: CliContext, *, json_output: bool) -> None:
                 ", ".join(summary.pending_on) or "-",
                 style=audit_style,
             )
-        ctx.err.print(table)
+        ctx.err.print(table, markup=False, highlight=False)
 
     if any(not summary.present for summary in summaries if summary.in_template):
         ctx.error("One or more template admin_nodes are missing from the Keys sheet.")

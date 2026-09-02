@@ -228,7 +228,7 @@ def render_console(
     table = build_table(report)
     if not show_summary:
         table.caption = None
-    active_console.print(table)
+    active_console.print(table, markup=False, highlight=False)
 
 
 def report_to_json_dict(report: StatusReport) -> dict[str, object]:
