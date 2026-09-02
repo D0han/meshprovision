@@ -867,7 +867,19 @@ def verify_plan(
 
     for change in plan.sections:
         for field_change in change.changes:
-            actual = live_after.value(change.section, field_change.field)
+            if change.section == "security":
+                # LiveConfig.sections/module_sections deliberately exclude
+                # "security" (its content lives in LiveConfig.security
+                # instead -- see that field's docstring), so the generic
+                # value() lookup below always returns None here and every
+                # security scalar field (is_managed, serial_enabled,
+                # debug_log_api_enabled, admin_channel_enabled) would
+                # otherwise report UNCONFIRMED even on a fully successful
+                # write. Read the real post-write value the same way
+                # _verify_key_material/_verify_admin_keys already do.
+                actual = getattr(live_after.security, field_change.field, None)
+            else:
+                actual = live_after.value(change.section, field_change.field)
             if values_equal(actual, field_change.desired):
                 results.append(
                     WriteResult(

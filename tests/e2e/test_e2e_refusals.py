@@ -123,23 +123,21 @@ def test_is_managed_gated_but_not_authorized_then_authorized(
 
     # With every safety gate satisfied and --allow-lockdown passed, the plan
     # legitimately sets security.is_managed=True on the device (observable
-    # below directly on the fake interface). However, apply.verify_plan's
-    # generic per-field read-back (detect.LiveConfig.value()) never looks
-    # inside "security" -- that section is deliberately excluded from
-    # LiveConfig.sections and surfaced only via the separate
-    # LiveConfig.security structure -- so a changed security scalar field
-    # (is_managed here) can never be confirmed by the shipped verification
-    # pass. The system fails safe: the node is left UNCERTAIN and the
-    # database is correctly never updated for an unconfirmed security
-    # change, even though the device-side write itself succeeded.
+    # below directly on the fake interface) -- and verify_plan reads the
+    # real post-write value back from LiveConfig.security (the same way
+    # _verify_key_material/_verify_admin_keys already did), so the write is
+    # correctly confirmed and persisted, not left UNCERTAIN.
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
     allowed = invoke(
         runner,
         ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--allow-lockdown"],
         env,
     )
-    assert allowed.exit_code == 5
-    assert "UNCERTAIN" in allowed.stderr
+    assert allowed.exit_code == 0
+    assert "UNCERTAIN" not in allowed.stderr
     assert iface.localNode.localConfig.security.is_managed is True
+    assert db_fingerprint(db_path) != before
 
 
 def test_transactional_write_failure_drop_security_keys(
