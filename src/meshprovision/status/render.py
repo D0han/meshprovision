@@ -169,6 +169,7 @@ def build_table(report: StatusReport) -> Table:
     table.add_column("Node")
     table.add_column("Short")
     table.add_column("Long")
+    table.add_column("Mgmt")
     table.add_column("Status")
     table.add_column("Last seen")
     table.add_column("Timestamp")
@@ -188,6 +189,7 @@ def build_table(report: StatusReport) -> Table:
             node.node_id.display,
             _text_cell(node.short_name),
             _text_cell(node.long_name),
+            _text_cell(node.management),
             AVAILABILITY_LABELS[node.availability],
             node.age_text,
             _timestamp_cell(node.last_seen),

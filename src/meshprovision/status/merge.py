@@ -231,13 +231,23 @@ class MergedNode:
             return self.record.short_name
         return self.node_id.display
 
+    @property
+    def management(self) -> str | None:
+        """This node's database management mode.
+
+        Returns:
+            ``"template"`` or ``"observed"`` from :attr:`record`, or
+            ``None`` when the node has no row in the ``Nodes`` sheet.
+        """
+        return None if self.record is None else self.record.management.value
+
     def to_json_dict(self) -> dict[str, object]:
         """Render this node as a stable, secret-free JSON-able mapping.
 
         Never emits ``ble_pin``, any key material, or a ``key_ref`` --
         :attr:`record` is never serialized wholesale; only its
-        ``short_name``/``long_name``/``role``/``region`` are picked into
-        a nested ``"database"`` object.
+        ``short_name``/``long_name``/``role``/``region``/``management``
+        are picked into a nested ``"database"`` object.
 
         Returns:
             A mapping with insertion-ordered keys, safe to pass to
@@ -250,6 +260,7 @@ class MergedNode:
                 "long_name": self.record.long_name,
                 "role": self.record.role,
                 "region": self.record.region,
+                "management": self.record.management.value,
             }
         return {
             "node_id": self.node_id.hex,

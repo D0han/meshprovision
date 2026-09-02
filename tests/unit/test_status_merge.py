@@ -156,7 +156,15 @@ def test_merged_node_to_json_dict_never_contains_secrets() -> None:
         "long_name": "",
         "role": "CLIENT",
         "region": "EU_868",
+        "management": "template",
     }
+
+
+def test_merged_node_management_is_none_when_not_in_database() -> None:
+    obs = _obs(SOURCE_LORANET, last_seen=NOW)
+    merged = merge_observations(NID, [obs], record=None, now=NOW)
+    assert merged.management is None
+    assert merged.to_json_dict()["database"] is None
 
 
 def test_merge_all_preserves_caller_order_never_re_sorts() -> None:
@@ -329,6 +337,7 @@ def test_build_table_returns_expected_columns() -> None:
         "Node",
         "Short",
         "Long",
+        "Mgmt",
         "Status",
         "Last seen",
         "Timestamp",
