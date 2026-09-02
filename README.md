@@ -513,7 +513,7 @@ mesh --no-cache status --json
 mesh status --no-fail-on-offline
 ```
 
-The rendered table columns are: Node, Short, Long, Status, Last seen,
+The rendered table columns are: Node, Short, Long, Mgmt, Status, Last seen,
 Timestamp, Batt, Volt, ChUtil, AirTx, Nbrs, Sources.
 
 `--watch` respects the cache TTL (default poll interval = the cache TTL,
@@ -548,7 +548,10 @@ mesh admin list --json
   per admin node. Later admins are authorized on earlier ones only when
   those devices are next connected -- the run **reports** which
   cross-authorizations are still pending rather than silently skipping
-  them.
+  them. It reuses `run_provision` wholesale, so it accepts and honors
+  every option in `mesh provision`'s table above (`--dry-run`, `--enroll`,
+  `--allow-lockdown`, `--allow-weak-admin-key`, `--force-regenerate-key`,
+  `--no-reconnect`, `-y`/`--yes`, `--json`) in addition to its own `--ref`.
 - `import` registers a public key you already hold, without touching a
   device. It validates length and canonical base64, runs the weak-key
   audit, and refuses a key already registered under a different reference
@@ -573,6 +576,14 @@ mesh db backup
 mesh db backup --list
 mesh db backup --retention 20 --backup-dir /mnt/usb/mesh-backups
 ```
+
+| Option | Meaning |
+|---|---|
+| `--strict` (`verify`) | Treat a bare warning (no error or critical problem) as a failing exit code too |
+| `--backup-dir` (`backup`) | Directory to store backups under. Defaults to `data/backups` |
+| `--retention` (`backup`) | Number of backups to retain (default: 20) |
+| `--list` (`backup`) | List existing backups instead of creating one |
+| `--json` | Emit JSON instead of human text |
 
 - `verify` layers cross-reference checks, a weak-key audit over every key
   row, and alias-aware cross-fleet duplicate detection on top of the
