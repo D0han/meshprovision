@@ -50,6 +50,7 @@ _ensure_package_importable()
 
 from meshprovision.crypto import keys as crypto_keys  # noqa: E402
 from meshprovision.crypto import weakkeys  # noqa: E402
+from meshprovision.db import locking  # noqa: E402
 from meshprovision.errors import KeyMaterialError, MeshprovisionError  # noqa: E402
 
 _HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
@@ -262,9 +263,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         target = _resolve_target(args.target)
-        existing_text = target.read_text(encoding="utf-8") if target.exists() else ""
-        existing = set(weakkeys.parse_known_bad_keys(existing_text, source=str(target)))
-
         tokens = _read_candidate_tokens(args.source)
         decoded: list[bytes] = []
         seen_in_source: set[bytes] = set()
@@ -274,20 +272,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                 seen_in_source.add(raw)
                 decoded.append(raw)
 
-        new_keys = [raw for raw in decoded if raw not in existing]
-        already_present = len(decoded) - len(new_keys)
-        print(f"read {len(decoded)}, new {len(new_keys)}, already present {already_present}")
+        # Held across the read-decide-write sequence below: two concurrent
+        # invocations each computing "new" keys from their own independent
+        # read of `target` would otherwise race, and the second writer's
+        # _append_block call could silently clobber the first's just-merged
+        # block (last-writer-wins on the temp-file-then-replace).
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with locking.exclusive_lock(target):
+            existing_text = target.read_text(encoding="utf-8") if target.exists() else ""
+            existing = set(weakkeys.parse_known_bad_keys(existing_text, source=str(target)))
 
-        if args.check:
-            return 1 if new_keys else 0
-        if not new_keys:
-            return 0
-        if args.dry_run:
-            for raw in new_keys:
-                print(base64.b64encode(raw).decode("ascii"))
-            return 0
+            new_keys = [raw for raw in decoded if raw not in existing]
+            already_present = len(decoded) - len(new_keys)
+            print(f"read {len(decoded)}, new {len(new_keys)}, already present {already_present}")
 
-        _append_block(target, new_keys, comment=args.comment, source=args.source)
+            if args.check:
+                return 1 if new_keys else 0
+            if not new_keys:
+                return 0
+            if args.dry_run:
+                for raw in new_keys:
+                    print(base64.b64encode(raw).decode("ascii"))
+                return 0
+
+            _append_block(target, new_keys, comment=args.comment, source=args.source)
         return 0
     except MeshprovisionError as exc:
         print(exc.user_message, file=sys.stderr)
