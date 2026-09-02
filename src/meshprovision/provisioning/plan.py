@@ -307,15 +307,19 @@ class LockdownDecision:
         enable: Whether ``is_managed`` should end up ``True``.
         reason: ``"template_opt_out"`` (the template does not request
             it), ``"authorized"`` (every gate passed and
-            ``--allow-lockdown`` was given), or
-            ``"allow_lockdown_not_set"`` (every hard gate passed, but
-            the explicit opt-in flag was not given).
+            ``--allow-lockdown`` was given), ``"already_locked"``
+            (every gate passed, the explicit opt-in flag was not given
+            this run, but the live device is already locked down --
+            ``enable`` stays ``True`` so this run does not silently
+            unlock it), or ``"allow_lockdown_not_set"`` (every hard
+            gate passed, the device is not yet locked, and the
+            explicit opt-in flag was not given).
         gates: ``{"has_admin_keys": ..., "has_private_counterpart": ...,
             "audit_clean": ..., "explicit_intent": ...}``.
     """
 
     enable: bool
-    reason: Literal["template_opt_out", "authorized", "allow_lockdown_not_set"]
+    reason: Literal["template_opt_out", "authorized", "allow_lockdown_not_set", "already_locked"]
     gates: Mapping[str, bool]
 
 
@@ -1024,6 +1028,16 @@ def _evaluate_lockdown(
             with a compromised key" cases. The weak-key audit is checked
             first, so a key that is both compromised and mismatched is
             reported as ``"weak_admin_key"``.
+
+    Note:
+        ``--allow-lockdown`` gates only the *disabled -> enabled*
+        transition. When the live device is already locked down
+        (``inputs.live.security.is_managed`` is ``True``) and every
+        hard gate above still passes, this returns ``enable=True``
+        regardless of ``inputs.allow_lockdown`` -- an operator who
+        forgets to repeat ``--allow-lockdown`` on a later, unrelated
+        re-run must never have this function plan to *disable* an
+        admin lockdown that was deliberately enabled earlier.
     """
     if not inputs.template.security.is_managed:
         gates = MappingProxyType(
@@ -1087,6 +1101,8 @@ def _evaluate_lockdown(
         }
     )
     if not inputs.allow_lockdown:
+        if inputs.live.security.is_managed:
+            return LockdownDecision(enable=True, reason="already_locked", gates=gates)
         return LockdownDecision(enable=False, reason="allow_lockdown_not_set", gates=gates)
     return LockdownDecision(enable=True, reason="authorized", gates=gates)
 

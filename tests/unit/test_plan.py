@@ -889,6 +889,29 @@ def test_lockdown_positive_gates_but_not_allowed(make_live, template, make_admin
     assert plan.lockdown.gates["explicit_intent"] is False
 
 
+def test_lockdown_stays_enabled_without_allow_lockdown_when_already_locked(
+    make_live, template, make_admin_key
+) -> None:
+    admin = make_admin_key("ADMIN1", has_private=True, audit_ok=True)
+    template2 = _with_admin_and_lockdown(template, "ADMIN1")
+    live = make_live(template2, security=make_security(is_managed=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+        allow_lockdown=False,
+    )
+    plan = build_plan(inputs)
+    assert plan.lockdown.enable is True
+    assert plan.lockdown.reason == "already_locked"
+    assert not any(w.code == "lockdown_not_authorized" for w in plan.warnings)
+    security_section = plan.section("security")
+    if security_section is not None:
+        assert not any(c.field == "is_managed" for c in security_section.changes)
+
+
 def test_lockdown_authorized(make_live, template, make_admin_key) -> None:
     admin = make_admin_key("ADMIN1", has_private=True, audit_ok=True)
     template2 = _with_admin_and_lockdown(template, "ADMIN1")
