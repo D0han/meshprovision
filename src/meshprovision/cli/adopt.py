@@ -21,7 +21,6 @@ does write to the database.
 
 from __future__ import annotations
 
-import base64
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, cast
 
@@ -29,6 +28,7 @@ import click
 
 from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_errors, pass_cli
 from meshprovision.cli.provision import TransportOptions, resolve_backend, transport_options
+from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
 from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import AdoptionRefusedError
@@ -94,7 +94,7 @@ def _render_admin_key_lines(
         return ()
     if show_admin_keys:
         return tuple(
-            f"mesh admin import <REF>={base64.b64encode(key.material).decode('ascii')}"
+            f"mesh admin import <REF>={crypto_keys.encode_key(key.material)}"
             for key in unregistered
         )
     return (
