@@ -260,19 +260,11 @@ def test_is_low_entropy_boundaries() -> None:
     assert is_low_entropy(low_distinct) is True
 
 
-def test_low_entropy_severity_warning_vs_critical() -> None:
-    # A hamming weight just under LOW_HAMMING_MIN -> critical.
-    critical_raw = bytearray(32)
-    weight = 0
-    idx = 0
-    while weight < LOW_HAMMING_MIN - 1:
-        critical_raw[idx % 32] |= 1 << (idx // 32 % 8)
-        weight += 1
-        idx += 1
-    critical_finding = [
+def _low_entropy_finding(raw: bytes) -> weakkeys.WeakKeyFinding:
+    [finding] = [
         f
         for f in weakkeys._structural_findings(
-            bytes(critical_raw),
+            raw,
             include_small_order=False,
             fp="sha256:test",
             node_id=None,
@@ -281,7 +273,38 @@ def test_low_entropy_severity_warning_vs_critical() -> None:
         )
         if f.check == WeakKeyCheck.LOW_ENTROPY
     ]
-    assert critical_finding and critical_finding[0].severity == "critical"
+    return finding
+
+
+def test_low_entropy_severity_symmetric_across_both_hamming_bounds() -> None:
+    """Regression test: an above-maximum weight is exactly as critical as below-minimum.
+
+    LOW_HAMMING_MIN/MAX are documented as a symmetric bound -- a key with
+    an abnormally *high* Hamming weight (nearly all one-bits) is exactly
+    as degenerate as one with an abnormally *low* weight (nearly all
+    zero-bits), so both must report the same severity. Only the
+    distinct-byte-count trigger stays at warning (see
+    test_soft_audit_finding_logs_a_warning in test_pipeline.py, which
+    pins that as deliberate).
+    """
+    below_min_weight = bytearray(32)
+    weight = 0
+    idx = 0
+    while weight < LOW_HAMMING_MIN - 1:
+        below_min_weight[idx % 32] |= 1 << (idx // 32 % 8)
+        weight += 1
+        idx += 1
+    assert is_low_entropy(bytes(below_min_weight)) is True
+    assert _low_entropy_finding(bytes(below_min_weight)).severity == "critical"
+
+    above_max_target = LOW_HAMMING_MAX + 8
+    above_max_weight = bytes([0xFF] * (above_max_target // 8)) + bytes(32 - above_max_target // 8)
+    assert is_low_entropy(above_max_weight) is True
+    assert _low_entropy_finding(above_max_weight).severity == "critical"
+
+    low_distinct = bytes([1, 2, 3, 4]) * 8
+    assert is_low_entropy(low_distinct) is True
+    assert _low_entropy_finding(low_distinct).severity == "warning"
 
 
 def test_clamping_check_default_off_and_explicit_on(keypair_factory) -> None:

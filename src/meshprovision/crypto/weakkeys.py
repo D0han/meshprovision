@@ -712,7 +712,12 @@ def _structural_findings(
         )
     if is_low_entropy(raw):
         weight = hamming_weight(raw)
-        severity = WeakKeySeverity.CRITICAL if weight < LOW_HAMMING_MIN else WeakKeySeverity.WARNING
+        # LOW_HAMMING_MIN/MAX are a symmetric bound (see their docstrings) --
+        # a weight abnormally high is exactly as suspect as one abnormally
+        # low, so both sides are critical. A merely low distinct-byte count
+        # with an otherwise-normal weight stays warning: distinct.
+        low_or_high_weight = weight < LOW_HAMMING_MIN or weight > LOW_HAMMING_MAX
+        severity = WeakKeySeverity.CRITICAL if low_or_high_weight else WeakKeySeverity.WARNING
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.LOW_ENTROPY,
