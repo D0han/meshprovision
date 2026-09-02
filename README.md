@@ -428,9 +428,10 @@ copies the raw file with `shutil.copy2`, which reads the inode it opened
 through to completion even if a concurrent writer replaces the path
 mid-copy, so a backup is always a complete snapshot of one version of
 the database. A second write command that cannot acquire the lock
-within `MESHPROVISION_LOCK_TIMEOUT` seconds (default 5) fails fast with
-exit code 4 and a message naming the holder's pid when known, rather
-than silently discarding whichever write loses the race. Read-only
+within `MESHPROVISION_LOCK_TIMEOUT` seconds (default 60, sized for a
+full multi-section device transaction rather than just the save) fails
+fast with exit code 4 and a message naming the holder's pid when known,
+rather than silently discarding whichever write loses the race. Read-only
 commands (`mesh status`, `mesh db verify`, `mesh db backup`) are never
 blocked by it. `--dry-run` does not take the lock. POSIX only: on a
 platform without `fcntl` the lock is a no-op, logged once at WARNING.

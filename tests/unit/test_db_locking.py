@@ -71,6 +71,20 @@ def test_lock_file_records_the_holder_pid(tmp_path: Path) -> None:
 
 
 @_POSIX_ONLY
+def test_locked_error_hint_mentions_the_timeout_env_var(tmp_path: Path) -> None:
+    """The hint must proactively surface the tuning knob, not just say "wait"."""
+    target = tmp_path / "nodes_db.ods"
+    with (
+        locking.exclusive_lock(target, timeout=1.0),
+        pytest.raises(DatabaseLockedError) as excinfo,
+        locking.exclusive_lock(target, timeout=0.1),
+    ):
+        pass
+    assert "MESHPROVISION_LOCK_TIMEOUT" in (excinfo.value.hint or "")
+    assert "0.1" in (excinfo.value.hint or "")
+
+
+@_POSIX_ONLY
 def test_locked_error_names_the_holder_pid(tmp_path: Path) -> None:
     target = tmp_path / "nodes_db.ods"
     with (

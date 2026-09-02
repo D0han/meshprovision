@@ -74,8 +74,21 @@ _logger = logging.getLogger(__name__)
 LOCK_SUFFIX: Final[str] = ".lock"
 """Suffix appended to a target path to derive its sidecar lock file path."""
 
-DEFAULT_LOCK_TIMEOUT: Final[float] = 5.0
-"""Default number of seconds :func:`exclusive_lock` polls before giving up."""
+DEFAULT_LOCK_TIMEOUT: Final[float] = 60.0
+"""Default number of seconds :func:`exclusive_lock` polls before giving up.
+
+Sized for the transaction the write lock actually guards -- the whole
+device provisioning conversation, not just the database save. A single
+reboot-triggering section write already costs
+:data:`~meshprovision.provisioning.apply.DEFAULT_SETTLE_SECONDS` (5s)
+plus, on a lost connection, up to
+:data:`~meshprovision.provisioning.apply.DEFAULT_RECONNECT_ATTEMPTS`
+backoff-spaced reconnect attempts; a multi-section plan easily runs well
+past a minute. A short default here doesn't fail safer -- it just makes
+two callers provisioning two *unrelated* devices concurrently (this
+project's own normal fleet workflow) spuriously collide on
+:class:`~meshprovision.errors.DatabaseLockedError` on almost every run.
+"""
 
 LOCK_TIMEOUT_ENV: Final[str] = "MESHPROVISION_LOCK_TIMEOUT"
 """Environment variable overriding the lock-acquisition timeout."""
@@ -268,9 +281,13 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
                             "A concurrent `mesh provision` or `mesh admin` run"
                             f"{f' (pid {holder_pid})' if holder_pid else ''} holds "
                             "the write lock; it may be waiting at a confirmation "
-                            "prompt. Wait for it to finish, or check for a stale "
-                            "process. Read-only commands (`mesh status`, `mesh db "
-                            "verify`, `mesh db backup`) are never blocked."
+                            "prompt, or simply still mid-provision on a different "
+                            "device. Wait for it to finish, or check for a stale "
+                            "process. If this happens routinely with normal "
+                            "concurrent fleet use, raise MESHPROVISION_LOCK_TIMEOUT "
+                            f"(currently resolves to {resolved_timeout}s). Read-only "
+                            "commands (`mesh status`, `mesh db verify`, `mesh db "
+                            "backup`) are never blocked."
                         ),
                     ) from None
                 time.sleep(_POLL_INTERVAL)
