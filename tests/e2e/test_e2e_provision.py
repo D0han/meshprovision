@@ -237,6 +237,54 @@ def test_drift_repair_renames_back_and_updates_role(
     assert bytes(iface.localNode.localConfig.security.public_key) == kp.public
 
 
+def test_stale_db_key_is_corrected_by_adopting_the_devices_reported_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Regression test for the `adopt_device_key` persistence gap (firmware #7449).
+
+    A plan that decides to adopt the device's reported key rather than
+    overwrite it (because the Keys sheet disagrees with what the device
+    holds) must actually correct the Keys sheet -- not just print a
+    warning and leave the stale row in place forever.
+    """
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    first = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first.exit_code == 0
+
+    device_public_key = bytes(iface.localNode.localConfig.security.public_key)
+    device_private_key = bytes(iface.localNode.localConfig.security.private_key)
+
+    loaded = ods.load_database(db_path)
+    node_record = NodeRecord.from_row(loaded.nodes[0])
+    stale = keypair_factory()
+    stale_pub, stale_priv = KeyRecord.for_keypair("deadbe01", stale)
+    seed_db(nodes=[node_record], keys=[stale_pub, stale_priv])
+
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert second.exit_code == 0
+    assert "#7449" in second.stderr
+
+    # The device's own key material is never touched -- only adopted into the DB.
+    assert bytes(iface.localNode.localConfig.security.public_key) == device_public_key
+    assert bytes(iface.localNode.localConfig.security.private_key) == device_private_key
+    assert device_public_key != stale.public
+
+    loaded_after = ods.load_database(db_path)
+    keys_after = {row["key_ref"]: row for row in loaded_after.keys}
+    assert KeyRecord.from_row(keys_after["deadbe01_pub"]).material() == device_public_key
+    assert KeyRecord.from_row(keys_after["deadbe01_priv"]).secret().reveal() == device_private_key
+
+    _assert_no_secrets(second.stdout)
+    _assert_no_secrets(second.stderr)
+
+
 def test_repair_with_no_admin_nodes_template_preserves_existing_admin_keys(
     runner: CliRunner,
     env: dict[str, str],

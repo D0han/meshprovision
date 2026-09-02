@@ -45,7 +45,12 @@ from meshprovision.crypto import weakkeys
 from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyType, ManagementMode
-from meshprovision.errors import DeviceNotFoundError, ExitCode, NodeNotEnrolledError
+from meshprovision.errors import (
+    DeviceNotFoundError,
+    ExitCode,
+    NodeNotEnrolledError,
+    PlanConflictError,
+)
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import apply, connection, detect, discovery, repair
 from meshprovision.provisioning import plan as plan_mod
@@ -273,7 +278,9 @@ class ProvisionResult:
         plan: The change plan that was built and (unless a dry run)
             applied.
         keypair: The freshly generated node keypair, when one was
-            generated.
+            generated (``regenerate``); the device's own already-existing
+            keypair, when one was adopted into the database instead
+            (``adopt_device_key``); otherwise ``None``.
         outcome: The result of applying the plan to the device, or
             ``None`` for a dry run.
         persisted: Whether the database was updated.
@@ -626,7 +633,21 @@ def run_provision(
         if not ctx.confirm(question, default=False):
             raise click.Abort()
 
-    keypair = crypto_keys.generate_keypair() if change_plan.key_plan.regenerate else None
+    if change_plan.key_plan.regenerate:
+        keypair: crypto_keys.KeyPair | None = crypto_keys.generate_keypair()
+    elif change_plan.key_plan.adopt_device_key:
+        # _plan_node_keypair only sets adopt_device_key once it has confirmed
+        # both are present -- this guards the type, not a real code path.
+        live_public = live.security.public_key
+        live_private = live.security.private_key
+        if live_public is None or live_private is None:  # pragma: no cover
+            raise PlanConflictError(
+                "Plan wants to adopt the device's key but the device reported none",
+                field="security.public_key",
+            )
+        keypair = crypto_keys.KeyPair(private=live_private, public=live_public)
+    else:
+        keypair = None
 
     outcome = apply.apply_plan(change_plan, session, keypair=keypair, dry_run=False)
     for line in outcome.describe():

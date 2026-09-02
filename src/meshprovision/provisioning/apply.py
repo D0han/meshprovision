@@ -913,7 +913,12 @@ def apply_plan(
         session: The device session to write and (unless ``verify`` is
             ``False``) re-read through.
         keypair: The freshly generated keypair, required when
-            ``plan.key_plan.regenerate`` is set.
+            ``plan.key_plan.regenerate`` is set. The caller may also pass
+            the device's own already-existing keypair when
+            ``plan.key_plan.adopt_device_key`` is set instead -- this
+            function never writes or verifies it (nothing changed on the
+            device to verify against), but the same value flows through
+            to :func:`persist_result`, which does record it.
         dry_run: When ``True``, no device writes are attempted; every
             result is :attr:`WriteStatus.SKIPPED`.
         verify: When ``False``, skip the read-back verification pass
@@ -1050,7 +1055,11 @@ def persist_result(
             ``nodes`` -- this is what makes the final :meth:`save` atomic
             across both sheets.
         keypair: The freshly generated keypair, when one was confirmed on
-            the device.
+            the device (``key_plan.regenerate``); or the device's own
+            already-existing keypair, when the plan adopted it instead of
+            overwriting it (``key_plan.adopt_device_key``, firmware issue
+            #7449). Either way, ``keys`` is updated to match what the
+            device now holds.
         admin_key_refs: Unused directly here (the confirmed record's
             ``authorized_admin_keys`` already reflects the plan); kept as
             part of this function's documented signature for callers that

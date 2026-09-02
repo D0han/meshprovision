@@ -194,9 +194,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   firmware 2.8's tightened limit. A template that validated cleanly under
   the old limit could render a name that firmware 2.8 silently truncates on
   write. 25 bytes is safe for 2.7.x devices too.
+- `mesh adopt` no longer reports a node as "not vulnerable" to
+  CVE-2025-52464 when its firmware version is missing or unparseable; it
+  now warns that the vulnerability status is unknown, matching the same
+  function's existing handling of an unmappable region or role.
+- `mesh provision` now actually records a device's own reported public
+  key into the `Keys` sheet when the plan decides to adopt it rather than
+  overwrite it (`security.public_key: adopt the device's reported key` in
+  `--dry-run` output, firmware issue #7449's "a restored key can silently
+  fail to persist" case). Previously this decision was only ever
+  described, never applied: the stale `Keys` sheet row was left in place
+  indefinitely, and every subsequent run re-reported the same
+  `device_key_differs_from_db` warning and re-triggered an unnecessary
+  device reboot. The device's own keypair is never written back to the
+  device in this case -- only the database is corrected to match what the
+  device already holds.
 
 ### Security
 
+- **`mesh status`'s rendered table and `mesh admin list`'s table no longer
+  interpret a device-reported name as Rich markup.** A name sourced from a
+  third-party aggregator (loranet.pl/lorastats.pl) could embed markup like
+  `[link=file:///etc/passwd]click[/link]`, which Rich rendered as a real,
+  spoofed clickable terminal hyperlink -- every other console-print call
+  site in this project already disabled markup interpretation for exactly
+  this reason; these two direct `Console.print(table)` calls had not.
 - **Fixed a critical authorization bypass: an admin public key already
   flagged as compromised by this project's own weak-key audit could be
   authorized onto a device with no warning, no dry-run line, and no log
