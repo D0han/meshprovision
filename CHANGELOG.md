@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   live reality (unlike `mesh provision`'s narrow-only rule for a
   template-managed row); re-adopting an already-`management=template` node
   is refused unless `--force`, with an explicit demotion warning.
+- `mesh status` now shows each node's `management` mode (`template` or
+  `observed`) -- a new `Mgmt` console column and a `management` key in
+  `--json`'s per-node `database` object -- so a fleet mixing
+  template-managed and adopted-but-not-yet-enrolled nodes is distinguishable
+  without opening the `.ods` by hand.
 - Hand-editable ODS database (`Nodes` + `Keys` sheets) written with odfpy
   directly: OpenFormula formulas for every derived column, dropdown content
   validation generated from the installed protobuf enums, a frozen header row,
@@ -167,6 +172,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removal already was -- previously, an admin key an operator never asked
   to remove (for example a trusted collaborator's) could be wiped with no
   warning anywhere.
+- `mesh provision --allow-weak-admin-key` no longer claims a weak admin key
+  "will be removed" when the key is both template-named and already live on
+  the device -- the override re-authorizes it in place, so no device write
+  happens, but the plan's `--dry-run`/`--json` output previously reported a
+  removal that would not occur. This was a false statement in the tool's
+  own security audit trail on a security-relevant field, not a data-loss
+  bug: the device and database always ended up where the operator asked.
+- A database-save failure during `mesh provision --enroll` now tells the
+  operator up front that the node needs `--enroll` again on retry. The
+  previous hint predated `--enroll`/`management`, so a literal re-run
+  hit `NodeNotEnrolledError` a second time before reaching the right fix.
+- `mesh provision`/`mesh repair`'s admin-key drift detection no longer
+  reports a false `ADMIN_KEYS` drift for a key registered under more than
+  one `Keys` sheet reference (for example `mesh admin bootstrap --ref
+  LABEL`'s deliberate dual filing). The lookup used to invert `{ref:
+  material}` into `{material: ref}`, silently keeping only one alias; it
+  now preserves every matching ref, the same alias-aware logic `mesh
+  adopt` already used.
+- `long_name`'s enforced limit is now 25 UTF-8 bytes, down from 39, matching
+  firmware 2.8's tightened limit. A template that validated cleanly under
+  the old limit could render a name that firmware 2.8 silently truncates on
+  write. 25 bytes is safe for 2.7.x devices too.
 
 ### Security
 
