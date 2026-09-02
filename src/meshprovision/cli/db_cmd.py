@@ -221,7 +221,13 @@ def verify_database(
     key-cloning signature) only when it contains two or more *distinct*
     owners whose ``Keys`` sheet ref names an actual node id (``schema.
     ref_for`` only ever files a device's own key under ``<node_id>_pub``,
-    never a template ``admin_nodes`` label); a node-plus-label group (or
+    never a template ``admin_nodes`` label) -- checked by the *canonical*
+    8-lowercase-hex-digit form specifically
+    (:meth:`~meshprovision.nodeid.NodeId.hex`'s own zero-padded shape),
+    not merely whether the owner is parseable as *some* node id form:
+    ``NodeId.try_parse`` alone also accepts a 1-7 character all-hex
+    string, which a short hex-looking template label (``"cafe"``,
+    ``"face"``) could satisfy by coincidence; a node-plus-label group (or
     a labels-only group) is reported as an informational alias warning
     instead. Deliberately does **not** additionally require that node to
     already have a ``Nodes`` sheet row: an admin key registered via
@@ -402,7 +408,19 @@ def verify_database(
         for member_ref in group:
             member = db.keys.find(member_ref)
             owner = member.owner_node_id if member is not None else member_ref
-            if NodeId.try_parse(owner) is not None:
+            # NodeId.try_parse() alone is too permissive here: it also
+            # accepts 1-7 character all-hex strings (NodeId.parse's case
+            # (e), meant for lorastats/human-typed shortcuts elsewhere),
+            # so a short hex-looking template label like "cafe" or
+            # "face" would satisfy it and be wrongly counted as a real
+            # device. schema.ref_for() only ever files a device's own
+            # key under its *canonical* NodeId.hex form -- always
+            # exactly 8 lowercase hex digits, zero-padded -- so the
+            # round-trip check (parses, AND the parse's own canonical
+            # form equals the string as-is) is what actually proves
+            # "this owner IS a node id," not merely "looks hex-shaped."
+            parsed = NodeId.try_parse(owner)
+            if parsed is not None and parsed.hex == owner:
                 node_owners.add(owner)
 
         rest = tuple(member_ref for member_ref in group if member_ref != group[0])
