@@ -303,27 +303,6 @@ def test_diff_record_admin_key_rendering_with_unknown_key(make_live, keypair_fac
     assert f"<unknown:{redact.fingerprint(kp2.public)}>" in admin_drift.observed
 
 
-def test_diff_record_public_key_present_ref_always_derived_from_node_id(
-    make_live, keypair_factory
-) -> None:
-    """Pin down that a live public key never trips the KEY_MATERIAL drift check.
-
-    ``NodeRecord.public_key_ref`` is a derived property (``node_id + "_pub"``)
-    that is never empty as long as ``node_id`` is set, so a device reporting a
-    real public key never trips the check on that path.
-    """
-    from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
-
-    template = load_template_text("version: 1\n")
-    kp = keypair_factory()
-    live = make_live(template, security=make_security(keypair=kp))
-    record = NodeRecord(node_id="deadbe01")
-    assert record.public_key_ref == "deadbe01_pub"
-    drifts = repair.diff_record(live, record)
-    assert not any(d.kind is repair.DriftKind.KEY_MATERIAL for d in drifts)
-
-
 def test_diff_record_aliased_admin_key_is_not_drift(make_live, keypair_factory) -> None:
     from meshprovision.config.template import load_template_text
     from tests.unit.conftest import make_security

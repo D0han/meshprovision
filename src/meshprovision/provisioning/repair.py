@@ -176,24 +176,11 @@ def diff_record(
             )
         )
 
-    if live.security.public_key is not None:
-        observed_fp = redact.fingerprint(live.security.public_key)
-        # record.public_key_ref names the row, not the material -- the
-        # caller resolves it to bytes when it wants a fingerprint to
-        # compare; without that resolution we can only compare presence.
-        # KEY_MATERIAL drift is reported by the caller when it has both
-        # sides resolved to raw bytes (see module docstring); here we
-        # only flag the case where the recorded ref is empty but the
-        # device has a real key, which is always worth surfacing.
-        if not record.public_key_ref:
-            drifts.append(
-                Drift(
-                    kind=DriftKind.KEY_MATERIAL,
-                    field="public_key",
-                    recorded="<none>",
-                    observed=observed_fp,
-                )
-            )
+    # DriftKind.KEY_MATERIAL is never emitted here: record.public_key_ref
+    # (db/nodes.py) is `schema.ref_for(node_id, ...)`, derived from node_id,
+    # which is a required field -- it can never be empty for a valid
+    # NodeRecord, so a check for "recorded ref empty but device has a real
+    # key" can never fire.
 
     # is_managed/admin_channel_enabled have no Nodes-sheet column to compare
     # against directly (see DriftKind.SECURITY docstring); the security
