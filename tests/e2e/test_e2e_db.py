@@ -189,9 +189,18 @@ def test_db_verify_alias_public_key_is_a_warning_unless_strict(
     assert strict.exit_code == 4
 
 
-def test_db_verify_admin_key_mismatch_exits_four_without_strict(
+def test_db_verify_admin_key_mismatch_exits_six(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:
+    """A mismatched admin keypair is critical, matching audit_keypair's own rating.
+
+    Regression test: this used to report severity "error" (exit 4), a
+    lesser finding than weakkeys.audit_keypair's CONSISTENCY check would
+    give the identical real-world condition (corruption or a partial
+    restore, firmware issue #7449) -- but audit_keypair itself is never
+    actually invoked from `mesh db verify`, so private_key_mismatch's
+    severity was the only one that mattered in practice.
+    """
     kp_a, kp_b = generate_keypair(), generate_keypair()
     pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a)
     _, priv = KeyRecord.for_keypair("ADMIN1", kp_b)
@@ -199,10 +208,10 @@ def test_db_verify_admin_key_mismatch_exits_four_without_strict(
 
     result = invoke(runner, ["db", "verify", "--json"], env)
 
-    assert result.exit_code == 4
+    assert result.exit_code == 6
     document = json.loads(result.stdout)
     problem = next(p for p in document["problems"] if p["kind"] == "admin_key_mismatch")
-    assert problem["severity"] == "error"
+    assert problem["severity"] == "critical"
 
 
 def test_db_verify_does_not_report_an_orphan_private_key_as_a_mismatch(

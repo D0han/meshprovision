@@ -346,10 +346,18 @@ def verify_database(
             problems.append(
                 DbProblem(
                     kind=DbProblemKind.ADMIN_KEY_MISMATCH,
-                    severity="error",
+                    # Matches weakkeys.audit_keypair's own CONSISTENCY finding
+                    # severity for this exact condition -- a mismatched pair
+                    # means corruption or a partial restore (firmware issue
+                    # #7449), the same real-world risk either detection path
+                    # reports; only private_key_mismatch is actually reachable
+                    # from `mesh db verify` today, but that shouldn't make it
+                    # a lesser finding.
+                    severity="critical",
                     message=(
                         f"{record.key_ref} does not derive "
-                        f"{admin_public_key_ref(admin_ref)}; the pair is inconsistent."
+                        f"{admin_public_key_ref(admin_ref)}; the pair is inconsistent "
+                        "(corruption or a partial restore -- firmware issue #7449)."
                     ),
                     sheet="Keys",
                     ref=record.key_ref,
