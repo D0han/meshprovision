@@ -191,9 +191,17 @@ def verify_database(
     key under both ``<node_id>_pub`` and ``<LABEL>_pub``, so a duplicate
     group is classified CRITICAL (the CVE-2025-52464 vendor
     key-cloning signature) only when it contains two or more *distinct*
-    owners that are real nodes in the ``Nodes`` sheet; a node-plus-label
-    group (or a labels-only group) is reported as an informational alias
-    warning instead. Each duplicate group produces exactly one problem,
+    owners whose ``Keys`` sheet ref names an actual node id (``schema.
+    ref_for`` only ever files a device's own key under ``<node_id>_pub``,
+    never a template ``admin_nodes`` label); a node-plus-label group (or
+    a labels-only group) is reported as an informational alias warning
+    instead. Deliberately does **not** additionally require that node to
+    already have a ``Nodes`` sheet row: an admin key registered via
+    ``mesh admin import`` ahead of the device being adopted or
+    provisioned is exactly this project's own documented onboarding
+    order, and a genuine clone between two such not-yet-adopted devices
+    must not be downgraded to a warning just because neither is in
+    ``Nodes`` yet. Each duplicate group produces exactly one problem,
     keyed by its sorted member tuple, so a two-member group never
     produces two lines.
 
@@ -360,8 +368,7 @@ def verify_database(
         for member_ref in group:
             member = db.keys.find(member_ref)
             owner = member.owner_node_id if member is not None else member_ref
-            parsed = NodeId.try_parse(owner)
-            if parsed is not None and db.nodes.exists(parsed):
+            if NodeId.try_parse(owner) is not None:
                 node_owners.add(owner)
 
         rest = tuple(member_ref for member_ref in group if member_ref != group[0])

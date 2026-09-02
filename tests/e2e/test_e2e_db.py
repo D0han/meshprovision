@@ -144,6 +144,32 @@ def test_db_verify_duplicate_public_key_across_nodes_exits_six(
     assert "CVE-2025-52464" in critical["message"]
 
 
+def test_db_verify_duplicate_public_key_not_yet_adopted_still_exits_six(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """Regression test: a clone between two not-yet-adopted devices is still CRITICAL.
+
+    Registering an admin key via `mesh admin import` ahead of adopting or
+    provisioning the device it belongs to is this project's own
+    documented onboarding order -- a genuine CVE-2025-52464 clone must
+    not be downgraded to a mere alias warning just because neither
+    colliding node has a Nodes sheet row yet.
+    """
+    kp = generate_keypair()
+    pub_a, priv_a = KeyRecord.for_keypair("deadbe01", kp)
+    pub_b, priv_b = KeyRecord.for_keypair("deadbe02", kp)
+    seed_db(nodes=[], keys=[pub_a, priv_a, pub_b, priv_b])
+
+    result = invoke(runner, ["db", "verify", "--json"], env)
+
+    assert result.exit_code == 6
+    document = json.loads(result.stdout)
+    kinds = {problem["kind"] for problem in document["problems"]}
+    assert "duplicate_public_key" in kinds
+    critical = next(p for p in document["problems"] if p["kind"] == "duplicate_public_key")
+    assert "CVE-2025-52464" in critical["message"]
+
+
 def test_db_verify_alias_public_key_is_a_warning_unless_strict(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:
