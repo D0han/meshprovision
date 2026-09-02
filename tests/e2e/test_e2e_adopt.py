@@ -263,6 +263,61 @@ def test_adopt_then_enroll_round_trip(
     assert managed.management is ManagementMode.TEMPLATE
 
 
+def test_status_surfaces_management_across_a_mixed_fleet(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    template_node = NodeRecord(
+        node_id="aaaa0001",
+        management=ManagementMode.TEMPLATE,
+        short_name="MT01",
+        long_name="Meshtastic MT01",
+    )
+    observed_node = NodeRecord(
+        node_id="bbbb0002",
+        management=ManagementMode.OBSERVED,
+        short_name="OB02",
+        long_name="Observed Node 02",
+    )
+    seed_db(nodes=[template_node, observed_node])
+
+    bus.use(FakeMeshInterface("cccc0003"))
+    adopted = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert adopted.exit_code == 0
+    enrolled = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--enroll"], env)
+    assert enrolled.exit_code == 0
+
+    with mock_sources(nodes={}):
+        status_doc = json.loads(invoke(runner, ["status", "--json"], env).stdout)
+    by_id = {n["node_id"]: n for n in status_doc["nodes"]}
+    assert set(by_id) == {"aaaa0001", "bbbb0002", "cccc0003"}
+    for node in by_id.values():
+        assert set(node["database"]) == {
+            "short_name",
+            "long_name",
+            "role",
+            "region",
+            "management",
+        }
+    assert by_id["aaaa0001"]["database"]["management"] == "template"
+    assert by_id["bbbb0002"]["database"]["management"] == "observed"
+    assert by_id["cccc0003"]["database"]["management"] == "template"
+
+    with mock_sources(nodes={}):
+        table = invoke(runner, ["status"], env)
+    assert table.exit_code == 0
+    assert "observed" in table.stdout
+
+    verify_result = invoke(runner, ["db", "verify", "--json"], env)
+    verify_doc = json.loads(verify_result.stdout)
+    assert verify_result.exit_code == 0, verify_doc["problems"]
+    assert verify_doc["node_count"] == 3
+    assert "nodes" not in verify_doc
+
+
 def test_adopt_json_output_reports_the_expected_fields(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:
