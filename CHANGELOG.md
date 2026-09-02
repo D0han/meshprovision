@@ -209,6 +209,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device reboot. The device's own keypair is never written back to the
   device in this case -- only the database is corrected to match what the
   device already holds.
+- `mesh provision --allow-lockdown` can now actually complete
+  successfully. The post-write verification pass looked up every
+  `security` scalar field (`is_managed`, `serial_enabled`,
+  `debug_log_api_enabled`, `admin_channel_enabled`) through a lookup that
+  is documented to always return nothing for that section, so a
+  successful lockdown write was unconditionally reported UNCONFIRMED and
+  the database was never updated, regardless of whether the device write
+  actually succeeded.
+- `MESHPROVISION_LOCK_TIMEOUT`'s default is now 60 seconds, up from 5.
+  The write lock is deliberately held for the whole device provisioning
+  conversation, not just the database save, but the old default was far
+  shorter than a realistic transaction -- two operators (or one
+  operator's scripted loop) provisioning two completely unrelated
+  devices concurrently, this project's own normal fleet workflow, would
+  spuriously collide on `DatabaseLockedError` on almost every run. The
+  error's hint now also names the env var and its current value.
+- `mesh status` now surfaces when a data source successfully fetched but
+  silently could not parse some of the entries it returned (a new
+  `skipped_entries` map in `--json`, a summary/caption line, and
+  participation in the degraded exit code) -- previously a mass
+  parse-failure (an upstream schema change dropping a large fraction of
+  the fleet, for example) was indistinguishable from those nodes simply
+  being offline unless an operator was tailing logs at WARNING.
+- `mesh db verify`'s cross-fleet duplicate-key classifier no longer
+  requires both colliding keys to already have a `Nodes` sheet row before
+  rating the match CRITICAL -- registering an admin key via `mesh admin
+  import` ahead of adopting the device it belongs to is this project's
+  own documented onboarding order, and a genuine CVE-2025-52464 clone
+  between two such not-yet-adopted devices was being silently downgraded
+  to an informational alias warning.
+- A mismatched admin keypair now exits `mesh db verify` at severity
+  `critical` (exit 6) instead of `error` (exit 4), matching the severity
+  `weakkeys.audit_keypair`'s own (unreached) consistency check already
+  gives the identical condition.
+- `mesh adopt` now actually audits live admin keys against the weak-key
+  blocklist -- previously the blocklist was loaded and threaded through
+  on every run but never used, so the inventory report checked firmware
+  vulnerability but said nothing about a compromised or structurally weak
+  admin key already on the device.
 
 ### Security
 
