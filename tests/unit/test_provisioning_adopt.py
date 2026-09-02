@@ -234,6 +234,38 @@ def test_build_adoption_report_firmware_not_vulnerable(make_live, template) -> N
     assert report.firmware_vulnerable is False
 
 
+def test_build_adoption_report_unparseable_firmware_warns_not_silently_safe(
+    make_live, template
+) -> None:
+    live = make_live(template, firmware_version="not-a-version")
+
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    assert report.firmware_vulnerable is False
+    assert any(
+        "could not be parsed" in w and "CVE-2025-52464" in w and "unknown" in w
+        for w in report.warnings
+    )
+
+
+def test_build_adoption_report_missing_firmware_warns_not_silently_safe(
+    make_live, template
+) -> None:
+    live = make_live(template, firmware_version="")
+
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    assert report.firmware_vulnerable is False
+    assert any(
+        "no firmware version reported" in w and "CVE-2025-52464" in w and "unknown" in w
+        for w in report.warnings
+    )
+
+
 def test_build_adoption_report_is_managed_reflected(make_live, template) -> None:
     live = make_live(template, security=make_security(is_managed=True))
 

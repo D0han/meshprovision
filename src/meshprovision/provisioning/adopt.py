@@ -228,6 +228,9 @@ class AdoptionReport:
         firmware_vulnerable: Whether the live firmware version falls
             inside the CVE-2025-52464 window (see
             :func:`meshprovision.crypto.weakkeys.is_vulnerable_firmware`).
+            ``False`` when the version is missing or unparseable too --
+            that is NOT the same as confirmed-safe; see :attr:`warnings`
+            for the distinction.
         is_managed: Whether the device is locked into admin-managed mode
             (``security.is_managed``).
         ble_pin: The captured fixed BLE PIN, or ``None``. Never rendered
@@ -370,11 +373,26 @@ def build_adoption_report(
 
     state = detect.classify(live, db_entry=existing).state
     admin_keys = classify_live_admin_keys(live, public_keys)
-    firmware_vulnerable = weakkeys.is_vulnerable_firmware(live.firmware_version)
 
     warnings: list[str] = list(
         check_name_pattern_fit(template, short_name=live.short_name, long_name=live.long_name)
     )
+
+    if not live.firmware_version.strip():
+        firmware_vulnerable = False
+        warnings.append(
+            "no firmware version reported; CVE-2025-52464 status is unknown, not confirmed safe."
+        )
+    else:
+        parsed_firmware = weakkeys.parse_firmware_version(live.firmware_version)
+        if parsed_firmware is None:
+            firmware_vulnerable = False
+            warnings.append(
+                f"firmware version {live.firmware_version!r} could not be parsed; "
+                "CVE-2025-52464 status is unknown, not confirmed safe."
+            )
+        else:
+            firmware_vulnerable = weakkeys.is_vulnerable_firmware(parsed_firmware)
 
     live_region = live.value("lora", "region")
     region = ""
