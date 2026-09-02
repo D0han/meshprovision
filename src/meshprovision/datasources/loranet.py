@@ -161,10 +161,15 @@ class LoranetSource(BaseHTTPDataSource):
 
         Fetches the dump once (memoized) regardless of how many ids are
         requested, then looks each one up by its decimal form. An id
-        absent from the dump is simply omitted from the result -- never
-        an error, and never counted in :attr:`last_fetch_skipped` (which
-        this call resets and sets to the number of *requested* ids whose
-        entry was present but failed to parse).
+        absent from the dump -- its key is not in the index at all -- is
+        simply omitted from the result -- never an error, and never
+        counted in :attr:`last_fetch_skipped`. A key that *is* present
+        but maps to a JSON ``null`` is a different case: the entry was
+        there and failed to parse, so it is counted the same as any
+        other malformed entry (see :meth:`_parse_entry`, which rejects
+        anything that isn't a JSON object -- ``None`` included).
+        :attr:`last_fetch_skipped` is set to the number of *requested*
+        ids whose entry was present but failed to parse.
 
         Args:
             ids: The node ids to look up.
@@ -179,12 +184,10 @@ class LoranetSource(BaseHTTPDataSource):
         result: dict[NodeId, NodeObservation] = {}
         skipped = 0
         for node_id in ids:
-            payload = index.get(node_id.decimal)
-            if payload is None:
+            key = node_id.decimal
+            if key not in index:
                 continue
-            observation = self._parse_entry(
-                node_id, node_id.decimal, payload, observed_at=observed_at
-            )
+            observation = self._parse_entry(node_id, key, index[key], observed_at=observed_at)
             if observation is None:
                 skipped += 1
                 continue

@@ -498,6 +498,31 @@ def test_loranet_fetch_nodes_last_fetch_skipped_resets_and_excludes_absent_ids(
 
 
 @respx.mock
+def test_loranet_fetch_nodes_counts_a_present_null_entry_as_skipped(tmp_path: Path) -> None:
+    """Regression test: a present-but-null dump entry is not the same as an absent key.
+
+    dict.get() returns None both when a key is absent AND when it is
+    present with a JSON null value -- fetch_nodes must not conflate
+    "never in the dump" (never a parse failure) with "in the dump but
+    failed to parse" (must be counted), or a source that starts emitting
+    null for some entries would silently vanish from last_fetch_skipped.
+    """
+    good_nid = NodeId.from_hex("deadbe01")
+    null_nid = NodeId.from_hex("deadbe02")
+    payload = {
+        good_nid.decimal: {"shortName": "good"},
+        null_nid.decimal: None,
+    }
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_nodes([good_nid, null_nid])
+    assert set(result) == {good_nid}
+    assert source.last_fetch_skipped == 1
+
+
+@respx.mock
 def test_loranet_json_array_payload_raises_invalid_response(tmp_path: Path) -> None:
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=[1, 2, 3]))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
