@@ -120,7 +120,7 @@ def test_apply_field_unsupported_type_raises() -> None:
 
 def test_write_section_unknown_section_raises() -> None:
     iface = _FakeIfaceForApply()
-    change = SectionChange(section="not_a_real_section", kind="config", changes=())
+    change = SectionChange(section="not_a_real_section", kind=detect.SectionKind.CONFIG, changes=())
     with pytest.raises(PlanConflictError):
         write_section(iface, change)  # type: ignore[arg-type]
 

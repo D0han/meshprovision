@@ -46,7 +46,7 @@ import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final
 
 from meshprovision import enums
 from meshprovision.crypto.redact import SecretBytes, fingerprint
@@ -69,6 +69,7 @@ __all__ = [
     "LiveConfig",
     "LiveSecurity",
     "NodeState",
+    "SectionKind",
     "classify",
     "is_factory_long_name",
     "is_factory_short_name",
@@ -81,6 +82,21 @@ FACTORY_LONG_NAME_PREFIX: Final[str] = "Meshtastic "
 
 _FACTORY_SHORT_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{4}$")
 """Matches any 4-hex-digit short name -- the loose form of a factory default."""
+
+
+class SectionKind(StrEnum):
+    """Which of a live device's two ``write*Config`` surfaces a section belongs to.
+
+    The single source of truth for this classification, shared by
+    :meth:`LiveConfig.kind_of` and
+    :attr:`meshprovision.provisioning.plan.SectionChange.kind` -- both
+    used to describe exactly the same two-value outcome and previously
+    declared as independent, un-linked ``Literal`` types.
+    """
+
+    CONFIG = "config"
+    MODULE_CONFIG = "module_config"
+
 
 CONFIG_SECTIONS: Final[tuple[str, ...]] = (
     "device",
@@ -321,23 +337,24 @@ class LiveConfig:
         """
         return self.section(section).get(field)
 
-    def kind_of(self, section: str) -> Literal["config", "module_config"]:
+    def kind_of(self, section: str) -> SectionKind:
         """Classify a section name as belonging to config or module config.
 
         Args:
             section: The section name to classify.
 
         Returns:
-            ``"config"`` for a name in :data:`CONFIG_SECTIONS`;
-            ``"module_config"`` for a name in :data:`MODULE_SECTIONS`.
+            :attr:`SectionKind.CONFIG` for a name in
+            :data:`CONFIG_SECTIONS`; :attr:`SectionKind.MODULE_CONFIG`
+            for a name in :data:`MODULE_SECTIONS`.
 
         Raises:
             PlanConflictError: If ``section`` is neither.
         """
         if section in CONFIG_SECTIONS:
-            return "config"
+            return SectionKind.CONFIG
         if section in MODULE_SECTIONS:
-            return "module_config"
+            return SectionKind.MODULE_CONFIG
         raise PlanConflictError(f"Unknown config section: {section!r}", field=section)
 
 

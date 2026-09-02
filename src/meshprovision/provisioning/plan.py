@@ -216,8 +216,10 @@ class SectionChange:
     Attributes:
         section: Name of the section.
         kind: Whether ``section`` names a ``LocalConfig`` field
-            (``"config"``) or a ``LocalModuleConfig`` field
-            (``"module_config"``).
+            (:attr:`detect.SectionKind.CONFIG`) or a
+            ``LocalModuleConfig`` field
+            (:attr:`detect.SectionKind.MODULE_CONFIG`) -- see
+            :meth:`detect.LiveConfig.kind_of`.
         changes: The field changes to apply, in a fixed order. May be
             empty even for a section :func:`build_plan` includes in
             :attr:`ChangePlan.sections`, specifically for
@@ -229,7 +231,7 @@ class SectionChange:
     """
 
     section: str
-    kind: Literal["config", "module_config"]
+    kind: detect.SectionKind
     changes: tuple[FieldChange, ...]
     reboots_device: bool = False
 
@@ -869,7 +871,10 @@ def _plan_config_sections(
             )
         sections.append(
             SectionChange(
-                section=section_name, kind="config", changes=changes, reboots_device=reboots
+                section=section_name,
+                kind=live.kind_of(section_name),
+                changes=changes,
+                reboots_device=reboots,
             )
         )
 
@@ -914,7 +919,7 @@ def _plan_module_sections(
         if current != want:
             module_changes[opt] = SectionChange(
                 section=opt,
-                kind="module_config",
+                kind=live.kind_of(opt),
                 changes=(
                     FieldChange(
                         section=opt, field=MODULE_ENABLED_FIELD, current=current, desired=want
@@ -925,7 +930,7 @@ def _plan_module_sections(
     telemetry_changes = _diff_section("telemetry", template.telemetry, live)
     if telemetry_changes:
         module_changes["telemetry"] = SectionChange(
-            section="telemetry", kind="module_config", changes=telemetry_changes
+            section="telemetry", kind=live.kind_of("telemetry"), changes=telemetry_changes
         )
 
     ordered = tuple(module_changes[name] for name in sorted(module_changes))
@@ -966,7 +971,9 @@ def _plan_bluetooth_section(inputs: PlanInputs) -> SectionChange | None:
             )
     if not changes:
         return None
-    return SectionChange(section="bluetooth", kind="config", changes=tuple(changes))
+    return SectionChange(
+        section="bluetooth", kind=live.kind_of("bluetooth"), changes=tuple(changes)
+    )
 
 
 def _plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanWarning, ...]]:
@@ -1160,7 +1167,10 @@ def _plan_security_section(
     if not changes and key_plan.is_empty:
         return None
     return SectionChange(
-        section="security", kind="config", changes=tuple(changes), reboots_device=True
+        section="security",
+        kind=inputs.live.kind_of("security"),
+        changes=tuple(changes),
+        reboots_device=True,
     )
 
 
