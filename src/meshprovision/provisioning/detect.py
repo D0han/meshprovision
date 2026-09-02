@@ -131,6 +131,7 @@ _REASON_TEXT: Final[Mapping[str, str]] = MappingProxyType(
         "factory_default_names": "factory default names",
         "custom_names": "custom names",
         "admin_keys_present": "admin keys present",
+        "is_managed": "locked (is_managed) by an admin key not on hand",
     }
 )
 """Human-readable phrase for each :attr:`Detection.reasons` code.
@@ -640,9 +641,18 @@ def classify(live: LiveConfig, *, db_entry: NodeRecord | None) -> Detection:
       re-classification. Reasons: ``"in_database"``, plus
       ``"factory_defaults_restored"`` when the live names look factory,
       plus ``"no_admin_keys"`` when the device reports none.
-    - **Not in the database, factory-default names, no admin keys** ->
-      :attr:`NodeState.FACTORY`. Reasons: ``"not_in_database"``,
-      ``"factory_default_names"``, ``"no_admin_keys"``.
+    - **Not in the database, but locked** (``security.is_managed``) ->
+      :attr:`NodeState.FOREIGN`, regardless of names or reported admin
+      keys. A factory-fresh device can never report ``is_managed=True``
+      -- this is always someone else's locked node, even if its admin
+      keys happen to be unreadable or empty right now (a partial or
+      failed key rotation, for example) and even if its names still look
+      factory-default. Reasons: ``"not_in_database"``, ``"is_managed"``,
+      plus ``"custom_names"``/``"admin_keys_present"`` as below.
+    - **Not in the database, factory-default names, no admin keys, not
+      locked** -> :attr:`NodeState.FACTORY`. Reasons:
+      ``"not_in_database"``, ``"factory_default_names"``,
+      ``"no_admin_keys"``.
     - **Everything else** -> :attr:`NodeState.FOREIGN`. A node we have
       never seen that already carries someone's admin keys is foreign
       even if its names are still default -- admin keys are the signal
@@ -673,6 +683,13 @@ def classify(live: LiveConfig, *, db_entry: NodeRecord | None) -> Detection:
             reasons.append("factory_defaults_restored")
         if not admin_present:
             reasons.append("no_admin_keys")
+    elif live.security.is_managed:
+        state = NodeState.FOREIGN
+        reasons = ["not_in_database", "is_managed"]
+        if not factory_names:
+            reasons.append("custom_names")
+        if admin_present:
+            reasons.append("admin_keys_present")
     elif factory_names and not admin_present:
         state = NodeState.FACTORY
         reasons = ["not_in_database", "factory_default_names", "no_admin_keys"]

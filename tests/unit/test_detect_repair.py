@@ -56,6 +56,30 @@ def test_classify_factory(factory_live) -> None:
     }
 
 
+def test_classify_locked_node_with_factory_names_and_no_admin_keys_is_foreign(make_live) -> None:
+    """Regression test: a factory-fresh device can never report is_managed=True.
+
+    A node not in our database, with factory-default names and no
+    readable admin keys (a partial/failed key rotation, for example) but
+    security.is_managed=True must never be classified FACTORY -- it is
+    locked by an admin key we don't have, and mesh provision's normal
+    unauthenticated writeConfig path will not work against it.
+    """
+    from meshprovision.config.template import load_template_text
+    from tests.unit.conftest import make_security
+
+    template = load_template_text("version: 1\n")
+    live = make_live(
+        template,
+        short_name="be01",
+        long_name="Meshtastic be01",
+        security=make_security(is_managed=True),
+    )
+    detection = detect.classify(live, db_entry=None)
+    assert detection.state is detect.NodeState.FOREIGN
+    assert set(detection.reasons) == {"not_in_database", "is_managed"}
+
+
 def test_classify_foreign_custom_names(make_live) -> None:
     from meshprovision.config.template import load_template_text
     from tests.unit.conftest import make_security
