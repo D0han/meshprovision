@@ -174,7 +174,10 @@ from `name_suffix_alphabet`; write a literal brace as `{{`/`}}`.
 **Hard limits, enforced at template-load time:** firmware **silently
 truncates** an over-length name rather than rejecting it, so meshprovision
 refuses to load a template whose *widest possible* rendering exceeds
-**4 UTF-8 bytes** for `short_name` or **39 UTF-8 bytes** for `long_name`.
+**4 UTF-8 bytes** for `short_name` or **25 UTF-8 bytes** for `long_name`
+(firmware 2.8 lowered `long_name` from 39 bytes; meshprovision now
+enforces the tighter, 2.8-safe limit regardless of which firmware
+version a given device runs).
 These are byte limits, not character limits -- one accented or non-Latin
 character can consume the entire 4-byte `short_name` budget on its own.
 
@@ -246,7 +249,7 @@ LibreOffice, not a CSV dump.
 |---|---|---|
 | `node_id` | NODE_ID, primary key, required | 8 lowercase hex digits, no leading `!`; the same form lorastats.pl's `NodeId` field uses |
 | `short_name` | TEXT | Device short name (<=4 bytes UTF-8), as sent to the node |
-| `long_name` | TEXT | Device long name (<=39 bytes UTF-8), as sent to the node |
+| `long_name` | TEXT | Device long name (<=25 bytes UTF-8, per firmware 2.8's tightened limit), as sent to the node |
 | `hw_model` | ENUM (dropdown `mp_hw_model`) | Hardware model, from the installed `HardwareModel` protobuf enum |
 | `main_chipset` | DERIVED, code-only | Main MCU/SoC for `hw_model`, derived by code (`meshprovision.chipsets.main_chipset`); not expressible as an ODF formula, so this column has no OpenFormula template |
 | `firmware_type` | ENUM (dropdown `mp_firmware_type`) | Firmware flavor running on this node: `vanilla`, `loranet`, or `other` |

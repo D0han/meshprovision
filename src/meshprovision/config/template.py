@@ -82,9 +82,11 @@ SHORT_NAME_MAX_BYTES: Final[int] = 4
 """Firmware limit on ``short_name``, in UTF-8 bytes. Silently truncated
 past this length rather than rejected."""
 
-LONG_NAME_MAX_BYTES: Final[int] = 39
+LONG_NAME_MAX_BYTES: Final[int] = 25
 """Firmware limit on ``long_name``, in UTF-8 bytes. Silently truncated
-past this length rather than rejected."""
+past this length rather than rejected. Firmware 2.8 lowered this from
+the earlier 39-byte limit; 25 is safe for both 2.7.x and 2.8+ devices,
+since a name that fits in 25 bytes always fit in 39 too."""
 
 BASE36_ALPHABET: Final[str] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 """Default ``name_suffix_alphabet``: the 36 upper-case base36 digits."""
@@ -919,7 +921,7 @@ class TemplateConfig(BaseModel):
             raise NamePatternError(
                 f"long_name_pattern {self.long_name_pattern!r} renders at most "
                 f"{rendered!r}, which is {byte_length} UTF-8 bytes; the firmware "
-                "limit is 39 bytes and it truncates silently.",
+                f"limit is {LONG_NAME_MAX_BYTES} bytes and it truncates silently.",
                 pattern=self.long_name_pattern,
                 rendered=rendered,
                 byte_length=byte_length,
@@ -1094,7 +1096,7 @@ class TemplateConfig(BaseModel):
                     "long_name_near_limit",
                     f"long_name_pattern {self.long_name_pattern!r} renders at "
                     f"{long_spec.widest_byte_length()} UTF-8 bytes, within 4 bytes "
-                    "of the 39-byte firmware limit.",
+                    f"of the {LONG_NAME_MAX_BYTES}-byte firmware limit.",
                     field="long_name_pattern",
                 )
             )

@@ -59,14 +59,14 @@ def test_short_name_multibyte_boundary_loads_cleanly() -> None:
 
 def test_long_name_overflow() -> None:
     with pytest.raises(NamePatternError) as exc_info:
-        TemplateConfig(long_name_pattern="X" * 40 + "{n}")
-    assert exc_info.value.limit == 39
+        TemplateConfig(long_name_pattern="X" * 25 + "{n}")
+    assert exc_info.value.limit == 25
 
 
 def test_long_name_near_limit_warns_but_loads() -> None:
-    cfg = TemplateConfig(long_name_pattern="X" * 35 + "{n}{n}")
+    cfg = TemplateConfig(long_name_pattern="X" * 21 + "{n}{n}")
     spec = cfg.long_name_spec()
-    assert 36 <= spec.widest_byte_length() <= 39
+    assert 22 <= spec.widest_byte_length() <= 25
     warnings = cfg.collect_warnings()
     assert any(w.code == "long_name_near_limit" for w in warnings)
 
