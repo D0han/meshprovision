@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 import click
 
@@ -46,6 +46,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DbProblem",
     "DbProblemKind",
+    "ProblemSeverity",
     "VerifyReport",
     "db",
     "db_backup",
@@ -69,6 +70,32 @@ class DbProblemKind(StrEnum):
     TEMPLATE_UNAVAILABLE = "template_unavailable"
 
 
+class ProblemSeverity(StrEnum):
+    """Severity of one :class:`DbProblem`."""
+
+    CRITICAL = "critical"
+    ERROR = "error"
+    WARNING = "warning"
+
+    @classmethod
+    def from_weak_key_severity(cls, severity: WeakKeySeverity) -> ProblemSeverity:
+        """Convert a :class:`~meshprovision.errors.WeakKeySeverity` finding severity.
+
+        The single, explicit place this project's two independent
+        severity vocabularies are bridged -- ``WeakKeySeverity`` has no
+        ``"error"`` tier, so this can only ever produce ``CRITICAL`` or
+        ``WARNING``.
+
+        Args:
+            severity: The weak-key audit finding's severity.
+
+        Returns:
+            :attr:`CRITICAL` for :attr:`WeakKeySeverity.CRITICAL`,
+            otherwise :attr:`WARNING`.
+        """
+        return cls.CRITICAL if severity is WeakKeySeverity.CRITICAL else cls.WARNING
+
+
 @dataclass(frozen=True, slots=True)
 class DbProblem:
     """One finding surfaced by :func:`verify_database`.
@@ -76,14 +103,15 @@ class DbProblem:
     Attributes:
         kind: The category of this finding. Serializes as its bare
             string value, so the ``--json`` wire format is unchanged.
-        severity: ``"critical"``, ``"error"``, or ``"warning"``.
+        severity: This finding's severity. Serializes as its bare string
+            value, same as :attr:`kind`.
         message: Human-readable description of the finding.
         sheet: Name of the offending sheet, when known.
         ref: Reference or cell identifying the offending row, when known.
     """
 
     kind: DbProblemKind
-    severity: Literal["critical", "error", "warning"]
+    severity: ProblemSeverity
     message: str
     sheet: str | None = None
     ref: str | None = None
@@ -127,7 +155,7 @@ class VerifyReport:
             ``True`` if any :attr:`problems` entry has
             ``severity == "critical"``.
         """
-        return any(problem.severity == "critical" for problem in self.problems)
+        return any(problem.severity is ProblemSeverity.CRITICAL for problem in self.problems)
 
     @property
     def has_error(self) -> bool:
@@ -137,7 +165,7 @@ class VerifyReport:
             ``True`` if any :attr:`problems` entry has
             ``severity == "error"``.
         """
-        return any(problem.severity == "error" for problem in self.problems)
+        return any(problem.severity is ProblemSeverity.ERROR for problem in self.problems)
 
     def exit_code(self, *, strict: bool) -> int:
         """Compute the process exit code ``mesh db verify`` should return.
@@ -158,7 +186,7 @@ class VerifyReport:
             return int(ExitCode.CRYPTO)
         if self.has_error:
             return int(ExitCode.DB)
-        if strict and any(problem.severity == "warning" for problem in self.problems):
+        if strict and any(problem.severity is ProblemSeverity.WARNING for problem in self.problems):
             return int(ExitCode.DB)
         return int(ExitCode.OK)
 
@@ -231,7 +259,7 @@ def verify_database(
         problems.append(
             DbProblem(
                 kind=DbProblemKind.TEMPLATE_UNAVAILABLE,
-                severity="warning",
+                severity=ProblemSeverity.WARNING,
                 message=(
                     "Template cross-check skipped: the template failed to load "
                     "(admin_nodes references were not verified against the Keys sheet)."
@@ -245,7 +273,7 @@ def verify_database(
             problems.append(
                 DbProblem(
                     kind=DbProblemKind.INSECURE_PERMISSIONS,
-                    severity="warning",
+                    severity=ProblemSeverity.WARNING,
                     message=(
                         f"Database file mode is {mode:04o}; it holds private key material "
                         f"and should be 0600. Run `chmod 600 {db.path}`."
@@ -262,7 +290,7 @@ def verify_database(
                     if warning.kind == "coerced_cell"
                     else DbProblemKind.INTEGRITY_WARNING
                 ),
-                severity="warning",
+                severity=ProblemSeverity.WARNING,
                 message=warning.message(),
                 sheet=warning.sheet,
                 ref=warning.cell,
@@ -274,7 +302,7 @@ def verify_database(
         problems.append(
             DbProblem(
                 kind=DbProblemKind.UNRESOLVED_ADMIN_REF,
-                severity="error",
+                severity=ProblemSeverity.ERROR,
                 message=(
                     f"Node {node_id} authorizes unresolved admin key reference(s): "
                     f"{', '.join(missing_refs)}."
@@ -291,7 +319,7 @@ def verify_database(
                 problems.append(
                     DbProblem(
                         kind=DbProblemKind.UNRESOLVED_TEMPLATE_REF,
-                        severity="error",
+                        severity=ProblemSeverity.ERROR,
                         message=(
                             f"Template admin_nodes entry {ref!r} does not resolve to a "
                             f"{key_ref!r} row in the Keys sheet."
@@ -318,7 +346,7 @@ def verify_database(
             problems.append(
                 DbProblem(
                     kind=DbProblemKind.WEAK_KEY,
-                    severity="critical",
+                    severity=ProblemSeverity.CRITICAL,
                     message="malformed key material",
                     sheet="Keys",
                     ref=record.key_ref,
@@ -329,9 +357,7 @@ def verify_database(
             problems.append(
                 DbProblem(
                     kind=DbProblemKind.WEAK_KEY,
-                    severity=(
-                        "critical" if finding.severity is WeakKeySeverity.CRITICAL else "warning"
-                    ),
+                    severity=ProblemSeverity.from_weak_key_severity(finding.severity),
                     message=f"{finding.check.value}: {finding.reason}",
                     sheet="Keys",
                     ref=record.key_ref,
@@ -353,7 +379,7 @@ def verify_database(
                     # reports; only private_key_mismatch is actually reachable
                     # from `mesh db verify` today, but that shouldn't make it
                     # a lesser finding.
-                    severity="critical",
+                    severity=ProblemSeverity.CRITICAL,
                     message=(
                         f"{record.key_ref} does not derive "
                         f"{admin_public_key_ref(admin_ref)}; the pair is inconsistent "
@@ -384,7 +410,7 @@ def verify_database(
             problems.append(
                 DbProblem(
                     kind=DbProblemKind.DUPLICATE_PUBLIC_KEY,
-                    severity="critical",
+                    severity=ProblemSeverity.CRITICAL,
                     message=(
                         f"Public key shared across distinct nodes: "
                         f"{', '.join(sorted(node_owners))} -- the CVE-2025-52464 vendor "
@@ -398,7 +424,7 @@ def verify_database(
             problems.append(
                 DbProblem(
                     kind=DbProblemKind.ALIAS_PUBLIC_KEY,
-                    severity="warning",
+                    severity=ProblemSeverity.WARNING,
                     message=(
                         f"{group[0]} shares its public key with {', '.join(rest)} "
                         "(alias for the same node)."
@@ -474,13 +500,13 @@ def db_verify(ctx: CliContext, *, strict: bool, json_output: bool) -> None:
     elif not report.problems:
         ctx.success("Database OK.")
     else:
-        emitters: tuple[tuple[str, Callable[[str], None]], ...] = (
-            ("critical", ctx.error),
-            ("error", ctx.error),
-            ("warning", ctx.warn),
+        emitters: tuple[tuple[ProblemSeverity, Callable[[str], None]], ...] = (
+            (ProblemSeverity.CRITICAL, ctx.error),
+            (ProblemSeverity.ERROR, ctx.error),
+            (ProblemSeverity.WARNING, ctx.warn),
         )
         for severity, emit in emitters:
-            items = [problem for problem in report.problems if problem.severity == severity]
+            items = [problem for problem in report.problems if problem.severity is severity]
             if not items:
                 continue
             emit(f"{len(items)} {severity} problem(s):")
