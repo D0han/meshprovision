@@ -600,18 +600,24 @@ class NodeRepository:
         return frozenset(record.long_name for record in self.all() if record.long_name)
 
     def next_free_name(
-        self, spec: PatternSpec, *, start: int = 0, warn_at: float | None = None
+        self,
+        spec: PatternSpec,
+        *,
+        is_long: bool = False,
+        start: int = 0,
+        warn_at: float | None = None,
     ) -> tuple[int, str]:
         """Find the next unused name for a compiled pattern, warning near exhaustion.
 
-        Selects the "used" name set (:meth:`used_short_names` or
-        :meth:`used_long_names`) by checking whether ``"long"`` appears in
-        ``spec.field`` (the template field the pattern was compiled from,
-        e.g. ``"long_name_pattern"``), defaulting to short names
-        otherwise.
-
         Args:
             spec: The compiled name pattern to search.
+            is_long: Whether ``spec`` compiled ``long_name_pattern``
+                (selects :meth:`used_long_names`) rather than
+                ``short_name_pattern`` (:meth:`used_short_names`, the
+                default). The caller already knows which one it compiled
+                -- :attr:`~meshprovision.config.template.PatternSpec.field`
+                exists only to make error messages actionable and is
+                deliberately not inferred from here.
             start: Index to begin searching from.
             warn_at: Utilization ratio at or above which a warning is
                 logged. Defaults to
@@ -625,7 +631,7 @@ class NodeRepository:
             NamespaceExhaustedError: If ``spec``'s namespace has no
                 unused names remaining.
         """
-        used = self.used_long_names() if "long" in spec.field else self.used_short_names()
+        used = self.used_long_names() if is_long else self.used_short_names()
         in_namespace = sum(1 for name in used if spec.parse_index(name) is not None)
 
         warning: TemplateWarning | None

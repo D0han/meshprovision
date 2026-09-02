@@ -396,7 +396,7 @@ def test_next_free_name_selects_by_field_name(nodes: NodeRepository, db: OdsData
     nodes.upsert(record)
     db.save()
 
-    _, long_name = nodes.next_free_name(long_spec)
+    _, long_name = nodes.next_free_name(long_spec, is_long=True)
     assert long_name != "Meshtastic MT00"
-    _, short_name = nodes.next_free_name(short_spec)
+    _, short_name = nodes.next_free_name(short_spec, is_long=False)
     assert short_name != "MT00"

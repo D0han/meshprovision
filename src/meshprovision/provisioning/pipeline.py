@@ -283,10 +283,12 @@ def allocate_names(
         return None, None
 
     short_spec = template.short_name_spec()
-    index, short = nodes.next_free_name(short_spec, warn_at=template.name_capacity_warn_utilization)
+    index, short = nodes.next_free_name(
+        short_spec, is_long=False, warn_at=template.name_capacity_warn_utilization
+    )
     long_spec = template.long_name_spec()
     try:
         long = long_spec.render(index)
     except NamespaceExhaustedError:
-        long = nodes.next_free_name(long_spec)[1]
+        long = nodes.next_free_name(long_spec, is_long=True)[1]
     return short, long
