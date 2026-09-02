@@ -33,7 +33,6 @@ process mid-provision. Every catch converts to a
 
 from __future__ import annotations
 
-import base64
 import logging
 import secrets
 import time
@@ -44,7 +43,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from meshprovision.crypto import redact
-from meshprovision.crypto.keys import KeyPair
+from meshprovision.crypto.keys import KeyPair, decode_key
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.schema import BLE_PIN_LENGTH
@@ -55,6 +54,7 @@ from meshprovision.errors import (
     DetectionError,
     EnumMappingError,
     ExitCode,
+    KeyMaterialError,
     PlanConflictError,
     ProvisioningError,
     WriteVerificationError,
@@ -771,8 +771,8 @@ def _verify_key_material(
         nodedb_bytes = bytes(device_public_key)
     elif isinstance(device_public_key, str):
         try:
-            nodedb_bytes = base64.b64decode(device_public_key, validate=True)
-        except (ValueError, TypeError):
+            nodedb_bytes = decode_key(device_public_key, field="NodeDB public key")
+        except KeyMaterialError:
             nodedb_bytes = None
     nodedb_ok = nodedb_bytes is not None and nodedb_bytes == keypair.public
 

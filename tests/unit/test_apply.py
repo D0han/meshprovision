@@ -321,6 +321,41 @@ def test_verify_plan_key_confirmed_needs_both_agree(make_live) -> None:
     assert key_result.status == WriteStatus.CONFIRMED
 
 
+def test_verify_plan_key_rejects_noncanonically_encoded_nodedb_key(make_live) -> None:
+    """Reject a non-canonically-encoded NodeDB key rather than confirm it.
+
+    A NodeDB public key that decodes to the right bytes via non-canonical
+    base64 (stray padding bits) must not be silently confirmed -- it should
+    go through the same strict decode (:func:`crypto.keys.decode_key`) used
+    everywhere else key material is decoded, not a hand-rolled, more lenient
+    ``base64.b64decode``.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    canonical = base64.b64encode(kp.public).decode("ascii")
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    noncanonical = next(
+        candidate
+        for c in alphabet
+        if (candidate := canonical[:-2] + c + canonical[-1]) != canonical
+        and base64.b64decode(candidate, validate=True) == kp.public
+    )
+
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        security=make_security(keypair=kp),
+    )
+    results = verify_plan(plan, live_after, keypair=kp, device_public_key=noncanonical)
+    key_result = next(r for r in results if r.field == "public_key")
+    assert key_result.status == WriteStatus.UNCONFIRMED
+
+
 def test_verify_plan_key_mismatch_unconfirmed_with_fingerprints(make_live) -> None:
     template = _template()
     live = make_live(template, security=make_security(empty=True))
