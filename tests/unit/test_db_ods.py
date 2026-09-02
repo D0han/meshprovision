@@ -332,6 +332,91 @@ def test_invalid_role_raises_db_validation_error(tmp_path: Path, keypair) -> Non
     assert exc_info.value.column == "role"
 
 
+@pytest.mark.parametrize(
+    ("column", "bad_value"),
+    [("management", "BOGUS"), ("firmware_type", "BOGUS"), ("key_type", "BOGUS")],
+)
+def test_invalid_literal_allowed_enum_raises_db_validation_error(
+    tmp_path: Path, keypair, column: str, bad_value: str
+) -> None:
+    """Reject an unrecognized value in a literal-``allowed``-set ENUM column.
+
+    `_validate_enum`'s ``spec.allowed`` (non-``enum_table``) branch, used by
+    ``management``/``firmware_type``/``key_type``, must reject an
+    unrecognized value exactly like the ``enum_table`` branch already
+    tested by ``test_invalid_role_raises_db_validation_error`` does.
+    """
+    from tests.unit.conftest import edit_ods_cell
+
+    path = _write_raw_row(tmp_path, keypair, {})
+    sheet = "Keys" if column == "key_type" else "Nodes"
+    edit_ods_cell(path, sheet, column, 2, bad_value)
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.sheet == sheet
+    assert exc_info.value.column == column
+
+
+def test_gps_lat_below_min_range_raises(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    path = _write_raw_row(tmp_path, keypair, {})
+    edit_ods_cell(path, "Nodes", "gps_lat", 2, "-95")
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.column == "gps_lat"
+
+
+def test_non_numeric_int_column_raises(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    path = _write_raw_row(tmp_path, keypair, {})
+    edit_ods_cell(path, "Nodes", "gps_alt", 2, "not-a-number")
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.column == "gps_alt"
+
+
+def test_non_numeric_float_column_raises(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    path = _write_raw_row(tmp_path, keypair, {})
+    edit_ods_cell(path, "Nodes", "gps_lat", 2, "not-a-number")
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.column == "gps_lat"
+
+
+def test_non_finite_float_column_raises(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    path = _write_raw_row(tmp_path, keypair, {})
+    edit_ods_cell(path, "Nodes", "gps_lat", 2, "nan")
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.column == "gps_lat"
+
+
+def test_malformed_timestamp_raises(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    path = _write_raw_row(tmp_path, keypair, {})
+    edit_ods_cell(path, "Nodes", "first_added_ts", 2, "not-a-date")
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.column == "first_added_ts"
+
+
+def test_invalid_ref_inside_key_ref_list_raises(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    path = _write_raw_row(tmp_path, keypair, {})
+    edit_ods_cell(path, "Nodes", "authorized_admin_keys", 2, "ADMIN1_pub;not a valid ref!")
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.column == "authorized_admin_keys"
+
+
 def test_invalid_base64_key_value_raises_without_leaking(tmp_path: Path, keypair) -> None:
     from tests.unit.conftest import edit_ods_cell
 
