@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from meshprovision.errors import (
     AmbiguousDeviceError,
+    ConnectionFailedError,
     DeviceNotFoundError,
     NonInteractiveError,
     UnsupportedTransportError,
@@ -224,6 +227,69 @@ def test_close_interface_swallows_oserror() -> None:
             raise OSError("boom")
 
     connection.close_interface(_BadIface())  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Backend.connect() error mapping (impure -- patches the underlying
+# meshtastic interface constructors rather than Backend.connect() itself).
+# ---------------------------------------------------------------------------
+
+
+def test_serial_backend_connect_wraps_oserror(monkeypatch: pytest.MonkeyPatch) -> None:
+    import meshtastic.serial_interface as serial_mod
+
+    def failing_init(self: object, **kwargs: object) -> None:
+        raise OSError("no such device")
+
+    monkeypatch.setattr(serial_mod.SerialInterface, "__init__", failing_init)
+
+    backend = SerialBackend("/dev/ttyUSB0")
+    with pytest.raises(ConnectionFailedError) as exc_info:
+        backend.connect()
+    assert exc_info.value.transport == "serial"
+    assert exc_info.value.target == "/dev/ttyUSB0"
+    assert exc_info.value.hint
+
+
+def test_tcp_backend_connect_wraps_valueerror(monkeypatch: pytest.MonkeyPatch) -> None:
+    import meshtastic.tcp_interface as tcp_mod
+
+    def failing_init(self: object, **kwargs: object) -> None:
+        raise ValueError("bad hostname")
+
+    monkeypatch.setattr(tcp_mod.TCPInterface, "__init__", failing_init)
+
+    backend = TCPBackend("bogus.invalid")
+    with pytest.raises(ConnectionFailedError) as exc_info:
+        backend.connect()
+    assert exc_info.value.transport == "tcp"
+    assert exc_info.value.hint
+
+
+def test_ble_backend_connect_wraps_runtimeerror(monkeypatch: pytest.MonkeyPatch) -> None:
+    import meshtastic.ble_interface as ble_mod
+
+    def failing_init(self: object, **kwargs: object) -> None:
+        raise RuntimeError("adapter busy")
+
+    monkeypatch.setattr(ble_mod.BLEInterface, "__init__", failing_init)
+
+    backend = BLEBackend("AA:BB:CC:DD:EE:FF")
+    with pytest.raises(ConnectionFailedError) as exc_info:
+        backend.connect()
+    assert exc_info.value.transport == "ble"
+    assert exc_info.value.target == "AA:BB:CC:DD:EE:FF"
+    assert exc_info.value.hint
+
+
+def test_ble_backend_connect_import_failure_raises_unsupported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(sys.modules, "meshtastic.ble_interface", None)
+
+    backend = BLEBackend("AA:BB:CC:DD:EE:FF")
+    with pytest.raises(UnsupportedTransportError):
+        backend.connect()
 
 
 def test_connected_closes_interface_even_when_body_raises() -> None:
