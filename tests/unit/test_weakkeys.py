@@ -412,12 +412,107 @@ def test_load_known_bad_keys_caches_by_mtime_and_size(tmp_path: Path) -> None:
     assert kp2.public in second
 
 
+def test_load_known_bad_keys_stat_failure_raises_key_material_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Force the second stat() call, not the one inside exists(), to fail.
+
+    The *second* stat() -- the explicit one after exists() already
+    succeeded -- is the one this test forces to fail, since exists()
+    itself calls stat() internally and would otherwise be the one to
+    (silently, for most errnos) absorb the failure.
+    """
+    path = tmp_path / "known_bad_keys.txt"
+    path.write_text("")
+    real_stat = Path.stat
+    calls = 0
+
+    def failing_stat(self: Path, *args: object, **kwargs: object) -> object:
+        nonlocal calls
+        if self == path:
+            calls += 1
+            if calls > 1:
+                raise OSError("permission denied")
+        return real_stat(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", failing_stat)
+    with pytest.raises(KeyMaterialError):
+        load_known_bad_keys(path)
+
+
+def test_load_known_bad_keys_read_failure_raises_key_material_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "known_bad_keys.txt"
+    path.write_text("")
+    real_read_text = Path.read_text
+
+    def failing_read_text(self: Path, *args: object, **kwargs: object) -> str:
+        if self == path:
+            raise OSError("i/o error")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", failing_read_text)
+    with pytest.raises(KeyMaterialError):
+        load_known_bad_keys(path)
+
+
 def test_default_known_bad_keys_path_env_nonexistent_raises(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv(KNOWN_BAD_KEYS_ENV, str(tmp_path / "nope.txt"))
     with pytest.raises(SettingsError):
         default_known_bad_keys_path()
+
+
+def _candidate_paths() -> tuple[Path, Path | None, Path]:
+    """The three non-env candidates default_known_bad_keys_path tries, in order."""
+    import meshprovision.crypto.weakkeys as weakkeys_module
+
+    module_parents = Path(weakkeys_module.__file__).resolve().parents
+    package_root = module_parents[1]
+    repo_root_candidate = module_parents[3] if len(module_parents) > 3 else None
+    return (
+        package_root / "data" / "known_bad_keys.txt",
+        (repo_root_candidate / "data" / "known_bad_keys.txt") if repo_root_candidate else None,
+        Path.cwd() / "data" / "known_bad_keys.txt",
+    )
+
+
+def test_default_known_bad_keys_path_falls_back_to_package_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
+    package_candidate, repo_candidate, cwd_candidate = _candidate_paths()
+    real_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == package_candidate:
+            return True
+        if self in (repo_candidate, cwd_candidate):
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    assert default_known_bad_keys_path() == package_candidate
+
+
+def test_default_known_bad_keys_path_falls_back_to_cwd_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
+    package_candidate, repo_candidate, cwd_candidate = _candidate_paths()
+    real_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == cwd_candidate:
+            return True
+        if self in (package_candidate, repo_candidate):
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    assert default_known_bad_keys_path() == cwd_candidate
 
 
 def test_audit_result_api(keypair_factory) -> None:
