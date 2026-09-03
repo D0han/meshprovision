@@ -15,15 +15,20 @@ from meshprovision.db.ods import OdsDatabase
 from meshprovision.errors import (
     AtomicWriteError,
     ConnectionBackendError,
+    ConnectionFailedError,
     EnumMappingError,
     ExitCode,
     PlanConflictError,
+    UnsupportedTransportError,
 )
 from meshprovision.nodeid import NodeId
+from meshprovision.provisioning import apply as apply_module
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.apply import (
+    DEFAULT_SETTLE_SECONDS,
     ApplyOutcome,
     InPlaceSession,
+    ReconnectingSession,
     WriteResult,
     WriteStatus,
     apply_field,
@@ -609,6 +614,132 @@ def test_apply_plan_persists_the_truncated_name_not_the_desired_one(tmp_path, ma
     assert outcome.record is not None
     assert outcome.record.long_name == plan.name_change.desired_long_name[:20]
     assert outcome.record.long_name != plan.name_change.desired_long_name
+
+
+# ---------------------------------------------------------------------------
+# ReconnectingSession.refresh() -- the real retry-with-backoff logic, not a
+# hand-rolled fake session double.
+# ---------------------------------------------------------------------------
+
+
+class _FakeReconnectBackend:
+    """A ConnectionBackend double: connect() replays a scripted outcome sequence."""
+
+    def __init__(self, outcomes: list[object]) -> None:
+        self._outcomes = list(outcomes)
+        self.connect_calls = 0
+
+    @property
+    def transport(self) -> str:
+        return "serial"
+
+    @property
+    def target(self) -> str:
+        return "/dev/ttyFAKE"
+
+    def describe(self) -> str:
+        return "fake"
+
+    def connect(self) -> object:
+        outcome = self._outcomes[self.connect_calls]
+        self.connect_calls += 1
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+class _FakeIfaceForReconnect:
+    def __init__(self) -> None:
+        self.closed = False
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def test_reconnecting_session_refresh_succeeds_on_first_attempt() -> None:
+    iface = _FakeIfaceForReconnect()
+    backend = _FakeReconnectBackend([iface])
+    sleeps: list[float] = []
+    session = ReconnectingSession(backend=backend, sleep=sleeps.append)  # type: ignore[arg-type]
+
+    result = session.refresh()
+
+    assert result is iface
+    assert backend.connect_calls == 1
+    assert sleeps == [DEFAULT_SETTLE_SECONDS]
+
+
+def test_reconnecting_session_refresh_retries_then_succeeds() -> None:
+    iface = _FakeIfaceForReconnect()
+    fail1 = ConnectionFailedError("nope", transport="serial", target="/dev/ttyFAKE")
+    fail2 = ConnectionFailedError("still nope", transport="serial", target="/dev/ttyFAKE")
+    backend = _FakeReconnectBackend([fail1, fail2, iface])
+    sleeps: list[float] = []
+    session = ReconnectingSession(
+        backend=backend,  # type: ignore[arg-type]
+        attempts=3,
+        sleep=sleeps.append,
+    )
+
+    result = session.refresh()
+
+    assert result is iface
+    assert backend.connect_calls == 3
+    assert sleeps == [
+        DEFAULT_SETTLE_SECONDS,
+        apply_module._RECONNECT_BACKOFF * 1,
+        apply_module._RECONNECT_BACKOFF * 2,
+    ]
+
+
+def test_reconnecting_session_refresh_exhausts_all_attempts_and_raises() -> None:
+    fail = ConnectionFailedError("nope", transport="serial", target="/dev/ttyFAKE")
+    backend = _FakeReconnectBackend([fail, fail, fail])
+    sleeps: list[float] = []
+    session = ReconnectingSession(
+        backend=backend,  # type: ignore[arg-type]
+        attempts=3,
+        sleep=sleeps.append,
+    )
+
+    with pytest.raises(ConnectionFailedError):
+        session.refresh()
+
+    assert backend.connect_calls == 3
+    # No backoff sleep after the last (3rd) attempt -- only 2 retries follow attempts 1-2.
+    assert sleeps == [
+        DEFAULT_SETTLE_SECONDS,
+        apply_module._RECONNECT_BACKOFF * 1,
+        apply_module._RECONNECT_BACKOFF * 2,
+    ]
+
+
+def test_reconnecting_session_refresh_wraps_non_connectionfailed_backend_error() -> None:
+    backend = _FakeReconnectBackend([UnsupportedTransportError("no ble", transport="ble")])
+    session = ReconnectingSession(
+        backend=backend,  # type: ignore[arg-type]
+        attempts=1,
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(ConnectionFailedError) as exc_info:
+        session.refresh()
+
+    assert exc_info.value.transport == "serial"
+    assert "no ble" in str(exc_info.value)
+
+
+def test_reconnecting_session_refresh_closes_the_existing_interface_first() -> None:
+    old_iface = _FakeIfaceForReconnect()
+    new_iface = _FakeIfaceForReconnect()
+    backend = _FakeReconnectBackend([new_iface])
+    session = ReconnectingSession(backend=backend, sleep=lambda _: None)  # type: ignore[arg-type]
+    session._iface = old_iface  # type: ignore[assignment]
+
+    result = session.refresh()
+
+    assert old_iface.closed is True
+    assert result is new_iface
 
 
 class _RefreshFailsSession:
