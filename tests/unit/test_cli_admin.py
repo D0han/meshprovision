@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING
 import pytest
 from click.testing import CliRunner
 
+from meshprovision.cli import admin
 from meshprovision.cli.main import cli
 from meshprovision.crypto.weakkeys import AuditResult, WeakKeyCheck, WeakKeyFinding
-from meshprovision.errors import WeakKeySeverity
+from meshprovision.errors import SettingsError, WeakKeySeverity
 from meshprovision.provisioning import admin_custody
 
 if TYPE_CHECKING:
@@ -52,6 +53,17 @@ def test_audit_cell_maps_severity_to_a_label_and_row_style(
     audit: AuditResult | None, expected: tuple[str, str | None]
 ) -> None:
     assert admin_custody._audit_cell(audit) == expected
+
+
+@pytest.mark.parametrize("ref", ["", "1bad start", "ADMIN 1", "ADMIN!", " "])
+def test_validate_admin_ref_rejects_an_invalid_shape(ref: str) -> None:
+    """Reject a malformed admin ref, shared by import and bootstrap --ref.
+
+    Only the reserved-suffix branch (_pub/_priv/_psk) had a test before
+    this.
+    """
+    with pytest.raises(SettingsError):
+        admin._validate_admin_ref(ref)
 
 
 def test_admin_list_table_column_order(
