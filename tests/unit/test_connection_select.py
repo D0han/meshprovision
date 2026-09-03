@@ -97,6 +97,19 @@ def test_forced_serial_one_candidate_auto_uses() -> None:
     assert backend.port == "/dev/ttyUSB0"
 
 
+def test_forced_serial_with_explicit_port_skips_discovery() -> None:
+    """Use --port directly, bypassing discovery_result.
+
+    --interface serial --port <X> must use <X> directly, never touching
+    discovery_result -- even when discovery would report zero or several
+    candidates.
+    """
+    result = DiscoveryResult(serial_ports=_serial_ports("/dev/ttyUSB0", "/dev/ttyUSB1"))
+    backend = select_backend(ConnectionRequest(interface="serial", port="/dev/ttyEXPLICIT"), result)
+    assert isinstance(backend, SerialBackend)
+    assert backend.port == "/dev/ttyEXPLICIT"
+
+
 def test_forced_serial_many_candidates_ambiguous_even_with_chooser() -> None:
     result = DiscoveryResult(serial_ports=_serial_ports("/dev/ttyUSB0", "/dev/ttyUSB1"))
     with pytest.raises(AmbiguousDeviceError):
@@ -114,6 +127,19 @@ def test_forced_ble_one_candidate_auto_uses() -> None:
     result = DiscoveryResult(ble_devices=_ble_devices("AA:BB:CC:DD:EE:FF"))
     backend = select_backend(ConnectionRequest(interface="ble"), result)
     assert isinstance(backend, BLEBackend)
+
+
+def test_forced_ble_with_explicit_address_skips_discovery() -> None:
+    """Use --ble-address directly, bypassing discovery_result.
+
+    --interface ble --ble-address <X> must use <X> directly, never
+    touching discovery_result -- even when discovery would report zero or
+    several candidates.
+    """
+    result = DiscoveryResult(ble_devices=_ble_devices("AA:AA", "BB:BB"))
+    backend = select_backend(ConnectionRequest(interface="ble", ble_address="EXPLICIT:AA"), result)
+    assert isinstance(backend, BLEBackend)
+    assert backend.address == "EXPLICIT:AA"
 
 
 def test_forced_ble_many_candidates_ambiguous() -> None:
@@ -178,6 +204,21 @@ def test_auto_zero_serial_one_ble() -> None:
     result = DiscoveryResult(ble_devices=_ble_devices("AA:BB:CC:DD:EE:FF"))
     backend = select_backend(ConnectionRequest(), result)
     assert isinstance(backend, BLEBackend)
+
+
+def test_auto_zero_serial_several_ble_interactive_chooser_returns_second() -> None:
+    result = DiscoveryResult(ble_devices=_ble_devices("AA:AA", "BB:BB"))
+    backend = select_backend(
+        ConnectionRequest(non_interactive=False), result, chooser=lambda _summaries, _prompt: 1
+    )
+    assert isinstance(backend, BLEBackend)
+    assert backend.address == "BB:BB"
+
+
+def test_auto_zero_serial_several_ble_non_interactive_raises() -> None:
+    result = DiscoveryResult(ble_devices=_ble_devices("AA:AA", "BB:BB"))
+    with pytest.raises(NonInteractiveError):
+        select_backend(ConnectionRequest(non_interactive=True), result)
 
 
 def test_auto_zero_both_raises_with_hint() -> None:
