@@ -12,6 +12,7 @@ import pytest
 from meshprovision.db import atomic_writer
 from meshprovision.db.atomic_writer import (
     BackupInfo,
+    _backup_sort_key,
     _claim_backup_path,
     _parse_backup_timestamp,
     atomic_write,
@@ -81,6 +82,27 @@ def test_legacy_second_resolution_backup_names_still_parse(tmp_path: Path) -> No
     assert _parse_backup_timestamp("nodes_db-20260825T031410Z.ods", target) == datetime(
         2026, 8, 25, 3, 14, 10, tzinfo=UTC
     )
+
+
+def test_parse_backup_timestamp_returns_none_for_wrong_prefix(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    assert _parse_backup_timestamp("totally_unrelated_file.ods", target) is None
+
+
+def test_parse_backup_timestamp_returns_none_for_unparseable_token(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    assert _parse_backup_timestamp("nodes_db-not-a-real-timestamp.ods", target) is None
+
+
+def test_backup_sort_key_falls_back_to_mtime_when_name_is_unparseable(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    unparseable = tmp_path / "totally_unrelated_file.ods"
+    unparseable.write_bytes(b"x")
+
+    key = _backup_sort_key(unparseable, target)
+
+    expected_mtime = unparseable.stat().st_mtime
+    assert key == (datetime.fromtimestamp(expected_mtime, tz=UTC), expected_mtime)
 
 
 def test_two_backups_same_second_get_distinct_paths(tmp_path: Path) -> None:

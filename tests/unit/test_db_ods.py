@@ -88,6 +88,21 @@ def test_round_trip_management_mode(tmp_path: Path, keypair, mode: ManagementMod
     assert round_tripped_node.management is mode
 
 
+def test_sheet_spec_column_unknown_name_raises_schema_error() -> None:
+    with pytest.raises(SchemaError):
+        schema.NODES_SHEET_SPEC.column("not_a_real_column")
+
+
+def test_sheet_spec_column_index_unknown_name_raises_schema_error() -> None:
+    with pytest.raises(SchemaError):
+        schema.NODES_SHEET_SPEC.column_index("not_a_real_column")
+
+
+def test_recompute_key_ref_returns_empty_string_for_an_unknown_key_type() -> None:
+    row = {"owner_node_id": "deadbe01", "key_type": "not_a_real_key_type"}
+    assert schema._recompute_key_ref(row) == ""
+
+
 def test_structural_assertions_formulas_validations_freeze(tmp_path: Path, keypair) -> None:
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
