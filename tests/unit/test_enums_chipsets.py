@@ -17,6 +17,46 @@ def test_role_table_source_is_protobuf_in_this_environment() -> None:
     assert enums.region_table().source is EnumSource.PROTOBUF
 
 
+def test_load_protobuf_items_returns_none_when_every_candidate_path_fails() -> None:
+    bogus_paths = (
+        ("meshprovision._no_such_module_at_all", ("Nope",)),
+        ("meshprovision.enums", ("_no_such_attribute_at_all",)),
+    )
+    assert enums._load_protobuf_items(bogus_paths) is None
+
+
+def test_build_table_falls_back_when_every_protobuf_path_fails() -> None:
+    bogus_paths = (("meshprovision._no_such_module_at_all", ("Nope",)),)
+    table = enums._build_table("test_enum", bogus_paths, {"ALPHA": 1, "BETA": 2})
+
+    assert table.source is EnumSource.FALLBACK
+    assert table.to_name(1) == "ALPHA"
+    assert table.to_value("BETA") == 2
+
+
+def test_build_table_alias_collision_keeps_the_first_seen_name() -> None:
+    bogus_paths = (("meshprovision._no_such_module_at_all", ("Nope",)),)
+    table = enums._build_table("test_enum", bogus_paths, {"FIRST": 5, "SECOND": 5})
+
+    assert table.to_name(5) == "FIRST"
+    assert table.to_value("FIRST") == 5
+    assert table.to_value("SECOND") == 5
+
+
+def test_to_value_digit_string_resolves_like_int() -> None:
+    table = enums.role_table()
+    value = table.to_value("CLIENT")
+    assert table.to_value(str(value)) == value
+
+
+def test_enum_table_values_and_contains_value() -> None:
+    table = enums.role_table()
+    assert table.values() == tuple(sorted(table.value_to_name))
+    known_value = table.values()[0]
+    assert table.contains_value(known_value) is True
+    assert table.contains_value(999999) is False
+
+
 @pytest.mark.parametrize("table_fn", [enums.role_table, enums.hw_model_table, enums.region_table])
 def test_to_name_to_value_round_trip(table_fn) -> None:
     table = table_fn()
