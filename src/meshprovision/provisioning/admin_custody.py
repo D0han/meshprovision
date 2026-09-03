@@ -11,11 +11,17 @@ form this module owns; ``cli/admin.py`` stays a thin wrapper that opens
 the database, calls these two, and either prints the table or emits
 JSON via :meth:`AdminSummary.to_json_dict`.
 
-This mirrors the split :mod:`meshprovision.status.report`/
-:mod:`meshprovision.status.render` already use for node status: keep
-compute and presentation together but separate from the CLI's argument
+Serves the same purpose :mod:`meshprovision.status.report`/
+:mod:`meshprovision.status.render`'s two-module split does for node
+status -- keep compute and presentation separate from the CLI's argument
 parsing and I/O orchestration, so either half can be reused or tested
-without going through Click. Unlike ``status/report.py``, this module is
+without going through Click -- but deliberately as a single module
+rather than a matching two-file split: the presentation surface here is
+one table (``build_admin_table``) with no JSON-rendering logic of its
+own (:meth:`AdminSummary.to_json_dict` lives on the compute-side
+dataclass, since it is itself pure data transformation, not
+``rich``-driven presentation), so a second file would be a near-empty
+wrapper around one function. Unlike ``status/report.py``, this module is
 not read-only-asserted -- callers of `mesh admin bootstrap`/`import` are
 free to write -- but :func:`collect_admins` and :func:`build_admin_table`
 themselves only ever read, taking already-open repositories rather than
