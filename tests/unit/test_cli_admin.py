@@ -7,10 +7,10 @@ from typing import TYPE_CHECKING
 import pytest
 from click.testing import CliRunner
 
-from meshprovision.cli import admin
 from meshprovision.cli.main import cli
 from meshprovision.crypto.weakkeys import AuditResult, WeakKeyCheck, WeakKeyFinding
 from meshprovision.errors import WeakKeySeverity
+from meshprovision.provisioning import admin_custody
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -51,7 +51,7 @@ _CRITICAL = AuditResult(
 def test_audit_cell_maps_severity_to_a_label_and_row_style(
     audit: AuditResult | None, expected: tuple[str, str | None]
 ) -> None:
-    assert admin._audit_cell(audit) == expected
+    assert admin_custody._audit_cell(audit) == expected
 
 
 def test_admin_list_table_column_order(
