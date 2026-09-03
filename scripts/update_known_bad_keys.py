@@ -24,7 +24,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import base64
 import datetime as dt
 import sys
 from collections.abc import Sequence
@@ -229,7 +228,7 @@ def _append_block(target: Path, new_keys: list[bytes], *, comment: str | None, s
         "",
         f"# --- Merged {today} from {source} ---",
         f"# {comment or 'no provenance supplied'}",
-        *(base64.b64encode(raw).decode("ascii") for raw in new_keys),
+        *(crypto_keys.encode_key(raw) for raw in new_keys),
     ]
     block = "\n".join(block_lines) + "\n"
 
@@ -277,7 +276,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         # read of `target` would otherwise race, and the second writer's
         # _append_block call could silently clobber the first's just-merged
         # block (last-writer-wins on the temp-file-then-replace).
-        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise MeshprovisionError(f"could not create directory for: {target}") from exc
         with locking.exclusive_lock(target):
             existing_text = target.read_text(encoding="utf-8") if target.exists() else ""
             existing = set(weakkeys.parse_known_bad_keys(existing_text, source=str(target)))
@@ -292,7 +294,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
             if args.dry_run:
                 for raw in new_keys:
-                    print(base64.b64encode(raw).decode("ascii"))
+                    print(crypto_keys.encode_key(raw))
                 return 0
 
             _append_block(target, new_keys, comment=args.comment, source=args.source)
