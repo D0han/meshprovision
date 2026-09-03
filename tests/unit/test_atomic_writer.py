@@ -270,6 +270,62 @@ def test_temp_file_is_not_world_readable_while_the_caller_holds_it(tmp_path: Pat
         tmp.write_bytes(b"hello")
 
 
+def test_atomic_write_mkdir_failure_raises_atomic_write_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "sub" / "data.txt"
+    real_mkdir = Path.mkdir
+
+    def failing_mkdir(self: Path, *args: object, **kwargs: object) -> None:
+        if self == target.parent:
+            raise OSError("no space left on device")
+        real_mkdir(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", failing_mkdir)
+
+    with pytest.raises(AtomicWriteError), atomic_write(target, backup=False) as tmp:
+        tmp.write_bytes(b"x")
+
+
+def test_atomic_write_temp_file_creation_failure_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    real_open = os.open
+
+    def failing_open(path: object, flags: int, mode: int = 0o777) -> int:
+        if isinstance(path, Path) and ".tmp-" in path.name:
+            raise OSError("permission denied")
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", failing_open)
+
+    with pytest.raises(AtomicWriteError), atomic_write(target, backup=False) as tmp:
+        tmp.write_bytes(b"x")
+
+
+def test_atomic_write_replace_failure_leaves_target_untouched_and_cleans_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    target.write_bytes(b"original")
+    real_replace = Path.replace
+
+    def failing_replace(self: Path, target_arg: object) -> Path:
+        if self.name.startswith(f".{target.name}.tmp-"):
+            raise OSError("disk gone mid-replace")
+        return real_replace(self, target_arg)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "replace", failing_replace)
+
+    with pytest.raises(AtomicWriteError), atomic_write(target, backup=False) as tmp:
+        tmp.write_bytes(b"new content")
+
+    assert target.read_bytes() == b"original"
+    leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(f".{target.name}.tmp")]
+    assert leftovers == []
+
+
 @pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
 def test_backup_files_are_owner_only(tmp_path: Path) -> None:
     target = tmp_path / "data.txt"
