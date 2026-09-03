@@ -22,7 +22,7 @@ does write to the database.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 import click
 
@@ -198,7 +198,7 @@ def adopt(
     with ctx.open_database(for_write=not dry_run) as db:
         known_bad = weakkeys.load_known_bad_keys()
         transport_opts = TransportOptions(
-            interface=cast("connection.Transport | None", interface),
+            interface=connection.Transport(interface) if interface is not None else None,
             port=port,
             ble_address=ble_address,
             ble_scan=ble_scan,

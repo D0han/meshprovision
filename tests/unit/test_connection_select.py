@@ -15,11 +15,13 @@ from meshprovision.errors import (
 )
 from meshprovision.provisioning import connection, discovery
 from meshprovision.provisioning.connection import (
+    TRANSPORTS,
     BLEBackend,
     ConnectionRequest,
     DiscoveryResult,
     SerialBackend,
     TCPBackend,
+    Transport,
     backend_for,
     select_backend,
 )
@@ -227,6 +229,21 @@ def test_close_interface_swallows_oserror() -> None:
             raise OSError("boom")
 
     connection.close_interface(_BadIface())  # must not raise
+
+
+def test_transports_values_match_the_click_choice_wiring() -> None:
+    """Guards the exact regression Click 8.4.2 would otherwise cause.
+
+    click.Choice(list(TRANSPORTS)) would match/display by each member's
+    ``.name`` (``SERIAL``) rather than ``.value`` (``serial``), silently
+    breaking every documented ``-i/--transport`` invocation -- the CLI
+    layer must instead build its Choice from ``[t.value for t in
+    TRANSPORTS]``. This pins the plain-string values themselves, in the
+    order cli/provision.py's ``--interface`` help text documents them.
+    """
+    assert [t.value for t in TRANSPORTS] == ["serial", "ble", "tcp"]
+    for value in ("serial", "ble", "tcp"):
+        assert Transport(value).value == value
 
 
 # ---------------------------------------------------------------------------

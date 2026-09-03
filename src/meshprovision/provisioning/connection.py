@@ -24,7 +24,8 @@ import contextlib
 import logging
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
+from enum import StrEnum
+from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
 
 from meshprovision.errors import (
     AmbiguousDeviceError,
@@ -56,10 +57,16 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 
-Transport: TypeAlias = Literal["serial", "ble", "tcp"]
-"""The three supported connection transports."""
 
-TRANSPORTS: Final[tuple[Transport, ...]] = ("serial", "ble", "tcp")
+class Transport(StrEnum):
+    """The three supported connection transports."""
+
+    SERIAL = "serial"
+    BLE = "ble"
+    TCP = "tcp"
+
+
+TRANSPORTS: Final[tuple[Transport, ...]] = (Transport.SERIAL, Transport.BLE, Transport.TCP)
 """Every supported transport, in the order `--interface` documents them."""
 
 DEFAULT_CONNECT_TIMEOUT: Final[int] = 300
@@ -124,7 +131,7 @@ class SerialBackend:
     @property
     def transport(self) -> Transport:
         """Always ``"serial"``."""
-        return "serial"
+        return Transport.SERIAL
 
     @property
     def target(self) -> str:
@@ -180,7 +187,7 @@ class BLEBackend:
     @property
     def transport(self) -> Transport:
         """Always ``"ble"``."""
-        return "ble"
+        return Transport.BLE
 
     @property
     def target(self) -> str:
@@ -248,7 +255,7 @@ class TCPBackend:
     @property
     def transport(self) -> Transport:
         """Always ``"tcp"``."""
-        return "tcp"
+        return Transport.TCP
 
     @property
     def target(self) -> str:
@@ -504,7 +511,7 @@ def _select_auto(
             [port.summary() for port in ports],
             request,
             chooser,
-            transport="serial",
+            transport=Transport.SERIAL,
             build=lambda index: SerialBackend(ports[index].device, timeout=request.timeout),
         )
 
@@ -516,7 +523,7 @@ def _select_auto(
             [device.summary() for device in devices],
             request,
             chooser,
-            transport="ble",
+            transport=Transport.BLE,
             build=lambda index: BLEBackend(devices[index].address, timeout=request.timeout),
         )
 

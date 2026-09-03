@@ -35,7 +35,7 @@ import logging
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, TypeVar
 
 import click
 
@@ -121,7 +121,7 @@ _TRANSPORT_OPTIONS: Final = (
     ),
     click.option(
         "--interface",
-        type=click.Choice(list(connection.TRANSPORTS), case_sensitive=False),
+        type=click.Choice([t.value for t in connection.TRANSPORTS], case_sensitive=False),
         default=None,
         help="Force a transport, turning ambiguity into a hard error.",
     ),
@@ -783,7 +783,7 @@ def provision(
     """
     ctx = ctx.with_assume_yes(yes)
     transport_opts = TransportOptions(
-        interface=cast("connection.Transport | None", interface),
+        interface=connection.Transport(interface) if interface is not None else None,
         port=port,
         ble_address=ble_address,
         ble_scan=ble_scan,

@@ -19,7 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import click
 from rich import box
@@ -388,7 +388,7 @@ def admin_bootstrap(
         known_bad = weakkeys.load_known_bad_keys()
 
         transport_opts = TransportOptions(
-            interface=cast("connection.Transport | None", interface),
+            interface=connection.Transport(interface) if interface is not None else None,
             port=port,
             ble_address=ble_address,
             ble_scan=ble_scan,
