@@ -709,6 +709,126 @@ def test_apply_plan_owner_write_failure_reports_failed_not_a_crash(make_live) ->
     assert "Failed to set owner" in owner_result.message
 
 
+class _FakeSessionTracksRefresh:
+    """A session whose refresh() swaps in a second, distinct fake interface.
+
+    Lets a test tell apart "wrote to the pre-reboot interface" from "wrote
+    to the post-reboot, refreshed interface".
+    """
+
+    def __init__(self, first: _FakeIfaceForApply, refreshed: _FakeIfaceForApply) -> None:
+        self._iface: _FakeIfaceForApply = first
+        self._refreshed = refreshed
+        self.refresh_calls = 0
+
+    @property
+    def interface(self) -> _FakeIfaceForApply:
+        return self._iface
+
+    def describe(self) -> str:
+        return "fake (tracks refresh calls)"
+
+    def refresh(self) -> _FakeIfaceForApply:
+        self.refresh_calls += 1
+        self._iface = self._refreshed
+        return self._iface
+
+
+class _FakeSessionRefreshFailsAfterFirstCall:
+    """A session whose refresh() raises on its first call -- the mid-loop reboot case."""
+
+    def __init__(self, iface: _FakeIfaceForApply) -> None:
+        self._iface = iface
+
+    @property
+    def interface(self) -> _FakeIfaceForApply:
+        return self._iface
+
+    def describe(self) -> str:
+        return "fake (refresh fails)"
+
+    def refresh(self) -> _FakeIfaceForApply:
+        raise ConnectionBackendError("link dropped after reboot", transport="serial")
+
+
+def test_apply_plan_reconnects_mid_loop_after_a_reboot_before_writing_later_sections(
+    make_live,
+) -> None:
+    """A reboot-triggering section that isn't last must not leave later writes stale.
+
+    lora.region/modem_preset changes reboot the device; if a later section
+    (e.g. device) is written against the same never-refreshed interface,
+    it's written into (or later read back from) a stale, possibly-dead
+    handle instead of a genuinely fresh connection.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    rebooting_lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="hop_limit", current=3, desired=5),),
+        reboots_device=True,
+    )
+    later_device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    plan = dataclasses.replace(plan, sections=(rebooting_lora_change, later_device_change))
+
+    first_iface = _FakeIfaceForApply()
+    refreshed_iface = _FakeIfaceForApply()
+    session = _FakeSessionTracksRefresh(first_iface, refreshed_iface)
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    # One mid-loop refresh (after "lora" reboots, before "device"), plus the
+    # unconditional final-verify refresh at the end of apply_plan.
+    assert session.refresh_calls == 2
+    assert "lora" in first_iface.localNode.written_sections
+    assert "device" not in first_iface.localNode.written_sections
+    assert "device" in refreshed_iface.localNode.written_sections
+    role_result = next(r for r in outcome.results if r.field == "role")
+    assert role_result.status == WriteStatus.CONFIRMED
+
+
+def test_apply_plan_reports_uncertain_when_mid_loop_reconnect_fails(make_live) -> None:
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    rebooting_lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="hop_limit", current=3, desired=5),),
+        reboots_device=True,
+    )
+    later_device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    plan = dataclasses.replace(plan, sections=(rebooting_lora_change, later_device_change))
+
+    iface = _FakeIfaceForApply()
+    session = _FakeSessionRefreshFailsAfterFirstCall(iface)
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert outcome.verified is True
+    assert outcome.ok is False
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.status == WriteStatus.FAILED
+    assert "reconnect" in verify_result.message
+    # The device section must never be attempted once the mid-loop
+    # reconnect is known to have failed -- the connection is dead.
+    assert "device" not in iface.localNode.written_sections
+
+
 # ---------------------------------------------------------------------------
 # ReconnectingSession.refresh() -- the real retry-with-backoff logic, not a
 # hand-rolled fake session double.

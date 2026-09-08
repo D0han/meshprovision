@@ -1049,14 +1049,38 @@ def apply_plan(
     if name_failure is not None:
         results.append(name_failure)
 
-    for change in plan.sections:
+    last_index = len(plan.sections) - 1
+    for index, change in enumerate(plan.sections):
         try:
             write_section(iface, change, key_plan=plan.key_plan, keypair=keypair)
-        except (ProvisioningError, PlanConflictError, EnumMappingError) as exc:
+        except (ProvisioningError, EnumMappingError) as exc:
             results.append(WriteResult(change.section, WriteStatus.FAILED, str(exc)))
             continue
         if change.reboots_device:
             sleep(settle_seconds)
+            if index < last_index:
+                # A section besides the last (always "security", written
+                # last precisely to avoid a self-inflicted lockout, see
+                # SECTION_ORDER) just rebooted the device -- the sections
+                # still to come must be written against a fresh
+                # connection, or they would silently write into (or read
+                # back from) a stale, possibly-dead handle. Mirrors the
+                # same sleep-then-refresh sequence used below for the
+                # final verify pass.
+                try:
+                    iface = session.refresh()
+                except ConnectionBackendError:
+                    results.append(
+                        WriteResult(
+                            "<verify>",
+                            WriteStatus.FAILED,
+                            "Could not reconnect after a reboot-triggering write to "
+                            "continue the plan",
+                        )
+                    )
+                    return ApplyOutcome(
+                        node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
+                    )
 
     if not verify:
         return ApplyOutcome(
