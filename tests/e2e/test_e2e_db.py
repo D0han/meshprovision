@@ -348,6 +348,48 @@ def test_db_backup_create_and_list(
     assert document["backups"][0]["size_bytes"] > 0
 
 
+def test_db_backup_list_with_no_backups_reports_none_found(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    seed_db(nodes=[])
+    backup_dir = tmp_path / "empty-backups"
+
+    result = invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir), "--list"], env)
+
+    assert result.exit_code == 0
+    assert "No backups found." in result.stdout
+
+
+def test_db_backup_list_plain_text_shows_path_and_size(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    backup_dir = tmp_path / "custom-backups"
+    invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir)], env)
+
+    result = invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir), "--list"], env)
+
+    assert result.exit_code == 0
+    assert "bytes" in result.stdout
+    assert str(backup_dir) in result.stdout
+
+
+def test_db_backup_create_json_reports_source_and_backup_paths(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    backup_dir = tmp_path / "custom-backups"
+
+    result = invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir), "--json"], env)
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert document["source"] == str(db_path)
+    assert Path(document["backup"]).exists()
+    assert document["size_bytes"] > 0
+
+
 def test_db_backup_missing_database_exits_four(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:
