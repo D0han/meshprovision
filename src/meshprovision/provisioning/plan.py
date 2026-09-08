@@ -52,7 +52,7 @@ from meshprovision.provisioning.plan_admin_keys import (
     ResolvedAdminKey,
     _plan_admin_key_material,
 )
-from meshprovision.provisioning.plan_warnings import PlanWarning
+from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -71,6 +71,7 @@ __all__ = [
     "NameChange",
     "PlanInputs",
     "PlanWarning",
+    "PlanWarningCode",
     "SectionChange",
     "build_plan",
     "values_equal",
@@ -777,7 +778,7 @@ def _name_warnings(name_change: NameChange) -> tuple[PlanWarning, ...]:
     if short_bytes > SHORT_NAME_MAX_BYTES:
         warnings.append(
             PlanWarning(
-                "name_truncation_risk",
+                PlanWarningCode.NAME_TRUNCATION_RISK,
                 f"Desired short_name {name_change.desired_short_name!r} is {short_bytes} "
                 f"UTF-8 bytes, over the {SHORT_NAME_MAX_BYTES}-byte firmware limit, and "
                 "will be truncated silently.",
@@ -788,7 +789,7 @@ def _name_warnings(name_change: NameChange) -> tuple[PlanWarning, ...]:
     if long_bytes > LONG_NAME_MAX_BYTES:
         warnings.append(
             PlanWarning(
-                "name_truncation_risk",
+                PlanWarningCode.NAME_TRUNCATION_RISK,
                 f"Desired long_name {name_change.desired_long_name!r} is {long_bytes} "
                 f"UTF-8 bytes, over the {LONG_NAME_MAX_BYTES}-byte firmware limit, and "
                 "will be truncated silently.",
@@ -865,7 +866,7 @@ def _plan_config_sections(
         if reboots:
             warnings.append(
                 PlanWarning(
-                    "region_change_reboots",
+                    PlanWarningCode.REGION_CHANGE_REBOOTS,
                     "Changing lora.region/modem_preset reboots the device.",
                     section="lora",
                 )
@@ -903,7 +904,9 @@ def _plan_module_sections(
         if opt not in detect.MODULE_SECTIONS:
             warnings.append(
                 PlanWarning(
-                    "unknown_module", f"{opt!r} is not a known module section.", section=opt
+                    PlanWarningCode.UNKNOWN_MODULE,
+                    f"{opt!r} is not a known module section.",
+                    section=opt,
                 )
             )
             continue
@@ -911,7 +914,7 @@ def _plan_module_sections(
         if current is None:
             warnings.append(
                 PlanWarning(
-                    "module_has_no_enabled_field",
+                    PlanWarningCode.MODULE_HAS_NO_ENABLED_FIELD,
                     f"Module {opt!r} has no 'enabled' field on this firmware.",
                     section=opt,
                 )
@@ -1002,7 +1005,7 @@ def _plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanW
 
     if inputs.db_public_key is not None and inputs.db_public_key != live_sec.public_key:
         warning = PlanWarning(
-            "device_key_differs_from_db",
+            PlanWarningCode.DEVICE_KEY_DIFFERS_FROM_DB,
             "The device's reported public key differs from the Keys sheet; adopting the "
             "device's key rather than overwriting it (firmware issue #7449).",
             section="security",
@@ -1264,7 +1267,7 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
     if lockdown.reason == LockdownReason.ALLOW_LOCKDOWN_NOT_SET:
         warnings.append(
             PlanWarning(
-                "lockdown_not_authorized",
+                PlanWarningCode.LOCKDOWN_NOT_AUTHORIZED,
                 "security.is_managed stays false: pass --allow-lockdown to enable it.",
                 section="security",
                 field="is_managed",
@@ -1276,7 +1279,7 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
     if inputs.state is detect.NodeState.FOREIGN:
         warnings.append(
             PlanWarning(
-                "foreign_node",
+                PlanWarningCode.FOREIGN_NODE,
                 f"{live.node_id.display} was not found in the database and does not look "
                 "like a factory-default node; it may belong to someone else.",
             )

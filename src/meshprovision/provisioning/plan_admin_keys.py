@@ -56,7 +56,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from meshprovision.errors import MAX_ADMIN_KEYS, AdminKeyCapacityError
-from meshprovision.provisioning.plan_warnings import PlanWarning
+from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 
 if TYPE_CHECKING:
     from meshprovision.provisioning.plan import PlanInputs
@@ -296,7 +296,7 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
             rejected: tuple[ResolvedAdminKey, ...] = ()
             warnings.extend(
                 PlanWarning(
-                    "resolved_admin_key_forced",
+                    PlanWarningCode.RESOLVED_ADMIN_KEY_FORCED,
                     f"Admin key {key.key_ref} failed the weak-key audit but will be "
                     f"authorized anyway (--allow-weak-admin-key): "
                     f"{key.audit_summary or 'flagged as compromised'}.",
@@ -310,7 +310,7 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
             rejected = weak
             warnings.extend(
                 PlanWarning(
-                    "resolved_admin_key_rejected",
+                    PlanWarningCode.RESOLVED_ADMIN_KEY_REJECTED,
                     f"Admin key {key.key_ref} failed the weak-key audit and will not be "
                     f"authorized: {key.audit_summary or 'flagged as compromised'}. Correct or "
                     f"replace that Keys sheet row (see `mesh admin import`).",
@@ -329,7 +329,7 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
         revoked = tuple(f"live-admin[{i}]" for i in revoked_indices)
         warnings.extend(
             PlanWarning(
-                "live_admin_key_revoked",
+                PlanWarningCode.LIVE_ADMIN_KEY_REVOKED,
                 f"Live admin key {label} is authorized on the device but not named in "
                 f"template.admin_nodes; it will be removed.",
                 section="security",
@@ -344,7 +344,7 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
     removed = tuple(f"live-admin[{i}]" for i in dropped_indices if live_keys[i] not in desired)
     warnings = [
         PlanWarning(
-            "live_admin_key_rejected",
+            PlanWarningCode.LIVE_ADMIN_KEY_REJECTED,
             f"Live admin key {label} failed the weak-key audit and will be removed.",
             section="security",
             field="admin_key",
