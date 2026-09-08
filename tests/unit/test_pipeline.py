@@ -8,12 +8,17 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.config.template import TemplateConfig, load_template_text
+from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyType
+from meshprovision.nodeid import NodeId
+from meshprovision.provisioning import detect
 from meshprovision.provisioning.pipeline import (
     allocate_names,
+    audit_live_admin_keys,
+    audit_node_key,
     resolve_admin_keys,
     resolve_removed_admin_refs,
 )
@@ -87,6 +92,46 @@ def test_compromised_admin_key_logs_an_error(
     records = _audit_records(caplog)
     assert [record.levelno for record in records] == [logging.ERROR]
     assert "[critical]" in records[0].getMessage()
+
+
+def test_resolve_admin_keys_reports_a_private_key_mismatch(
+    keys: KeyRepository, keypair_factory, caplog: pytest.LogCaptureFixture
+) -> None:
+    kp_a, kp_b = keypair_factory(), keypair_factory()
+    pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a)
+    _, mismatched_priv = KeyRecord.for_keypair("ADMIN1", kp_b)
+    keys.upsert(pub)
+    keys.upsert(mismatched_priv)
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        resolved = resolve_admin_keys(keys, _template_with_admin("ADMIN1"), known_bad=frozenset())
+
+    assert resolved[0].has_private is False
+    assert resolved[0].private_mismatch is True
+    assert any("does not derive" in record.getMessage() for record in caplog.records)
+
+
+def _live_with_security(security: detect.LiveSecurity) -> detect.LiveConfig:
+    return detect.LiveConfig(node_id=NodeId.from_hex("deadbe01"), security=security)
+
+
+def test_audit_live_admin_keys_rejects_malformed_length_material() -> None:
+    live = _live_with_security(detect.LiveSecurity(admin_keys=(b"too-short",)))
+
+    rejected = audit_live_admin_keys(live, known_bad=frozenset())
+
+    assert rejected == frozenset({b"too-short"})
+
+
+def test_audit_node_key_malformed_private_key_is_reported_compromised(keypair: KeyPair) -> None:
+    live = _live_with_security(
+        detect.LiveSecurity(public_key=keypair.public, private_key=SecretBytes(b"too-short"))
+    )
+
+    compromised, reason = audit_node_key(live, known_bad=frozenset())
+
+    assert compromised is True
+    assert reason == "malformed key material"
 
 
 _MAP = {"A_pub": b"a" * 32, "B_pub": b"b" * 32}
