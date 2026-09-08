@@ -277,17 +277,6 @@ class ApplyOutcome:
             lines.append(line)
         return tuple(lines)
 
-    def raise_if_uncertain(self) -> None:
-        """Raise the first failure's error, if this outcome is uncertain.
-
-        Raises:
-            WriteVerificationError: The error built from the first entry
-                of :meth:`failures`, when any exists.
-        """
-        failures = self.failures()
-        if failures:
-            raise failures[0].as_error()
-
 
 class DeviceSession(Protocol):
     """Structural protocol for a live connection :func:`apply_plan` can drive.
@@ -983,11 +972,11 @@ def apply_plan(
     """Execute a change plan against a live device with a write-then-verify guarantee.
 
     Never raises for a verification mismatch: the caller inspects
-    :attr:`ApplyOutcome.exit_code` or calls
-    :meth:`ApplyOutcome.raise_if_uncertain`. It does propagate a lost
-    reconnect as an uncertain outcome (never as an exception) -- a device
-    that cannot be re-read is by definition unverified, and the ODS must
-    not be written.
+    :attr:`ApplyOutcome.exit_code`, :attr:`ApplyOutcome.may_update_database`,
+    or :meth:`ApplyOutcome.failures`. It does propagate a lost reconnect
+    as an uncertain outcome (never as an exception) -- a device that
+    cannot be re-read is by definition unverified, and the ODS must not
+    be written.
 
     Args:
         plan: The change plan to execute.

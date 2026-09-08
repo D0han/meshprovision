@@ -367,31 +367,6 @@ class KeyRepository:
             raise KeyNotFoundError(f"Key reference not found: {key_ref!r}", key_ref=key_ref)
         return record
 
-    def material(self, key_ref: str) -> bytes:
-        """Resolve a ``key_ref`` to raw key bytes.
-
-        Args:
-            key_ref: The ``key_ref`` to resolve.
-
-        Returns:
-            The decoded 32 raw key bytes.
-
-        Raises:
-            KeyNotFoundError: If no key with this reference exists.
-        """
-        return self.get(key_ref).material()
-
-    def for_owner(self, owner: str) -> tuple[KeyRecord, ...]:
-        """Return every key row belonging to one owner.
-
-        Args:
-            owner: The ``owner_node_id`` to filter by.
-
-        Returns:
-            The matching rows, in the sheet's own order.
-        """
-        return tuple(record for record in self.all() if record.owner_node_id == owner)
-
     def of_type(self, key_type: KeyType) -> tuple[KeyRecord, ...]:
         """Return every key row of one type.
 
@@ -550,22 +525,3 @@ class KeyRepository:
             updated_rows.append(new_row)
         self._db.replace(schema.KEYS_SHEET, updated_rows)
         return record
-
-    def delete(self, key_ref: str) -> bool:
-        """Delete a key's row, in memory only.
-
-        Does not write to disk; call ``self.db.save()`` to persist.
-
-        Args:
-            key_ref: The ``key_ref`` to delete.
-
-        Returns:
-            ``True`` if a row was removed; ``False`` if no matching row
-            existed.
-        """
-        rows = list(self._db.rows(schema.KEYS_SHEET))
-        filtered = [row for row in rows if row.get("key_ref") != key_ref]
-        if len(filtered) == len(rows):
-            return False
-        self._db.replace(schema.KEYS_SHEET, filtered)
-        return True

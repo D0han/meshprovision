@@ -518,18 +518,6 @@ class ChangePlan:
                 return section
         return None
 
-    def all_changes(self) -> tuple[FieldChange, ...]:
-        """Flatten every field change across every section.
-
-        Returns:
-            Every :class:`FieldChange` from :attr:`sections`, in order.
-            Never includes key material -- that lives in :attr:`key_plan`.
-        """
-        result: list[FieldChange] = []
-        for section in self.sections:
-            result.extend(section.changes)
-        return tuple(result)
-
     def describe(self) -> tuple[str, ...]:
         """Render this plan as ready-to-print ``--dry-run`` lines.
 

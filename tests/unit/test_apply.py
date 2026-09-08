@@ -609,8 +609,6 @@ def test_apply_outcome_uncertain_and_failures() -> None:
     assert outcome.may_update_database is False
     assert outcome.exit_code != 0
     assert outcome.failures() == (bad_result,)
-    with pytest.raises(Exception):  # noqa: B017
-        outcome.raise_if_uncertain()
 
 
 def test_apply_outcome_dry_run_never_updates_database_even_if_ok() -> None:

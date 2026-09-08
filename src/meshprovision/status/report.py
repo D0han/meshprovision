@@ -10,8 +10,8 @@ to :mod:`meshprovision.status.render` for presentation.
 **The read-only guarantee, stated for both a human reviewer and a unit
 test.** Nothing in this module may reference
 ``OdsDatabase.save``, ``OdsDatabase.replace``, ``NodeRepository.upsert``,
-``NodeRepository.delete``, ``KeyRepository.upsert``,
-``KeyRepository.delete``, ``db.atomic_writer``, or anything in
+``NodeRepository.delete``, ``KeyRepository.upsert``, ``db.atomic_writer``,
+or anything in
 ``meshprovision.provisioning.apply`` or ``meshprovision.provisioning.
 repair``. An e2e test asserts the ODS file's mtime is unchanged across a
 full ``mesh status`` run, and a unit test

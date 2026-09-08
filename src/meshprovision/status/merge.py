@@ -217,21 +217,6 @@ class MergedNode:
         return bool(self.sources)
 
     @property
-    def display_name(self) -> str:
-        """The best available human-readable name for this node.
-
-        Returns:
-            :attr:`short_name` when known; otherwise the database
-            record's short name when known; otherwise
-            ``node_id.display``.
-        """
-        if self.short_name:
-            return self.short_name
-        if self.record is not None and self.record.short_name:
-            return self.record.short_name
-        return self.node_id.display
-
-    @property
     def management(self) -> str | None:
         """This node's database management mode.
 
