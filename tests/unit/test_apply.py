@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 
 import pytest
 from meshtastic.protobuf import localonly_pb2
@@ -38,7 +39,13 @@ from meshprovision.provisioning.apply import (
     verify_plan,
     write_section,
 )
-from meshprovision.provisioning.plan import ChangePlan, PlanInputs, SectionChange, build_plan
+from meshprovision.provisioning.plan import (
+    ChangePlan,
+    FieldChange,
+    PlanInputs,
+    SectionChange,
+    build_plan,
+)
 from tests.unit.conftest import make_security
 
 pytestmark = pytest.mark.unit
@@ -614,6 +621,54 @@ def test_apply_plan_persists_the_truncated_name_not_the_desired_one(tmp_path, ma
     assert outcome.record is not None
     assert outcome.record.long_name == plan.name_change.desired_long_name[:20]
     assert outcome.record.long_name != plan.name_change.desired_long_name
+
+
+def test_apply_plan_an_unmappable_enum_value_fails_its_section_not_the_whole_run(
+    tmp_path, make_live
+) -> None:
+    """Cover apply_plan's per-section enum-mapping failure handling.
+
+    A bad enum value (e.g. a typo'd, unvalidated ``rebroadcast_mode``/
+    ``modem_preset`` in the template) must degrade to a FAILED WriteResult
+    for its own section, not crash apply_plan and abandon sections already
+    written to the device with no verify/persist pass at all.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    good_device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    bad_lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(
+            FieldChange(
+                section="lora", field="modem_preset", current="LONG_FAST", desired="NOT_A_PRESET"
+            ),
+        ),
+    )
+    plan = dataclasses.replace(plan, sections=(good_device_change, bad_lora_change))
+
+    iface = _FakeIfaceForApply()
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert outcome.ok is False
+    lora_result = next(r for r in outcome.results if r.section == "lora")
+    assert lora_result.status == WriteStatus.FAILED
+    assert "modem_preset" in lora_result.message or "NOT_A_PRESET" in lora_result.message
+
+    # The device section, processed before the lora failure, was genuinely
+    # written and still reaches the verify pass.
+    assert "device" in iface.localNode.written_sections
+    role_result = next(r for r in outcome.results if r.field == "role")
+    assert role_result.status == WriteStatus.CONFIRMED
 
 
 # ---------------------------------------------------------------------------

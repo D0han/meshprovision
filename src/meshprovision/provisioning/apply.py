@@ -1020,7 +1020,7 @@ def apply_plan(
     for change in plan.sections:
         try:
             write_section(iface, change, key_plan=plan.key_plan, keypair=keypair)
-        except (ProvisioningError, PlanConflictError) as exc:
+        except (ProvisioningError, PlanConflictError, EnumMappingError) as exc:
             results.append(WriteResult(change.section, WriteStatus.FAILED, str(exc)))
             continue
         if change.reboots_device:
