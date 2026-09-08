@@ -603,6 +603,30 @@ def test_apply_plan_success_confirmed_and_persist_result(tmp_path, make_live) ->
     assert keys.find("deadbe01_priv") is not None
 
 
+def test_apply_plan_sleeps_only_once_for_a_reboot_on_the_last_section(make_live) -> None:
+    """A reboot on the last section (typically "security") must settle once, not twice.
+
+    The loop's own settle sleep is only needed ahead of a mid-loop
+    refresh; the last section's reboot is already covered by the
+    unconditional sleep right before the final verify reconnect.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    assert [s.section for s in plan.sections] == ["security"]
+    assert plan.sections[0].reboots_device is True
+    kp = generate_keypair()
+
+    sleep_calls: list[float] = []
+    iface = _FakeIfaceForApply()
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp, sleep=sleep_calls.append)
+
+    assert outcome.ok is True, outcome.describe()
+    assert sleep_calls == [DEFAULT_SETTLE_SECONDS]
+
+
 def test_apply_plan_persists_the_truncated_name_not_the_desired_one(tmp_path, make_live) -> None:
     """A truncated-but-CONFIRMED name write must persist what's really on the device.
 

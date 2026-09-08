@@ -1056,31 +1056,33 @@ def apply_plan(
         except (ProvisioningError, EnumMappingError) as exc:
             results.append(WriteResult(change.section, WriteStatus.FAILED, str(exc)))
             continue
-        if change.reboots_device:
+        if change.reboots_device and index < last_index:
+            # A section besides the last (always "security", written last
+            # precisely to avoid a self-inflicted lockout, see
+            # SECTION_ORDER) just rebooted the device -- the sections
+            # still to come must be written against a fresh connection,
+            # or they would silently write into (or read back from) a
+            # stale, possibly-dead handle. Mirrors the same
+            # sleep-then-refresh sequence used below for the final verify
+            # pass. The last section's own reboot needs no sleep here:
+            # when reached, either the unconditional sleep+refresh right
+            # below already covers it (verify=True), or nothing further
+            # touches the device at all (verify=False), so sleeping here
+            # too would just double the wait for the same reboot.
             sleep(settle_seconds)
-            if index < last_index:
-                # A section besides the last (always "security", written
-                # last precisely to avoid a self-inflicted lockout, see
-                # SECTION_ORDER) just rebooted the device -- the sections
-                # still to come must be written against a fresh
-                # connection, or they would silently write into (or read
-                # back from) a stale, possibly-dead handle. Mirrors the
-                # same sleep-then-refresh sequence used below for the
-                # final verify pass.
-                try:
-                    iface = session.refresh()
-                except ConnectionBackendError:
-                    results.append(
-                        WriteResult(
-                            "<verify>",
-                            WriteStatus.FAILED,
-                            "Could not reconnect after a reboot-triggering write to "
-                            "continue the plan",
-                        )
+            try:
+                iface = session.refresh()
+            except ConnectionBackendError:
+                results.append(
+                    WriteResult(
+                        "<verify>",
+                        WriteStatus.FAILED,
+                        "Could not reconnect after a reboot-triggering write to continue the plan",
                     )
-                    return ApplyOutcome(
-                        node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
-                    )
+                )
+                return ApplyOutcome(
+                    node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
+                )
 
     if not verify:
         return ApplyOutcome(
