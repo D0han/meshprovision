@@ -207,3 +207,31 @@ def test_allocate_names_avoids_long_name_collision_when_namespaces_diverge(
     assert short == "MT00"
     assert long != "Meshtastic 00"
     assert long.casefold() not in {n.casefold() for n in nodes.used_long_names()}
+
+
+def test_allocate_names_finds_a_free_long_name_below_the_short_names_index(
+    nodes: NodeRepository,
+) -> None:
+    """The long-name fallback search must cover the WHOLE namespace, not just index+.
+
+    A prior bug started the fallback search at the short name's own
+    index (``start=index``) rather than 0, so a free long name sitting
+    at a LOWER index than the short name's index could never be found --
+    even though the sibling fallback branch just above it (when
+    render(index) itself raises) correctly searches from 0.
+    """
+    for i in range(5):
+        nodes.upsert(NodeRecord(node_id=f"0000000{i}", short_name=f"MT0{i}", long_name="unused"))
+    for i in range(20):
+        if i == 2:
+            continue
+        nodes.upsert(
+            NodeRecord(
+                node_id=f"1000000{i}" if i < 10 else f"100000{i}", long_name=f"Meshtastic 0{i}"
+            )
+        )
+
+    short, long = allocate_names(nodes, _naming_template(), existing=None, rename=False)
+
+    assert short == "MT05"
+    assert long == "Meshtastic 02"

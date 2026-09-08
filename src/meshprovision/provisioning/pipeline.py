@@ -301,5 +301,5 @@ def allocate_names(
     else:
         used_long = {name.casefold() for name in nodes.used_long_names()}
         if long.casefold() in used_long:
-            long = nodes.next_free_name(long_spec, is_long=True, start=index)[1]
+            long = nodes.next_free_name(long_spec, is_long=True)[1]
     return short, long
