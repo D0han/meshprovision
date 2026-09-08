@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import click
 
 from meshprovision.cli.common import CONTEXT_SETTINGS, handle_cli_errors, pass_cli
-from meshprovision.datasources.base import SOURCE_LORASTATS
+from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.lorastats import DEFAULT_REGIONS
 from meshprovision.errors import ExitCode, SettingsError
 from meshprovision.nodeid import NodeId
@@ -157,7 +157,7 @@ def _run_once(ctx: CliContext, options: StatusOptions, client: CachedHTTPClient)
     "--source",
     "sources",
     multiple=True,
-    type=click.Choice(["loranet", "lorastats"]),
+    type=click.Choice([SOURCE_LORANET, SOURCE_LORASTATS]),
     help="Restrict to this data source (repeatable).",
 )
 @click.option(
