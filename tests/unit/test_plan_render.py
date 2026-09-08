@@ -7,6 +7,8 @@ sibling extraction out of cli/admin.py.
 
 from __future__ import annotations
 
+import dataclasses
+
 import pytest
 
 from meshprovision.config.template import load_template_text
@@ -18,6 +20,7 @@ from meshprovision.provisioning.plan_render import (
     describe_plan,
     plan_to_json_dict,
 )
+from meshprovision.provisioning.plan_warnings import PlanWarning
 from meshprovision.provisioning.repair import Drift, DriftKind
 from tests.unit.conftest import make_security
 
@@ -104,6 +107,19 @@ def test_describe_plan_reboot_warning_uses_warning_kind(make_live, template) -> 
         and line.text == "Applying this plan reboots the device."
     ]
     assert len(reboot_lines) == 1
+
+
+def test_describe_plan_warnings_use_warning_kind(make_live, template, keypair) -> None:
+    plan = _empty_plan(make_live, template, keypair)
+    assert not plan.reboots_device
+    warning = PlanWarning(code="foreign_node", message="This node is not in the database.")
+    plan = dataclasses.replace(plan, warnings=(warning,))
+
+    lines = describe_plan(plan)
+
+    matching = [line for line in lines if line.text == warning.message]
+    assert len(matching) == 1
+    assert matching[0].kind is PlanLineKind.WARNING
 
 
 def test_plan_to_json_dict_includes_detection_drifts_and_plan(make_live, template, keypair) -> None:
