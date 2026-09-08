@@ -264,82 +264,125 @@ def verify_database(
     Returns:
         The full :class:`VerifyReport`.
     """
-    problems: list[DbProblem] = []
+    problems: list[DbProblem] = [
+        *_check_template_unavailable(template, template_error),
+        *_check_permissions(path),
+        *_check_integrity_warnings(warnings),
+        *_check_unresolved_admin_refs(nodes, keys),
+        *_check_template_refs(keys, template),
+        *_check_weak_keys(keys, known_bad),
+        *_check_admin_key_mismatch(keys),
+        *_check_duplicate_keys(keys),
+    ]
 
-    if template is None and template_error is not None:
-        problems.append(
-            DbProblem(
-                kind=DbProblemKind.TEMPLATE_UNAVAILABLE,
-                severity=ProblemSeverity.WARNING,
-                message=(
-                    "Template cross-check skipped: the template failed to load "
-                    "(admin_nodes references were not verified against the Keys sheet)."
-                ),
-            )
+    return VerifyReport(
+        path=path,
+        node_count=len(nodes.all()),
+        key_count=len(keys.all()),
+        problems=tuple(problems),
+    )
+
+
+def _check_template_unavailable(
+    template: TemplateConfig | None, template_error: str | None
+) -> list[DbProblem]:
+    """Flag that the template cross-check was skipped because loading it failed."""
+    if template is not None or template_error is None:
+        return []
+    return [
+        DbProblem(
+            kind=DbProblemKind.TEMPLATE_UNAVAILABLE,
+            severity=ProblemSeverity.WARNING,
+            message=(
+                "Template cross-check skipped: the template failed to load "
+                "(admin_nodes references were not verified against the Keys sheet)."
+            ),
         )
+    ]
 
-    if os.name == "posix":
-        mode = path.stat().st_mode & 0o777
-        if mode & 0o077:
+
+def _check_permissions(path: Path) -> list[DbProblem]:
+    """Flag a database file mode that is readable/writable beyond the owner."""
+    if os.name != "posix":
+        return []
+    mode = path.stat().st_mode & 0o777
+    if not mode & 0o077:
+        return []
+    return [
+        DbProblem(
+            kind=DbProblemKind.INSECURE_PERMISSIONS,
+            severity=ProblemSeverity.WARNING,
+            message=(
+                f"Database file mode is {mode:04o}; it holds private key material "
+                f"and should be 0600. Run `chmod 600 {path}`."
+            ),
+            ref=str(path),
+        )
+    ]
+
+
+def _check_integrity_warnings(warnings: Sequence[IntegrityWarning]) -> list[DbProblem]:
+    """Translate load-time integrity warnings (stale formulas, coerced cells) into problems."""
+    return [
+        DbProblem(
+            kind=(
+                DbProblemKind.COERCED_CELL
+                if warning.kind == IntegrityWarningKind.COERCED_CELL
+                else DbProblemKind.INTEGRITY_WARNING
+            ),
+            severity=ProblemSeverity.WARNING,
+            message=warning.message(),
+            sheet=warning.sheet,
+            ref=warning.cell,
+        )
+        for warning in warnings
+    ]
+
+
+def _check_unresolved_admin_refs(nodes: NodeRepository, keys: KeyRepository) -> list[DbProblem]:
+    """Flag a node authorizing an admin key reference absent from the Keys sheet."""
+    unresolved = nodes.unresolved_admin_refs(keys)
+    return [
+        DbProblem(
+            kind=DbProblemKind.UNRESOLVED_ADMIN_REF,
+            severity=ProblemSeverity.ERROR,
+            message=(
+                f"Node {node_id} authorizes unresolved admin key reference(s): "
+                f"{', '.join(missing_refs)}."
+            ),
+            sheet="Nodes",
+            ref=node_id,
+        )
+        for node_id, missing_refs in unresolved.items()
+    ]
+
+
+def _check_template_refs(keys: KeyRepository, template: TemplateConfig | None) -> list[DbProblem]:
+    """Flag a template admin_nodes entry that does not resolve to a Keys sheet row."""
+    if template is None:
+        return []
+    problems: list[DbProblem] = []
+    for ref in template.admin_nodes:
+        key_ref = admin_public_key_ref(ref)
+        if keys.find(key_ref) is None:
             problems.append(
                 DbProblem(
-                    kind=DbProblemKind.INSECURE_PERMISSIONS,
-                    severity=ProblemSeverity.WARNING,
+                    kind=DbProblemKind.UNRESOLVED_TEMPLATE_REF,
+                    severity=ProblemSeverity.ERROR,
                     message=(
-                        f"Database file mode is {mode:04o}; it holds private key material "
-                        f"and should be 0600. Run `chmod 600 {path}`."
+                        f"Template admin_nodes entry {ref!r} does not resolve to a "
+                        f"{key_ref!r} row in the Keys sheet."
                     ),
-                    ref=str(path),
+                    sheet="Keys",
+                    ref=ref,
                 )
             )
+    return problems
 
-    for warning in warnings:
-        problems.append(
-            DbProblem(
-                kind=(
-                    DbProblemKind.COERCED_CELL
-                    if warning.kind == IntegrityWarningKind.COERCED_CELL
-                    else DbProblemKind.INTEGRITY_WARNING
-                ),
-                severity=ProblemSeverity.WARNING,
-                message=warning.message(),
-                sheet=warning.sheet,
-                ref=warning.cell,
-            )
-        )
 
-    unresolved = nodes.unresolved_admin_refs(keys)
-    for node_id, missing_refs in unresolved.items():
-        problems.append(
-            DbProblem(
-                kind=DbProblemKind.UNRESOLVED_ADMIN_REF,
-                severity=ProblemSeverity.ERROR,
-                message=(
-                    f"Node {node_id} authorizes unresolved admin key reference(s): "
-                    f"{', '.join(missing_refs)}."
-                ),
-                sheet="Nodes",
-                ref=node_id,
-            )
-        )
-
-    if template is not None:
-        for ref in template.admin_nodes:
-            key_ref = admin_public_key_ref(ref)
-            if keys.find(key_ref) is None:
-                problems.append(
-                    DbProblem(
-                        kind=DbProblemKind.UNRESOLVED_TEMPLATE_REF,
-                        severity=ProblemSeverity.ERROR,
-                        message=(
-                            f"Template admin_nodes entry {ref!r} does not resolve to a "
-                            f"{key_ref!r} row in the Keys sheet."
-                        ),
-                        sheet="Keys",
-                        ref=ref,
-                    )
-                )
-
+def _check_weak_keys(keys: KeyRepository, known_bad: frozenset[bytes]) -> list[DbProblem]:
+    """Run the weak-key audit over every Keys sheet row."""
+    problems: list[DbProblem] = []
     for record in keys.all():
         try:
             if record.key_type is KeyType.ADMIN_PUBLIC:
@@ -374,7 +417,12 @@ def verify_database(
                     ref=record.key_ref,
                 )
             )
+    return problems
 
+
+def _check_admin_key_mismatch(keys: KeyRepository) -> list[DbProblem]:
+    """Flag an admin private key that does not derive its registered public key."""
+    problems: list[DbProblem] = []
     for record in keys.of_type(KeyType.ADMIN_PRIVATE):
         admin_ref = record.key_ref.removesuffix("_priv")
         if keys.find(admin_public_key_ref(admin_ref)) is None:
@@ -400,7 +448,16 @@ def verify_database(
                     ref=record.key_ref,
                 )
             )
+    return problems
 
+
+def _check_duplicate_keys(keys: KeyRepository) -> list[DbProblem]:
+    """Detect cross-fleet duplicate public keys, alias-aware.
+
+    See :func:`verify_database`'s own docstring for the full alias-vs-
+    duplicate classification rationale -- this helper only implements it.
+    """
+    problems: list[DbProblem] = []
     groups = weakkeys.find_duplicate_public_keys(keys.public_key_map())
     seen_groups: set[tuple[str, ...]] = set()
     for key_ref, others in groups.items():
@@ -456,10 +513,4 @@ def verify_database(
                     ref=",".join(group),
                 )
             )
-
-    return VerifyReport(
-        path=path,
-        node_count=len(nodes.all()),
-        key_count=len(keys.all()),
-        problems=tuple(problems),
-    )
+    return problems
