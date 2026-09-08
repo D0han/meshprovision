@@ -994,6 +994,44 @@ def test_apply_plan_reports_uncertain_when_the_reconnect_fails(tmp_path, make_li
     assert verify_results[0].message == "Could not reconnect to verify the writes"
 
 
+def test_apply_plan_keeps_an_earlier_section_failure_when_the_final_reconnect_also_fails(
+    make_live,
+) -> None:
+    """A pre-verify section failure must not be lost when the final reconnect also fails.
+
+    Both early-return branches append to the same accumulating `results`
+    list rather than replacing it, but that's exactly the kind of thing a
+    regression could silently break.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    bad_lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(
+            FieldChange(
+                section="lora", field="modem_preset", current="LONG_FAST", desired="NOT_A_PRESET"
+            ),
+        ),
+    )
+    plan = dataclasses.replace(plan, sections=(bad_lora_change,))
+
+    iface = _FakeIfaceForApply()
+    session = _RefreshFailsSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert outcome.ok is False
+    lora_result = next(r for r in outcome.results if r.section == "lora")
+    assert lora_result.status == WriteStatus.FAILED
+    verify_results = [r for r in outcome.results if r.section == "<verify>"]
+    assert len(verify_results) == 1
+    assert verify_results[0].status == WriteStatus.FAILED
+
+
 class _FakeIfaceRaisesOnUser(_FakeIfaceForApply):
     """A fresh interface whose reconnect succeeded but whose user read fails.
 
