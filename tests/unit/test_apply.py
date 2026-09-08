@@ -671,6 +671,31 @@ def test_apply_plan_an_unmappable_enum_value_fails_its_section_not_the_whole_run
     assert role_result.status == WriteStatus.CONFIRMED
 
 
+def test_apply_plan_owner_write_failure_reports_failed_not_a_crash(make_live) -> None:
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="MT01",
+        desired_long_name="Meshtastic MT01",
+    )
+    plan = build_plan(inputs)
+    assert not plan.name_change.is_empty
+    kp = generate_keypair()
+
+    iface = _FakeIfaceRaisesOnSetOwner()
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert outcome.ok is False
+    owner_result = next(r for r in outcome.results if r.section == "owner")
+    assert owner_result.status == WriteStatus.FAILED
+    assert "Failed to set owner" in owner_result.message
+
+
 # ---------------------------------------------------------------------------
 # ReconnectingSession.refresh() -- the real retry-with-backoff logic, not a
 # hand-rolled fake session double.
@@ -877,6 +902,21 @@ class _FakeIfaceTruncatesLongName(_FakeIfaceForApply):
     def __init__(self) -> None:
         super().__init__()
         self.localNode = _FakeLocalNodeTruncatesLongName(self)
+
+
+class _FakeLocalNodeRaisesOnSetOwner(_FakeLocalNode):
+    """Simulates a device/communication failure during the owner (name) write."""
+
+    def setOwner(self, **_kw: object) -> None:  # noqa: N802 -- real MeshInterface method name
+        raise OSError("serial write timed out")
+
+
+class _FakeIfaceRaisesOnSetOwner(_FakeIfaceForApply):
+    """An interface whose owner (name) write always raises."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.localNode = _FakeLocalNodeRaisesOnSetOwner(self)
 
 
 class _ReadFailsAfterReconnectSession:
