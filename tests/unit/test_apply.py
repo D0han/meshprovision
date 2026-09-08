@@ -9,7 +9,7 @@ import pytest
 from meshtastic.protobuf import localonly_pb2
 
 from meshprovision.config.template import TemplateConfig, load_template_text
-from meshprovision.crypto.keys import KeyPair, generate_keypair
+from meshprovision.crypto.keys import KeyPair, encode_key, generate_keypair
 from meshprovision.db.keys import KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
@@ -278,6 +278,56 @@ def test_verify_plan_int_one_against_desired_true_is_unconfirmed(make_live) -> N
     assert tx_result.status == WriteStatus.UNCONFIRMED
 
 
+def test_verify_key_material_nodedb_present_but_wrong_is_unconfirmed(make_live) -> None:
+    """A present-but-mismatched NodeDB key must not satisfy the cross-check.
+
+    _verify_key_material's dual check (LocalConfig AND NodeDB) exists
+    specifically for firmware issue #7449: LocalConfig can say a key
+    write succeeded while NodeDB still disagrees. LocalConfig matching
+    alone must not be enough when NodeDB is available and reports a
+    *different* key, not merely absent.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    assert plan.key_plan.regenerate is True
+    kp = generate_keypair()
+    wrong_kp = generate_keypair()
+
+    # LocalConfig confirms the right key...
+    live_after = make_live(template, security=make_security(keypair=kp))
+    # ...but NodeDB reports a different one entirely.
+    result = apply_module._verify_key_material(
+        plan, live_after, keypair=kp, device_public_key=encode_key(wrong_kp.public)
+    )
+
+    assert result is not None
+    assert result.status == WriteStatus.UNCONFIRMED
+
+
+def test_confirmed_name_ignores_a_different_fields_actual_value() -> None:
+    """_confirmed_name must not return a truncated OTHER field's actual value.
+
+    Both the section and field checks are load-bearing: an owner-section
+    result for the field NOT being asked about must never be mistaken
+    for the one that is, even when that other field's write was itself
+    truncated (actual is not None).
+    """
+    results = (
+        WriteResult(
+            "owner",
+            WriteStatus.CONFIRMED,
+            "long_name truncated on write",
+            field="long_name",
+            actual="Meshtastic ABCDEFGHIJ",
+        ),
+        WriteResult("owner", WriteStatus.CONFIRMED, "short_name confirmed", field="short_name"),
+    )
+
+    assert apply_module._confirmed_name(results, "short_name") is None
+
+
 def test_verify_plan_secret_field_expected_actual_redacted(make_live) -> None:
     template = _template()
     live = make_live(template, security=make_security(empty=True))
@@ -303,6 +353,41 @@ def test_verify_plan_secret_field_expected_actual_redacted(make_live) -> None:
     assert pin_result.status == WriteStatus.UNCONFIRMED
     assert pin_result.expected == "<redacted>"
     assert pin_result.actual == "<redacted>"
+
+
+def test_verify_plan_security_scalar_field_confirmed_via_live_security(make_live) -> None:
+    """A security scalar field write must confirm via LiveConfig.security, not .value().
+
+    LiveConfig.sections/module_sections deliberately exclude "security",
+    so the generic live_after.value(...) lookup always returns None for
+    it -- verify_plan's security branch must read via
+    getattr(live_after.security, field, None) instead, or a real
+    is_managed/admin_channel_enabled/etc. write would always report
+    UNCONFIRMED even after a fully successful write.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(admin_channel_enabled=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    admin_channel_change = next(
+        c
+        for section in plan.sections
+        for c in section.changes
+        if section.section == "security" and c.field == "admin_channel_enabled"
+    )
+    assert admin_channel_change.desired is False
+
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        security=make_security(admin_channel_enabled=False),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    result = next(
+        r for r in results if r.section == "security" and r.field == "admin_channel_enabled"
+    )
+    assert result.status == WriteStatus.CONFIRMED
 
 
 def test_verify_plan_name_truncated_confirmed(make_live) -> None:
@@ -1203,6 +1288,38 @@ def test_persist_result_refuses_on_uncertain_outcome(tmp_path) -> None:
     persisted = persist_result(outcome, nodes=nodes, keys=keys)
     assert persisted is False
     assert db_path.stat().st_mtime_ns == mtime_before
+    assert nodes.exists("deadbe01") is False
+
+
+def test_persist_result_refuses_when_may_update_database_is_false_with_a_record_present(
+    tmp_path,
+) -> None:
+    """The gate's two halves (may_update_database, record presence) are independent.
+
+    ApplyOutcome is a plain public dataclass; nothing stops constructing
+    one with may_update_database=False (here via dry_run=True) alongside
+    a non-None record, even though apply_plan itself never produces that
+    combination. persist_result's own docstring frames it as "the single
+    gate", so the may_update_database half must refuse on its own,
+    independent of whether record happens to be present.
+    """
+    outcome = ApplyOutcome(
+        node_id=_node_id(),
+        results=(),
+        dry_run=True,
+        verified=False,
+        record=NodeRecord(node_id="deadbe01"),
+    )
+    assert outcome.record is not None
+    assert outcome.may_update_database is False
+
+    db_path = tmp_path / "db.ods"
+    db = OdsDatabase.create(db_path)
+    nodes = NodeRepository(db)
+    keys = KeyRepository(db)
+
+    persisted = persist_result(outcome, nodes=nodes, keys=keys)
+    assert persisted is False
     assert nodes.exists("deadbe01") is False
 
 
