@@ -91,6 +91,40 @@ def test_reboots_device_on_region_change(make_live, template) -> None:
     assert any(w.code == "region_change_reboots" for w in plan.warnings)
 
 
+def test_position_section_normal_field_is_diffed_fixed_field_is_not(make_live, template) -> None:
+    """_diff_section's fixed-position skip must apply only to the three fixed_* fields.
+
+    An ``and``->``or`` mutant on ``section_name == "position" and
+    field_name in _POSITION_FIXED_FIELDS`` would skip EVERY position
+    field once the section is "position", silently making position
+    config (GPS interval, smart-broadcast settings, etc.) unwritable;
+    an ``in``->``not in`` mutant would invert which fields get skipped
+    instead. This test fails under either.
+    """
+    template2 = template.model_copy(
+        update={
+            "position": template.position.model_copy(
+                update={
+                    "position_broadcast_secs": 900,
+                    "fixed_latitude": 12.5,
+                    "fixed_position": True,
+                }
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+
+    position_section = plan.section("position")
+    assert position_section is not None
+    fields = {c.field for c in position_section.changes}
+    assert "position_broadcast_secs" in fields
+    assert "fixed_latitude" not in fields
+
+
 # ---------------------------------------------------------------------------
 # Already-correct node.
 # ---------------------------------------------------------------------------
@@ -910,6 +944,15 @@ def test_lockdown_stays_enabled_without_allow_lockdown_when_already_locked(
     security_section = plan.section("security")
     if security_section is not None:
         assert not any(c.field == "is_managed" for c in security_section.changes)
+    # gates must be a real mapping here, not None -- to_json_dict() (the
+    # mesh provision --json path) unconditionally does dict(lockdown.gates).
+    assert dict(plan.lockdown.gates) == {
+        "has_admin_keys": True,
+        "has_private_counterpart": True,
+        "audit_clean": True,
+        "explicit_intent": False,
+    }
+    assert plan.to_json_dict()["lockdown"]["gates"] == dict(plan.lockdown.gates)
 
 
 def test_lockdown_authorized(make_live, template, make_admin_key) -> None:
@@ -931,6 +974,15 @@ def test_lockdown_authorized(make_live, template, make_admin_key) -> None:
     assert security_section is not None
     is_managed_change = next(c for c in security_section.changes if c.field == "is_managed")
     assert is_managed_change.desired is True
+    # gates must be a real mapping here, not None -- to_json_dict() (the
+    # mesh provision --json path) unconditionally does dict(lockdown.gates).
+    assert dict(plan.lockdown.gates) == {
+        "has_admin_keys": True,
+        "has_private_counterpart": True,
+        "audit_clean": True,
+        "explicit_intent": True,
+    }
+    assert plan.to_json_dict()["lockdown"]["gates"] == dict(plan.lockdown.gates)
 
 
 def test_lockdown_template_opt_out(make_live, template) -> None:
@@ -958,6 +1010,7 @@ def test_force_regenerate_key(make_live, template, keypair) -> None:
     plan = build_plan(inputs)
     assert plan.key_plan.regenerate is True
     assert plan.key_plan.regenerate_reason == "forced"
+    assert plan.key_plan.adopt_device_key is False
 
 
 def test_missing_key_material(make_live, template) -> None:
@@ -969,6 +1022,42 @@ def test_missing_key_material(make_live, template) -> None:
     plan = build_plan(inputs)
     assert plan.key_plan.regenerate is True
     assert plan.key_plan.regenerate_reason == "missing_key_material"
+    assert plan.key_plan.adopt_device_key is False
+
+
+def test_missing_key_material_public_present_private_absent(make_live, template, keypair) -> None:
+    """EITHER half missing must trigger regeneration, not only both at once.
+
+    The gate is ``not has_public_key or not has_private_key`` -- an
+    ``and`` here would only regenerate when both halves are absent,
+    silently accepting a node with a public key but no usable private
+    counterpart.
+    """
+    live = make_live(
+        template, security=detect.LiveSecurity(public_key=keypair.public, private_key=None)
+    )
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live, template=template, db_entry=record, state=detect.NodeState.PROVISIONED
+    )
+    plan = build_plan(inputs)
+    assert plan.key_plan.regenerate is True
+    assert plan.key_plan.regenerate_reason == "missing_key_material"
+    assert plan.key_plan.adopt_device_key is False
+
+
+def test_missing_key_material_private_present_public_absent(make_live, template, keypair) -> None:
+    live = make_live(
+        template, security=detect.LiveSecurity(public_key=None, private_key=keypair.private)
+    )
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live, template=template, db_entry=record, state=detect.NodeState.PROVISIONED
+    )
+    plan = build_plan(inputs)
+    assert plan.key_plan.regenerate is True
+    assert plan.key_plan.regenerate_reason == "missing_key_material"
+    assert plan.key_plan.adopt_device_key is False
 
 
 def test_node_key_compromised_with_reason(make_live, template, keypair) -> None:
@@ -985,6 +1074,7 @@ def test_node_key_compromised_with_reason(make_live, template, keypair) -> None:
     plan = build_plan(inputs)
     assert plan.key_plan.regenerate is True
     assert plan.key_plan.regenerate_reason == "all_zero"
+    assert plan.key_plan.adopt_device_key is False
 
 
 def test_node_key_compromised_empty_reason_defaults(make_live, template, keypair) -> None:
