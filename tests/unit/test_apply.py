@@ -104,6 +104,19 @@ def test_apply_field_bad_numeric_string_raises() -> None:
         apply_field(msg, "hop_limit", "not-a-number")
 
 
+def test_apply_field_out_of_range_int_raises_plan_conflict_not_value_error() -> None:
+    """Protobuf's own range check raises a bare ValueError -- must be converted.
+
+    node_info_broadcast_secs is one of several config.template.py fields
+    declared with only a lower bound (``ge=0``), so an operator typo with
+    an extra digit reaches this call unvalidated by pydantic.
+    """
+    msg = _local_config().device
+    with pytest.raises(PlanConflictError) as exc_info:
+        apply_field(msg, "node_info_broadcast_secs", 99999999999)
+    assert "node_info_broadcast_secs" in str(exc_info.value)
+
+
 def test_apply_field_bool_int_float_str_bytes() -> None:
     msg = _local_config().lora
     apply_field(msg, "tx_enabled", False)

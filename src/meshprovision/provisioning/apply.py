@@ -507,6 +507,34 @@ def generate_ble_pin(*, rng: Callable[[int], int] = secrets.randbelow) -> str:
     return "".join(str(rng(10)) for _ in range(BLE_PIN_LENGTH))
 
 
+def _set_field(message: Any, field: str, value: object) -> None:
+    """``setattr`` a validated field value, converting protobuf's own rejection.
+
+    protobuf raises a bare ``ValueError``/``TypeError`` from its generated
+    ``__setattr__`` for a value :func:`apply_field` already accepted as
+    the right Python type but that is out of the field's own range (an
+    unbounded template integer, for example) or otherwise not assignable
+    -- neither exception is a :class:`~meshprovision.errors.MeshprovisionError`,
+    so left uncaught it would propagate out of :func:`apply_plan` entirely
+    rather than degrading to a per-section :class:`WriteResult`.
+
+    Args:
+        message: The protobuf message to set ``field`` on.
+        field: The field's name on ``message``.
+        value: The already-type-selected value to assign.
+
+    Raises:
+        PlanConflictError: If protobuf itself rejects ``value`` for
+            ``field``.
+    """
+    try:
+        setattr(message, field, value)
+    except (ValueError, TypeError) as exc:
+        raise PlanConflictError(
+            f"Field {field!r} rejected value {value!r}: {exc}", field=field
+        ) from exc
+
+
 def apply_field(message: Any, field: str, value: object) -> None:
     """Apply one field change onto a live protobuf config-section message.
 
@@ -519,9 +547,10 @@ def apply_field(message: Any, field: str, value: object) -> None:
             ``bool``/``int``/``float``/``str``/``bytes`` otherwise.
 
     Raises:
-        PlanConflictError: If ``field`` does not exist on ``message``, or
+        PlanConflictError: If ``field`` does not exist on ``message``,
             ``value`` is of a type this function does not know how to
-            apply.
+            apply, or protobuf itself rejects an otherwise-well-typed
+            value (for example an out-of-range integer).
         EnumMappingError: If ``field`` is an enum field and ``value`` is a
             ``str`` that does not name a known enum member.
     """
@@ -543,7 +572,7 @@ def apply_field(message: Any, field: str, value: object) -> None:
                 value=value,
                 known=known,
             )
-        setattr(message, field, enum_value.number)
+        _set_field(message, field, enum_value.number)
         return
 
     int_field_types = (
@@ -559,7 +588,7 @@ def apply_field(message: Any, field: str, value: object) -> None:
         FieldDescriptor.TYPE_SFIXED64,
     )
     if isinstance(value, bool):
-        setattr(message, field, value)
+        _set_field(message, field, value)
         return
     if isinstance(value, str) and descriptor.type in int_field_types:
         stripped = value.strip()
@@ -567,13 +596,13 @@ def apply_field(message: Any, field: str, value: object) -> None:
             raise PlanConflictError(
                 f"Field {field!r} expects an integer, got {value!r}", field=field
             )
-        setattr(message, field, int(stripped))
+        _set_field(message, field, int(stripped))
         return
     if isinstance(value, int | float | str):
-        setattr(message, field, value)
+        _set_field(message, field, value)
         return
     if isinstance(value, bytes | bytearray):
-        setattr(message, field, bytes(value))
+        _set_field(message, field, bytes(value))
         return
 
     raise PlanConflictError(
@@ -602,6 +631,9 @@ def write_section(
         PlanConflictError: If ``change.section`` is not a known config or
             module-config section name, or a field within it cannot be
             applied.
+        EnumMappingError: If a field within ``change`` is an enum field
+            whose desired value does not name a known enum member --
+            propagated straight from :func:`apply_field`.
         ProvisioningError: If the device write itself fails (including a
             ``SystemExit`` raised by ``meshtastic.util.our_exit()``,
             converted here rather than allowed to kill the process).
