@@ -52,7 +52,7 @@ from meshprovision.errors import (
     PlanConflictError,
 )
 from meshprovision.nodeid import NodeId
-from meshprovision.provisioning import apply, connection, detect, discovery, repair
+from meshprovision.provisioning import apply, connection, detect, discovery, plan_render, repair
 from meshprovision.provisioning import plan as plan_mod
 from meshprovision.provisioning.pipeline import (
     allocate_names,
@@ -451,6 +451,10 @@ def render_plan(
 ) -> None:
     """Render a change plan (and any pre-existing drift) for the operator.
 
+    A thin dispatcher: the actual line-building is pure and lives in
+    :mod:`meshprovision.provisioning.plan_render`, so it is reusable and
+    testable without a :class:`CliContext`.
+
     Args:
         ctx: The shared CLI context.
         change_plan: The plan to render.
@@ -463,46 +467,16 @@ def render_plan(
             ``--dry-run`` plan stays diffable without ``--json``).
     """
     if json_output:
-        echo_json(
-            {
-                "detection": {
-                    "node_id": change_plan.node_id.hex,
-                    "state": change_plan.state.value,
-                    "is_new": change_plan.is_new,
-                },
-                "drifts": [
-                    {
-                        "kind": drift.kind.value,
-                        "field": drift.field,
-                        "recorded": drift.recorded,
-                        "observed": drift.observed,
-                    }
-                    for drift in drifts
-                ],
-                "plan": change_plan.to_json_dict(),
-            }
-        )
+        echo_json(plan_render.plan_to_json_dict(change_plan, drifts=drifts))
         return
 
-    if drifts:
-        ctx.info("Drift detected:")
-        for drift in drifts:
-            ctx.info(drift.describe())
-
-    if change_plan.is_empty:
-        ctx.info("No changes needed.")
-    else:
-        ctx.info("Planned changes:")
-        for line in change_plan.describe():
-            ctx.print_out(line)
-
-    for warning in change_plan.warnings:
-        ctx.warn(warning.message)
-
-    ctx.info(change_plan.summary())
-
-    if change_plan.reboots_device:
-        ctx.warn("Applying this plan reboots the device.")
+    for line in plan_render.describe_plan(change_plan, drifts=drifts):
+        if line.kind is plan_render.PlanLineKind.WARNING:
+            ctx.warn(line.text)
+        elif line.kind is plan_render.PlanLineKind.CHANGE:
+            ctx.print_out(line.text)
+        else:
+            ctx.info(line.text)
 
 
 def run_provision(
