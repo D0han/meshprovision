@@ -162,6 +162,7 @@ class ColumnKind(StrEnum):
     FLOAT = "float"
     TIMESTAMP = "timestamp"
     BASE64_KEY = "base64_key"
+    BASE64_KEY_LIST = "base64_key_list"
     KEY_REF = "key_ref"
     KEY_REF_LIST = "key_ref_list"
     PIN = "pin"
@@ -597,17 +598,19 @@ NODES_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
             width="1.1in",
         ),
         ColumnSpec(
-            name="unregistered_admin_key_fingerprints",
+            name="unregistered_admin_keys",
             description=(
-                "Semicolon-separated sha256 fingerprint labels (see "
-                "crypto.redact.fingerprint) of admin keys mesh adopt observed live "
-                "on this node that are not registered in the Keys sheet. Enables "
+                "Semicolon-separated base64-encoded raw public keys (32 bytes each) "
+                "that mesh adopt observed live on this node's security.adminKey but "
+                "that are not registered in the Keys sheet. Enables exact-material "
                 "cross-device duplicate-admin-key detection (CVE-2025-52464) even "
-                "before either key is ever imported. Never raw key material -- a "
-                "fingerprint alone cannot be used to authenticate as this node."
+                "before either key is ever imported -- an admin key is not secret "
+                "(it is a public key), but this column is still marked secret to "
+                "match the Keys sheet's own key_value column."
             ),
-            kind=ColumnKind.TEXT,
-            width="3.0in",
+            kind=ColumnKind.BASE64_KEY_LIST,
+            secret=True,
+            width="4.0in",
         ),
     ),
 )
@@ -975,6 +978,42 @@ def _validate_base64_key(sheet: str, row: int, spec: ColumnSpec, stripped: str) 
     return encode_key(raw)
 
 
+def _validate_base64_key_list(sheet: str, row: int, spec: ColumnSpec, stripped: str) -> str:
+    """Validate a ``BASE64_KEY_LIST`` cell.
+
+    Args:
+        sheet: Name of the sheet containing the cell.
+        row: 1-indexed row number of the cell.
+        spec: The column's spec.
+        stripped: The already-stripped, non-empty cell text.
+
+    Returns:
+        Each element's canonical base64 re-encoding, de-duplicated
+        (preserving first-seen order) and re-joined with
+        :data:`LIST_SEPARATOR`.
+
+    Raises:
+        DbValidationError: If any element is not valid key material.
+            ``value`` is always ``None`` on this error -- an element is
+            key material and must never reach a message or log.
+    """
+    canonical: list[str] = []
+    for element in normalize_ref_list(stripped):
+        try:
+            raw = decode_key(element, field=spec.name)
+        except KeyMaterialError as exc:
+            raise DbValidationError(
+                f"{spec.name!r} contains invalid key material: {exc.reason}",
+                sheet=sheet,
+                row=row,
+                column=spec.name,
+                value=None,
+                hint=exc.hint,
+            ) from exc
+        canonical.append(encode_key(raw))
+    return format_ref_list(canonical)
+
+
 def _validate_key_ref(sheet: str, row: int, spec: ColumnSpec, stripped: str) -> str:
     """Validate a ``KEY_REF`` cell.
 
@@ -1105,6 +1144,8 @@ def validate_cell(*, sheet: str, row: int, spec: ColumnSpec, value: str) -> str:
         return _validate_timestamp(sheet, row, spec, stripped)
     if spec.kind is ColumnKind.BASE64_KEY:
         return _validate_base64_key(sheet, row, spec, stripped)
+    if spec.kind is ColumnKind.BASE64_KEY_LIST:
+        return _validate_base64_key_list(sheet, row, spec, stripped)
     if spec.kind is ColumnKind.KEY_REF:
         return _validate_key_ref(sheet, row, spec, stripped)
     if spec.kind is ColumnKind.KEY_REF_LIST:

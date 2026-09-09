@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from meshprovision.crypto import redact
+from meshprovision.crypto.keys import encode_key
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
@@ -406,7 +406,7 @@ def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
     seed_db: Callable[..., Path],
     keypair_factory: Callable[[], KeyPair],
 ) -> None:
-    """Fingerprint comparison against another node's never-imported observed key.
+    """Exact-material comparison against another node's never-imported observed key.
 
     The scenario the fix exists for: two vendor-cloned devices, neither
     key ever registered in the Keys sheet.
@@ -416,7 +416,7 @@ def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
         nodes=[
             NodeRecord(
                 node_id="cafe0001",
-                unregistered_admin_key_fingerprints=(redact.fingerprint(cloned_kp.public),),
+                unregistered_admin_keys=(encode_key(cloned_kp.public),),
             )
         ]
     )

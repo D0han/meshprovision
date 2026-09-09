@@ -16,11 +16,14 @@ recomputed and warned about them by the time a row reaches
 again on the way out, so a :class:`NodeRecord` never carries a stale
 derived value forward.
 
-Secret hygiene: :attr:`NodeRecord.ble_pin` is a ``pydantic.SecretStr``.
-Nothing in this module ever logs, prints, or f-string-interpolates its
-value; the only way to read it back is :meth:`pydantic.SecretStr.
-get_secret_value`, called only where a plain cell string must actually be
-written (:meth:`NodeRecord.to_row`).
+Secret hygiene: :attr:`NodeRecord.ble_pin` and each element of
+:attr:`NodeRecord.unregistered_admin_keys` are ``pydantic.SecretStr``.
+Nothing in this module ever logs, prints, or f-string-interpolates
+their values; the only ways to read them back are :meth:`pydantic.
+SecretStr.get_secret_value` (called only where a plain cell string must
+actually be written, in :meth:`NodeRecord.to_row`) and
+:meth:`NodeRecord.unregistered_admin_key_materials` (the only path to
+raw bytes, mirroring :meth:`~meshprovision.db.keys.KeyRecord.material`).
 """
 
 from __future__ import annotations
@@ -39,6 +42,7 @@ from meshprovision.config.template import (
     check_capacity_utilization,
     ensure_capacity_available,
 )
+from meshprovision.crypto.keys import decode_key, encode_key
 from meshprovision.db import schema
 from meshprovision.db.keys import KeyRepository
 from meshprovision.db.ods import OdsDatabase
@@ -129,12 +133,13 @@ class NodeRecord(BaseModel):
             zeros survive; never logged or displayed.
         management: Whether mesh provision enforces the template on this
             node, or only observed it (see mesh adopt).
-        unregistered_admin_key_fingerprints: Fingerprint labels (see
-            :func:`~meshprovision.crypto.redact.fingerprint`) of admin
-            keys mesh adopt observed live on this node that are not
+        unregistered_admin_keys: Raw admin public keys (canonical base64,
+            :class:`pydantic.SecretStr`-wrapped) mesh adopt observed
+            live on this node's ``security.adminKey`` that are not
             registered in the ``Keys`` sheet. A full replace on every
             adopt, same "observed rows mirror live reality" semantics
-            as :attr:`authorized_admin_keys` -- never raw key material.
+            as :attr:`authorized_admin_keys`. The only way to the raw
+            bytes is :meth:`unregistered_admin_key_materials`.
     """
 
     model_config = ConfigDict(
@@ -159,7 +164,7 @@ class NodeRecord(BaseModel):
     region: str = DEFAULT_REGION
     ble_pin: SecretStr | None = None
     management: ManagementMode = ManagementMode.TEMPLATE
-    unregistered_admin_key_fingerprints: tuple[str, ...] = ()
+    unregistered_admin_keys: tuple[SecretStr, ...] = ()
 
     @field_validator("node_id")
     @classmethod
@@ -254,6 +259,33 @@ class NodeRecord(BaseModel):
             raise ValueError(f"ble_pin must be exactly {BLE_PIN_LENGTH} ASCII digits")
         return value
 
+    @field_validator("unregistered_admin_keys")
+    @classmethod
+    def _validate_unregistered_admin_keys(
+        cls, value: tuple[SecretStr, ...]
+    ) -> tuple[SecretStr, ...]:
+        """Decode and re-encode every element to its canonical base64 form.
+
+        Mirrors :meth:`~meshprovision.db.keys.KeyRecord._validate_key_value`'s
+        canonicalization, applied element-wise, after pydantic's own
+        ``tuple[SecretStr, ...]`` coercion has already run.
+
+        Args:
+            value: The candidate tuple.
+
+        Returns:
+            Each element, canonicalized.
+
+        Raises:
+            KeyMaterialError: If any element is not valid key material.
+        """
+        return tuple(
+            SecretStr(
+                encode_key(decode_key(item.get_secret_value(), field="unregistered_admin_keys"))
+            )
+            for item in value
+        )
+
     @property
     def node(self) -> NodeId:
         """This record's id as a :class:`~meshprovision.nodeid.NodeId`.
@@ -289,6 +321,21 @@ class NodeRecord(BaseModel):
             ``schema.ref_for(self.node_id, KeyType.CHANNEL_PSK)``.
         """
         return schema.ref_for(self.node_id, KeyType.CHANNEL_PSK)
+
+    def unregistered_admin_key_materials(self) -> tuple[bytes, ...]:
+        """Decode :attr:`unregistered_admin_keys` to raw bytes.
+
+        The only way out of this record to the raw material -- mirrors
+        :meth:`~meshprovision.db.keys.KeyRecord.material`.
+
+        Returns:
+            Each entry of :attr:`unregistered_admin_keys`, decoded, in
+            stored order.
+        """
+        return tuple(
+            decode_key(item.get_secret_value(), field="unregistered_admin_keys")
+            for item in self.unregistered_admin_keys
+        )
 
     def to_row(self) -> dict[str, str]:
         """Render this record as a ``Nodes`` sheet row.
@@ -328,8 +375,8 @@ class NodeRecord(BaseModel):
             "channel_psk_ref": self.channel_psk_ref,
             "ble_pin": "" if self.ble_pin is None else self.ble_pin.get_secret_value(),
             "management": self.management.value,
-            "unregistered_admin_key_fingerprints": schema.format_ref_list(
-                self.unregistered_admin_key_fingerprints
+            "unregistered_admin_keys": schema.format_ref_list(
+                [item.get_secret_value() for item in self.unregistered_admin_keys]
             ),
         }
 
@@ -387,8 +434,9 @@ class NodeRecord(BaseModel):
             region=row.get("region") or region_default,
             ble_pin=SecretStr(ble_pin_raw) if ble_pin_raw else None,
             management=management,
-            unregistered_admin_key_fingerprints=schema.normalize_ref_list(
-                row.get("unregistered_admin_key_fingerprints", "")
+            unregistered_admin_keys=tuple(
+                SecretStr(item)
+                for item in schema.normalize_ref_list(row.get("unregistered_admin_keys", ""))
             ),
         )
 

@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 
 from meshprovision.config.template import load_template_text
-from meshprovision.crypto import redact
+from meshprovision.crypto.keys import encode_key
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import ManagementMode
 from meshprovision.provisioning.adopt import (
@@ -372,10 +372,10 @@ def test_adopted_record_deduplicates_a_key_reported_twice_by_the_device(
     assert record.authorized_admin_keys == ("ADMIN1_pub",)
 
 
-def test_adopted_record_persists_unregistered_admin_key_fingerprints_only(
+def test_adopted_record_persists_unregistered_admin_keys_only(
     make_live, template, keypair_factory
 ) -> None:
-    """A registered key never contributes to unregistered_admin_key_fingerprints."""
+    """A registered key never contributes to unregistered_admin_keys."""
     registered_key = keypair_factory().public
     unregistered_key = keypair_factory().public
     live = make_live(
@@ -392,10 +392,10 @@ def test_adopted_record_persists_unregistered_admin_key_fingerprints_only(
     record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
 
     assert record.authorized_admin_keys == ("ADMIN1_pub",)
-    assert record.unregistered_admin_key_fingerprints == (redact.fingerprint(unregistered_key),)
+    assert record.unregistered_admin_key_materials() == (unregistered_key,)
 
 
-def test_adopted_record_deduplicates_unregistered_fingerprint_reported_twice(
+def test_adopted_record_deduplicates_unregistered_key_reported_twice(
     make_live, template, keypair_factory
 ) -> None:
     key = keypair_factory().public
@@ -407,26 +407,47 @@ def test_adopted_record_deduplicates_unregistered_fingerprint_reported_twice(
 
     record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
 
-    assert record.unregistered_admin_key_fingerprints == (redact.fingerprint(key),)
+    assert record.unregistered_admin_key_materials() == (key,)
 
 
-def test_adopted_record_reuse_replaces_stale_unregistered_fingerprints(
+def test_adopted_record_skips_a_malformed_length_unregistered_key(
     make_live, template, keypair_factory
 ) -> None:
-    """Full-replace, matching authorized_admin_keys: drops a fingerprint no longer live."""
-    live_key = keypair_factory().public
-    live = make_live(template, security=make_security(admin_keys=(live_key,)))
-    existing = NodeRecord(
-        node_id="deadbe01", unregistered_admin_key_fingerprints=("sha256:staleaaa",)
+    """A malformed-length admin key degrades (is skipped), never crashes persistence.
+
+    detect.py applies no length check on security.admin_key, so a
+    non-32-byte value is reachable in practice; the report's own
+    warnings already flag it separately (build_adoption_report's
+    weak-key-audit loop).
+    """
+    good_key = keypair_factory().public
+    live = make_live(template, security=make_security(admin_keys=(good_key, b"\x01\x02\x03")))
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
     )
+    assert len(report.admin_keys) == 2
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert record.unregistered_admin_key_materials() == (good_key,)
+
+
+def test_adopted_record_reuse_replaces_stale_unregistered_keys(
+    make_live, template, keypair_factory
+) -> None:
+    """Full-replace, matching authorized_admin_keys: drops a key no longer live."""
+    live_key = keypair_factory().public
+    stale_key = keypair_factory().public
+    live = make_live(template, security=make_security(admin_keys=(live_key,)))
+    existing = NodeRecord(node_id="deadbe01", unregistered_admin_keys=(encode_key(stale_key),))
     report = build_adoption_report(
         live, existing=existing, public_keys={}, template=template, known_bad=frozenset()
     )
 
     record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
 
-    assert record.unregistered_admin_key_fingerprints == (redact.fingerprint(live_key),)
-    assert "sha256:staleaaa" not in record.unregistered_admin_key_fingerprints
+    assert record.unregistered_admin_key_materials() == (live_key,)
+    assert stale_key not in record.unregistered_admin_key_materials()
 
 
 def test_adopted_record_reuse_drops_stale_ref_and_preserves_history(

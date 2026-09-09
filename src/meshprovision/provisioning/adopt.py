@@ -469,11 +469,11 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
     state the way a template-managed row does.
 
     Never writes a ``Keys`` sheet row: an unregistered admin key
-    (``preferred_ref is None``) contributes only its fingerprint to
-    ``unregistered_admin_key_fingerprints`` (same full-replace treatment
-    as ``authorized_admin_keys``), never its raw material anywhere on
-    this row. Registering it is a separate, explicit ``mesh admin
-    import`` action for the operator.
+    (``preferred_ref is None``) contributes its raw material to
+    ``unregistered_admin_keys`` instead (same full-replace treatment as
+    ``authorized_admin_keys``), but never a ``Keys`` sheet entry --
+    registering it there is a separate, explicit ``mesh admin import``
+    action for the operator.
 
     Args:
         report: The adoption report to persist.
@@ -524,14 +524,26 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
     # this is what lets a later mesh adopt on a *different* node detect a
     # CVE-2025-52464 cloned keypair even when neither key has ever been
     # imported into the Keys sheet (see cli/adopt.py's
-    # _duplicate_admin_key_warnings). Only the fingerprint is persisted,
-    # never the raw material.
-    seen_fingerprints: set[str] = set()
-    unregistered_fingerprints: list[str] = []
+    # _duplicate_admin_key_warnings). The raw material is persisted, not
+    # just its fingerprint -- an admin key is a public key, not secret
+    # (see crypto.keys.KeyPair's own docstring), so this is the same
+    # exact-material comparison already used against registered keys,
+    # rather than a fingerprint-collision-prone approximation of it. A
+    # key whose material is not exactly 32 bytes -- reachable from a
+    # device reporting malformed data, detect.py applies no length
+    # check -- is simply skipped here, the same degrade-not-crash
+    # treatment AdoptionReport.to_json_dict already gives it; the
+    # report's own warnings already flag the malformed key separately.
+    seen_materials: set[bytes] = set()
+    unregistered_encoded: list[str] = []
     for key in report.admin_keys:
-        if key.preferred_ref is None and key.fingerprint not in seen_fingerprints:
-            seen_fingerprints.add(key.fingerprint)
-            unregistered_fingerprints.append(key.fingerprint)
+        if key.preferred_ref is not None or key.material in seen_materials:
+            continue
+        seen_materials.add(key.material)
+        try:
+            unregistered_encoded.append(crypto_keys.encode_key(key.material))
+        except KeyMaterialError:
+            continue
 
     changes: dict[str, object] = {
         "short_name": report.short_name,
@@ -539,7 +551,7 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
         "hw_model": report.hw_model,
         "firmware_version": report.firmware_version,
         "authorized_admin_keys": tuple(admin_key_refs),
-        "unregistered_admin_key_fingerprints": tuple(unregistered_fingerprints),
+        "unregistered_admin_keys": tuple(unregistered_encoded),
         "management": ManagementMode.OBSERVED,
     }
     if report.role or report.existing is None:

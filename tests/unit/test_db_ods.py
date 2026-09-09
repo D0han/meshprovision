@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from meshprovision.crypto.keys import encode_key
 from meshprovision.db import ods, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
@@ -88,11 +89,11 @@ def test_round_trip_management_mode(tmp_path: Path, keypair, mode: ManagementMod
     assert round_tripped_node.management is mode
 
 
-def test_round_trip_unregistered_admin_key_fingerprints(tmp_path: Path, keypair) -> None:
+def test_round_trip_unregistered_admin_keys(tmp_path: Path, keypair, keypair_factory) -> None:
+    other = keypair_factory()
+    unregistered = (encode_key(keypair.public), encode_key(other.public))
     node, pub, priv = _sample_records(keypair)
-    node = node.with_updates(
-        unregistered_admin_key_fingerprints=("sha256:aaaaaaaa", "sha256:bbbbbbbb")
-    )
+    node = node.with_updates(unregistered_admin_keys=unregistered)
     path = tmp_path / "db.ods"
     ods.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
@@ -102,9 +103,9 @@ def test_round_trip_unregistered_admin_key_fingerprints(tmp_path: Path, keypair)
     assert loaded.warnings == ()
     round_tripped_node = NodeRecord.from_row(loaded.nodes[0])
     assert round_tripped_node == node
-    assert round_tripped_node.unregistered_admin_key_fingerprints == (
-        "sha256:aaaaaaaa",
-        "sha256:bbbbbbbb",
+    assert round_tripped_node.unregistered_admin_key_materials() == (
+        keypair.public,
+        other.public,
     )
 
 
@@ -452,6 +453,20 @@ def test_invalid_ref_inside_key_ref_list_raises(tmp_path: Path, keypair) -> None
     assert exc_info.value.column == "authorized_admin_keys"
 
 
+def test_invalid_key_inside_unregistered_admin_keys_raises_without_leaking(
+    tmp_path: Path, keypair
+) -> None:
+    from tests.unit.conftest import edit_ods_cell
+
+    path = _write_raw_row(tmp_path, keypair, {})
+    edit_ods_cell(path, "Nodes", "unregistered_admin_keys", 2, "not-valid-base64!!!")
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.column == "unregistered_admin_keys"
+    assert exc_info.value.value is None
+    assert "not-valid-base64" not in str(exc_info.value)
+
+
 def test_invalid_base64_key_value_raises_without_leaking(tmp_path: Path, keypair) -> None:
     from tests.unit.conftest import edit_ods_cell
 
@@ -529,12 +544,12 @@ def test_check_header_hint_names_missing_trailing_column(tmp_path: Path, keypair
     ods.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
-    edit_ods_cell(path, "Nodes", "unregistered_admin_key_fingerprints", 1, "")
+    edit_ods_cell(path, "Nodes", "unregistered_admin_keys", 1, "")
 
     with pytest.raises(SchemaError) as exc_info:
         ods.load_database(path)
     assert exc_info.value.hint is not None
-    assert "unregistered_admin_key_fingerprints" in exc_info.value.hint
+    assert "unregistered_admin_keys" in exc_info.value.hint
 
 
 def test_check_header_no_hint_for_non_prefix_mismatch(tmp_path: Path, keypair) -> None:

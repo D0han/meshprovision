@@ -96,18 +96,17 @@ def _duplicate_admin_key_warnings(
     adopt.build_adoption_report` only ever sees one device's live config.
 
     Two comparison tiers against every *other* node's own admin keys,
-    never this node's own (``live_node_id`` is excluded):
+    never this node's own (``live_node_id`` is excluded), both exact
+    raw-material comparisons -- as rigorous as
+    :func:`~meshprovision.crypto.weakkeys.find_duplicate_public_keys`'s
+    own comparison, with no fingerprint-collision risk:
 
-    - Exact raw-material comparison against every ``other`` node's
-      *registered* refs (material is available via ``public_keys``) --
-      as rigorous as :func:`~meshprovision.crypto.weakkeys
-      .find_duplicate_public_keys`'s own comparison.
-    - Fingerprint comparison against every ``other`` node's persisted
-      *unregistered* key fingerprints -- the only form
-      :attr:`~meshprovision.db.nodes.NodeRecord
-      .unregistered_admin_key_fingerprints` ever stores, since
-      :func:`meshprovision.provisioning.adopt.adopted_record`
-      deliberately never writes raw material outside the ``Keys`` sheet.
+    - Against every ``other`` node's *registered* refs (material is
+      available via ``public_keys``).
+    - Against every ``other`` node's persisted *unregistered* keys
+      (:meth:`~meshprovision.db.nodes.NodeRecord
+      .unregistered_admin_key_materials`), worded distinctly in the
+      warning text so the operator can tell which tier matched.
 
     Args:
         db_nodes: The open :class:`~meshprovision.db.nodes.NodeRepository`.
@@ -127,13 +126,14 @@ def _duplicate_admin_key_warnings(
         other_registered_material = [
             public_keys[ref] for ref in other.authorized_admin_keys if ref in public_keys
         ]
+        other_unregistered_material = other.unregistered_admin_key_materials()
         for key in admin_keys:
             if any(key.material == material for material in other_registered_material):
                 warnings.append(
                     f"admin key {key.fingerprint} is also authorized on node "
                     f"{other.node_id} -- the CVE-2025-52464 vendor key-cloning failure mode."
                 )
-            elif key.fingerprint in other.unregistered_admin_key_fingerprints:
+            elif any(key.material == material for material in other_unregistered_material):
                 warnings.append(
                     f"admin key {key.fingerprint} was also observed, unregistered, on node "
                     f"{other.node_id} during a previous adopt -- the CVE-2025-52464 vendor "

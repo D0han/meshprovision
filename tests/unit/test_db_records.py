@@ -9,6 +9,7 @@ import pytest
 
 from meshprovision.config.template import BASE36_ALPHABET, PatternSpec
 from meshprovision.crypto import redact
+from meshprovision.crypto.keys import encode_key
 from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository, find_next_free_name
@@ -31,7 +32,8 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 
 
-def test_node_record_round_trip_full(keypair) -> None:
+def test_node_record_round_trip_full(keypair, keypair_factory) -> None:
+    unregistered = (encode_key(keypair_factory().public), encode_key(keypair.public))
     record = NodeRecord(
         node_id="deadbe01",
         short_name="MT00",
@@ -50,7 +52,7 @@ def test_node_record_round_trip_full(keypair) -> None:
         role="CLIENT",
         region="EU_868",
         ble_pin="012345",
-        unregistered_admin_key_fingerprints=("sha256:aaaaaaaa", "sha256:bbbbbbbb"),
+        unregistered_admin_keys=unregistered,
     )
     assert NodeRecord.from_row(record.to_row()) == record
 
