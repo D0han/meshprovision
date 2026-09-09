@@ -102,7 +102,7 @@ def parse_assignment(raw: str) -> tuple[str, str]:
     ref, sep, b64 = raw.partition("=")
     if not sep:
         raise SettingsError(
-            f"Expected REF=BASE64, got {raw!r}",
+            f"Expected REF=BASE64, got {raw!r}.",
             hint="Example: mesh admin import ADMIN1=<base64 public key>",
         )
     ref = ref.strip()
@@ -194,30 +194,30 @@ def admin_bootstrap(
         normalized_ref = ref.strip()
         _validate_admin_ref(normalized_ref)
 
+    transport_opts = TransportOptions(
+        interface=connection.Transport(interface) if interface is not None else None,
+        port=port,
+        ble_address=ble_address,
+        ble_scan=ble_scan,
+        host=host,
+        timeout=timeout,
+        ble_scan_timeout=ble_scan_timeout,
+    )
+    opts = ProvisionOptions(
+        dry_run=dry_run,
+        enroll=enroll,
+        allow_lockdown=allow_lockdown,
+        allow_weak_admin_key=allow_weak_admin_key,
+        force_regenerate_key=force_regenerate_key,
+        rename=False,
+        no_reconnect=no_reconnect,
+        json_output=json_output,
+        admin_ref=normalized_ref,
+    )
+
     template = ctx.load_template()
     with ctx.open_database(for_write=not dry_run) as db:
         known_bad = weakkeys.load_known_bad_keys()
-
-        transport_opts = TransportOptions(
-            interface=connection.Transport(interface) if interface is not None else None,
-            port=port,
-            ble_address=ble_address,
-            ble_scan=ble_scan,
-            host=host,
-            timeout=timeout,
-            ble_scan_timeout=ble_scan_timeout,
-        )
-        opts = ProvisionOptions(
-            dry_run=dry_run,
-            enroll=enroll,
-            allow_lockdown=allow_lockdown,
-            allow_weak_admin_key=allow_weak_admin_key,
-            force_regenerate_key=force_regenerate_key,
-            rename=False,
-            no_reconnect=no_reconnect,
-            json_output=json_output,
-            admin_ref=normalized_ref,
-        )
 
         backend = resolve_backend(ctx, transport_opts)
         with device_session(ctx, backend, no_reconnect=no_reconnect) as session:

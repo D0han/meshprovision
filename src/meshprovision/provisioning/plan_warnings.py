@@ -60,3 +60,16 @@ class PlanWarning:
     message: str
     section: str | None = None
     field: str | None = None
+
+    def to_json_dict(self) -> dict[str, object]:
+        """Render this warning as a JSON-safe dict.
+
+        Returns:
+            A mapping covering every field.
+        """
+        return {
+            "code": self.code,
+            "message": self.message,
+            "section": self.section,
+            "field": self.field,
+        }

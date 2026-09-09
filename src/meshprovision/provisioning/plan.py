@@ -632,10 +632,7 @@ class ChangePlan:
                 "reason": self.lockdown.reason,
                 "gates": dict(self.lockdown.gates),
             },
-            "warnings": [
-                {"code": w.code, "message": w.message, "section": w.section, "field": w.field}
-                for w in self.warnings
-            ],
+            "warnings": [w.to_json_dict() for w in self.warnings],
             "ble_pin_set": self.ble_pin_set,
         }
 
