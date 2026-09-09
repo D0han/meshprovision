@@ -261,6 +261,28 @@ class LoranetSource(BaseHTTPDataSource):
             return None
 
 
+def _typed_enum_raw(raw: object) -> str | int | None:
+    """Return ``raw`` unchanged when it's a valid enum-lookup shape, else ``None``.
+
+    A thin coercion-shaped wrapper around the type guard
+    :func:`_resolve_enum_name`/:func:`_resolve_enum_value` already apply,
+    so a single :class:`~meshprovision.datasources.models.CoercionTracker`
+    call can cover both derived outputs (name and numeric value) for one
+    raw payload field without double-counting.
+
+    Args:
+        raw: The raw payload value; expected ``str``/``int``, possibly
+            absent.
+
+    Returns:
+        ``raw`` unchanged when it is a non-bool ``str``/``int``;
+        ``None`` otherwise.
+    """
+    if raw is None or isinstance(raw, bool) or not isinstance(raw, str | int):
+        return None
+    return raw
+
+
 def _resolve_enum_name(table: EnumTable, raw: object) -> str | None:
     """Resolve a loranet enum-like field to a canonical name, or the raw string.
 
@@ -355,16 +377,20 @@ def parse_node(
             :class:`NodeObservation`'s own validation.
     """
     tracker = coercion_tracker if coercion_tracker is not None else CoercionTracker()
-    latitude = e7_to_degrees(payload.get("latitude"), limit=_LATITUDE_LIMIT)
-    longitude = e7_to_degrees(payload.get("longitude"), limit=_LONGITUDE_LIMIT)
+    latitude = tracker.coerce(
+        payload.get("latitude"), lambda raw: e7_to_degrees(raw, limit=_LATITUDE_LIMIT)
+    )
+    longitude = tracker.coerce(
+        payload.get("longitude"), lambda raw: e7_to_degrees(raw, limit=_LONGITUDE_LIMIT)
+    )
     if latitude == 0.0 and longitude == 0.0:
         # An unpositioned node reports (0, 0), not the Gulf of Guinea.
         latitude = None
         longitude = None
 
     neighbor_count, seen_by, seen_by_last_seen = _parse_seen_by(payload.get("seenBy"))
-    last_device_metrics = parse_epoch(payload.get("lastDeviceMetrics"))
-    last_map_report = parse_epoch(payload.get("lastMapReport"))
+    last_device_metrics = tracker.coerce(payload.get("lastDeviceMetrics"), parse_epoch)
+    last_map_report = tracker.coerce(payload.get("lastMapReport"), parse_epoch)
     # last_seen is documented as "the node's most recent activity," not
     # "the most recent seenBy relay" -- a device-metrics or map report is
     # just as much activity as being relayed by an MQTT gateway topic, and
@@ -378,8 +404,9 @@ def parse_node(
         default=None,
     )
 
-    raw_hw_model = payload.get("hwModel")
-    raw_role = payload.get("role")
+    raw_hw_model = tracker.coerce(payload.get("hwModel"), _typed_enum_raw)
+    raw_role = tracker.coerce(payload.get("role"), _typed_enum_raw)
+    raw_region = tracker.coerce(payload.get("region"), _typed_enum_raw)
 
     return NodeObservation(
         node_id=node_id,
@@ -391,7 +418,7 @@ def parse_node(
         hw_model_value=_resolve_enum_value(hw_model_table(), raw_hw_model),
         role=_resolve_enum_name(role_table(), raw_role),
         role_value=_resolve_enum_value(role_table(), raw_role),
-        region=_resolve_enum_name(region_table(), payload.get("region")),
+        region=_resolve_enum_name(region_table(), raw_region),
         modem_preset=tracker.coerce(payload.get("modemPreset"), coerce_str),
         firmware_version=tracker.coerce(payload.get("fwVersion"), coerce_str),
         latitude=latitude,

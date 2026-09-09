@@ -384,8 +384,8 @@ def parse_node(
         role_value=role_value,
         hw_model=hw_model_table().try_name(hw_model_value) if hw_model_value is not None else None,
         hw_model_value=hw_model_value,
-        last_seen=parse_iso8601(payload.get("LastSeen")),
-        last_boot=parse_iso8601(payload.get("LastBoot")),
+        last_seen=tracker.coerce(payload.get("LastSeen"), parse_iso8601),
+        last_boot=tracker.coerce(payload.get("LastBoot"), parse_iso8601),
     )
 
 

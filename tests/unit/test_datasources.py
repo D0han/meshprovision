@@ -161,6 +161,21 @@ def test_lorastats_parse_node_maps_enums() -> None:
     assert obs.short_name == "abcd"
 
 
+def test_lorastats_parse_node_uncoercible_timestamps_counted_as_field_coercions() -> None:
+    """LastSeen/LastBoot must route through the tracker like every other field."""
+    tracker = CoercionTracker()
+    obs = lorastats_module.parse_node(
+        {"NodeId": "deadbe01", "LastSeen": "not-a-timestamp", "LastBoot": "also-not-one"},
+        region="PL",
+        observed_at=datetime.now(tz=UTC),
+        coercion_tracker=tracker,
+    )
+    assert obs is not None
+    assert obs.last_seen is None
+    assert obs.last_boot is None
+    assert tracker.failures == 2
+
+
 def test_lorastats_parse_node_missing_node_id_returns_none() -> None:
     assert lorastats_module.parse_node({}, region="PL", observed_at=datetime.now(tz=UTC)) is None
 
@@ -528,6 +543,62 @@ def test_loranet_present_but_uncoercible_field_counted_as_a_field_coercion_not_a
     assert result[nid].short_name == "good"
     assert source.last_fetch_skipped == 0
     assert source.last_fetch_field_coercions == 1
+
+
+@respx.mock
+def test_loranet_uncoercible_position_counted_as_field_coercions(tmp_path: Path) -> None:
+    """latitude/longitude must route through the tracker like every other field."""
+    nid = NodeId.from_hex("deadbe01")
+    payload = {
+        nid.decimal: {"shortName": "good", "latitude": "not-a-number", "longitude": 12345678}
+    }
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_all()
+
+    assert result[nid].latitude is None
+    assert result[nid].longitude == pytest.approx(1.2345678)
+    assert source.last_fetch_skipped == 0
+    assert source.last_fetch_field_coercions == 1
+
+
+@respx.mock
+def test_loranet_uncoercible_hw_model_counted_as_one_field_coercion_not_two(
+    tmp_path: Path,
+) -> None:
+    """A malformed hwModel must count once, not once per derived output (name + value)."""
+    nid = NodeId.from_hex("deadbe01")
+    payload = {nid.decimal: {"shortName": "good", "hwModel": [1, 2, 3]}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_all()
+
+    assert result[nid].hw_model is None
+    assert result[nid].hw_model_value is None
+    assert source.last_fetch_skipped == 0
+    assert source.last_fetch_field_coercions == 1
+
+
+@respx.mock
+def test_loranet_unresolvable_but_well_typed_enum_value_not_counted_as_a_coercion_failure(
+    tmp_path: Path,
+) -> None:
+    """A forward-incompatible-but-well-typed enum value is not a coercion failure."""
+    nid = NodeId.from_hex("deadbe01")
+    payload = {nid.decimal: {"shortName": "good", "hwModel": 99999}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_all()
+
+    assert result[nid].hw_model == "99999"
+    assert result[nid].hw_model_value is None
+    assert source.last_fetch_field_coercions == 0
 
 
 @respx.mock
