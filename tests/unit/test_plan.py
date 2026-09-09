@@ -91,6 +91,29 @@ def test_reboots_device_on_region_change(make_live, template) -> None:
     assert any(w.code == "region_change_reboots" for w in plan.warnings)
 
 
+def test_non_reboot_lora_field_change_does_not_claim_reboot(make_live, template) -> None:
+    """A lora field outside {region, modem_preset} must not spuriously reboot.
+
+    Only region/modem_preset changes reboot the device -- e.g. hop_limit
+    must not set reboots_device.
+    """
+    live = make_live(
+        template,
+        section_overrides={"lora": {"hop_limit": 5}},
+        security=make_security(empty=True),
+        short_name="be01",
+        long_name="Meshtastic be01",
+    )
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+
+    lora_section = plan.section("lora")
+    assert lora_section is not None
+    assert any(c.field == "hop_limit" for c in lora_section.changes)
+    assert lora_section.reboots_device is False
+    assert not any(w.code == "region_change_reboots" for w in plan.warnings)
+
+
 def test_position_section_normal_field_is_diffed_fixed_field_is_not(make_live, template) -> None:
     """_diff_section's fixed-position skip must apply only to the three fixed_* fields.
 
@@ -1182,6 +1205,21 @@ def test_values_equal_bool_vs_int_and_float_tolerance() -> None:
     assert values_equal(1.0000000001, 1.0) is True
     assert values_equal(1, 1) is True
     assert values_equal("a", "a") is True
+
+
+def test_values_equal_float_tolerance_boundary() -> None:
+    """Pins down the abs_tol=1e-9 boundary.
+
+    Within it (even near zero, where rel_tol alone would never match) is
+    equal; meaningfully beyond it is not.
+    """
+    from meshprovision.provisioning.plan import values_equal
+
+    assert values_equal(1.0, 1.001) is False
+    # Near zero, rel_tol is powerless (relative to ~0); only abs_tol=1e-9
+    # can make this pair equal.
+    assert values_equal(0.0, 5e-10) is True
+    assert values_equal(0.0, 5e-9) is False
 
 
 def test_values_equal_string_never_coerced_to_float() -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision.config.template import BASE36_ALPHABET, PatternSpec
+from meshprovision.crypto import redact
 from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository, find_next_free_name
@@ -357,6 +358,22 @@ def test_keypair_for(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
     assert material.private is not None
     assert material.private.reveal() == keypair.private.reveal()
     assert material.fingerprint() is not None
+
+
+def test_keypair_for_private_only_falls_back_from_public(
+    keys: KeyRepository, keypair, db: OdsDatabase
+) -> None:
+    """fingerprint() falls back to the private key when only it is present."""
+    _pub, priv = KeyRecord.for_keypair("deadbe02", keypair)
+    keys.upsert(priv)
+    db.save()
+
+    material = keys.keypair_for("deadbe02")
+    assert material.public is None
+    assert material.private is not None
+    fingerprint = material.fingerprint()
+    assert fingerprint is not None
+    assert fingerprint == redact.fingerprint(keypair.private)
 
 
 def test_unresolved_admin_refs(

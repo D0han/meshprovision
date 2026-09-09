@@ -223,6 +223,50 @@ def test_429_rate_limited_with_retry_after(tmp_path: Path) -> None:
     assert "lorastats" in (exc_info.value.hint or "").lower()
 
 
+def test_parse_retry_after_header_absent_returns_none() -> None:
+    from meshprovision.cache.http import _parse_retry_after
+
+    assert _parse_retry_after(None, clock=lambda: 0.0) is None
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_parse_retry_after_empty_or_whitespace_returns_none(value: str) -> None:
+    from meshprovision.cache.http import _parse_retry_after
+
+    assert _parse_retry_after(value, clock=lambda: 0.0) is None
+
+
+def test_parse_retry_after_http_date_computes_delay_from_clock() -> None:
+    from meshprovision.cache.http import _parse_retry_after
+
+    # Fri, 02 Jan 1970 00:00:30 GMT == epoch 30.0 (2 Jan minus 1 Jan = 86400s + 30s).
+    header = "Fri, 02 Jan 1970 00:00:30 GMT"
+    delay = _parse_retry_after(header, clock=lambda: 86400.0)
+    assert delay == pytest.approx(30.0)
+
+
+def test_parse_retry_after_http_date_in_past_clamps_to_zero() -> None:
+    from meshprovision.cache.http import _parse_retry_after
+
+    header = "Thu, 01 Jan 1970 00:00:00 GMT"
+    delay = _parse_retry_after(header, clock=lambda: 1000.0)
+    assert delay == 0.0
+
+
+def test_parse_retry_after_date_without_timezone_returns_none() -> None:
+    from meshprovision.cache.http import _parse_retry_after
+
+    # A date string with no timezone/offset parses to a naive datetime,
+    # which the tzinfo-None guard rejects rather than mis-computing a delay.
+    assert _parse_retry_after("02 Jan 1970 00:00:30", clock=lambda: 0.0) is None
+
+
+def test_parse_retry_after_malformed_date_returns_none() -> None:
+    from meshprovision.cache.http import _parse_retry_after
+
+    assert _parse_retry_after("not a date", clock=lambda: 0.0) is None
+
+
 @respx.mock
 def test_connect_error_raises_after_retries(tmp_path: Path) -> None:
     respx.get(URL).mock(side_effect=httpx.ConnectError("refused"))
