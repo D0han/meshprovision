@@ -36,6 +36,8 @@ from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning import connection, detect
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from meshprovision.cli.common import CliContext
     from meshprovision.db.nodes import NodeRepository
 
@@ -72,6 +74,71 @@ def _duplicate_name_warnings(
             warnings.append(f"short_name {short_name!r} is already used by node {other.node_id}.")
         if long_name and other.long_name == long_name:
             warnings.append(f"long_name {long_name!r} is already used by node {other.node_id}.")
+    return tuple(warnings)
+
+
+def _duplicate_admin_key_warnings(
+    db_nodes: NodeRepository,
+    *,
+    live_node_id: str,
+    admin_keys: tuple[adopt_mod.LiveAdminKey, ...],
+    public_keys: Mapping[str, bytes],
+) -> tuple[str, ...]:
+    """Check a device's live admin keys against every *other* node's admin keys.
+
+    The CVE-2025-52464 vendor key-cloning scenario this exists to catch:
+    two already-deployed devices share the same admin keypair, and
+    neither has ever been imported into the ``Keys`` sheet, so
+    :func:`meshprovision.provisioning.pipeline.audit_node_key`'s own
+    cross-fleet check (which only ever sees one device) has nothing to
+    compare against. Belongs in the CLI layer, same reasoning as
+    :func:`_duplicate_name_warnings`: :func:`meshprovision.provisioning.
+    adopt.build_adoption_report` only ever sees one device's live config.
+
+    Two comparison tiers against every *other* node's own admin keys,
+    never this node's own (``live_node_id`` is excluded):
+
+    - Exact raw-material comparison against every ``other`` node's
+      *registered* refs (material is available via ``public_keys``) --
+      as rigorous as :func:`~meshprovision.crypto.weakkeys
+      .find_duplicate_public_keys`'s own comparison.
+    - Fingerprint comparison against every ``other`` node's persisted
+      *unregistered* key fingerprints -- the only form
+      :attr:`~meshprovision.db.nodes.NodeRecord
+      .unregistered_admin_key_fingerprints` ever stores, since
+      :func:`meshprovision.provisioning.adopt.adopted_record`
+      deliberately never writes raw material outside the ``Keys`` sheet.
+
+    Args:
+        db_nodes: The open :class:`~meshprovision.db.nodes.NodeRepository`.
+        live_node_id: The adopted device's own ``node_id`` (hex), excluded
+            from the comparison so a re-adopt never flags itself.
+        admin_keys: The adopted device's live admin keys.
+        public_keys: ``{key_ref: raw public key}``, as returned by
+            :meth:`~meshprovision.db.keys.KeyRepository.public_key_map`.
+
+    Returns:
+        One warning string per duplicate found, in ``admin_keys``/other-node order.
+    """
+    warnings: list[str] = []
+    for other in db_nodes.all():
+        if other.node_id == live_node_id:
+            continue
+        other_registered_material = [
+            public_keys[ref] for ref in other.authorized_admin_keys if ref in public_keys
+        ]
+        for key in admin_keys:
+            if any(key.material == material for material in other_registered_material):
+                warnings.append(
+                    f"admin key {key.fingerprint} is also authorized on node "
+                    f"{other.node_id} -- the CVE-2025-52464 vendor key-cloning failure mode."
+                )
+            elif key.fingerprint in other.unregistered_admin_key_fingerprints:
+                warnings.append(
+                    f"admin key {key.fingerprint} was also observed, unregistered, on node "
+                    f"{other.node_id} during a previous adopt -- the CVE-2025-52464 vendor "
+                    "key-cloning failure mode."
+                )
     return tuple(warnings)
 
 
@@ -234,15 +301,27 @@ def adopt(
             short_name=report.short_name,
             long_name=report.long_name,
         )
+        duplicate_admin_key_warnings = _duplicate_admin_key_warnings(
+            db.nodes,
+            live_node_id=live.node_id.hex,
+            admin_keys=report.admin_keys,
+            public_keys=public_keys,
+        )
 
         if json_output:
             payload = report.to_json_dict(show_key_material=show_admin_keys)
-            payload["warnings"] = [*report.warnings, *duplicate_warnings]
+            payload["warnings"] = [
+                *report.warnings,
+                *duplicate_warnings,
+                *duplicate_admin_key_warnings,
+            ]
             echo_json(payload)
         else:
             for line in report.describe():
                 ctx.info(line)
             for warning in duplicate_warnings:
+                ctx.warn(warning)
+            for warning in duplicate_admin_key_warnings:
                 ctx.warn(warning)
             for line in _render_admin_key_lines(report, show_admin_keys=show_admin_keys):
                 ctx.info(line)

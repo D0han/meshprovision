@@ -50,6 +50,7 @@ def test_node_record_round_trip_full(keypair) -> None:
         role="CLIENT",
         region="EU_868",
         ble_pin="012345",
+        unregistered_admin_key_fingerprints=("sha256:aaaaaaaa", "sha256:bbbbbbbb"),
     )
     assert NodeRecord.from_row(record.to_row()) == record
 

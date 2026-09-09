@@ -596,6 +596,19 @@ NODES_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
             validation_name="mp_management",
             width="1.1in",
         ),
+        ColumnSpec(
+            name="unregistered_admin_key_fingerprints",
+            description=(
+                "Semicolon-separated sha256 fingerprint labels (see "
+                "crypto.redact.fingerprint) of admin keys mesh adopt observed live "
+                "on this node that are not registered in the Keys sheet. Enables "
+                "cross-device duplicate-admin-key detection (CVE-2025-52464) even "
+                "before either key is ever imported. Never raw key material -- a "
+                "fingerprint alone cannot be used to authenticate as this node."
+            ),
+            kind=ColumnKind.TEXT,
+            width="3.0in",
+        ),
     ),
 )
 

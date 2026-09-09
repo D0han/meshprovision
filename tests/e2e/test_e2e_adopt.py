@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from meshprovision.crypto import redact
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
@@ -373,6 +374,80 @@ def test_adopt_warns_on_a_duplicate_name_and_folds_it_into_json_warnings(
     document = json.loads(json_result.stdout)
     assert any("short_name 'AB01'" in warning for warning in document["warnings"])
     assert any("long_name 'Adopted Node 01'" in warning for warning in document["warnings"])
+
+
+def test_adopt_warns_on_a_duplicate_admin_key_already_registered_on_another_node(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Exact raw-material comparison against another node's registered admin key ref."""
+    shared_kp = keypair_factory()
+    pub, priv = KeyRecord.for_keypair("OTHER", shared_kp)
+    seed_db(
+        nodes=[NodeRecord(node_id="cafe0001", authorized_admin_keys=("OTHER_pub",))],
+        keys=[pub, priv],
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(shared_kp.public)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert any("cafe0001" in w and "CVE-2025-52464" in w for w in document["warnings"])
+
+
+def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Fingerprint comparison against another node's never-imported observed key.
+
+    The scenario the fix exists for: two vendor-cloned devices, neither
+    key ever registered in the Keys sheet.
+    """
+    cloned_kp = keypair_factory()
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="cafe0001",
+                unregistered_admin_key_fingerprints=(redact.fingerprint(cloned_kp.public),),
+            )
+        ]
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(cloned_kp.public)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert any("cafe0001" in w and "CVE-2025-52464" in w for w in document["warnings"])
+
+
+def test_adopt_does_not_warn_about_its_own_previously_persisted_fingerprint(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """A re-adopt of the same node must never flag itself as a duplicate."""
+    kp = keypair_factory()
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(kp.public)
+
+    first = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+    assert first.exit_code == 0
+    assert not any("CVE-2025-52464" in w for w in json.loads(first.stdout)["warnings"])
+
+    bus.use(iface)
+    second = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+    assert second.exit_code == 0
+    assert not any("CVE-2025-52464" in w for w in json.loads(second.stdout)["warnings"])
 
 
 def test_declining_the_adopt_prompt_writes_nothing(

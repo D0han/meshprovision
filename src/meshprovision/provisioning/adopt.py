@@ -469,8 +469,11 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
     state the way a template-managed row does.
 
     Never writes a ``Keys`` sheet row: an unregistered admin key
-    (``preferred_ref is None``) is simply excluded here. Registering it is
-    a separate, explicit ``mesh admin import`` action for the operator.
+    (``preferred_ref is None``) contributes only its fingerprint to
+    ``unregistered_admin_key_fingerprints`` (same full-replace treatment
+    as ``authorized_admin_keys``), never its raw material anywhere on
+    this row. Registering it is a separate, explicit ``mesh admin
+    import`` action for the operator.
 
     Args:
         report: The adoption report to persist.
@@ -516,12 +519,27 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
             seen_refs.add(key.preferred_ref)
             admin_key_refs.append(key.preferred_ref)
 
+    # Same de-duplicated, first-seen, full-replace treatment as
+    # admin_key_refs above, for the complementary (unregistered) subset --
+    # this is what lets a later mesh adopt on a *different* node detect a
+    # CVE-2025-52464 cloned keypair even when neither key has ever been
+    # imported into the Keys sheet (see cli/adopt.py's
+    # _duplicate_admin_key_warnings). Only the fingerprint is persisted,
+    # never the raw material.
+    seen_fingerprints: set[str] = set()
+    unregistered_fingerprints: list[str] = []
+    for key in report.admin_keys:
+        if key.preferred_ref is None and key.fingerprint not in seen_fingerprints:
+            seen_fingerprints.add(key.fingerprint)
+            unregistered_fingerprints.append(key.fingerprint)
+
     changes: dict[str, object] = {
         "short_name": report.short_name,
         "long_name": report.long_name,
         "hw_model": report.hw_model,
         "firmware_version": report.firmware_version,
         "authorized_admin_keys": tuple(admin_key_refs),
+        "unregistered_admin_key_fingerprints": tuple(unregistered_fingerprints),
         "management": ManagementMode.OBSERVED,
     }
     if report.role or report.existing is None:

@@ -129,6 +129,12 @@ class NodeRecord(BaseModel):
             zeros survive; never logged or displayed.
         management: Whether mesh provision enforces the template on this
             node, or only observed it (see mesh adopt).
+        unregistered_admin_key_fingerprints: Fingerprint labels (see
+            :func:`~meshprovision.crypto.redact.fingerprint`) of admin
+            keys mesh adopt observed live on this node that are not
+            registered in the ``Keys`` sheet. A full replace on every
+            adopt, same "observed rows mirror live reality" semantics
+            as :attr:`authorized_admin_keys` -- never raw key material.
     """
 
     model_config = ConfigDict(
@@ -153,6 +159,7 @@ class NodeRecord(BaseModel):
     region: str = DEFAULT_REGION
     ble_pin: SecretStr | None = None
     management: ManagementMode = ManagementMode.TEMPLATE
+    unregistered_admin_key_fingerprints: tuple[str, ...] = ()
 
     @field_validator("node_id")
     @classmethod
@@ -292,7 +299,7 @@ class NodeRecord(BaseModel):
         set via :meth:`with_updates` can never reach disk.
 
         Returns:
-            The full ``{column_name: text}`` row, covering exactly the 21
+            The full ``{column_name: text}`` row, covering exactly the 22
             :data:`~meshprovision.db.schema.NODES_SHEET_SPEC` columns.
         """
         return {
@@ -321,6 +328,9 @@ class NodeRecord(BaseModel):
             "channel_psk_ref": self.channel_psk_ref,
             "ble_pin": "" if self.ble_pin is None else self.ble_pin.get_secret_value(),
             "management": self.management.value,
+            "unregistered_admin_key_fingerprints": schema.format_ref_list(
+                self.unregistered_admin_key_fingerprints
+            ),
         }
 
     @classmethod
@@ -377,6 +387,9 @@ class NodeRecord(BaseModel):
             region=row.get("region") or region_default,
             ble_pin=SecretStr(ble_pin_raw) if ble_pin_raw else None,
             management=management,
+            unregistered_admin_key_fingerprints=schema.normalize_ref_list(
+                row.get("unregistered_admin_key_fingerprints", "")
+            ),
         )
 
     def with_updates(self, **changes: object) -> NodeRecord:

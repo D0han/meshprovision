@@ -88,6 +88,26 @@ def test_round_trip_management_mode(tmp_path: Path, keypair, mode: ManagementMod
     assert round_tripped_node.management is mode
 
 
+def test_round_trip_unregistered_admin_key_fingerprints(tmp_path: Path, keypair) -> None:
+    node, pub, priv = _sample_records(keypair)
+    node = node.with_updates(
+        unregistered_admin_key_fingerprints=("sha256:aaaaaaaa", "sha256:bbbbbbbb")
+    )
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    loaded = ods.load_database(path)
+    assert loaded.warnings == ()
+    round_tripped_node = NodeRecord.from_row(loaded.nodes[0])
+    assert round_tripped_node == node
+    assert round_tripped_node.unregistered_admin_key_fingerprints == (
+        "sha256:aaaaaaaa",
+        "sha256:bbbbbbbb",
+    )
+
+
 def test_sheet_spec_column_unknown_name_raises_schema_error() -> None:
     with pytest.raises(SchemaError):
         schema.NODES_SHEET_SPEC.column("not_a_real_column")
@@ -509,12 +529,12 @@ def test_check_header_hint_names_missing_trailing_column(tmp_path: Path, keypair
     ods.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
-    edit_ods_cell(path, "Nodes", "management", 1, "")
+    edit_ods_cell(path, "Nodes", "unregistered_admin_key_fingerprints", 1, "")
 
     with pytest.raises(SchemaError) as exc_info:
         ods.load_database(path)
     assert exc_info.value.hint is not None
-    assert "management" in exc_info.value.hint
+    assert "unregistered_admin_key_fingerprints" in exc_info.value.hint
 
 
 def test_check_header_no_hint_for_non_prefix_mismatch(tmp_path: Path, keypair) -> None:
