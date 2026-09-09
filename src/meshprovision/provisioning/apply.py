@@ -194,8 +194,8 @@ class ApplyOutcome:
         dry_run: Whether this outcome came from a dry run (no device
             writes were attempted).
         verified: Whether a verification pass was actually run (``False``
-            only when the caller passed ``verify=False``, which is for
-            unit tests and never for a real run).
+            for a dry run or an empty plan, where there was nothing to
+            verify; ``True`` whenever a real device write was attempted).
         public_key_fingerprint: A redacted fingerprint of the public key
             confirmed on the device, when a key was written and verified.
         record: The :class:`~meshprovision.db.nodes.NodeRecord` to
@@ -965,7 +965,6 @@ def apply_plan(
     *,
     keypair: KeyPair | None = None,
     dry_run: bool = False,
-    verify: bool = True,
     settle_seconds: float = DEFAULT_SETTLE_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> ApplyOutcome:
@@ -980,8 +979,7 @@ def apply_plan(
 
     Args:
         plan: The change plan to execute.
-        session: The device session to write and (unless ``verify`` is
-            ``False``) re-read through.
+        session: The device session to write and re-read through.
         keypair: The freshly generated keypair, required when
             ``plan.key_plan.regenerate`` is set. The caller may also pass
             the device's own already-existing keypair when
@@ -991,8 +989,6 @@ def apply_plan(
             to :func:`persist_result`, which does record it.
         dry_run: When ``True``, no device writes are attempted; every
             result is :attr:`WriteStatus.SKIPPED`.
-        verify: When ``False``, skip the read-back verification pass
-            entirely. Only for unit tests -- never for a real run.
         settle_seconds: Pause after a reboot-triggering write, and again
             before the final verification reconnect.
         sleep: Sleep function, injectable for tests.
@@ -1054,10 +1050,9 @@ def apply_plan(
             # stale, possibly-dead handle. Mirrors the same
             # sleep-then-refresh sequence used below for the final verify
             # pass. The last section's own reboot needs no sleep here:
-            # when reached, either the unconditional sleep+refresh right
-            # below already covers it (verify=True), or nothing further
-            # touches the device at all (verify=False), so sleeping here
-            # too would just double the wait for the same reboot.
+            # the unconditional sleep+refresh right below already covers
+            # it, so sleeping here too would just double the wait for
+            # the same reboot.
             sleep(settle_seconds)
             try:
                 iface = session.refresh()
@@ -1072,11 +1067,6 @@ def apply_plan(
                 return ApplyOutcome(
                     node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
                 )
-
-    if not verify:
-        return ApplyOutcome(
-            node_id=plan.node_id, results=tuple(results), dry_run=False, verified=False
-        )
 
     sleep(settle_seconds)
     try:
