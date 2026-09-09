@@ -208,6 +208,15 @@ class WeakKeyCheck(StrEnum):
 class WeakKeyFinding:
     """One weak-key audit finding.
 
+    Named ``reason`` rather than ``message`` (the field name
+    :class:`~meshprovision.provisioning.plan_warnings.PlanWarning`/
+    :class:`~meshprovision.db.verify.DbProblem`/``WriteResult`` use for
+    the same descriptive-text role) deliberately: :meth:`as_error` maps
+    this field 1:1 onto :class:`~meshprovision.errors.WeakKeyError`'s
+    own ``reason`` attribute, its natural conversion target, so the two
+    stay named the same rather than matching the other "outcome"
+    dataclasses' unrelated convention.
+
     Attributes:
         check: Which check produced this finding.
         severity: ``"warning"`` or ``"critical"``.
