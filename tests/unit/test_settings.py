@@ -60,6 +60,35 @@ def test_os_environ_never_mutated(tmp_path: Path) -> None:
     assert os.environ == snapshot
 
 
+def test_unrecognized_env_var_from_environ_logs_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A typo'd MESHPROVISION_* variable must not be silently ignored.
+
+    The field still falls back to its default either way -- this only
+    pins that the operator gets a trail back to the cause.
+    """
+    with caplog.at_level("WARNING", logger="meshprovision.config.settings"):
+        load_settings(environ={"MESHPROVISION_CACHE_TLL": "600"}, search_dotenv=False)
+    assert any("MESHPROVISION_CACHE_TLL" in r.getMessage() for r in caplog.records)
+
+
+def test_unrecognized_env_var_from_dotenv_logs_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_CACHE_TLL=600\n")
+    with caplog.at_level("WARNING", logger="meshprovision.config.settings"):
+        load_settings(env_file=env_file, environ={}, search_dotenv=False)
+    assert any("MESHPROVISION_CACHE_TLL" in r.getMessage() for r in caplog.records)
+
+
+def test_recognized_env_vars_never_log_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger="meshprovision.config.settings"):
+        load_settings(environ={"MESHPROVISION_CONTACT": "me@example.invalid"}, search_dotenv=False)
+    assert caplog.records == []
+
+
 def test_invalid_cache_ttl_raises_and_does_not_echo_value() -> None:
     with pytest.raises(SettingsError) as exc_info:
         load_settings(environ={"MESHPROVISION_CACHE_TTL": "-5"}, search_dotenv=False)

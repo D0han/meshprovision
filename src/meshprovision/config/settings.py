@@ -20,6 +20,7 @@ this module imports nothing from ``meshprovision.config.template``.
 
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Mapping
 from pathlib import Path
@@ -31,6 +32,8 @@ import platformdirs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from meshprovision.errors import MissingContactError, SettingsError
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "APP_NAME",
@@ -287,6 +290,12 @@ def load_settings(
     ``.env``) is treated as "not set" rather than as an empty string,
     letting the field's own default (or lack of one) apply.
 
+    A ``.env``/environment key that starts with :data:`ENV_PREFIX` but
+    doesn't name a field in :data:`ENV_FIELD_MAP` (a typo, most often)
+    is logged as a warning rather than silently ignored -- the affected
+    field still falls back to its default either way, but the operator
+    at least has a trail back to the cause.
+
     Args:
         env_file: An explicit ``.env`` file to read. When given, it is
             used instead of searching.
@@ -306,15 +315,28 @@ def load_settings(
             validation.
     """
     values: dict[str, str] = {}
+    unrecognized: set[str] = set()
     if search_dotenv or env_file is not None:
         dotenv_path = Path(env_file) if env_file is not None else find_env_file()
         if dotenv_path is not None and dotenv_path.is_file():
-            values.update(
-                {k: v for k, v in dotenv.dotenv_values(dotenv_path).items() if v is not None}
+            dotenv_values = dotenv.dotenv_values(dotenv_path)
+            values.update({k: v for k, v in dotenv_values.items() if v is not None})
+            unrecognized.update(
+                k for k in dotenv_values if k.startswith(ENV_PREFIX) and k not in ENV_FIELD_MAP
             )
 
     source_environ = environ if environ is not None else os.environ
     values.update({k: v for k, v in source_environ.items() if k in ENV_FIELD_MAP})
+    unrecognized.update(
+        k for k in source_environ if k.startswith(ENV_PREFIX) and k not in ENV_FIELD_MAP
+    )
+
+    if unrecognized:
+        _logger.warning(
+            "Unrecognized %s variable(s), ignored: %s. See .env.example for every supported name.",
+            ENV_PREFIX.rstrip("_"),
+            ", ".join(sorted(unrecognized)),
+        )
 
     data: dict[str, object] = {}
     for env_name, field in ENV_FIELD_MAP.items():
