@@ -80,6 +80,23 @@ class DataSource(Protocol):
         """
         ...
 
+    @property
+    def last_fetch_field_coercions(self) -> int:
+        """Return how many fields the most recent ``fetch_nodes`` call could not coerce.
+
+        Distinct from :attr:`last_fetch_skipped`: this counts one
+        *field* within an otherwise-successfully-parsed entry whose raw
+        value was present but a ``coerce_*`` helper
+        (:mod:`meshprovision.datasources.models`) still could not
+        confidently coerce it -- an upstream schema rename or shape
+        change would otherwise silently zero out that field fleet-wide
+        with no signal anywhere. See
+        :class:`~meshprovision.datasources.models.CoercionTracker`.
+        Resets to 0 at the start of each ``fetch_nodes`` call, same
+        "last fetch only" convention as :attr:`last_fetch_skipped`.
+        """
+        ...
+
     def fetch_nodes(
         self, ids: Collection[NodeId], *, force_refresh: bool | None = None
     ) -> dict[NodeId, NodeObservation]:
@@ -127,6 +144,7 @@ class BaseHTTPDataSource:
         self._client = client
         self._source_name = source_name
         self._last_fetch_skipped = 0
+        self._last_fetch_field_coercions = 0
 
     @property
     def name(self) -> str:
@@ -148,6 +166,19 @@ class BaseHTTPDataSource:
             initializes it to 0.
         """
         return self._last_fetch_skipped
+
+    @property
+    def last_fetch_field_coercions(self) -> int:
+        """How many fields the most recent ``fetch_nodes`` call could not coerce.
+
+        Returns:
+            See :attr:`DataSource.last_fetch_field_coercions`. A
+            concrete subclass's ``fetch_nodes`` is responsible for
+            resetting and updating
+            ``self._last_fetch_field_coercions``; this base class only
+            initializes it to 0.
+        """
+        return self._last_fetch_field_coercions
 
     @property
     def client(self) -> CachedHTTPClient:

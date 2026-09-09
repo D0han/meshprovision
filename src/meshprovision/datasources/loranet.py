@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from meshprovision.datasources.base import SOURCE_LORANET, BaseHTTPDataSource, require_json_object
 from meshprovision.datasources.models import (
     MAX_SEEN_BY_TOPICS,
+    CoercionTracker,
     NodeObservation,
     coerce_bool,
     coerce_float,
@@ -141,17 +142,21 @@ class LoranetSource(BaseHTTPDataSource):
         observed_at = datetime.now(tz=UTC)
         result: dict[NodeId, NodeObservation] = {}
         skipped = 0
+        tracker = CoercionTracker()
         for key, payload in index.items():
             node_id = self._parse_key(key)
             if node_id is None:
                 skipped += 1
                 continue
-            observation = self._parse_entry(node_id, key, payload, observed_at=observed_at)
+            observation = self._parse_entry(
+                node_id, key, payload, observed_at=observed_at, coercion_tracker=tracker
+            )
             if observation is None:
                 skipped += 1
                 continue
             result[node_id] = observation
         self._last_fetch_skipped = skipped
+        self._last_fetch_field_coercions = tracker.failures
         return result
 
     def fetch_nodes(
@@ -183,16 +188,20 @@ class LoranetSource(BaseHTTPDataSource):
         observed_at = datetime.now(tz=UTC)
         result: dict[NodeId, NodeObservation] = {}
         skipped = 0
+        tracker = CoercionTracker()
         for node_id in ids:
             key = node_id.decimal
             if key not in index:
                 continue
-            observation = self._parse_entry(node_id, key, index[key], observed_at=observed_at)
+            observation = self._parse_entry(
+                node_id, key, index[key], observed_at=observed_at, coercion_tracker=tracker
+            )
             if observation is None:
                 skipped += 1
                 continue
             result[node_id] = observation
         self._last_fetch_skipped = skipped
+        self._last_fetch_field_coercions = tracker.failures
         return result
 
     @staticmethod
@@ -218,7 +227,12 @@ class LoranetSource(BaseHTTPDataSource):
 
     @staticmethod
     def _parse_entry(
-        node_id: NodeId, key: str, payload: object, *, observed_at: datetime
+        node_id: NodeId,
+        key: str,
+        payload: object,
+        *,
+        observed_at: datetime,
+        coercion_tracker: CoercionTracker,
     ) -> NodeObservation | None:
         """Parse one dump entry, tolerating a malformed payload.
 
@@ -228,6 +242,8 @@ class LoranetSource(BaseHTTPDataSource):
             payload: The raw per-node payload; expected to be a JSON
                 object.
             observed_at: Timestamp to stamp the observation with.
+            coercion_tracker: Forwarded to :func:`parse_node`, shared
+                across every entry in one fetch.
 
         Returns:
             The parsed observation, or ``None`` (logged at WARNING) when
@@ -237,7 +253,9 @@ class LoranetSource(BaseHTTPDataSource):
             _logger.warning("skipping loranet node %s: payload is not a JSON object", key)
             return None
         try:
-            return parse_node(node_id, payload, observed_at=observed_at)
+            return parse_node(
+                node_id, payload, observed_at=observed_at, coercion_tracker=coercion_tracker
+            )
         except _PARSE_NODE_EXCEPTIONS as exc:
             _logger.warning("skipping loranet node %s: %s", key, exc)
             return None
@@ -306,7 +324,11 @@ def _parse_seen_by(raw: object) -> tuple[int | None, tuple[str, ...], datetime |
 
 
 def parse_node(
-    node_id: NodeId, payload: Mapping[str, Any], *, observed_at: datetime
+    node_id: NodeId,
+    payload: Mapping[str, Any],
+    *,
+    observed_at: datetime,
+    coercion_tracker: CoercionTracker | None = None,
 ) -> NodeObservation:
     """Map one loranet.pl ``nodes.json`` entry to a :class:`NodeObservation`.
 
@@ -315,6 +337,12 @@ def parse_node(
             decimal key).
         payload: The per-node JSON object.
         observed_at: Timestamp to stamp the observation with.
+        coercion_tracker: Accumulates a count of fields present in
+            ``payload`` but not confidently coercible (see
+            :class:`~meshprovision.datasources.models.CoercionTracker`).
+            Defaults to a throwaway tracker when not given -- callers
+            that want the count share one instance across every entry
+            in a fetch.
 
     Returns:
         The normalized observation.
@@ -326,6 +354,7 @@ def parse_node(
         pydantic.ValidationError: If the assembled fields fail
             :class:`NodeObservation`'s own validation.
     """
+    tracker = coercion_tracker if coercion_tracker is not None else CoercionTracker()
     latitude = e7_to_degrees(payload.get("latitude"), limit=_LATITUDE_LIMIT)
     longitude = e7_to_degrees(payload.get("longitude"), limit=_LONGITUDE_LIMIT)
     if latitude == 0.0 and longitude == 0.0:
@@ -356,27 +385,27 @@ def parse_node(
         node_id=node_id,
         source=SOURCE_LORANET,
         observed_at=observed_at,
-        short_name=coerce_str(payload.get("shortName")),
-        long_name=coerce_str(payload.get("longName")),
+        short_name=tracker.coerce(payload.get("shortName"), coerce_str),
+        long_name=tracker.coerce(payload.get("longName"), coerce_str),
         hw_model=_resolve_enum_name(hw_model_table(), raw_hw_model),
         hw_model_value=_resolve_enum_value(hw_model_table(), raw_hw_model),
         role=_resolve_enum_name(role_table(), raw_role),
         role_value=_resolve_enum_value(role_table(), raw_role),
         region=_resolve_enum_name(region_table(), payload.get("region")),
-        modem_preset=coerce_str(payload.get("modemPreset")),
-        firmware_version=coerce_str(payload.get("fwVersion")),
+        modem_preset=tracker.coerce(payload.get("modemPreset"), coerce_str),
+        firmware_version=tracker.coerce(payload.get("fwVersion"), coerce_str),
         latitude=latitude,
         longitude=longitude,
-        altitude=coerce_int(payload.get("altitude")),
-        position_precision=coerce_int(payload.get("precision")),
-        battery_level=coerce_int(payload.get("batteryLevel")),
-        voltage=coerce_float(payload.get("voltage")),
-        channel_utilization=coerce_float(payload.get("chUtil")),
-        air_util_tx=coerce_float(payload.get("airUtilTx")),
-        temperature=coerce_float(payload.get("temperature")),
-        uptime_seconds=coerce_int(payload.get("uptime")),
-        online_local_nodes=coerce_int(payload.get("onlineLocalNodes")),
-        has_default_channel=coerce_bool(payload.get("hasDefaultCh")),
+        altitude=tracker.coerce(payload.get("altitude"), coerce_int),
+        position_precision=tracker.coerce(payload.get("precision"), coerce_int),
+        battery_level=tracker.coerce(payload.get("batteryLevel"), coerce_int),
+        voltage=tracker.coerce(payload.get("voltage"), coerce_float),
+        channel_utilization=tracker.coerce(payload.get("chUtil"), coerce_float),
+        air_util_tx=tracker.coerce(payload.get("airUtilTx"), coerce_float),
+        temperature=tracker.coerce(payload.get("temperature"), coerce_float),
+        uptime_seconds=tracker.coerce(payload.get("uptime"), coerce_int),
+        online_local_nodes=tracker.coerce(payload.get("onlineLocalNodes"), coerce_int),
+        has_default_channel=tracker.coerce(payload.get("hasDefaultCh"), coerce_bool),
         neighbor_count=neighbor_count,
         seen_by=seen_by,
         last_seen=last_seen,

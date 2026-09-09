@@ -211,6 +211,9 @@ def build_table(report: StatusReport) -> Table:
     for source, count in report.skipped_entries.items():
         caption.append("\n")
         caption.append(f"{source}: {count} entrie(s) could not be parsed", style="dim yellow")
+    for source, count in report.field_coercions.items():
+        caption.append("\n")
+        caption.append(f"{source}: {count} field(s) could not be coerced", style="dim yellow")
     table.caption = caption
     return table
 
@@ -258,6 +261,7 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
                 "cache": {"hits": 2, "misses": 1, "network_requests": 1},
                 "failures": [{"source": "lorastats", "message": "...", "hint": None}],
                 "skipped_entries": {"loranet": 12},
+                "field_coercions": {"loranet": 5},
                 "nodes": [...],
             }
     """
@@ -276,6 +280,7 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
             "network_requests": report.network_requests,
         },
         "skipped_entries": dict(report.skipped_entries),
+        "field_coercions": dict(report.field_coercions),
         "failures": [
             {"source": failure.source, "message": failure.message, "hint": failure.hint}
             for failure in report.failures

@@ -19,6 +19,7 @@ from meshprovision.datasources.lorastats import (
     validate_regions,
 )
 from meshprovision.datasources.models import (
+    CoercionTracker,
     NodeObservation,
     coerce_bool,
     coerce_float,
@@ -126,6 +127,23 @@ def test_node_observation_coerces_node_id() -> None:
     assert obs.node_id == NodeId.from_hex("deadbe01")
 
 
+def test_coercion_tracker_counts_only_present_but_uncoercible_values() -> None:
+    tracker = CoercionTracker()
+
+    # Absent (None) is never a failure -- the field simply wasn't reported.
+    assert tracker.coerce(None, coerce_int) is None
+    assert tracker.failures == 0
+
+    # Present but uncoercible IS a failure, and the coerced result is
+    # still returned (None), consistent with coerce_*'s own contract.
+    assert tracker.coerce("not-a-number", coerce_int) is None
+    assert tracker.failures == 1
+
+    # Present and coercible is never a failure.
+    assert tracker.coerce("5", coerce_int) == 5
+    assert tracker.failures == 1
+
+
 # ---------------------------------------------------------------------------
 # lorastats: parse_node.
 # ---------------------------------------------------------------------------
@@ -198,6 +216,27 @@ def test_lorastats_fetch_node_matches_by_node_id(tmp_path: Path) -> None:
     obs = source.fetch_node("deadbe01")
     assert obs is not None
     assert obs.short_name == "found"
+
+
+@respx.mock
+def test_lorastats_present_but_uncoercible_field_counted_as_a_field_coercion_not_a_skip(
+    tmp_path: Path,
+) -> None:
+    """A malformed-but-present field must not be conflated with a whole-record skip."""
+    records = [{"NodeId": "deadbe01", "ShortName": "found", "Role": "not-a-number"}]
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(200, json=records))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid")
+
+    obs = source.fetch_node("deadbe01")
+
+    assert obs is not None
+    assert obs.short_name == "found"
+    assert obs.role_value is None
+    assert source.last_fetch_skipped == 0
+    assert source.last_fetch_field_coercions == 1
 
 
 @respx.mock
@@ -464,6 +503,53 @@ def test_loranet_malformed_entry_skipped_not_fatal(tmp_path: Path) -> None:
     assert good_nid in result
     assert len(result) == 1
     assert source.last_fetch_skipped == 2
+
+
+@respx.mock
+def test_loranet_present_but_uncoercible_field_counted_as_a_field_coercion_not_a_skip(
+    tmp_path: Path,
+) -> None:
+    """A malformed-but-present field must not be conflated with a whole-entry skip.
+
+    The entry itself still parses into a real NodeObservation (voltage
+    just ends up None); last_fetch_skipped must stay 0 for it, while
+    last_fetch_field_coercions must count the one bad field.
+    """
+    nid = NodeId.from_hex("deadbe01")
+    payload = {nid.decimal: {"shortName": "good", "voltage": "not-a-number"}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_all()
+
+    assert nid in result
+    assert result[nid].voltage is None
+    assert result[nid].short_name == "good"
+    assert source.last_fetch_skipped == 0
+    assert source.last_fetch_field_coercions == 1
+
+
+@respx.mock
+def test_loranet_fetch_nodes_last_fetch_field_coercions_resets_between_calls(
+    tmp_path: Path,
+) -> None:
+    """Regression test: the counter reflects only the *last* fetch_nodes call."""
+    bad_nid = NodeId.from_hex("deadbe01")
+    good_nid = NodeId.from_hex("deadbe02")
+    payload = {
+        bad_nid.decimal: {"shortName": "bad", "voltage": "not-a-number"},
+        good_nid.decimal: {"shortName": "good", "voltage": 3.7},
+    }
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    source.fetch_nodes([bad_nid])
+    assert source.last_fetch_field_coercions == 1
+
+    source.fetch_nodes([good_nid])
+    assert source.last_fetch_field_coercions == 0
 
 
 @respx.mock

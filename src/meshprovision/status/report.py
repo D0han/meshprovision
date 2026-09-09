@@ -133,6 +133,15 @@ class StatusReport:
             just silently dropped some of it -- without this, a mass
             parse-failure (an upstream schema change, for example) is
             indistinguishable from those nodes simply being offline.
+        field_coercions: Per-source count of individual *fields* (within
+            otherwise-successfully-parsed entries) whose raw value was
+            present but a ``coerce_*`` helper could not confidently
+            coerce it, keyed by source name. Omits any source with a
+            count of zero. Distinct from :attr:`skipped_entries`: the
+            entry itself parsed fine, just one field within it didn't --
+            without this, a source silently zeroing out one field
+            fleet-wide (an upstream schema rename, for example) is
+            invisible.
         cache_hits: Cache hits accumulated by the underlying HTTP client
             during this run.
         cache_misses: Cache misses accumulated by the underlying HTTP
@@ -146,6 +155,7 @@ class StatusReport:
     thresholds: Thresholds
     failures: tuple[SourceFailure, ...] = ()
     skipped_entries: Mapping[str, int] = field(default_factory=dict)
+    field_coercions: Mapping[str, int] = field(default_factory=dict)
     cache_hits: int = 0
     cache_misses: int = 0
     network_requests: int = 0
@@ -188,33 +198,42 @@ class StatusReport:
     def degraded(self) -> bool:
         """Whether this report represents a degraded run.
 
-        No magnitude threshold on :attr:`skipped_entries`: even a single
-        skipped entry marks the run degraded, deliberately matching how
-        :attr:`has_offline`/:attr:`failures` already work -- neither
+        No magnitude threshold on :attr:`skipped_entries`/
+        :attr:`field_coercions`: even a single skipped entry or
+        miscoerced field marks the run degraded, deliberately matching
+        how :attr:`has_offline`/:attr:`failures` already work -- neither
         distinguishes "one offline node" from "the whole fleet is
         offline" either. This module's :func:`collect_observations` is
         always called with the operator's own (often small) fleet's ids,
         never a source's full upstream dump, so one skipped entry is
         already a meaningfully large fraction for a typical fleet size,
         not noise to be filtered. The exact counts remain visible in
-        :attr:`skipped_entries` for a caller that wants to judge
-        magnitude itself (a `--json` consumer, for example).
+        :attr:`skipped_entries`/:attr:`field_coercions` for a caller
+        that wants to judge magnitude itself (a `--json` consumer, for
+        example).
 
         Returns:
-            ``True`` if :attr:`has_offline`, any source failed, or any
-            source skipped an entry it could not parse.
+            ``True`` if :attr:`has_offline`, any source failed, any
+            source skipped an entry it could not parse, or any source
+            reported a field it could not coerce.
         """
-        return self.has_offline or bool(self.failures) or bool(self.skipped_entries)
+        return (
+            self.has_offline
+            or bool(self.failures)
+            or bool(self.skipped_entries)
+            or bool(self.field_coercions)
+        )
 
     def exit_code(self, *, fail_on_offline: bool = True) -> int:
         """Compute the process exit code the ``mesh status`` CLI should return.
 
-        A source failure, or a source silently skipping an entry it
-        could not parse, always degrades the exit code, since a status
-        report built from an incomplete or partially-dropped source is
-        not fully trustworthy either way -- see :attr:`degraded` for why
-        this has no magnitude threshold. An offline node only does so
-        when ``fail_on_offline`` is true.
+        A source failure, a source silently skipping an entry it could
+        not parse, or a source silently failing to coerce one field of
+        an otherwise-parsed entry, always degrades the exit code, since
+        a status report built from an incomplete or partially-dropped
+        source is not fully trustworthy either way -- see
+        :attr:`degraded` for why this has no magnitude threshold. An
+        offline node only does so when ``fail_on_offline`` is true.
 
         Args:
             fail_on_offline: Whether an offline node should count as
@@ -227,6 +246,7 @@ class StatusReport:
         is_degraded = (
             bool(self.failures)
             or bool(self.skipped_entries)
+            or bool(self.field_coercions)
             or (fail_on_offline and self.has_offline)
         )
         return int(ExitCode.STATUS_DEGRADED) if is_degraded else int(ExitCode.OK)
@@ -250,6 +270,12 @@ class StatusReport:
             )
             total = sum(self.skipped_entries.values())
             text += f"; {total} unparsable entrie(s) ({parts})"
+        if self.field_coercions:
+            parts = ", ".join(
+                f"{count} from {source}" for source, count in self.field_coercions.items()
+            )
+            total = sum(self.field_coercions.values())
+            text += f"; {total} uncoercible field(s) ({parts})"
         return text
 
 
@@ -320,7 +346,12 @@ def load_node_ids(db_path: Path) -> tuple[NodeId, ...]:
 
 def collect_observations(
     sources: Sequence[DataSource], ids: Sequence[NodeId], *, force_refresh: bool = False
-) -> tuple[dict[str, dict[NodeId, NodeObservation]], tuple[SourceFailure, ...], dict[str, int]]:
+) -> tuple[
+    dict[str, dict[NodeId, NodeObservation]],
+    tuple[SourceFailure, ...],
+    dict[str, int],
+    dict[str, int],
+]:
     """Query every source for the given node ids, tolerating a failing source.
 
     A source that raises :class:`~meshprovision.errors.DataSourceError`
@@ -349,17 +380,21 @@ def collect_observations(
         force_refresh: Forwarded to each source's ``fetch_nodes`` call.
 
     Returns:
-        An ``(observations_by_source, failures, skipped_by_source)``
-        triple: the first maps each source's name to its
-        ``{node_id: observation}`` result (sources that failed entirely
-        are simply absent); the second lists every source that failed,
-        in the order they were queried; the third maps each
-        *successful* source's name to how many entries it could not
-        parse, omitting any source with a count of zero.
+        An ``(observations_by_source, failures, skipped_by_source,
+        field_coercions_by_source)`` 4-tuple: the first maps each
+        source's name to its ``{node_id: observation}`` result (sources
+        that failed entirely are simply absent); the second lists every
+        source that failed, in the order they were queried; the third
+        maps each *successful* source's name to how many entries it
+        could not parse, omitting any source with a count of zero; the
+        fourth maps each *successful* source's name to how many
+        individual fields (within otherwise-parsed entries) it could
+        not coerce, omitting any source with a count of zero.
     """
     observations: dict[str, dict[NodeId, NodeObservation]] = {}
     failures: list[SourceFailure] = []
     skipped: dict[str, int] = {}
+    field_coercions: dict[str, int] = {}
     for source in sources:
         try:
             fetched = source.fetch_nodes(ids, force_refresh=force_refresh)
@@ -370,7 +405,9 @@ def collect_observations(
         observations[source.name] = fetched
         if source.last_fetch_skipped:
             skipped[source.name] = source.last_fetch_skipped
-    return observations, tuple(failures), skipped
+        if source.last_fetch_field_coercions:
+            field_coercions[source.name] = source.last_fetch_field_coercions
+    return observations, tuple(failures), skipped, field_coercions
 
 
 def build_report(
@@ -488,7 +525,7 @@ def run_status(
                 LorastatsSource(active_client, contact=lorastats_contact, regions=options.regions)
             )
 
-        observations, failures, skipped = collect_observations(
+        observations, failures, skipped, field_coercions = collect_observations(
             sources, ids, force_refresh=options.force_refresh
         )
         stats = active_client.stats
@@ -506,6 +543,7 @@ def run_status(
             thresholds=report.thresholds,
             failures=report.failures,
             skipped_entries=skipped,
+            field_coercions=field_coercions,
             cache_hits=stats.hits,
             cache_misses=stats.misses,
             network_requests=stats.network_requests,

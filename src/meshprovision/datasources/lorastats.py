@@ -34,7 +34,13 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
 from meshprovision.datasources.base import SOURCE_LORASTATS, BaseHTTPDataSource, require_json_list
-from meshprovision.datasources.models import NodeObservation, coerce_int, coerce_str, parse_iso8601
+from meshprovision.datasources.models import (
+    CoercionTracker,
+    NodeObservation,
+    coerce_int,
+    coerce_str,
+    parse_iso8601,
+)
 from meshprovision.enums import hw_model_table, role_table
 from meshprovision.errors import HttpError, MissingContactError, NodeIdError, SettingsError
 from meshprovision.nodeid import NodeId, NodeIdLike
@@ -164,12 +170,15 @@ class LorastatsSource(BaseHTTPDataSource):
         """
         result: dict[NodeId, NodeObservation] = {}
         skipped = 0
+        field_coercions = 0
         for node_id in ids:
             observation = self.fetch_node(node_id, force_refresh=force_refresh)
             skipped += self._last_fetch_skipped
+            field_coercions += self._last_fetch_field_coercions
             if observation is not None:
                 result[node_id] = observation
         self._last_fetch_skipped = skipped
+        self._last_fetch_field_coercions = field_coercions
         return result
 
     def fetch_node(
@@ -212,6 +221,7 @@ class LorastatsSource(BaseHTTPDataSource):
         nid = NodeId.parse(node_id)
         candidates = validate_regions((region,)) if region is not None else self._regions
         skipped = 0
+        tracker = CoercionTracker()
 
         for candidate in candidates:
             url = f"{self._base_url}{LORASTATS_NODES_PATH.format(region=candidate)}"
@@ -223,7 +233,9 @@ class LorastatsSource(BaseHTTPDataSource):
             skipped += record_skipped
             if record is None:
                 continue
-            observation = parse_node(record, region=candidate, observed_at=datetime.now(tz=UTC))
+            observation = parse_node(
+                record, region=candidate, observed_at=datetime.now(tz=UTC), coercion_tracker=tracker
+            )
             if observation is None:
                 continue
             if observation.node_id != nid:
@@ -234,8 +246,10 @@ class LorastatsSource(BaseHTTPDataSource):
                 )
                 continue
             self._last_fetch_skipped = skipped
+            self._last_fetch_field_coercions = tracker.failures
             return observation
         self._last_fetch_skipped = skipped
+        self._last_fetch_field_coercions = tracker.failures
         return None
 
     def node_status(self, node_id: NodeIdLike, *, force_refresh: bool | None = None) -> bool | None:
@@ -319,7 +333,11 @@ def _match_record(records: list[Any], nid: NodeId) -> tuple[Mapping[str, Any] | 
 
 
 def parse_node(
-    payload: Mapping[str, Any], *, region: str, observed_at: datetime
+    payload: Mapping[str, Any],
+    *,
+    region: str,
+    observed_at: datetime,
+    coercion_tracker: CoercionTracker | None = None,
 ) -> NodeObservation | None:
     """Map one lorastats.pl ``Nodes/JSON`` record to a :class:`NodeObservation`.
 
@@ -332,11 +350,16 @@ def parse_node(
         payload: One element of the decoded JSON array.
         region: The region path segment this record was fetched from.
         observed_at: Timestamp to stamp the observation with.
+        coercion_tracker: Accumulates a count of fields present in
+            ``payload`` but not confidently coercible (see
+            :class:`~meshprovision.datasources.models.CoercionTracker`).
+            Defaults to a throwaway tracker when not given.
 
     Returns:
         The normalized observation, or ``None`` (logged at WARNING) when
         ``payload["NodeId"]`` is missing or unparsable.
     """
+    tracker = coercion_tracker if coercion_tracker is not None else CoercionTracker()
     raw_node_id = payload.get("NodeId")
     if not isinstance(raw_node_id, str):
         _logger.warning("lorastats record is missing a NodeId field: %r", raw_node_id)
@@ -347,16 +370,16 @@ def parse_node(
         _logger.warning("lorastats record has an unparsable NodeId: %r", raw_node_id)
         return None
 
-    role_value = coerce_int(payload.get("Role"))
-    hw_model_value = coerce_int(payload.get("HwModel"))
+    role_value = tracker.coerce(payload.get("Role"), coerce_int)
+    hw_model_value = tracker.coerce(payload.get("HwModel"), coerce_int)
 
     return NodeObservation(
         node_id=node_id,
         source=SOURCE_LORASTATS,
         observed_at=observed_at,
         region_queried=region,
-        short_name=coerce_str(payload.get("ShortName")),
-        long_name=coerce_str(payload.get("LongName")),
+        short_name=tracker.coerce(payload.get("ShortName"), coerce_str),
+        long_name=tracker.coerce(payload.get("LongName"), coerce_str),
         role=role_table().try_name(role_value) if role_value is not None else None,
         role_value=role_value,
         hw_model=hw_model_table().try_name(hw_model_value) if hw_model_value is not None else None,

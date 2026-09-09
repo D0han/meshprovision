@@ -264,6 +264,36 @@ def test_status_report_summary_mentions_skipped_entries() -> None:
     assert "1 from lorastats" in summary
 
 
+def test_status_report_degraded_and_exit_code_with_field_coercions() -> None:
+    """Regression test: a source silently zeroing out one field must be visible too.
+
+    Distinct from skipped_entries: the entry itself parsed fine, only
+    one field within it didn't coerce -- without this, a mass field-level
+    drop (an upstream schema rename, for example) is invisible.
+    """
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        field_coercions={"loranet": 5},
+    )
+    assert report.degraded is True
+    assert report.exit_code(fail_on_offline=False) != 0
+
+
+def test_status_report_summary_mentions_field_coercions() -> None:
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        field_coercions={"loranet": 5, "lorastats": 2},
+    )
+    summary = report.summary()
+    assert "7 uncoercible field(s)" in summary
+    assert "5 from loranet" in summary
+    assert "2 from lorastats" in summary
+
+
 # ---------------------------------------------------------------------------
 # collect_observations.
 # ---------------------------------------------------------------------------
@@ -284,6 +314,7 @@ class _FailingSource:
 class _OkSource:
     name = "lorastats"
     last_fetch_skipped = 0
+    last_fetch_field_coercions = 0
 
     def fetch_nodes(
         self,
@@ -309,6 +340,7 @@ class _MissingContactSource:
 class _PartiallySkippingSource:
     name = "loranet"
     last_fetch_skipped = 7
+    last_fetch_field_coercions = 0
 
     def fetch_nodes(
         self,
@@ -320,23 +352,27 @@ class _PartiallySkippingSource:
 
 
 def test_collect_observations_tolerates_one_failure() -> None:
-    observations, failures, skipped = collect_observations([_FailingSource(), _OkSource()], [NID])
+    observations, failures, skipped, field_coercions = collect_observations(
+        [_FailingSource(), _OkSource()], [NID]
+    )
     assert "loranet" not in observations
     assert "lorastats" in observations
     assert len(failures) == 1
     assert failures[0].source == "loranet"
     assert skipped == {}
+    assert field_coercions == {}
 
 
 def test_collect_observations_reports_skipped_entries_for_a_successful_source() -> None:
     """A source that succeeds but skipped entries must be visible, not silently absent."""
-    observations, failures, skipped = collect_observations(
+    observations, failures, skipped, field_coercions = collect_observations(
         [_PartiallySkippingSource(), _OkSource()], [NID]
     )
     assert failures == ()
     assert "loranet" in observations
     assert skipped == {"loranet": 7}
     assert "lorastats" not in skipped
+    assert field_coercions == {}
 
 
 def test_collect_observations_does_not_catch_missing_contact_error() -> None:
@@ -379,6 +415,7 @@ def test_report_to_json_dict_shape() -> None:
         "cache",
         "failures",
         "skipped_entries",
+        "field_coercions",
         "nodes",
     }
     assert payload["generated_at"] == "2026-08-25T12:00:00Z"
@@ -395,6 +432,17 @@ def test_report_to_json_dict_includes_skipped_entries() -> None:
     assert payload["skipped_entries"] == {"loranet": 12}
 
 
+def test_report_to_json_dict_includes_field_coercions() -> None:
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        field_coercions={"loranet": 5},
+    )
+    payload = render.report_to_json_dict(report)
+    assert payload["field_coercions"] == {"loranet": 5}
+
+
 def test_build_table_caption_mentions_skipped_entries() -> None:
     obs = _obs(SOURCE_LORANET, last_seen=NOW)
     base_report = build_report(
@@ -409,6 +457,22 @@ def test_build_table_caption_mentions_skipped_entries() -> None:
     table = render.build_table(report)
     assert table.caption is not None
     assert "12 entrie(s) could not be parsed" in str(table.caption)
+
+
+def test_build_table_caption_mentions_field_coercions() -> None:
+    obs = _obs(SOURCE_LORANET, last_seen=NOW)
+    base_report = build_report(
+        records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
+    )
+    report = StatusReport(
+        generated_at=base_report.generated_at,
+        nodes=base_report.nodes,
+        thresholds=base_report.thresholds,
+        field_coercions={"loranet": 5},
+    )
+    table = render.build_table(report)
+    assert table.caption is not None
+    assert "5 field(s) could not be coerced" in str(table.caption)
 
 
 def test_build_table_returns_expected_columns() -> None:

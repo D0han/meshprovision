@@ -21,8 +21,9 @@ a malformed field in one node's payload must never fail the whole batch.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, tzinfo
-from typing import Final
+from typing import Final, TypeVar
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, field_validator
@@ -33,6 +34,7 @@ __all__ = [
     "E7_SCALE",
     "LORASTATS_NAIVE_TZ",
     "MAX_SEEN_BY_TOPICS",
+    "CoercionTracker",
     "NodeObservation",
     "coerce_bool",
     "coerce_float",
@@ -42,6 +44,45 @@ __all__ = [
     "parse_epoch",
     "parse_iso8601",
 ]
+
+_T = TypeVar("_T")
+
+
+class CoercionTracker:
+    """Counts ``coerce_*`` calls that received a present-but-unparsable value.
+
+    Distinct from :attr:`~meshprovision.datasources.base.DataSource
+    .last_fetch_skipped`, which counts a whole *entry* that failed to
+    parse at all: this counts one *field* within an otherwise-parsed
+    entry whose raw value was present (not ``None``/absent from the
+    payload) but a ``coerce_*`` helper still could not confidently
+    coerce it -- an upstream schema rename or a shape change would
+    otherwise silently zero out that field fleet-wide with no signal
+    anywhere. A source's ``fetch_nodes`` resets and aggregates one
+    instance per call, the same "how many did the *last* fetch see,
+    not a lifetime total" convention ``last_fetch_skipped`` already
+    uses.
+    """
+
+    def __init__(self) -> None:
+        """Initialize with :attr:`failures` at 0."""
+        self.failures = 0
+
+    def coerce(self, raw: object, coerce_fn: Callable[[object], _T | None]) -> _T | None:
+        """Coerce ``raw`` via ``coerce_fn``, counting a present-but-failed result.
+
+        Args:
+            raw: The raw value read from the payload, before coercion.
+            coerce_fn: The ``coerce_*`` helper to apply.
+
+        Returns:
+            ``coerce_fn(raw)``.
+        """
+        result = coerce_fn(raw)
+        if raw is not None and result is None:
+            self.failures += 1
+        return result
+
 
 E7_SCALE: Final[float] = 1e7
 """Divisor converting a Meshtastic E7 fixed-point coordinate to degrees."""
