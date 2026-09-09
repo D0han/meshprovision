@@ -993,7 +993,11 @@ def audit_node(
         known_public_keys: Every other public key in the fleet, keyed by
             key reference, for cross-node duplicate detection. Entries
             whose ref equals ``key_ref`` are skipped (a node is not a
-            duplicate of itself).
+            duplicate of itself). Requires ``key_ref`` when supplied
+            together with ``public`` -- without it, there would be no
+            way to tell a genuine cross-fleet duplicate apart from the
+            node's own entry if it happens to already be present in
+            this mapping.
         known_bad: An explicit blocklist. When ``None``, loaded once via
             :func:`load_known_bad_keys`.
         check_clamping: Passed through to the private-key audit path.
@@ -1003,7 +1007,9 @@ def audit_node(
 
     Raises:
         KeyMaterialError: If neither ``public`` nor ``private`` is
-            supplied, or if a supplied key is the wrong length.
+            supplied, if a supplied key is the wrong length, or if
+            ``known_public_keys`` is supplied together with ``public``
+            but ``key_ref`` is not.
     """
     if public is None and private is None:
         raise KeyMaterialError(
@@ -1074,6 +1080,15 @@ def audit_node(
             )
 
     if known_public_keys and public is not None:
+        if key_ref is None:
+            raise KeyMaterialError(
+                "audit_node requires key_ref when known_public_keys is supplied and public "
+                "is known, so the node's own entry (if present in known_public_keys) can be "
+                "excluded from the cross-fleet duplicate check -- without it, a node whose own "
+                "key happens to be present in known_public_keys would be flagged as a duplicate "
+                "of itself",
+                reason="key_ref missing with known_public_keys",
+            )
         raw_public = bytes(public)
         matches = sorted(
             ref

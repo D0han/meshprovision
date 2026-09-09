@@ -241,6 +241,13 @@ def test_audit_node_duplicate_excludes_self(keypair_factory) -> None:
     assert "c_pub" not in (dup[0].detail or "")
 
 
+def test_audit_node_duplicate_check_requires_key_ref_when_public_known(keypair_factory) -> None:
+    k = keypair_factory().public
+    with pytest.raises(KeyMaterialError) as exc_info:
+        audit_node(public=k, known_public_keys={"a_pub": k})
+    assert "key_ref" in str(exc_info.value)
+
+
 def test_find_duplicate_public_keys() -> None:
     k = os.urandom(32)
     other = os.urandom(32)
