@@ -398,6 +398,33 @@ def test_purge_and_clear(tmp_path: Path) -> None:
 
 
 @respx.mock
+def test_purge_counts_a_corrupt_entry_exactly_once(tmp_path: Path, caplog) -> None:
+    """A corrupt entry must be counted once, not double-unlinked and missed.
+
+    _read_entry() already unlinks a corrupt entry itself before
+    returning None; purge()'s own unlink attempt on top of that always
+    raises FileNotFoundError, previously undercounting the deletion and
+    logging a misleading "could not purge" line for an entry that was
+    in fact already removed.
+    """
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+    client.get(URL)
+
+    key = cache_key("GET", URL)
+    path = client.path_for_key(key)
+    path.write_bytes(b"not valid json{{{")
+
+    with caplog.at_level("DEBUG", logger="meshprovision.cache.http"):
+        purged = client.purge(older_than=0)
+
+    assert purged == 1
+    assert not path.exists()
+    assert not any("could not purge" in r.getMessage() for r in caplog.records)
+
+
+@respx.mock
 @pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
 def test_cache_root_is_owner_only_after_the_first_write(tmp_path: Path) -> None:
     respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))

@@ -732,6 +732,14 @@ class CachedHTTPClient:
                 entry = self._read_entry(entry_path, cache_key_value=entry_path.stem)
             except OSError:
                 continue
+            if entry is None and not entry_path.exists():
+                # _read_entry() already unlinked a corrupt entry itself;
+                # counting it here without a second (always-failing)
+                # unlink attempt avoids undercounting deleted and logging
+                # a misleading "could not purge" line for an entry that
+                # was in fact already removed.
+                deleted += 1
+                continue
             is_corrupt = entry is None
             is_expired = entry is not None and entry.age(now=self._clock()) > threshold
             if is_corrupt or is_expired:
