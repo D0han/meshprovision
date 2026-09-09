@@ -271,6 +271,19 @@ def find_env_file(start: Path | None = None) -> Path | None:
     return None
 
 
+def _unrecognized_env_keys(source: Mapping[str, object]) -> set[str]:
+    """Return every key in ``source`` that looks like a mistyped ``MESHPROVISION_*`` variable.
+
+    Args:
+        source: A ``.env``/environment mapping to scan the keys of.
+
+    Returns:
+        Every key starting with :data:`ENV_PREFIX` that is not a name in
+        :data:`ENV_FIELD_MAP`.
+    """
+    return {k for k in source if k.startswith(ENV_PREFIX) and k not in ENV_FIELD_MAP}
+
+
 def load_settings(
     *,
     env_file: Path | str | None = None,
@@ -321,15 +334,11 @@ def load_settings(
         if dotenv_path is not None and dotenv_path.is_file():
             dotenv_values = dotenv.dotenv_values(dotenv_path)
             values.update({k: v for k, v in dotenv_values.items() if v is not None})
-            unrecognized.update(
-                k for k in dotenv_values if k.startswith(ENV_PREFIX) and k not in ENV_FIELD_MAP
-            )
+            unrecognized.update(_unrecognized_env_keys(dotenv_values))
 
     source_environ = environ if environ is not None else os.environ
     values.update({k: v for k, v in source_environ.items() if k in ENV_FIELD_MAP})
-    unrecognized.update(
-        k for k in source_environ if k.startswith(ENV_PREFIX) and k not in ENV_FIELD_MAP
-    )
+    unrecognized.update(_unrecognized_env_keys(source_environ))
 
     if unrecognized:
         _logger.warning(
