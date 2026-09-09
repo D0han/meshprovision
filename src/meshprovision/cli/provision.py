@@ -626,6 +626,8 @@ def run_provision(
     outcome = apply.apply_plan(change_plan, session, keypair=keypair, dry_run=False)
     for line in outcome.describe():
         ctx.info(line)
+    if outcome.public_key_fingerprint is not None:
+        ctx.info(f"Device public key: {outcome.public_key_fingerprint}")
 
     if (
         opts.admin_ref is not None

@@ -97,6 +97,8 @@ def test_factory_provisioning_end_to_end(
     assert by_ref["deadbe01_pub"].material() == public_key
     assert by_ref["deadbe01_priv"].material() == private_key
 
+    assert "Device public key: sha256:" in result.stderr
+
     _assert_no_secrets(result.stdout)
     _assert_no_secrets(result.stderr)
 
