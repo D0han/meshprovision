@@ -282,6 +282,19 @@ def test_is_monotonic_run() -> None:
     assert is_monotonic_run(bytes([1, 5, 2, 9] * 8)) is False
 
 
+def test_is_monotonic_run_rejects_non_unit_step_arithmetic_progression() -> None:
+    """A uniform step other than +-1 must not be flagged monotonic.
+
+    Guards the ``and``/``or`` boundary between the "single delta" and
+    "delta is 1 or 255" clauses: a step-2 progression has exactly one
+    distinct delta (so the first clause alone can't distinguish it from
+    a real +-1 run).
+    """
+    raw = bytes((i * 2) % 256 for i in range(32))
+    assert len({(raw[i + 1] - raw[i]) % 256 for i in range(len(raw) - 1)}) == 1
+    assert is_monotonic_run(raw) is False
+
+
 def test_hamming_weight() -> None:
     assert hamming_weight(bytes([0xFF] * 32)) == 256
     assert hamming_weight(bytes(32)) == 0
@@ -300,6 +313,23 @@ def test_is_low_entropy_boundaries() -> None:
     low_distinct = bytes([1, 2, 3, 4]) * 8
     assert len(set(low_distinct)) < MIN_DISTINCT_BYTES
     assert is_low_entropy(low_distinct) is True
+
+
+def test_is_low_entropy_flags_abnormal_weight_with_normal_byte_diversity() -> None:
+    """Isolate the weight bound from the distinct-byte bound.
+
+    Every other low-entropy fixture in this file is built out of runs of
+    a repeated byte, which also trips the distinct-byte-count clause --
+    so a broken ``or`` between the two weight comparisons could never be
+    caught by them. This fixture has abnormally low weight but *normal*
+    byte diversity, so it can only be flagged via the weight clause.
+    """
+    raw = bytearray(32)
+    raw[0], raw[1], raw[2], raw[3] = 1, 2, 4, 8
+    frozen = bytes(raw)
+    assert len(set(frozen)) == 5  # {0, 1, 2, 4, 8} -- not independently low-distinct
+    assert hamming_weight(frozen) == 4  # well below LOW_HAMMING_MIN
+    assert is_low_entropy(frozen) is True
 
 
 def _low_entropy_finding(raw: bytes) -> weakkeys.WeakKeyFinding:
@@ -349,6 +379,28 @@ def test_low_entropy_severity_symmetric_across_both_hamming_bounds() -> None:
     assert _low_entropy_finding(low_distinct).severity == "warning"
 
 
+def test_low_entropy_severity_at_exact_hamming_boundary_is_still_warning() -> None:
+    """A weight exactly at LOW_HAMMING_MIN/MAX is not itself abnormal.
+
+    Guards ``<``/``>`` vs ``<=``/``>=`` in the severity check. Both
+    fixtures also trip the distinct-byte-count clause (so
+    ``is_low_entropy`` is still ``True`` overall), isolating the
+    severity-determining weight comparison at the exact boundary value
+    on its own.
+    """
+    at_min = bytes([0xFF] * (LOW_HAMMING_MIN // 8)) + bytes(32 - LOW_HAMMING_MIN // 8)
+    assert hamming_weight(at_min) == LOW_HAMMING_MIN
+    assert len(set(at_min)) < MIN_DISTINCT_BYTES
+    assert is_low_entropy(at_min) is True
+    assert _low_entropy_finding(at_min).severity == "warning"
+
+    at_max = bytes([0xFF] * (LOW_HAMMING_MAX // 8)) + bytes(32 - LOW_HAMMING_MAX // 8)
+    assert hamming_weight(at_max) == LOW_HAMMING_MAX
+    assert len(set(at_max)) < MIN_DISTINCT_BYTES
+    assert is_low_entropy(at_max) is True
+    assert _low_entropy_finding(at_max).severity == "warning"
+
+
 def test_clamping_check_default_off_and_explicit_on(keypair_factory) -> None:
     from meshprovision.crypto.keys import X25519_KEY_SIZE
 
@@ -367,6 +419,29 @@ def test_clamping_check_default_off_and_explicit_on(keypair_factory) -> None:
     )
 
 
+def test_check_clamping_default_is_off_when_omitted_at_every_entry_point() -> None:
+    """The default must actually be exercised by omission, not just by passing False.
+
+    ``check_clamping`` defaults to ``False`` on every public entry point
+    (module docstring); this only pins that when the keyword argument is
+    left out entirely, at all three of ``audit_private_key``,
+    ``audit_node``, and ``audit_keypair``.
+    """
+    from meshprovision.crypto.keys import X25519_KEY_SIZE
+
+    unclamped = bytes([0xFF] * X25519_KEY_SIZE)
+    other_public = bytes(X25519_KEY_SIZE)
+
+    private_result = audit_private_key(unclamped)
+    assert not any(f.check == WeakKeyCheck.UNCLAMPED for f in private_result.findings)
+
+    node_result = audit_node(private=unclamped)
+    assert not any(f.check == WeakKeyCheck.UNCLAMPED for f in node_result.findings)
+
+    keypair_result = audit_keypair(unclamped, other_public)
+    assert not any(f.check == WeakKeyCheck.UNCLAMPED for f in keypair_result.findings)
+
+
 # ---------------------------------------------------------------------------
 # Errors and files.
 # ---------------------------------------------------------------------------
@@ -376,6 +451,13 @@ def test_audit_public_key_wrong_length_raises() -> None:
     with pytest.raises(KeyMaterialError) as exc_info:
         audit_public_key(b"\x00" * 31)
     assert exc_info.value.expected_length == 32
+
+
+def test_audit_private_key_wrong_length_raises() -> None:
+    with pytest.raises(KeyMaterialError) as exc_info:
+        audit_private_key(b"\x00" * 16)
+    assert exc_info.value.expected_length == 32
+    assert exc_info.value.actual_length == 16
 
 
 def test_audit_node_without_keys_raises() -> None:
@@ -520,6 +602,26 @@ def test_default_known_bad_keys_path_falls_back_to_cwd_candidate(
 
     monkeypatch.setattr(Path, "exists", fake_exists)
     assert default_known_bad_keys_path() == cwd_candidate
+
+
+def test_default_known_bad_keys_path_falls_back_to_repo_root_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The repo-root candidate (a checkout run from source) must actually participate."""
+    monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
+    package_candidate, repo_candidate, cwd_candidate = _candidate_paths()
+    assert repo_candidate is not None
+    real_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == repo_candidate:
+            return True
+        if self in (package_candidate, cwd_candidate):
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    assert default_known_bad_keys_path() == repo_candidate
 
 
 def test_audit_result_api(keypair_factory) -> None:
