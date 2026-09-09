@@ -67,6 +67,54 @@ def test_clamp_produces_a_clamped_scalar_that_derives_the_same_public_key(
     assert clamp(clamped) == clamped
 
 
+def test_clamp_exact_output_bytes_on_genuinely_unclamped_input() -> None:
+    """Pin clamp()'s exact byte output against fixed, known-unclamped input.
+
+    A freshly generated keypair's private key is already clamped on this
+    environment's backend (OpenSSL-family), so a test that only checks
+    ``is_clamped(clamp(x))`` against real keys can pass even if the
+    masking logic is completely broken -- it never actually exercises
+    clamp() against anything requiring a real bit change.
+    """
+    all_ones = bytes([0xFF] * X25519_KEY_SIZE)
+    assert is_clamped(all_ones) is False
+    clamped = clamp(all_ones)
+    assert clamped == bytes([0xF8]) + bytes([0xFF] * 30) + bytes([0x7F])
+    assert is_clamped(clamped) is True
+
+    all_zeros = bytes(X25519_KEY_SIZE)
+    assert is_clamped(all_zeros) is False
+    clamped_zeros = clamp(all_zeros)
+    assert clamped_zeros == bytes(31) + bytes([0x40])
+    assert is_clamped(clamped_zeros) is True
+
+
+def test_is_clamped_requires_all_three_conditions_independently() -> None:
+    """Each RFC 7748 clamping condition is independently necessary.
+
+    Guards the ``and``/``or`` boundary between the three clauses: every
+    negative case here keeps two of the three conditions satisfied, so a
+    connector accidentally weakened to ``or`` would wrongly report the
+    scalar as clamped.
+    """
+    baseline = bytearray(X25519_KEY_SIZE)
+    baseline[0] = 0x00  # low 3 bits clear
+    baseline[31] = 0x40  # top bit clear, second-highest bit set
+    assert is_clamped(bytes(baseline)) is True
+
+    bad_low_bits = bytearray(baseline)
+    bad_low_bits[0] = 0x07  # violates "low 3 bits clear" only
+    assert is_clamped(bytes(bad_low_bits)) is False
+
+    bad_top_bit = bytearray(baseline)
+    bad_top_bit[31] = 0xC0  # violates "top bit clear" only (bit 6 stays set)
+    assert is_clamped(bytes(bad_top_bit)) is False
+
+    bad_second_bit = bytearray(baseline)
+    bad_second_bit[31] = 0x00  # violates "second-highest bit set" only
+    assert is_clamped(bytes(bad_second_bit)) is False
+
+
 @pytest.mark.parametrize(
     ("value", "reason"),
     [
