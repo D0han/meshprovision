@@ -30,7 +30,14 @@ pytestmark = pytest.mark.e2e
 
 _SECRET_KEY_NAMES = frozenset({"ble_pin", "key_ref"})
 _BASE64_KEY_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])")
-_SIX_DIGIT_RE = re.compile(r"(?<!\d)\d{6}(?!\d)")
+_SIX_DIGIT_RE = re.compile(r"(?<![\da-fA-F])\d{6}(?![\da-fA-F])")
+"""Matches a bare 6-digit run (a BLE PIN candidate).
+
+Excludes a digit run adjacent to a hex letter (not just another digit),
+so an 8-char ``sha256:`` fingerprint digest -- non-secret, deliberately
+printed -- is never mistaken for a PIN just because 6 of its 8
+hex characters happen to be ASCII digits.
+"""
 
 
 def _scan_document(value: object) -> None:
