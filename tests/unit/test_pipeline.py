@@ -19,6 +19,7 @@ from meshprovision.provisioning.pipeline import (
     allocate_names,
     audit_live_admin_keys,
     audit_node_key,
+    match_admin_key_refs,
     resolve_admin_keys,
     resolve_removed_admin_refs,
 )
@@ -111,6 +112,51 @@ def test_resolve_admin_keys_reports_a_private_key_mismatch(
     assert any("does not derive" in record.getMessage() for record in caplog.records)
 
 
+_ALIASED = b"\x11" * 32
+"""One public key deliberately filed under two Keys-sheet refs."""
+
+
+@pytest.mark.parametrize(
+    ("public_keys", "expected"),
+    [
+        pytest.param(
+            {"deadbe01_pub": _ALIASED, "zzz_pub": _ALIASED},
+            ("zzz_pub", "deadbe01_pub"),
+            id="human-label-outranks-node-id-shape",
+        ),
+        pytest.param(
+            {"deadbe01_pub": _ALIASED, "deadbe0_pub": _ALIASED},
+            ("deadbe0_pub", "deadbe01_pub"),
+            id="seven-hex-owner-is-not-node-id-shaped",
+        ),
+        pytest.param(
+            {"ZULU_pub": _ALIASED, "ALPHA_pub": _ALIASED},
+            ("ALPHA_pub", "ZULU_pub"),
+            id="two-labels-tie-broken-lexicographically",
+        ),
+        pytest.param(
+            {"ffffffff_pub": _ALIASED, "00000001_pub": _ALIASED},
+            ("00000001_pub", "ffffffff_pub"),
+            id="two-node-ids-tie-broken-lexicographically",
+        ),
+        pytest.param({"other_pub": b"\x22" * 32}, (), id="no-match"),
+    ],
+)
+def test_match_admin_key_refs_orders_refs_preferred_first(
+    public_keys: dict[str, bytes], expected: tuple[str, ...]
+) -> None:
+    """Regression test: PREFERRED order is not plain lexicographic order.
+
+    ``mesh admin bootstrap --ref LABEL`` files one key under both
+    ``<node_id>_pub`` and ``<LABEL>_pub``, and the first ref returned
+    here becomes the displayed/persisted ``preferred_ref``. The
+    human-labeled ref must win even when it sorts LAST lexicographically
+    (``"zzz_pub"`` after ``"deadbe01_pub"``), and refs within each group
+    must still fall back to lexicographic order.
+    """
+    assert match_admin_key_refs(_ALIASED, public_keys) == expected
+
+
 def _live_with_security(security: detect.LiveSecurity) -> detect.LiveConfig:
     return detect.LiveConfig(node_id=NodeId.from_hex("deadbe01"), security=security)
 
@@ -123,6 +169,37 @@ def test_audit_live_admin_keys_rejects_malformed_length_material() -> None:
     assert rejected == frozenset({b"too-short"})
 
 
+def test_audit_live_admin_keys_keeps_auditing_after_malformed_material(keypair: KeyPair) -> None:
+    """Regression test: a malformed key must not end the audit loop.
+
+    The malformed branch has to ``continue``, not ``break``: a device
+    reporting a junk admin key followed by a genuinely blocklisted one
+    would otherwise carry the blocklisted key straight through
+    ``mesh provision`` unflagged.
+    """
+    live = _live_with_security(detect.LiveSecurity(admin_keys=(b"too-short", keypair.public)))
+
+    rejected = audit_live_admin_keys(live, known_bad=frozenset({keypair.public}))
+
+    assert rejected == frozenset({b"too-short", keypair.public})
+
+
+def test_audit_live_admin_keys_uses_the_supplied_blocklist(keypair_factory) -> None:
+    """The caller-supplied ``known_bad`` is authoritative, not the on-disk blocklist.
+
+    ``mesh provision`` loads the blocklist once per run and threads it
+    through; silently reloading it here would both break that contract
+    and ignore an operator's in-memory additions.
+    """
+    listed, clean = keypair_factory(), keypair_factory()
+    live = _live_with_security(detect.LiveSecurity(admin_keys=(listed.public, clean.public)))
+
+    assert audit_live_admin_keys(live, known_bad=frozenset({listed.public})) == frozenset(
+        {listed.public}
+    )
+    assert audit_live_admin_keys(live, known_bad=frozenset()) == frozenset()
+
+
 def test_audit_node_key_malformed_private_key_is_reported_compromised(keypair: KeyPair) -> None:
     live = _live_with_security(
         detect.LiveSecurity(public_key=keypair.public, private_key=SecretBytes(b"too-short"))
@@ -132,6 +209,32 @@ def test_audit_node_key_malformed_private_key_is_reported_compromised(keypair: K
 
     assert compromised is True
     assert reason == "malformed key material"
+
+
+def test_audit_node_key_reports_a_blocklisted_device_keypair(keypair: KeyPair) -> None:
+    """The real audit path: well-formed material that is nonetheless blocklisted.
+
+    Distinct from the ``KeyMaterialError`` fallback above -- here
+    :func:`weakkeys.audit_node` actually runs, so the returned reason
+    must be the audit's own first critical finding.
+    """
+    live = _live_with_security(
+        detect.LiveSecurity(public_key=keypair.public, private_key=keypair.private)
+    )
+
+    compromised, reason = audit_node_key(live, known_bad=frozenset({keypair.public}))
+
+    assert compromised is True
+    assert reason != "malformed key material"
+    assert "blocklist" in reason
+
+
+def test_audit_node_key_accepts_a_clean_device_keypair(keypair: KeyPair) -> None:
+    live = _live_with_security(
+        detect.LiveSecurity(public_key=keypair.public, private_key=keypair.private)
+    )
+
+    assert audit_node_key(live, known_bad=frozenset()) == (False, "")
 
 
 _MAP = {"A_pub": b"a" * 32, "B_pub": b"b" * 32}
@@ -235,3 +338,30 @@ def test_allocate_names_finds_a_free_long_name_below_the_short_names_index(
 
     assert short == "MT05"
     assert long == "Meshtastic 02"
+
+
+def test_allocate_names_falls_back_when_the_long_pattern_cannot_render_the_short_index(
+    nodes: NodeRepository,
+) -> None:
+    """The ``NamespaceExhaustedError`` branch: mismatched short/long capacities.
+
+    ``MT{n}{n}`` over the alphabet ``"01"`` holds four names, ``L{n}``
+    only two, so once the first two short names are taken the shared
+    index (2) is outside the long pattern's namespace entirely and
+    ``long_spec.render(index)`` raises. The fallback must search the
+    long namespace independently from 0 rather than propagating the
+    error or handing back a short-index-derived name.
+    """
+    template = load_template_text(
+        'short_name_pattern: "MT{n}{n}"\n'
+        'long_name_pattern: "L{n}"\n'
+        'name_suffix_alphabet: "01"\n'
+        "name_min_capacity: 1\n"
+    )
+    nodes.upsert(NodeRecord(node_id="00000000", short_name="MT00"))
+    nodes.upsert(NodeRecord(node_id="00000001", short_name="MT01"))
+
+    short, long = allocate_names(nodes, template, existing=None, rename=False)
+
+    assert short == "MT10"
+    assert long == "L0"
