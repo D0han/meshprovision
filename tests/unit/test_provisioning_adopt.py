@@ -432,6 +432,32 @@ def test_adopted_record_skips_a_malformed_length_unregistered_key(
     assert record.unregistered_admin_key_materials() == (good_key,)
 
 
+def test_adopted_record_keeps_a_well_formed_key_reported_after_a_malformed_one(
+    make_live, template, keypair_factory
+) -> None:
+    """The malformed-key skip must continue the loop, never abandon it.
+
+    With the malformed key reported FIRST, a `break` regression in
+    adopted_record's unregistered-key loop would silently drop every
+    well-formed key the device reports after it. The warning assertion
+    pins the coupling that makes the silent skip acceptable at all:
+    build_adoption_report audits (and warns about) the very same key
+    adopted_record then drops, so the operator is never left with a key
+    that vanished without a word.
+    """
+    good_key = keypair_factory().public
+    live = make_live(template, security=make_security(admin_keys=(b"\x01\x02\x03", good_key)))
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+    assert len(report.admin_keys) == 2
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert record.unregistered_admin_key_materials() == (good_key,)
+    assert any("malformed key material" in w for w in report.warnings)
+
+
 def test_adopted_record_reuse_replaces_stale_unregistered_keys(
     make_live, template, keypair_factory
 ) -> None:

@@ -268,6 +268,42 @@ def test_diff_record_empty_recorded_value_is_never_drift(make_live) -> None:
     assert (repair.DriftKind.HARDWARE, "hw_model") not in names
 
 
+@pytest.mark.parametrize(
+    ("live_kwargs", "record_kwargs"),
+    [
+        pytest.param(
+            {"long_name": "Custom Long Name"}, {"long_name": "Custom Long Name"}, id="long_name"
+        ),
+        pytest.param({"hw_model": "RAK4631"}, {"hw_model": "RAK4631"}, id="hw_model"),
+        pytest.param(
+            {"firmware_version": "2.7.12"}, {"firmware_version": "2.7.12"}, id="firmware_version"
+        ),
+        pytest.param(
+            {"section_overrides": {"device": {"role": "ROUTER"}}}, {"role": "ROUTER"}, id="role"
+        ),
+    ],
+)
+def test_diff_record_recorded_value_equal_to_live_is_never_drift(
+    make_live, live_kwargs, record_kwargs
+) -> None:
+    """An already-correct node must report no drift at all.
+
+    Distinct from the empty-recorded case above: here the ODS *does*
+    carry a value for the field and it matches the device exactly. A
+    regression at one of these call sites would make `mesh provision`
+    report drift on every run against a node that is already correct --
+    false-positive noise on a trust-relevant feature. One case per field
+    so a single regressed call site is named, not just detected.
+    """
+    from meshprovision.config.template import load_template_text
+
+    template = load_template_text("version: 1\n")
+    live = make_live(template, **live_kwargs)
+    record = NodeRecord(node_id="deadbe01", **record_kwargs)
+
+    assert repair.diff_record(live, record) == ()
+
+
 def test_diff_record_name_hardware_firmware_role_region_drift(make_live) -> None:
     from meshprovision.config.template import load_template_text
 

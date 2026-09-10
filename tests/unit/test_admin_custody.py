@@ -16,6 +16,7 @@ from meshprovision.config.template import load_template_text
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
+from meshprovision.db.schema import KeyType
 from meshprovision.provisioning.admin_custody import collect_admins
 
 if TYPE_CHECKING:
@@ -114,6 +115,34 @@ def test_collect_admins_does_not_double_count_a_template_admin_via_fleet_discove
     matches = [s for s in summaries if s.ref == "ADMIN1"]
     assert len(matches) == 1
     assert matches[0].in_template is True
+
+
+def test_collect_admins_keeps_discovering_after_skipping_a_template_admin(
+    nodes: NodeRepository, keys: KeyRepository, template, keypair_factory
+) -> None:
+    """The template-admin dedup skip must continue the loop, never abandon it.
+
+    With a template-configured admin key enumerated BEFORE a fleet-only
+    ("extra") one, a `break` regression in the fleet-discovery loop would
+    silently truncate `mesh admin list`'s "who has admin access" audit,
+    hiding every extra admin discovered after the first template hit. The
+    single-key dedup test above cannot tell `continue` and `break` apart.
+    """
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    nodes.upsert(NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub", "EXTRA1_pub")))
+    admin_pub, _ = KeyRecord.for_keypair("ADMIN1", keypair_factory())
+    extra_pub, _ = KeyRecord.for_keypair("EXTRA1", keypair_factory())
+    keys.upsert(admin_pub)
+    keys.upsert(extra_pub)
+    enumerated = [record.key_ref for record in keys.of_type(KeyType.ADMIN_PUBLIC)]
+    assert enumerated.index("ADMIN1_pub") < enumerated.index("EXTRA1_pub")
+
+    summaries = collect_admins(nodes, keys, template2, known_bad=frozenset())
+
+    by_ref = {s.ref: s for s in summaries}
+    assert by_ref["ADMIN1"].in_template is True
+    assert by_ref["EXTRA1"].in_template is False
+    assert by_ref["EXTRA1"].authorized_on == ("deadbe01",)
 
 
 def test_collect_admins_resolves_node_id_from_ref_alone_with_no_key_present(
