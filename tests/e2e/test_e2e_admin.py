@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.crypto import weakkeys
-from meshprovision.crypto.keys import generate_keypair
+from meshprovision.crypto.keys import encode_key, generate_keypair
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
@@ -295,12 +295,19 @@ def test_admin_import_malformed_assignment_missing_equals(
     assert "ADMIN9" in result.stderr
 
 
+@pytest.mark.parametrize("suffix", ["_pub", "_priv", "_psk"])
 def test_admin_import_ref_with_reserved_suffix_is_rejected(
-    runner: CliRunner, env: dict[str, str]
+    runner: CliRunner, env: dict[str, str], suffix: str
 ) -> None:
+    """All three reserved suffixes are rejected, not just ``_pub``.
+
+    meshprovision appends each of these itself when resolving Keys sheet
+    rows, so an operator ref ending in any of them would collide.
+    """
     kp = generate_keypair()
-    result = invoke(runner, ["admin", "import", f"ADMIN9_pub={kp.public_b64}"], env)
+    result = invoke(runner, ["admin", "import", f"ADMIN9{suffix}={kp.public_b64}"], env)
     assert result.exit_code == 2
+    assert suffix in result.stderr
     assert not _BASE64_KEY_RE.search(result.stderr)
 
 
@@ -334,6 +341,40 @@ def test_admin_import_multiple_assignments_reports_registered_and_skipped(
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     rows = {row["key_ref"] for row in loaded.keys}
     assert {"ADMIN_A_pub", "ADMIN_B_pub"} <= rows
+
+
+def test_admin_import_clears_the_key_from_every_nodes_unregistered_list(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """Registering a key must not leave it recorded as unregistered elsewhere.
+
+    ``mesh adopt`` records an admin key it cannot resolve to a ref onto
+    the adopting node. Importing that same material under a ref makes the
+    field stale, so ``mesh adopt``'s duplicate warning would keep calling
+    a registered key "unregistered" until the node is re-adopted.
+    """
+    adopted_kp = generate_keypair()
+    other_kp = generate_keypair()
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="cafe0001",
+                unregistered_admin_keys=(
+                    encode_key(adopted_kp.public),
+                    encode_key(other_kp.public),
+                ),
+            ),
+            NodeRecord(node_id="cafe0002", unregistered_admin_keys=(encode_key(other_kp.public),)),
+        ]
+    )
+
+    result = invoke(runner, ["admin", "import", f"FRIEND={adopted_kp.public_b64}"], env)
+    assert result.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = {row["node_id"]: NodeRecord.from_row(row) for row in loaded.nodes}
+    assert nodes["cafe0001"].unregistered_admin_key_materials() == (other_kp.public,)
+    assert nodes["cafe0002"].unregistered_admin_key_materials() == (other_kp.public,)
 
 
 def test_admin_list_table_shows_the_weak_key_audit_result(

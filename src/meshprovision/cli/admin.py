@@ -48,6 +48,7 @@ from meshprovision.provisioning.admin_custody import build_admin_table, collect_
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
+    from meshprovision.db.nodes import NodeRepository
 
 __all__ = [
     "admin",
@@ -80,6 +81,34 @@ def _validate_admin_ref(ref: str) -> None:
             f"Admin reference {ref!r} must not end in '_pub', '_priv', or '_psk'.",
             hint="meshprovision appends these suffixes itself when resolving Keys sheet rows.",
         )
+
+
+def _drop_now_registered_key(db_nodes: NodeRepository, material: bytes) -> None:
+    """Clear a just-registered key from every node's ``unregistered_admin_keys``.
+
+    ``mesh adopt`` persists an admin key it could not resolve to a ``Keys``
+    sheet ref onto the adopting node's ``unregistered_admin_keys``. Once
+    ``mesh admin import`` files that same material under a ref, the field
+    is stale, and :func:`meshprovision.cli.adopt._duplicate_admin_key_warnings`
+    would describe the key as "unregistered" until the node is re-adopted.
+    Mutates the in-memory session only; the caller owns the transaction.
+
+    Args:
+        db_nodes: The open :class:`~meshprovision.db.nodes.NodeRepository`.
+        material: The raw public key that was just registered.
+    """
+    for node in db_nodes.all():
+        kept = tuple(
+            encoded
+            for encoded, raw in zip(
+                node.unregistered_admin_keys,
+                node.unregistered_admin_key_materials(),
+                strict=True,
+            )
+            if raw != material
+        )
+        if len(kept) != len(node.unregistered_admin_keys):
+            db_nodes.upsert(node.with_updates(unregistered_admin_keys=kept))
 
 
 def parse_assignment(raw: str) -> tuple[str, str]:
@@ -286,7 +315,9 @@ def admin_import(
     Never touches a device. Validates key length and canonical base64
     encoding, runs the weak-key audit, and refuses a duplicate public key
     already registered under a different reference, unless ``--force`` is
-    passed.
+    passed. Registering a key also drops it from every node's
+    ``unregistered_admin_keys`` (see :func:`_drop_now_registered_key`),
+    which ``mesh adopt`` records for keys it could not resolve to a ref.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
@@ -358,6 +389,7 @@ def admin_import(
                     ref, KeyType.ADMIN_PUBLIC, material, created_ts=datetime.now(tz=UTC)
                 )
             )
+            _drop_now_registered_key(db.nodes, material)
             registered.append(
                 {"ref": ref, "key_ref": key_ref, "fingerprint": redact.fingerprint(material)}
             )

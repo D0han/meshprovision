@@ -129,6 +129,83 @@ def test_ble_via_scan(
     assert bus.connections == [("ble", "AA:BB:CC:DD:EE:FF")]
 
 
+def test_ble_scan_with_multiple_devices_prompts_the_chooser(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    fake_ble_devices: Callable[..., None],
+) -> None:
+    """``--ble-scan`` keeps ambiguity interactive, unlike ``--interface ble``.
+
+    Exercises ``resolve_backend``'s ``chooser=ctx.chooser`` passthrough on
+    the ``--ble-scan`` branch: dropping it would turn this prompt into a
+    NonInteractiveError hard failure.
+    """
+    fake_ble_devices("AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02")
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(
+        runner,
+        ["--interactive", "provision", "--ble-scan", "--yes", "--dry-run"],
+        env,
+        input="2\n",
+    )
+
+    assert result.exit_code == 0
+    assert bus.connections == [("ble", "AA:BB:CC:DD:EE:02")]
+    assert "AA:BB:CC:DD:EE:01" in result.stderr
+
+
+def test_zero_port_fallback_ble_scan_with_multiple_devices_prompts_the_chooser(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    fake_serial_ports: Callable[..., None],
+    fake_ble_devices: Callable[..., None],
+) -> None:
+    """The auto fallback's BLE scan is interactive too, not just its yes/no prompt.
+
+    Covers ``resolve_backend``'s ``chooser=ctx.chooser`` passthrough on the
+    ``scanned_ble`` branch: the first input accepts the scan, the second
+    picks among the devices it found.
+    """
+    fake_ble_devices("AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02")
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(
+        runner,
+        ["--interactive", "provision", "--yes", "--dry-run"],
+        env,
+        input="y\n2\n",
+    )
+
+    assert result.exit_code == 0
+    assert bus.connections == [("ble", "AA:BB:CC:DD:EE:02")]
+
+
+def test_ble_scan_finding_nothing_reports_no_ble_device_found(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    fake_ble_devices: Callable[..., None],
+) -> None:
+    """An empty ``--ble-scan`` must fail as a BLE miss, not fall through to auto.
+
+    Pins the direction of ``resolve_backend``'s ``if not ble_devices:``
+    guard: inverting it would let an empty scan reach the auto selector
+    and report the generic "No serial or BLE device found." instead, with
+    the wrong hints.
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--ble-scan", "--yes", "--dry-run"], env)
+
+    assert result.exit_code == 5
+    assert "No BLE device found." in result.stderr
+    assert "--ble-address" in result.stderr
+    assert bus.connections == []
+
+
 def test_tcp_explicit_host(runner: CliRunner, env: dict[str, str], bus: DeviceBus) -> None:
     bus.use(FakeMeshInterface("deadbe01"))
     result = invoke(runner, ["provision", "--host", "10.0.0.5:4404", "--yes", "--dry-run"], env)

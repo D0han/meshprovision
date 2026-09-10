@@ -185,6 +185,54 @@ def test_declining_the_apply_prompt_aborts_before_any_write(
     assert db_fingerprint(db_path) == before
 
 
+_CLI_FOREIGN_WARNING = "This node is not in the database and does not look factory-default"
+"""``run_provision``'s own pre-confirmation FOREIGN warning.
+
+Deliberately matched on the CLI's exact wording rather than the shared
+"may belong to someone else" tail: ``plan.build_plan`` emits its own
+FOREIGN_NODE plan warning ending in that same phrase, so the looser
+substring is satisfied by the plan warning alone and would pass even
+with ``run_provision``'s check inverted.
+"""
+
+
+def test_foreign_node_is_flagged_as_possibly_belonging_to_someone_else(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """A customized device we have never seen must be called out before any write.
+
+    ``detect.classify`` returns FOREIGN for a device that is absent from
+    the database and whose names are not factory-default. ``run_provision``
+    owes the operator this warning immediately before the apply
+    confirmation -- the one safety net against provisioning a stranger's
+    radio.
+    """
+    bus.use(FakeMeshInterface("deadbe01", short_name="XR7", long_name="Someone Elses Radio"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "FOREIGN" in result.stderr
+    assert _CLI_FOREIGN_WARNING in result.stderr
+
+
+def test_factory_node_is_not_flagged_as_possibly_belonging_to_someone_else(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """The FOREIGN warning must not fire for a factory-default device.
+
+    Pins the direction of the check: an inverted condition would warn
+    about every factory node instead, training operators to ignore it.
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "FACTORY" in result.stderr
+    assert _CLI_FOREIGN_WARNING not in result.stderr
+
+
 def test_zero_admin_keys_is_a_valid_outcome_never_repaired(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

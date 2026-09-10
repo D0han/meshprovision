@@ -172,6 +172,33 @@ def test_show_admin_keys_never_crashes_on_a_malformed_length_admin_key(
     assert "mesh admin import" not in result.stderr
 
 
+def test_show_admin_keys_degrades_per_key_not_for_the_whole_report(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """A malformed key must not suppress the import command for the keys after it.
+
+    ``_render_admin_key_lines`` promises degrading *per key*: the
+    malformed key is reported as unrenderable and the loop continues. A
+    ``continue``-to-``break`` regression would truncate the paste-ready
+    import commands for every subsequent unregistered key, which is
+    exactly what ``--show-admin-keys`` exists to produce.
+    """
+    good_kp = keypair_factory()
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(b"\x01\x02\x03")
+    iface.localNode.localConfig.security.admin_key.append(good_kp.public)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--show-admin-keys"], env)
+
+    assert result.exit_code == 0
+    assert "cannot render an import command" in result.stderr
+    assert "mesh admin import" in result.stderr
+    assert base64.b64encode(good_kp.public).decode("ascii") in result.stderr
+
+
 def test_adopt_recognizes_a_pre_imported_friends_admin_key(
     runner: CliRunner,
     env: dict[str, str],
@@ -438,6 +465,86 @@ def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
     assert duplicates[0]["severity"] == "critical"
     assert duplicates[0]["ref"] == "cafe0001,deadbe01"
     assert "CVE-2025-52464" in duplicates[0]["message"]
+
+
+def test_duplicate_name_check_skips_self_without_skipping_the_nodes_after_it(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    """Re-adopting must skip only the node's own row, never stop the scan there.
+
+    ``NodeRepository.all()`` returns rows in sheet order, so the live
+    node's own record (recorded by a previous adopt) is seeded *before*
+    the genuinely colliding node. A ``continue``-to-``break`` regression
+    in the self-skip guard would stop the cross-fleet check at the live
+    node's own row and silently miss ``cafe0001`` entirely.
+    """
+    seed_db(
+        nodes=[
+            NodeRecord(node_id="aaaa0001", short_name="ZZ01", long_name="Zeroth Node"),
+            NodeRecord(
+                node_id="deadbe01",
+                management=ManagementMode.OBSERVED,
+                short_name="AB01",
+                long_name="Adopted Node 01",
+            ),
+            NodeRecord(node_id="cafe0001", short_name="AB01", long_name="Adopted Node 01"),
+        ]
+    )
+    bus.use(FakeMeshInterface("deadbe01", short_name="AB01", long_name="Adopted Node 01"))
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    assert result.exit_code == 0
+    warnings = json.loads(result.stdout)["warnings"]
+    assert any("short_name 'AB01'" in w and "cafe0001" in w for w in warnings)
+    assert any("long_name 'Adopted Node 01'" in w and "cafe0001" in w for w in warnings)
+    assert not any("deadbe01" in w for w in warnings)
+
+
+def test_duplicate_admin_key_check_skips_self_without_skipping_the_nodes_after_it(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """The CVE-2025-52464 cross-fleet check must survive the live node's own row.
+
+    Same ordering trap as the name check: the live node's own record sits
+    in the middle of the sheet, so a ``continue``-to-``break`` regression
+    in the self-skip guard would never reach the cloned key on
+    ``cafe0001``.
+    """
+    cloned_kp = keypair_factory()
+    unrelated_kp = keypair_factory()
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="aaaa0001",
+                unregistered_admin_keys=(encode_key(unrelated_kp.public),),
+            ),
+            NodeRecord(
+                node_id="deadbe01",
+                management=ManagementMode.OBSERVED,
+                unregistered_admin_keys=(encode_key(cloned_kp.public),),
+            ),
+            NodeRecord(
+                node_id="cafe0001",
+                unregistered_admin_keys=(encode_key(cloned_kp.public),),
+            ),
+        ]
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(cloned_kp.public)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    assert result.exit_code == 0
+    warnings = json.loads(result.stdout)["warnings"]
+    clone_warnings = [w for w in warnings if "CVE-2025-52464" in w]
+    assert len(clone_warnings) == 1
+    assert "cafe0001" in clone_warnings[0]
+    assert not any("deadbe01" in w for w in clone_warnings)
 
 
 def test_adopt_does_not_warn_about_its_own_previously_persisted_fingerprint(
