@@ -29,7 +29,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from meshprovision.config.template import admin_public_key_ref
-from meshprovision.crypto import weakkeys
+from meshprovision.crypto import redact, weakkeys
 from meshprovision.db.ods import IntegrityWarningKind
 from meshprovision.db.schema import KeyType
 from meshprovision.errors import ExitCode, KeyMaterialError, WeakKeySeverity
@@ -240,6 +240,16 @@ def verify_database(
     keyed by its sorted member tuple, so a two-member group never
     produces two lines.
 
+    That ``Keys``-sheet pass is blind to admin keys ``mesh adopt``
+    observed live but that were never imported, so a second pass folds
+    every node's :meth:`~meshprovision.db.nodes.NodeRecord
+    .unregistered_admin_key_materials` into the comparison -- the same
+    two-tier check :func:`meshprovision.cli.adopt.
+    _duplicate_admin_key_warnings` performs at adopt time for one
+    device, here run fleet-wide. Without it the exact CVE-2025-52464
+    scenario of two cloned devices *neither* of which was ever imported
+    is invisible to ``mesh db verify``.
+
     Args:
         path: Path to the database file being verified.
         warnings: Integrity warnings collected while loading the
@@ -273,6 +283,7 @@ def verify_database(
         *_check_weak_keys(keys, known_bad),
         *_check_admin_key_mismatch(keys),
         *_check_duplicate_keys(keys),
+        *_check_unregistered_duplicate_keys(nodes, keys),
     ]
 
     return VerifyReport(
@@ -513,4 +524,85 @@ def _check_duplicate_keys(keys: KeyRepository) -> list[DbProblem]:
                     ref=",".join(group),
                 )
             )
+    return problems
+
+
+def _check_unregistered_duplicate_keys(
+    nodes: NodeRepository, keys: KeyRepository
+) -> list[DbProblem]:
+    """Detect cross-fleet duplicates involving never-imported admin keys.
+
+    :func:`_check_duplicate_keys` only ever compares ``Keys`` sheet rows,
+    so a cloned admin key that ``mesh adopt`` observed but nobody ran
+    ``mesh admin import`` on is invisible to it. Two exact raw-material
+    comparison tiers per node pair, mirroring :func:`meshprovision.cli.
+    adopt._duplicate_admin_key_warnings`'s own tiers (and its
+    ``elif`` precedence, so a key that is both registered on the other
+    node and unregistered on it reports the registered tier only), with
+    distinct wording per tier so an operator can tell which fired:
+
+    - One node's unregistered key against another node's *registered*
+      ``authorized_admin_keys`` material.
+    - One node's unregistered key against another node's own
+      *unregistered* keys -- the "two never-imported cloned devices"
+      case neither this module's ``Keys``-sheet pass nor a single
+      device's adopt-time audit can see.
+
+    Args:
+        nodes: The already-open node repository.
+        keys: The already-open key repository.
+
+    Returns:
+        One CRITICAL :class:`DbProblem` per (node pair, tier, key), so a
+        symmetric unregistered-vs-unregistered match reports once, not
+        once per direction.
+    """
+    public_keys = keys.public_key_map()
+    records = nodes.all()
+    problems: list[DbProblem] = []
+    seen: set[tuple[str, ...]] = set()
+    for record in records:
+        materials = record.unregistered_admin_key_materials()
+        if not materials:
+            continue
+        for other in records:
+            if other.node_id == record.node_id:
+                continue
+            other_registered = [
+                public_keys[ref] for ref in other.authorized_admin_keys if ref in public_keys
+            ]
+            other_unregistered = other.unregistered_admin_key_materials()
+            for material in materials:
+                fingerprint = redact.fingerprint(material)
+                if any(material == candidate for candidate in other_registered):
+                    tier = "registered"
+                    message = (
+                        f"Unregistered admin key {fingerprint} observed on node "
+                        f"{record.node_id} is also a registered admin key authorized on node "
+                        f"{other.node_id} -- the CVE-2025-52464 vendor key-cloning signature."
+                    )
+                elif any(material == candidate for candidate in other_unregistered):
+                    tier = "unregistered"
+                    message = (
+                        f"Unregistered admin key {fingerprint} was observed on both node "
+                        f"{record.node_id} and node {other.node_id} and imported for neither "
+                        "-- the CVE-2025-52464 vendor key-cloning signature between two "
+                        "never-imported devices."
+                    )
+                else:
+                    continue
+                pair = tuple(sorted((record.node_id, other.node_id)))
+                marker = (*pair, tier, fingerprint)
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                problems.append(
+                    DbProblem(
+                        kind=DbProblemKind.DUPLICATE_PUBLIC_KEY,
+                        severity=ProblemSeverity.CRITICAL,
+                        message=message,
+                        sheet="Nodes",
+                        ref=",".join(pair),
+                    )
+                )
     return problems

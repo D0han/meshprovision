@@ -428,6 +428,17 @@ def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
     document = json.loads(result.stdout)
     assert any("cafe0001" in w and "CVE-2025-52464" in w for w in document["warnings"])
 
+    # The same clone must also be visible to the fleet-wide audit, not only
+    # to the one adopt run that happened to see the second device.
+    verify_result = invoke(runner, ["db", "verify", "--json"], env)
+    verify_doc = json.loads(verify_result.stdout)
+    assert verify_result.exit_code == int(ExitCode.CRYPTO)
+    duplicates = [p for p in verify_doc["problems"] if p["kind"] == "duplicate_public_key"]
+    assert len(duplicates) == 1
+    assert duplicates[0]["severity"] == "critical"
+    assert duplicates[0]["ref"] == "cafe0001,deadbe01"
+    assert "CVE-2025-52464" in duplicates[0]["message"]
+
 
 def test_adopt_does_not_warn_about_its_own_previously_persisted_fingerprint(
     runner: CliRunner,
@@ -481,7 +492,11 @@ _FLEET_SPECS: tuple[_FleetSpec, ...] = (
     _FleetSpec("10000003", "RTR3", "East Ridge Repeater", "2.7.11", "a", False),
     _FleetSpec("10000004", "MT04", "Meshtastic MT04", "2.4.0", None, True),
     _FleetSpec("10000005", "GW05", "Garage Gateway", "2.5.0", "b", False),
-    _FleetSpec("10000006", "MT06", "Meshtastic MT06", "2.6.10", "b", True),
+    # Every unregistered admin key in this fleet is distinct on purpose:
+    # a key shared by two nodes and imported for neither is the
+    # CVE-2025-52464 clone signature `mesh db verify` now reports as
+    # critical, which this test asserts the fleet is free of.
+    _FleetSpec("10000006", "MT06", "Meshtastic MT06", "2.6.10", "d", True),
     _FleetSpec("20000abc", "HM", "", "2.6.11", None, False),
     _FleetSpec("20000def", "MT08", "Meshtastic MT08", "2.7.5", "a", True),
     _FleetSpec("30001111", "NODE9", "Backyard Sensor Node", "2.3.11", "c", False),
@@ -502,7 +517,8 @@ def test_fleet_adopt_heterogeneous_batch(
     kp_a = keypair_factory()
     kp_b = keypair_factory()
     kp_c = keypair_factory()
-    key_lookup = {"a": kp_a.public, "b": kp_b.public, "c": kp_c.public}
+    kp_d = keypair_factory()
+    key_lookup = {"a": kp_a.public, "b": kp_b.public, "c": kp_c.public, "d": kp_d.public}
 
     pub_a, priv_a = KeyRecord.for_keypair("FRIENDA", kp_a)
     seed_db(nodes=[], keys=[pub_a, priv_a])
