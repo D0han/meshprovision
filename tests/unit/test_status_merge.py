@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 
@@ -16,6 +16,8 @@ from meshprovision.status.merge import (
     SOURCE_PRIORITY,
     Availability,
     Thresholds,
+    _isoformat_z,
+    _order_by_recency,
     classify_age,
     humanize_age,
     merge_all,
@@ -32,6 +34,12 @@ pytestmark = pytest.mark.unit
 
 NID = NodeId.from_hex("deadbe01")
 NOW = datetime(2026, 8, 25, 12, 0, 0, tzinfo=UTC)
+
+# A timestamp whose offset is neither UTC nor this machine's local zone, so
+# that a dropped ``.astimezone(UTC)`` is observable in the rendered string
+# instead of being masked by the test host's own timezone.
+OFFSET_TIMESTAMP = datetime(2026, 8, 25, 8, 14, 10, tzinfo=timezone(timedelta(hours=5)))
+OFFSET_TIMESTAMP_Z = "2026-08-25T03:14:10Z"
 
 
 def _obs(source: str, **kwargs) -> NodeObservation:  # noqa: ANN003
@@ -105,6 +113,7 @@ def test_classify_age_boundaries() -> None:
     [
         (None, "never"),
         (-5, "in the future"),
+        (0, "just now"),
         (59, "just now"),
         (60, "1 minute ago"),
         (3599, "59 minutes ago"),
@@ -174,9 +183,232 @@ def test_merge_all_preserves_caller_order_never_re_sorts() -> None:
     assert [m.node_id for m in merged] == [nid_b, nid_a]
 
 
+def test_merge_all_tolerates_an_entirely_absent_source_key() -> None:
+    """A source key missing from the mapping must not drop the later sources.
+
+    Covers both ways a source can contribute nothing: the higher-priority
+    ``loranet`` key is absent altogether, and ``emptysource`` is present
+    but has no entry for this node. Neither may stop the scan, so every
+    remaining source -- including an unrecognized extra one -- is still
+    gathered.
+    """
+    lorastats_obs = _obs(SOURCE_LORASTATS, last_seen=NOW - timedelta(minutes=3))
+    extra_obs = _obs("othersource", battery_level=64)
+
+    merged = merge_all(
+        {
+            SOURCE_LORASTATS: {NID: lorastats_obs},
+            "emptysource": {},
+            "othersource": {NID: extra_obs},
+        },
+        node_ids=[NID],
+        now=NOW,
+    )
+
+    assert merged[0].sources == (SOURCE_LORASTATS, "othersource")
+    assert merged[0].last_seen == NOW - timedelta(minutes=3)
+    assert merged[0].battery_level == 64
+
+
+def test_merge_all_passes_custom_thresholds_through() -> None:
+    """The ``thresholds`` argument must reach ``merge_observations``.
+
+    The node below is ``ONLINE`` under the default thresholds and
+    ``STALE`` under the custom ones, so a dropped passthrough that falls
+    back to the default is visible in the classification.
+    """
+    obs = _obs(SOURCE_LORANET, last_seen=NOW - timedelta(minutes=30))
+    thresholds = Thresholds(stale_after=timedelta(minutes=1), offline_after=timedelta(hours=1))
+
+    default_merged = merge_all({SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW)
+    custom_merged = merge_all(
+        {SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW, thresholds=thresholds
+    )
+
+    assert default_merged[0].availability is Availability.ONLINE
+    assert custom_merged[0].availability is Availability.STALE
+
+
 def test_merge_observations_requires_timezone_aware_now() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
         merge_observations(NID, [], now=datetime(2026, 1, 1))  # noqa: DTZ001
+
+
+def test_merge_observations_carries_every_field_through() -> None:
+    """Every ``MergedNode`` field must be wired from the winning observation.
+
+    Guards the final ``MergedNode(...)`` construction as a whole: a
+    regression that drops any single field back to its ``None`` default
+    is silent everywhere else, because a merged node with one missing
+    field still renders and still serializes.
+    """
+    last_seen = NOW - timedelta(minutes=30)
+    loranet_obs = _obs(
+        SOURCE_LORANET,
+        last_seen=last_seen,
+        short_name="LNET",
+        long_name="Loranet Long Name",
+        hw_model="HELTEC_V3",
+        role="ROUTER",
+        region="EU_868",
+        firmware_version="2.7.11",
+        latitude=52.2297,
+        longitude=21.0122,
+        altitude=113,
+        battery_level=77,
+        voltage=4.05,
+        channel_utilization=12.5,
+        air_util_tx=3.25,
+        neighbor_count=6,
+        uptime_seconds=98765,
+    )
+    lorastats_obs = _obs(
+        SOURCE_LORASTATS,
+        last_seen=NOW - timedelta(hours=6),
+        short_name="LSTA",
+        long_name="Lorastats Long Name",
+        hw_model="TBEAM",
+        role="CLIENT",
+        region="US",
+        firmware_version="2.6.0",
+        latitude=50.0619,
+        longitude=19.9369,
+        altitude=219,
+        battery_level=41,
+        voltage=3.71,
+        channel_utilization=44.5,
+        air_util_tx=9.75,
+        neighbor_count=2,
+        uptime_seconds=12345,
+    )
+    record = NodeRecord(node_id="deadbe01")
+
+    merged = merge_observations(NID, [lorastats_obs, loranet_obs], record=record, now=NOW)
+
+    assert merged.node_id == NID
+    assert merged.record is record
+    assert merged.sources == (SOURCE_LORANET, SOURCE_LORASTATS)
+    assert merged.short_name == "LNET"
+    assert merged.long_name == "Loranet Long Name"
+    assert merged.hw_model == "HELTEC_V3"
+    assert merged.role == "ROUTER"
+    assert merged.region == "EU_868"
+    assert merged.firmware_version == "2.7.11"
+    assert merged.latitude == 52.2297
+    assert merged.longitude == 21.0122
+    assert merged.altitude == 113
+    assert merged.battery_level == 77
+    assert merged.voltage == 4.05
+    assert merged.channel_utilization == 12.5
+    assert merged.air_util_tx == 3.25
+    assert merged.neighbor_count == 6
+    assert merged.uptime_seconds == 98765
+    assert merged.last_seen == last_seen
+    assert merged.last_seen_source == SOURCE_LORANET
+    assert merged.age == timedelta(minutes=30)
+    assert merged.age_text == "30 minutes ago"
+    assert merged.availability is Availability.ONLINE
+
+
+def test_more_recent_observation_wins_for_identity_fields() -> None:
+    """A renamed node shows its newest name, even from a lower-priority source.
+
+    This is the module docstring's headline example: identity fields
+    resolve in *recency* order, not :data:`SOURCE_PRIORITY` order, while
+    telemetry fields still resolve by priority.
+    """
+    stale_loranet = _obs(
+        SOURCE_LORANET,
+        last_seen=NOW - timedelta(hours=8),
+        short_name="OLD_",
+        long_name="Old Name",
+        battery_level=11,
+    )
+    fresh_lorastats = _obs(
+        SOURCE_LORASTATS,
+        last_seen=NOW - timedelta(minutes=1),
+        short_name="NEW_",
+        long_name="New Name",
+        battery_level=22,
+    )
+
+    merged = merge_observations(NID, [stale_loranet, fresh_lorastats], now=NOW)
+
+    assert merged.short_name == "NEW_"
+    assert merged.long_name == "New Name"
+    assert merged.battery_level == 11
+
+
+def test_order_by_recency_is_most_recent_first_with_none_last() -> None:
+    oldest = _obs(SOURCE_LORANET, last_seen=NOW - timedelta(hours=5), short_name="old_")
+    never = _obs(SOURCE_LORANET, last_seen=None, short_name="none")
+    newest = _obs(SOURCE_LORASTATS, last_seen=NOW - timedelta(minutes=1), short_name="new_")
+
+    ordered = _order_by_recency([oldest, never, newest])
+
+    assert [obs.short_name for obs in ordered] == ["new_", "old_", "none"]
+
+
+def test_identity_fields_skip_an_observation_without_last_seen() -> None:
+    """An observation with no ``last_seen`` must not outrank a dated one."""
+    undated_loranet = _obs(SOURCE_LORANET, last_seen=None, short_name="NULL")
+    dated = _obs(SOURCE_LORASTATS, last_seen=NOW - timedelta(hours=3), short_name="SEEN")
+
+    merged = merge_observations(NID, [undated_loranet, dated], now=NOW)
+
+    assert merged.short_name == "SEEN"
+
+
+def test_last_seen_falls_through_a_higher_priority_source_that_has_none() -> None:
+    """A missing ``last_seen`` on loranet must not abandon the whole scan."""
+    loranet_obs = _obs(SOURCE_LORANET, last_seen=None, battery_level=50)
+    lorastats_obs = _obs(SOURCE_LORASTATS, last_seen=NOW - timedelta(minutes=10))
+
+    merged = merge_observations(NID, [loranet_obs, lorastats_obs], now=NOW)
+
+    assert merged.last_seen == NOW - timedelta(minutes=10)
+    assert merged.last_seen_source == SOURCE_LORASTATS
+    assert merged.availability is Availability.ONLINE
+    assert merged.age_text == "10 minutes ago"
+
+
+def test_last_seen_exact_tie_goes_to_the_higher_priority_source() -> None:
+    tied = NOW - timedelta(minutes=7)
+    loranet_obs = _obs(SOURCE_LORANET, last_seen=tied)
+    lorastats_obs = _obs(SOURCE_LORASTATS, last_seen=tied)
+
+    merged = merge_observations(NID, [lorastats_obs, loranet_obs], now=NOW)
+
+    assert merged.last_seen == tied
+    assert merged.last_seen_source == SOURCE_LORANET
+
+
+def test_observed_node_that_no_source_has_ever_dated() -> None:
+    """Observed but with no ``last_seen`` anywhere is ``UNKNOWN``, not ``ONLINE``."""
+    loranet_obs = _obs(SOURCE_LORANET, last_seen=None, battery_level=50)
+    lorastats_obs = _obs(SOURCE_LORASTATS, last_seen=None, short_name="abcd")
+
+    merged = merge_observations(NID, [loranet_obs, lorastats_obs], now=NOW)
+
+    assert merged.last_seen is None
+    assert merged.last_seen_source is None
+    assert merged.age is None
+    assert merged.age_text == "never"
+    assert merged.availability is Availability.UNKNOWN
+    assert merged.observed is True
+    assert merged.battery_level == 50
+    assert merged.short_name == "abcd"
+
+
+def test_isoformat_z_normalizes_a_non_utc_offset() -> None:
+    assert _isoformat_z(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_Z
+    assert _isoformat_z(None) is None
+
+
+def test_to_json_dict_last_seen_is_utc_normalized() -> None:
+    obs = _obs(SOURCE_LORANET, last_seen=OFFSET_TIMESTAMP)
+    merged = merge_observations(NID, [obs], now=NOW)
+    assert merged.to_json_dict()["last_seen"] == OFFSET_TIMESTAMP_Z
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +705,21 @@ def test_build_table_caption_mentions_field_coercions() -> None:
     table = render.build_table(report)
     assert table.caption is not None
     assert "5 field(s) could not be coerced" in str(table.caption)
+
+
+def test_timestamp_cell_normalizes_a_non_utc_offset() -> None:
+    assert render._timestamp_cell(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_Z
+    assert render._timestamp_cell(None) == "-"
+
+
+def test_build_table_timestamp_column_renders_utc() -> None:
+    obs = _obs(SOURCE_LORANET, last_seen=OFFSET_TIMESTAMP)
+    report = build_report(
+        records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
+    )
+    table = render.build_table(report)
+    timestamp_column = table.columns[6]
+    assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_Z]
 
 
 def test_build_table_returns_expected_columns() -> None:
