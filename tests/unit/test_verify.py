@@ -388,6 +388,103 @@ def test_check_unregistered_duplicate_keys_accepts_distinct_unregistered_keys(
     assert _check_unregistered_duplicate_keys(nodes, keys) == []
 
 
+def test_check_unregistered_duplicate_keys_dedupes_per_pair_across_a_three_node_cluster(
+    nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
+) -> None:
+    """Three devices sharing one never-imported key report all three pairs, once each.
+
+    Regression guard for the ``marker = (*pair, tier, fingerprint)`` dedup
+    key: if a mutant collapsed that key to drop the pair (e.g. just
+    ``(tier, fingerprint)``), every pair beyond the first would look
+    "already seen" and only one of the three genuinely distinct clone
+    pairs would be reported.
+    """
+    material = encode_key(keypair.public)
+    for node_id in ("deadbe01", "deadbe02", "deadbe03"):
+        nodes.upsert(NodeRecord(node_id=node_id, unregistered_admin_keys=(material,)))
+
+    problems = _check_unregistered_duplicate_keys(nodes, keys)
+
+    assert {problem.ref for problem in problems} == {
+        "deadbe01,deadbe02",
+        "deadbe01,deadbe03",
+        "deadbe02,deadbe03",
+    }
+
+
+def test_check_unregistered_duplicate_keys_checks_every_material_on_a_multi_key_node(
+    nodes: NodeRepository, keys: KeyRepository, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """A node with two distinct unregistered keys, each cloned on a different other node.
+
+    Regression guard for the per-material ``else: continue`` on the
+    non-match branch: node A holds material X (first) then Y (second);
+    node B clones X (unregistered) and node C clones Y (registered, so
+    C itself contributes no unregistered material and can't rediscover
+    the pair from the reverse direction -- that would mask the bug via
+    the same dedup collision seen in the elif test above). For
+    ``other=C``, X fails to match before Y succeeds, so a
+    ``continue``-to-``break`` regression on the non-match branch would
+    stop the loop at X and silently drop the genuine Y/C clone -- with
+    nothing to rediscover it, the pair would vanish outright rather
+    than just being deduped.
+    """
+    keypair_y = keypair_factory()
+    material_x = encode_key(keypair_factory().public)
+    material_y = encode_key(keypair_y.public)
+    keys.upsert(KeyRecord.from_material("ADMINC", KeyType.ADMIN_PUBLIC, keypair_y.public))
+    nodes.upsert(NodeRecord(node_id="deadbe0a", unregistered_admin_keys=(material_x, material_y)))
+    nodes.upsert(NodeRecord(node_id="deadbe0b", unregistered_admin_keys=(material_x,)))
+    nodes.upsert(NodeRecord(node_id="deadbe0c", authorized_admin_keys=("ADMINC_pub",)))
+
+    problems = _check_unregistered_duplicate_keys(nodes, keys)
+
+    assert {problem.ref for problem in problems} == {"deadbe0a,deadbe0b", "deadbe0a,deadbe0c"}
+
+
+def test_check_unregistered_duplicate_keys_prefers_registered_tier_when_both_match(
+    nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
+) -> None:
+    """When another node's material is both registered and unregistered, the elif picks registered.
+
+    Regression guard for the ``elif`` precedence between the two tiers:
+    ``deadbe01`` here authorizes the shared key as a registered admin key
+    *and* separately lists it (e.g. from a stale prior adopt) as an
+    unregistered material, so checking from ``deadbe02``'s side must
+    resolve to the registered-tier message, not the unregistered one.
+
+    Two problems are expected, not one: this same setup also makes
+    ``deadbe01`` a valid *record* in its own right (it holds the
+    material unregistered too), so it independently discovers
+    ``deadbe02``'s copy via the unregistered/unregistered tier -- a
+    real, distinct signal, not a duplicate of the first. Collapsing
+    the ``elif`` to a second unconditional ``if`` doesn't add a third
+    problem (the single post-branch ``problems.append`` means the
+    second branch only *overwrites* ``tier``/``message`` when both
+    match); instead it silently flips ``deadbe02``'s finding from
+    registered to unregistered, whose marker then collides with the
+    other direction's already-``seen`` marker and gets deduped away
+    entirely -- dropping the total from 2 to 1 while also losing the
+    "authorized on node deadbe01" message. Both effects are asserted
+    below so the test fails loudly either way.
+    """
+    material = encode_key(keypair.public)
+    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public))
+    nodes.upsert(
+        NodeRecord(
+            node_id="deadbe01",
+            authorized_admin_keys=("ADMIN1_pub",),
+            unregistered_admin_keys=(material,),
+        )
+    )
+    nodes.upsert(NodeRecord(node_id="deadbe02", unregistered_admin_keys=(material,)))
+
+    problems = _check_unregistered_duplicate_keys(nodes, keys)
+
+    assert len(problems) == 2
+    assert any("authorized on node deadbe01" in problem.message for problem in problems)
+
+
 def test_verify_database_reports_an_unregistered_clone_pair_as_critical(
     nodes: NodeRepository, keys: KeyRepository, template, db: OdsDatabase, keypair: KeyPair
 ) -> None:
