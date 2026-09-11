@@ -249,15 +249,6 @@ class NodeObservation(BaseModel):
             raise ValueError("datetime fields must be timezone-aware")
         return value
 
-    @property
-    def has_position(self) -> bool:
-        """Whether both ``latitude`` and ``longitude`` are known.
-
-        Returns:
-            ``True`` if neither is ``None``.
-        """
-        return self.latitude is not None and self.longitude is not None
-
     def age(self, *, now: datetime | None = None) -> timedelta | None:
         """Return how long ago this node was last seen.
 

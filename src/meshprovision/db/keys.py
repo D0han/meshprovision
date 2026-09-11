@@ -122,16 +122,6 @@ class KeyRecord(BaseModel):
         return self
 
     @property
-    def is_secret(self) -> bool:
-        """Whether this row holds material that must be kept confidential.
-
-        Returns:
-            ``True`` unless :attr:`key_type` is
-            :attr:`~meshprovision.db.schema.KeyType.ADMIN_PUBLIC`.
-        """
-        return self.key_type is not KeyType.ADMIN_PUBLIC
-
-    @property
     def fingerprint(self) -> str:
         """A redacted, non-reversible label for this key.
 

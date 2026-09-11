@@ -249,14 +249,6 @@ class SectionChange:
         """
         return len(self.changes) == 0
 
-    def field_names(self) -> tuple[str, ...]:
-        """Return the name of every changed field, in order.
-
-        Returns:
-            ``tuple(c.field for c in self.changes)``.
-        """
-        return tuple(change.field for change in self.changes)
-
 
 @dataclass(frozen=True, slots=True)
 class NameChange:

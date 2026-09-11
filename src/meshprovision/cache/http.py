@@ -522,7 +522,6 @@ class CachedHTTPClient:
         self._user_agent = stripped_user_agent
         self._cache_dir = cache_dir
         self._ttl = ttl
-        self._timeout = timeout
         self._max_retries = max_retries
         self._backoff_base = backoff_base
         self._backoff_max = backoff_max

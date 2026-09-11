@@ -221,15 +221,6 @@ class LiveSecurity:
             return False
         return any(b != 0 for b in self.public_key)
 
-    def admin_fingerprints(self) -> tuple[str, ...]:
-        """Redacted fingerprint labels for every authorized admin key.
-
-        Returns:
-            One :func:`~meshprovision.crypto.redact.fingerprint` string
-            per entry of :attr:`admin_keys`, in the same order.
-        """
-        return tuple(fingerprint(key) for key in self.admin_keys)
-
     def __repr__(self) -> str:
         """Return a repr that never exposes raw key bytes.
 
@@ -384,15 +375,6 @@ class Detection:
     factory_long_name: bool
     admin_keys_present: bool
     reasons: tuple[str, ...] = ()
-
-    @property
-    def is_factory(self) -> bool:
-        """Whether this node was classified as :attr:`NodeState.FACTORY`.
-
-        Returns:
-            ``True`` if :attr:`state` is :attr:`NodeState.FACTORY`.
-        """
-        return self.state is NodeState.FACTORY
 
     def summary(self) -> str:
         """Render a one-line, operator-facing summary of this detection.

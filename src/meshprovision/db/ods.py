@@ -1015,19 +1015,9 @@ class OdsDatabase:
         """Integrity warnings collected by the most recent load.
 
         Returns:
-            The warnings from the last :meth:`load`/:meth:`reload` call.
+            The warnings from the last :meth:`load` call.
         """
         return self._warnings
-
-    @property
-    def locked(self) -> bool:
-        """Whether this session currently holds the cross-process write lock.
-
-        Returns:
-            ``True`` between a successful :meth:`lock` call and the
-            matching :meth:`unlock`.
-        """
-        return self._lock_cm is not None
 
     def lock(self, *, timeout: float | None = None) -> None:
         """Acquire the cross-process write lock for this database.
@@ -1108,18 +1098,6 @@ class OdsDatabase:
         self._warnings = loaded.warnings
         self._loaded = True
         self._is_dirty = False
-
-    def reload(self) -> None:
-        """Reload the database from disk, discarding unsaved changes.
-
-        Raises:
-            SchemaError: If the file cannot be read or does not match
-                its schema.
-            DbValidationError: If any cell fails validation.
-            DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
-            DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
-        """
-        self.load(force=True)
 
     def rows(self, sheet: str) -> tuple[Mapping[str, str], ...]:
         """Return one sheet's current in-memory rows, loading first if needed.
