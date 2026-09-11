@@ -403,14 +403,28 @@ def test_adopt_warns_on_a_duplicate_name_and_folds_it_into_json_warnings(
     assert any("long_name 'Adopted Node 01'" in warning for warning in document["warnings"])
 
 
-def test_adopt_warns_on_a_duplicate_admin_key_already_registered_on_another_node(
+def test_adopt_does_not_warn_when_the_live_key_is_already_a_known_registered_admin_key(
     runner: CliRunner,
     env: dict[str, str],
     bus: DeviceBus,
     seed_db: Callable[..., Path],
     keypair_factory: Callable[[], KeyPair],
 ) -> None:
-    """Exact raw-material comparison against another node's registered admin key ref."""
+    """A key already recognized via any ref must never trip the clone warning.
+
+    Regression test: an earlier version compared a device's live admin
+    keys against every other node's *registered* material too, which is
+    provably always redundant with -- never a signal beyond -- this same
+    device's own already-resolved ``preferred_ref`` (both are looked up
+    in the identical ``public_keys`` map), so it did nothing but false-
+    alarm on the standard ``template.admin_nodes``-shared-admin-key
+    fleet pattern: the operator's own admin key, authorized on many
+    nodes by design, would trip "CVE-2025-52464 vendor key-cloning" on
+    nearly every adopt after the first. Here, ``shared_kp`` is already
+    registered as ``OTHER_pub`` and authorized on ``cafe0001`` -- exactly
+    that pattern -- and reporting it live on a second, newly-adopted
+    device must be silent.
+    """
     shared_kp = keypair_factory()
     pub, priv = KeyRecord.for_keypair("OTHER", shared_kp)
     seed_db(
@@ -423,7 +437,7 @@ def test_adopt_warns_on_a_duplicate_admin_key_already_registered_on_another_node
     result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
     assert result.exit_code == 0
     document = json.loads(result.stdout)
-    assert any("cafe0001" in w and "CVE-2025-52464" in w for w in document["warnings"])
+    assert not any("CVE-2025-52464" in w for w in document["warnings"])
 
 
 def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(

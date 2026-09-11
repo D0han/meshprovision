@@ -36,8 +36,6 @@ from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning import connection, detect
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from meshprovision.cli.common import CliContext
     from meshprovision.db.nodes import NodeRepository
 
@@ -78,13 +76,9 @@ def _duplicate_name_warnings(
 
 
 def _duplicate_admin_key_warnings(
-    db_nodes: NodeRepository,
-    *,
-    live_node_id: str,
-    admin_keys: tuple[adopt_mod.LiveAdminKey, ...],
-    public_keys: Mapping[str, bytes],
+    db_nodes: NodeRepository, *, live_node_id: str, admin_keys: tuple[adopt_mod.LiveAdminKey, ...]
 ) -> tuple[str, ...]:
-    """Check a device's live admin keys against every *other* node's admin keys.
+    """Check a device's live admin keys against every *other* node's unregistered keys.
 
     The CVE-2025-52464 vendor key-cloning scenario this exists to catch:
     two already-deployed devices share the same admin keypair, and
@@ -95,26 +89,30 @@ def _duplicate_admin_key_warnings(
     :func:`_duplicate_name_warnings`: :func:`meshprovision.provisioning.
     adopt.build_adoption_report` only ever sees one device's live config.
 
-    Two comparison tiers against every *other* node's own admin keys,
-    never this node's own (``live_node_id`` is excluded), both exact
-    raw-material comparisons -- as rigorous as
-    :func:`~meshprovision.crypto.weakkeys.find_duplicate_public_keys`'s
-    own comparison, with no fingerprint-collision risk:
-
-    - Against every ``other`` node's *registered* refs (material is
-      available via ``public_keys``).
-    - Against every ``other`` node's persisted *unregistered* keys
-      (:meth:`~meshprovision.db.nodes.NodeRecord
-      .unregistered_admin_key_materials`), worded distinctly in the
-      warning text so the operator can tell which tier matched.
+    Deliberately does **not** also compare against every ``other`` node's
+    *registered* refs -- an earlier version did, and it was a bug, not
+    an extra layer of rigor: ``admin_keys`` (via :func:`meshprovision.
+    provisioning.adopt.classify_live_admin_keys`) is resolved against the
+    exact same ``public_keys`` map ``other``'s registered material would
+    be looked up in, so a live key that matches *any* registered material
+    anywhere in the fleet has, by construction, already resolved to a
+    non-``None`` :attr:`~meshprovision.provisioning.adopt.LiveAdminKey
+    .preferred_ref` for *this* device too -- there is no possible input
+    where that registered-material comparison could fire on a key this
+    device doesn't already recognize as a known ref. In practice this
+    made every legitimate ``template.admin_nodes``-shared admin key (the
+    standard, intended way to authorize the same key on many nodes) trip
+    a false CVE-2025-52464 alarm on nearly every adopt after the first.
+    Comparing only against ``other``'s *unregistered* keys avoids this:
+    that data source is node-scoped, not derived from the same global
+    map, so it can genuinely differ between two devices reporting the
+    same still-unimported material.
 
     Args:
         db_nodes: The open :class:`~meshprovision.db.nodes.NodeRepository`.
         live_node_id: The adopted device's own ``node_id`` (hex), excluded
             from the comparison so a re-adopt never flags itself.
         admin_keys: The adopted device's live admin keys.
-        public_keys: ``{key_ref: raw public key}``, as returned by
-            :meth:`~meshprovision.db.keys.KeyRepository.public_key_map`.
 
     Returns:
         One warning string per duplicate found, in ``admin_keys``/other-node order.
@@ -123,17 +121,9 @@ def _duplicate_admin_key_warnings(
     for other in db_nodes.all():
         if other.node_id == live_node_id:
             continue
-        other_registered_material = [
-            public_keys[ref] for ref in other.authorized_admin_keys if ref in public_keys
-        ]
         other_unregistered_material = other.unregistered_admin_key_materials()
         for key in admin_keys:
-            if any(key.material == material for material in other_registered_material):
-                warnings.append(
-                    f"admin key {key.fingerprint} is also authorized on node "
-                    f"{other.node_id} -- the CVE-2025-52464 vendor key-cloning failure mode."
-                )
-            elif any(key.material == material for material in other_unregistered_material):
+            if any(key.material == material for material in other_unregistered_material):
                 warnings.append(
                     f"admin key {key.fingerprint} was also observed, unregistered, on node "
                     f"{other.node_id} during a previous adopt -- the CVE-2025-52464 vendor "
@@ -302,10 +292,7 @@ def adopt(
             long_name=report.long_name,
         )
         duplicate_admin_key_warnings = _duplicate_admin_key_warnings(
-            db.nodes,
-            live_node_id=live.node_id.hex,
-            admin_keys=report.admin_keys,
-            public_keys=public_keys,
+            db.nodes, live_node_id=live.node_id.hex, admin_keys=report.admin_keys
         )
 
         if json_output:
