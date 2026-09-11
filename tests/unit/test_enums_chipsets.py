@@ -88,6 +88,13 @@ def test_digit_string_resolves_like_int() -> None:
         ("Router Client", "ROUTER_CLIENT"),
         ("t-beam", "T_BEAM"),
         (" client ", "CLIENT"),
+        # Runs of separators collapse to a single '_'.
+        ("Router__Client", "ROUTER_CLIENT"),
+        ("Router - Client", "ROUTER_CLIENT"),
+        # Leading/trailing '_' is stripped, including once introduced by
+        # the '-'/space substitution.
+        ("_client_", "CLIENT"),
+        ("-client ", "CLIENT"),
     ],
 )
 def test_normalize_enum_name(raw: str, expected: str) -> None:
@@ -143,6 +150,36 @@ def test_chipset_for_hw_model_by_name_and_numeric() -> None:
 def test_chipset_for_unknown_model_degrades_to_unknown() -> None:
     assert chipsets.chipset_for_hw_model("TOTALLY_MADE_UP_BOARD") is chipsets.Chipset.UNKNOWN
     assert chipsets.chipset_for_hw_model(123456789) is chipsets.Chipset.UNKNOWN
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_bool_hw_model_is_rejected_despite_being_an_int_subtype(value: bool) -> None:
+    """``bool`` is an ``int`` subtype but is never a hw_model.
+
+    Without the explicit guard, ``True`` resolves as ``hw_model=1``
+    (``TLORA_V2`` -> ESP32) and silently reports a real chipset for a
+    value that carries no hardware meaning at all. Matches the
+    reject-bool convention used by ``NodeId`` and ``coerce_int``.
+    """
+    assert chipsets.chipset_for_hw_model(value) is chipsets.Chipset.UNKNOWN
+    assert chipsets.family_for_hw_model(value) is chipsets.ChipFamily.UNKNOWN
+    assert chipsets.is_mapped_hw_model(value) is False
+    assert chipsets.main_chipset(value) == "unknown"
+
+
+@pytest.mark.parametrize("bad", [None, 3.5, [], object()])
+def test_unusable_hw_model_type_degrades_instead_of_raising(bad) -> None:
+    """``_canonical``'s type guard upholds this module's never-raises contract.
+
+    Chipset data is informational only, so an unusable value must degrade
+    to UNKNOWN. Without the guard's ``not isinstance(..., (int, str))``
+    arm, a non-string value falls through to ``hw_model.strip()`` and
+    raises ``AttributeError`` out of a function documented never to raise.
+    """
+    assert chipsets.chipset_for_hw_model(bad) is chipsets.Chipset.UNKNOWN
+    assert chipsets.family_for_hw_model(bad) is chipsets.ChipFamily.UNKNOWN
+    assert chipsets.is_mapped_hw_model(bad) is False
+    assert chipsets.main_chipset(bad) == "unknown"
 
 
 def test_main_chipset_returns_display_string() -> None:

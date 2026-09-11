@@ -8,8 +8,10 @@ from pathlib import Path
 import pytest
 
 from meshprovision.config.settings import (
+    APP_NAME,
     DEFAULT_CACHE_TTL,
     Settings,
+    default_cache_dir,
     find_env_file,
     format_validation_error,
     load_settings,
@@ -25,6 +27,24 @@ def test_load_settings_from_env_file_alone(tmp_path: Path) -> None:
     settings = load_settings(env_file=env_file, environ={}, search_dotenv=False)
     assert settings.contact == "me@example.invalid"
     assert settings.log_level == "DEBUG"
+
+
+def test_load_settings_finds_dotenv_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``search_dotenv`` defaults to True, and that default is production.
+
+    ``cli/common.py``'s ``build_settings`` never passes ``search_dotenv``,
+    so this default is the entire mechanism by which a real ``.env`` is
+    discovered. Every other test here opts out of it explicitly, so it
+    must be pinned once from the outside: write a ``.env``, chdir to it
+    (``find_env_file`` searches upward from the CWD), and call
+    ``load_settings`` with the kwarg omitted entirely.
+    """
+    (tmp_path / ".env").write_text("MESHPROVISION_CONTACT=found@example.invalid\n")
+    monkeypatch.chdir(tmp_path)
+    settings = load_settings(environ={})
+    assert settings.contact == "found@example.invalid"
 
 
 def test_environ_overrides_env_file(tmp_path: Path) -> None:
@@ -113,6 +133,18 @@ def test_user_agent_format() -> None:
     assert agent == "meshprovision/9.9.9 (+me@example.invalid)"
 
 
+def test_user_agent_requires_contact_by_default() -> None:
+    """``require_contact`` defaults to True -- the lorastats.pl startup gate.
+
+    Both real call sites pass the kwarg explicitly, and the one test that
+    omits it already has ``contact`` set, so nothing else distinguishes
+    the default from ``require_contact=False``.
+    """
+    settings = Settings(contact=None)
+    with pytest.raises(MissingContactError):
+        settings.user_agent(version="9.9.9")
+
+
 def test_user_agent_omits_contact_when_not_required_and_unset() -> None:
     settings = Settings(contact=None)
     assert settings.user_agent(version="9.9.9", require_contact=False) == "meshprovision/9.9.9"
@@ -168,3 +200,9 @@ def test_format_validation_error_lists_field_paths_never_input() -> None:
 
 def test_default_cache_ttl_constant() -> None:
     assert DEFAULT_CACHE_TTL == 300.0
+
+
+def test_default_cache_dir_is_app_scoped() -> None:
+    cache_dir = default_cache_dir()
+    assert cache_dir.name == APP_NAME
+    assert cache_dir.is_absolute()

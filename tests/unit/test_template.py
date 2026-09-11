@@ -8,6 +8,7 @@ import pytest
 
 from meshprovision.config.template import (
     BASE36_ALPHABET,
+    LONG_NAME_MAX_BYTES,
     PatternSpec,
     TemplateConfig,
     check_capacity_utilization,
@@ -170,6 +171,35 @@ def test_check_capacity_utilization_boundaries() -> None:
     assert "1296" in warning.message
 
 
+def test_check_capacity_utilization_warns_exactly_at_the_threshold() -> None:
+    """The comparison is ``ratio >= warn_at``, so landing exactly on it warns.
+
+    The boundary test above straddles a ratio that is not exactly
+    representable, so neither side of it pins ``>=`` against ``>``.
+    ``capacity // 2`` over ``warn_at=0.5`` lands on the threshold exactly.
+    """
+    spec = PatternSpec.compile("MT{n}{n}", BASE36_ALPHABET, field="short_name_pattern")
+    exactly_at = spec.capacity // 2
+
+    warning = check_capacity_utilization(spec, exactly_at, warn_at=0.5)
+    assert warning is not None
+    assert warning.code == "capacity_near_exhaustion"
+    assert warning.field == "short_name_pattern"
+
+    assert check_capacity_utilization(spec, exactly_at - 1, warn_at=0.5) is None
+
+
+def test_long_name_near_limit_threshold_is_exact() -> None:
+    """The warning fires on ``> LONG_NAME_MAX_BYTES - 4``, i.e. at 22 bytes, not 21."""
+    at_threshold = TemplateConfig(long_name_pattern="X" * (LONG_NAME_MAX_BYTES - 5) + "{n}")
+    assert at_threshold.long_name_spec().widest_byte_length() == LONG_NAME_MAX_BYTES - 4
+    assert not any(w.code == "long_name_near_limit" for w in at_threshold.collect_warnings())
+
+    one_over = TemplateConfig(long_name_pattern="X" * (LONG_NAME_MAX_BYTES - 4) + "{n}")
+    assert one_over.long_name_spec().widest_byte_length() == LONG_NAME_MAX_BYTES - 3
+    assert any(w.code == "long_name_near_limit" for w in one_over.collect_warnings())
+
+
 def test_check_capacity_utilization_negative_raises() -> None:
     spec = PatternSpec.compile("MT{n}{n}", BASE36_ALPHABET, field="short_name_pattern")
     with pytest.raises(ValueError, match="negative"):
@@ -180,10 +210,10 @@ def test_ensure_capacity_available() -> None:
     spec = PatternSpec.compile("MT{n}{n}", BASE36_ALPHABET, field="short_name_pattern")
     with pytest.raises(NamespaceExhaustedError) as exc_info:
         ensure_capacity_available(spec, 1296)
-    assert (
-        "widening" in (exc_info.value.hint or "").lower()
-        or "widen" in (exc_info.value.hint or "").lower()
-    )
+    exc = exc_info.value
+    assert exc.pattern == "MT{n}{n}"
+    assert exc.capacity == 1296
+    assert "widen" in (exc.hint or "").lower()
     assert ensure_capacity_available(spec, 1295) is None
 
 

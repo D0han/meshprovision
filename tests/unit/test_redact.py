@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 
 import pytest
 import structlog
@@ -16,9 +17,11 @@ from meshprovision.crypto.redact import (
     SENSITIVE_KEY_SUFFIXES,
     SecretBytes,
     fingerprint,
+    redact,
     redact_processor,
     scrub_text,
 )
+from meshprovision.nodeid import NodeId
 
 pytestmark = pytest.mark.unit
 
@@ -142,18 +145,24 @@ class TestRedactProcessor:
         assert result is not event
 
     def test_sensitive_key_names_redacted(self) -> None:
+        """The replacement must be the *fingerprinted* form, not a bare literal.
+
+        Asserting only ``"<redacted" in ...`` would also pass for a
+        degraded ``REDACTED`` constant, losing the ability to correlate
+        which secret a given log line touched.
+        """
         for name in SENSITIVE_KEY_NAMES:
             event = {name: "value123"}
             result = redact_processor(None, "info", event)
-            assert result[name] != "value123"
-            assert "<redacted" in str(result[name])
+            assert result[name] == redact("value123")
+            assert result[name] != REDACTED
 
     def test_sensitive_key_suffixes_redacted(self) -> None:
         for suffix in SENSITIVE_KEY_SUFFIXES:
             key = f"custom{suffix}"
             event = {key: "value123"}
             result = redact_processor(None, "info", event)
-            assert "<redacted" in str(result[key])
+            assert re.fullmatch(r"<redacted:sha256:[0-9a-f]+>", str(result[key]))
 
     def test_safe_key_names_pass_through(self) -> None:
         for name in SAFE_KEY_NAMES:
@@ -170,6 +179,31 @@ class TestRedactProcessor:
         event = {"private_key": 12345}
         result = redact_processor(None, "info", event)
         assert result["private_key"] == REDACTED
+
+    def test_non_str_value_under_non_sensitive_key_passes_through_unchanged(self) -> None:
+        """Structured, non-secret log data must survive the processor intact.
+
+        A regression in the final ``else`` branch would silently null or
+        drop arbitrary structured values rather than merely over-redact
+        them, quietly gutting every log event this project emits.
+        """
+        nested = {"inner": ["a", 1]}
+        event = {
+            "count": 42,
+            "enabled": True,
+            "ratio": 1.5,
+            "meta": nested,
+            "absent": None,
+            "node_id": NodeId.parse("deadbe01"),
+        }
+        result = redact_processor(None, "info", event)
+
+        assert result["count"] == 42
+        assert result["enabled"] is True
+        assert result["ratio"] == 1.5
+        assert result["meta"] is nested
+        assert result["absent"] is None
+        assert result["node_id"] == NodeId.parse("deadbe01")
 
     def test_plain_string_values_pass_through_scrub_text(self) -> None:
         import base64
