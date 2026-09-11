@@ -327,8 +327,8 @@ class AdoptionReport:
             if show_key_material and not key.refs:
                 try:
                     entry["material"] = crypto_keys.encode_key(key.material)
-                except KeyMaterialError:
-                    entry["material_error"] = "malformed key material"
+                except KeyMaterialError as exc:
+                    entry["material_error"] = f"malformed key material: {exc.reason}"
             admin_keys.append(entry)
 
         return {
@@ -391,8 +391,8 @@ def build_adoption_report(
             audit = weakkeys.audit_public_key(
                 key.material, key_ref=key.preferred_ref, known_bad=known_bad
             )
-        except KeyMaterialError:
-            warnings.append(f"admin key {label} is malformed key material.")
+        except KeyMaterialError as exc:
+            warnings.append(f"admin key {label} is malformed key material: {exc.reason}.")
             continue
         if audit.findings:
             warnings.append(f"admin key {label} failed the weak-key audit: {audit.summary()}")

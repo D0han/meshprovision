@@ -464,6 +464,11 @@ def test_verify_plan_key_rejects_noncanonically_encoded_nodedb_key(make_live) ->
     results = verify_plan(plan, live_after, keypair=kp, device_public_key=noncanonical)
     key_result = next(r for r in results if r.field == "public_key")
     assert key_result.status == WriteStatus.UNCONFIRMED
+    # The NodeDB value never became comparable at all -- distinct from a
+    # decoded-but-differs mismatch, whose `actual` is a key fingerprint.
+    assert key_result.actual is not None
+    assert "did not decode" in key_result.actual
+    assert "non-canonical base64 encoding" in key_result.actual
 
 
 def test_verify_plan_key_mismatch_unconfirmed_with_fingerprints(make_live) -> None:

@@ -101,7 +101,7 @@ def test_check_weak_keys_malformed_material_reports_critical_problem() -> None:
     assert len(problems) == 1
     assert problems[0].kind == DbProblemKind.WEAK_KEY
     assert problems[0].severity == ProblemSeverity.CRITICAL
-    assert problems[0].message == "malformed key material"
+    assert problems[0].message.startswith("malformed key material: ")
     assert problems[0].ref == "ADMIN1_pub"
 
 

@@ -624,7 +624,7 @@ def test_to_json_dict_malformed_admin_key_reports_material_error_not_crash(
 
     entry = payload["admin_keys"][0]
     assert "material" not in entry
-    assert entry["material_error"] == "malformed key material"
+    assert entry["material_error"].startswith("malformed key material: ")
 
 
 def test_ble_pin_never_appears_in_json_or_describe(make_live, template) -> None:

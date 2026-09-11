@@ -247,8 +247,8 @@ def audit_node_key(live: detect.LiveConfig, *, known_bad: frozenset[bytes]) -> t
             firmware_version=live.firmware_version or None,
             known_bad=known_bad,
         )
-    except KeyMaterialError:
-        return True, "malformed key material"
+    except KeyMaterialError as exc:
+        return True, f"malformed key material: {exc.reason}"
     reason = next(
         (finding.reason for finding in result.findings if finding.severity == "critical"), ""
     )

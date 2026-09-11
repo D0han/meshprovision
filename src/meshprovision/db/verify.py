@@ -407,12 +407,12 @@ def _check_weak_keys(keys: KeyRepository, known_bad: frozenset[bytes]) -> list[D
                     known_bad=known_bad,
                     check_clamping=False,
                 )
-        except KeyMaterialError:
+        except KeyMaterialError as exc:
             problems.append(
                 DbProblem(
                     kind=DbProblemKind.WEAK_KEY,
                     severity=ProblemSeverity.CRITICAL,
-                    message="malformed key material",
+                    message=f"malformed key material: {exc.reason}",
                     sheet="Keys",
                     ref=record.key_ref,
                 )

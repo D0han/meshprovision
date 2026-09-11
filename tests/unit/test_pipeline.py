@@ -208,7 +208,7 @@ def test_audit_node_key_malformed_private_key_is_reported_compromised(keypair: K
     compromised, reason = audit_node_key(live, known_bad=frozenset())
 
     assert compromised is True
-    assert reason == "malformed key material"
+    assert reason.startswith("malformed key material: ")
 
 
 def test_audit_node_key_reports_a_blocklisted_device_keypair(keypair: KeyPair) -> None:

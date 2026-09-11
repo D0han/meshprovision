@@ -788,13 +788,14 @@ def _verify_key_material(
 
     nodedb_available = device_public_key is not None
     nodedb_bytes: bytes | None = None
+    nodedb_decode_error: str | None = None
     if isinstance(device_public_key, bytes | bytearray):
         nodedb_bytes = bytes(device_public_key)
     elif isinstance(device_public_key, str):
         try:
             nodedb_bytes = decode_key(device_public_key, field="NodeDB public key")
-        except KeyMaterialError:
-            nodedb_bytes = None
+        except KeyMaterialError as exc:
+            nodedb_decode_error = exc.reason
     nodedb_ok = nodedb_bytes is not None and nodedb_bytes == keypair.public
 
     if local_config_ok and (nodedb_ok or not nodedb_available):
@@ -803,8 +804,13 @@ def _verify_key_material(
             "security", WriteStatus.CONFIRMED, f"public key confirmed{note}", field="public_key"
         )
 
-    actual_bytes = nodedb_bytes if nodedb_bytes is not None else live_after.security.public_key
-    actual_repr = redact.fingerprint(actual_bytes) if actual_bytes is not None else "<absent>"
+    if nodedb_decode_error is not None:
+        # Distinct from "decoded fine but genuinely differs" below -- the
+        # NodeDB value never became comparable at all.
+        actual_repr = f"<NodeDB value did not decode: {nodedb_decode_error}>"
+    else:
+        actual_bytes = nodedb_bytes if nodedb_bytes is not None else live_after.security.public_key
+        actual_repr = redact.fingerprint(actual_bytes) if actual_bytes is not None else "<absent>"
     return WriteResult(
         "security",
         WriteStatus.UNCONFIRMED,
