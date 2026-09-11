@@ -464,6 +464,16 @@ def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
     iface = bus.use(FakeMeshInterface("deadbe01"))
     iface.localNode.localConfig.security.admin_key.append(cloned_kp.public)
 
+    # Human-text mode: the sibling duplicate-name warning is covered in this
+    # mode elsewhere, but this loop (cli/adopt.py's `for warning in
+    # duplicate_admin_key_warnings: ctx.warn(warning)`) previously had no
+    # coverage outside --json -- a no-op regression there would only ever
+    # have been caught by the JSON-mode assertion below.
+    text_result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert text_result.exit_code == 0
+    assert "CVE-2025-52464" in text_result.stderr
+    assert "cafe0001" in text_result.stderr
+
     result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
     assert result.exit_code == 0
     document = json.loads(result.stdout)
@@ -479,6 +489,67 @@ def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
     assert duplicates[0]["severity"] == "critical"
     assert duplicates[0]["ref"] == "cafe0001,deadbe01"
     assert "CVE-2025-52464" in duplicates[0]["message"]
+
+
+def test_duplicate_admin_key_check_examines_every_live_admin_key_not_just_the_first(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """A device reporting more than one live admin key must have all of them checked.
+
+    Regression test: every other CVE-clone test in this module gives the
+    live device exactly one ``admin_key``, so a regression narrowing
+    ``_duplicate_admin_key_warnings``'s ``for key in admin_keys:`` loop to
+    only the device's first live key -- plausible, since real devices can
+    and do report more than one -- would go undetected. Here the clean key
+    is reported first and the cloned one second, so only a genuine full
+    scan catches it.
+    """
+    clean_kp = keypair_factory()
+    cloned_kp = keypair_factory()
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="cafe0001",
+                unregistered_admin_keys=(encode_key(cloned_kp.public),),
+            )
+        ]
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.append(clean_kp.public)
+    iface.localNode.localConfig.security.admin_key.append(cloned_kp.public)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert any("cafe0001" in w and "CVE-2025-52464" in w for w in document["warnings"])
+
+
+def test_adopt_does_not_warn_about_two_nodes_both_reporting_an_empty_name(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    """Two genuinely unnamed devices must never trip a false empty-string collision.
+
+    Regression test for the ``short_name and ...`` / ``long_name and ...``
+    empty-string guards in ``_duplicate_name_warnings``: without them,
+    every adopt after the first device with a blank name would spuriously
+    warn that ``''`` is "already used" by the earlier one -- the same
+    false-positive failure mode this module's admin-key check exists to
+    avoid for a different comparison, here structurally untested since no
+    existing test pairs two blank-named nodes.
+    """
+    seed_db(nodes=[NodeRecord(node_id="cafe0001", short_name="", long_name="")])
+    bus.use(FakeMeshInterface("deadbe01", short_name="", long_name=""))
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    assert result.exit_code == 0
+    warnings = json.loads(result.stdout)["warnings"]
+    assert not any("already used by node" in w for w in warnings)
 
 
 def test_duplicate_name_check_skips_self_without_skipping_the_nodes_after_it(
