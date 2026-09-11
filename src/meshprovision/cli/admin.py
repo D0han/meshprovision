@@ -258,21 +258,29 @@ def admin_bootstrap(
             summaries = collect_admins(db.nodes, db.keys, template, known_bad=known_bad)
             new_summary = next((s for s in summaries if s.ref == new_ref), None)
 
-            pending_hexes: set[str] = (
-                set(new_summary.pending_on) if new_summary is not None else set()
-            )
+            # Two distinct facts, each needing its own (ref, node) pair --
+            # merging them into one node-id set previously lost track of
+            # which ref was pending on which node (see git history for the
+            # bug this replaced): `new_summary.pending_on` names nodes that
+            # still need *this* bootstrap's ref; the loop below instead
+            # finds other admins whose ref this newly-bootstrapped node
+            # doesn't yet authorize.
+            pending_pairs: set[tuple[str, str]] = {
+                (new_ref, other_hex)
+                for other_hex in (new_summary.pending_on if new_summary is not None else ())
+            }
             for other in summaries:
                 if (
                     other.ref != new_ref
                     and other.node_id is not None
                     and result.node_id.hex in other.pending_on
                 ):
-                    pending_hexes.add(other.node_id)
+                    pending_pairs.add((other.ref, result.node_id.hex))
 
             pending_lines = tuple(
-                f"pending: authorize {new_ref}_pub on node {other_hex} "
+                f"pending: authorize {ref}_pub on node {node_hex} "
                 "(run `mesh provision` with that device connected)"
-                for other_hex in sorted(pending_hexes)
+                for ref, node_hex in sorted(pending_pairs)
             )
 
             if authorized_here:

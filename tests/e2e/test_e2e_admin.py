@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     from click.testing import CliRunner
 
+    from meshprovision.crypto.keys import KeyPair
     from tests.e2e.conftest import DeviceBus
 
 pytestmark = pytest.mark.e2e
@@ -144,6 +145,79 @@ def test_full_admin_bootstrap_sequence_and_consumption(
 
     assert not _BASE64_KEY_RE.search(admin_list.stdout)
     assert not _BASE64_KEY_RE.search(admin_list.stderr)
+
+
+def test_admin_bootstrap_pending_message_names_the_right_ref_and_node_on_rotation(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Rotating an existing admin ref must not conflate two distinct pending facts.
+
+    Regression test for a bug in ``admin_bootstrap``'s pending-cross-
+    authorization message: a second internal check-loop correctly
+    detects that *this* newly-bootstrapped node doesn't yet authorize
+    some *other* admin's ref, but the buggy code rendered that finding
+    through the wrong (ref, node) pair -- reusing the just-bootstrapped
+    ref's name paired with the *other* admin's own node, producing a
+    false claim about a node that was already fully authorized. The
+    original sequential-growth test above never rotates an existing
+    ref, so it can't reach this path (see its module docstring).
+
+    Setup (seeded directly, so the scenario doesn't depend on exactly
+    which keypair a live ``mesh provision`` run happens to generate):
+    ``aaaa0001`` is ADMIN1's own device (its identity key is filed both
+    as ``aaaa0001_pub`` and, aliased, as ``ADMIN1_pub``) and already
+    authorizes ``ADMIN2_pub``. ``ADMIN2_pub``/``ADMIN2_priv`` hold old,
+    about-to-be-replaced material with no node of their own. ADMIN2 is
+    then rotated onto a brand-new device ``aaaa0003``, using a template
+    that does *not* list ADMIN1 -- so ``aaaa0003`` itself doesn't
+    authorize ``ADMIN1_pub`` yet, even though ``aaaa0001`` already
+    authorizes ``ADMIN2_pub``. The correct message is "authorize
+    ADMIN1_pub on node aaaa0003"; the bug instead printed the false
+    "authorize ADMIN2_pub on node aaaa0001".
+    """
+    admin1_kp = keypair_factory()
+    old_admin2_kp = keypair_factory()
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="aaaa0001",
+                management=ManagementMode.TEMPLATE,
+                authorized_admin_keys=("ADMIN2_pub",),
+            ),
+            # Authorizes ADMIN1_pub so ADMIN1 is discoverable via
+            # collect_admins's extra_refs path (this run's own template
+            # doesn't list ADMIN1, so template_refs alone won't surface it).
+            NodeRecord(
+                node_id="aaaa0002",
+                management=ManagementMode.TEMPLATE,
+                authorized_admin_keys=("ADMIN1_pub",),
+            ),
+        ],
+        keys=[
+            *KeyRecord.for_keypair("aaaa0001", admin1_kp),
+            *KeyRecord.for_keypair("ADMIN1", admin1_kp),
+            *KeyRecord.for_keypair("ADMIN2", old_admin2_kp),
+        ],
+    )
+
+    # Rotate ADMIN2 onto a brand-new device; this run's own template omits
+    # ADMIN1, so aaaa0003 itself won't authorize ADMIN1_pub.
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    bus.use(FakeMeshInterface("aaaa0003"))
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN2", "--yes"],
+        env,
+    )
+    assert result.exit_code == 0
+
+    assert "pending: authorize ADMIN1_pub on node aaaa0003" in result.stderr
+    assert "pending: authorize ADMIN2_pub on node aaaa0001" not in result.stderr
 
 
 def test_admin_bootstrap_inherits_the_enroll_gate(
