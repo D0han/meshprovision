@@ -222,8 +222,16 @@ class ColumnSpec:
         width: ODF column width, e.g. ``"1.0in"``.
         min_value: Inclusive lower bound for ``INT``/``FLOAT`` columns.
         max_value: Inclusive upper bound for ``INT``/``FLOAT`` columns.
-        secret: Whether this column holds material that must never be
-            echoed back in an error message or log line.
+        secret: Marks a column as holding sensitive material. Enforced in
+            exactly one place: :func:`validate_cell` sends ``value=None``
+            rather than ``""`` on the "required but is empty" error for
+            this column. Nothing else reads this flag -- the validators
+            that must not echo a value (``BASE64_KEY``,
+            ``BASE64_KEY_LIST``, ``PIN``) each hardcode ``value=None``
+            themselves, and logging, display, CLI rendering, and JSON
+            output are disciplined independently at their own call sites.
+            Setting it on a new column therefore buys that one error
+            branch and nothing more.
     """
 
     name: str
@@ -990,13 +998,18 @@ def _validate_base64_key_list(sheet: str, row: int, spec: ColumnSpec, stripped: 
     Returns:
         Each element's canonical base64 re-encoding, de-duplicated
         (preserving first-seen order) and re-joined with
-        :data:`LIST_SEPARATOR`.
+        :data:`LIST_SEPARATOR`. De-duplication happens *after*
+        canonicalization, so two spellings of one key -- bare base64 and
+        the :data:`~meshprovision.crypto.keys.B64_KEY_PREFIX` form
+        ``decode_key`` also accepts -- collapse to a single element
+        rather than surviving as two.
 
     Raises:
         DbValidationError: If any element is not valid key material.
             ``value`` is always ``None`` on this error -- an element is
             key material and must never reach a message or log.
     """
+    seen: set[str] = set()
     canonical: list[str] = []
     for element in normalize_ref_list(stripped):
         try:
@@ -1010,7 +1023,11 @@ def _validate_base64_key_list(sheet: str, row: int, spec: ColumnSpec, stripped: 
                 value=None,
                 hint=exc.hint,
             ) from exc
-        canonical.append(encode_key(raw))
+        encoded = encode_key(raw)
+        if encoded in seen:
+            continue
+        seen.add(encoded)
+        canonical.append(encoded)
     return format_ref_list(canonical)
 
 

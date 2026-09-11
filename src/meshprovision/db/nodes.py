@@ -274,17 +274,27 @@ class NodeRecord(BaseModel):
             value: The candidate tuple.
 
         Returns:
-            Each element, canonicalized.
+            Each element, canonicalized and de-duplicated (preserving
+            first-seen order), matching what the ``BASE64_KEY_LIST`` cell
+            validator stores for this column. De-duplication is by
+            canonical form, so the bare and
+            :data:`~meshprovision.crypto.keys.B64_KEY_PREFIX`-prefixed
+            spellings of one key collapse to a single element.
 
         Raises:
             KeyMaterialError: If any element is not valid key material.
         """
-        return tuple(
-            SecretStr(
-                encode_key(decode_key(item.get_secret_value(), field="unregistered_admin_keys"))
+        seen: set[str] = set()
+        canonical: list[SecretStr] = []
+        for item in value:
+            encoded = encode_key(
+                decode_key(item.get_secret_value(), field="unregistered_admin_keys")
             )
-            for item in value
-        )
+            if encoded in seen:
+                continue
+            seen.add(encoded)
+            canonical.append(SecretStr(encoded))
+        return tuple(canonical)
 
     @property
     def node(self) -> NodeId:
@@ -331,6 +341,12 @@ class NodeRecord(BaseModel):
         Returns:
             Each entry of :attr:`unregistered_admin_keys`, decoded, in
             stored order.
+
+        Raises:
+            KeyMaterialError: If any entry of
+                :attr:`unregistered_admin_keys` is not valid key material
+                (should not happen for a value that already passed field
+                validation, but re-checked defensively).
         """
         return tuple(
             decode_key(item.get_secret_value(), field="unregistered_admin_keys")

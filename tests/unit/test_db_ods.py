@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -695,6 +695,74 @@ def test_utc_timestamp_round_trip() -> None:
 
     naive_treated_as_utc = schema.parse_timestamp("2026-08-25T03:14:10")
     assert naive_treated_as_utc.tzinfo is UTC
+
+
+def test_parse_timestamp_converts_a_non_utc_offset_to_utc() -> None:
+    """An offset-aware value must be shifted to UTC, not relabelled as UTC.
+
+    A ``...Z`` input cannot tell the naive branch (``replace(tzinfo=UTC)``)
+    apart from the aware branch (``astimezone(UTC)``) -- both leave it
+    unchanged. A genuine ``+05:00`` offset separates them: shifting gives
+    05:00Z, relabelling would give 10:00Z.
+    """
+    parsed = schema.parse_timestamp("2026-01-01T10:00:00+05:00")
+    assert schema.utc_timestamp(parsed) == "2026-01-01T05:00:00Z"
+    assert parsed == datetime(2026, 1, 1, 5, 0, 0, tzinfo=UTC)
+
+
+def test_utc_timestamp_shifts_an_offset_aware_datetime() -> None:
+    aware = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone(timedelta(hours=5)))
+    assert schema.utc_timestamp(aware) == "2026-01-01T05:00:00Z"
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("gps_lat", "-90"),
+        ("gps_lat", "90"),
+        ("gps_lon", "-180"),
+        ("gps_lon", "180"),
+    ],
+)
+def test_float_bounds_are_inclusive_at_the_exact_boundary(column: str, value: str) -> None:
+    """``min_value``/``max_value`` are documented as inclusive bounds.
+
+    Every other range test uses a value well outside the range, which a
+    ``>``-to-``>=`` flip in ``_check_range`` would still reject correctly.
+    """
+    spec = schema.NODES_SHEET_SPEC.column(column)
+    assert schema.validate_cell(sheet="Nodes", row=2, spec=spec, value=value) == value
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("gps_lat", "-90.0000001"),
+        ("gps_lat", "90.0000001"),
+        ("gps_lon", "-180.0000001"),
+        ("gps_lon", "180.0000001"),
+    ],
+)
+def test_float_bounds_reject_just_past_the_boundary(column: str, value: str) -> None:
+    spec = schema.NODES_SHEET_SPEC.column(column)
+    with pytest.raises(DbValidationError) as exc_info:
+        schema.validate_cell(sheet="Nodes", row=2, spec=spec, value=value)
+    assert exc_info.value.column == column
+
+
+def test_base64_key_list_dedupes_after_canonicalization(keypair) -> None:
+    """One key spelled two ways collapses to one element.
+
+    ``decode_key`` accepts both the bare base64 and the ``base64:``
+    form, so de-duplicating on the raw cell text (as ``normalize_ref_list``
+    does) is not enough to honour this column's documented dedup contract.
+    """
+    encoded = encode_key(keypair.public)
+    spec = schema.NODES_SHEET_SPEC.column("unregistered_admin_keys")
+    result = schema.validate_cell(
+        sheet="Nodes", row=2, spec=spec, value=f"{encoded};base64:{encoded};{encoded}"
+    )
+    assert result == encoded
 
 
 def test_validate_row_fills_every_column() -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,7 +15,7 @@ from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository, find_next_free_name
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyType, ManagementMode
+from meshprovision.db.schema import FirmwareType, KeyType, ManagementMode
 from meshprovision.errors import (
     AdminRefUnresolvedError,
     DbIntegrityError,
@@ -97,6 +98,39 @@ def test_from_row_empty_role_region_defaults_for_a_template_row() -> None:
     reloaded = NodeRecord.from_row(row)
     assert reloaded.role == "CLIENT"
     assert reloaded.region == "EU_868"
+
+
+@pytest.mark.parametrize("firmware_type", [FirmwareType.LORANET, FirmwareType.OTHER])
+def test_non_default_firmware_type_survives_a_row_round_trip(
+    firmware_type: FirmwareType,
+) -> None:
+    """A non-default ``firmware_type`` must not be masked by the default.
+
+    ``from_row`` reads ``row.get("firmware_type") or VANILLA``; every other
+    fixture stores ``"vanilla"``, which is also the fallback, so a corrupted
+    read would look identical to a correct one.
+    """
+    record = NodeRecord(node_id="deadbe01", firmware_type=firmware_type)
+    row = record.to_row()
+    assert row["firmware_type"] == firmware_type.value
+    assert NodeRecord.from_row(row).firmware_type is firmware_type
+
+
+def test_unregistered_admin_keys_dedupe_by_canonical_form(keypair) -> None:
+    """Two spellings of one key collapse to a single element.
+
+    ``decode_key`` accepts both the bare base64 and the ``base64:`` form,
+    so de-duplicating on the raw input string would keep both. The app's
+    own write path (``adopted_record``) dedupes by material first; this
+    guards a hand-edited cell or a future direct constructor caller.
+    """
+    encoded = encode_key(keypair.public)
+    record = NodeRecord(
+        node_id="deadbe01",
+        unregistered_admin_keys=(encoded, f"base64:{encoded}", encoded),
+    )
+    assert len(record.unregistered_admin_keys) == 1
+    assert record.unregistered_admin_key_materials() == (keypair.public,)
 
 
 def test_to_row_always_recomputes_derived_columns() -> None:
@@ -199,6 +233,31 @@ def test_for_keypair_produces_pub_priv_pair(keypair) -> None:
     assert priv.key_ref == "deadbe01_priv"
     assert pub.material() == keypair.public
     assert priv.material() == keypair.private.reveal()
+
+
+def test_for_keypair_records_the_caller_supplied_created_ts(keypair) -> None:
+    """Both halves of the pair must carry the caller's timestamp.
+
+    Every other call site relies on the implicit ``None`` default, so a
+    ``for_keypair``/``from_material`` that dropped the argument on the floor
+    would go unnoticed -- while the real callers (provisioning.apply,
+    cli.admin, cli.provision) all pass an explicit timestamp.
+    """
+    created = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, created_ts=created)
+    assert pub.created_ts == created
+    assert priv.created_ts == created
+    assert pub.to_row()["created_ts"] == "2026-03-04T05:06:07Z"
+    assert priv.to_row()["created_ts"] == "2026-03-04T05:06:07Z"
+
+
+def test_from_material_records_the_caller_supplied_created_ts(keypair) -> None:
+    created = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
+    record = KeyRecord.from_material(
+        "deadbe01", KeyType.ADMIN_PUBLIC, keypair.public, created_ts=created
+    )
+    assert record.created_ts == created
+    assert KeyRecord.from_row(record.to_row()).created_ts == created
 
 
 # ---------------------------------------------------------------------------
@@ -405,6 +464,18 @@ def test_find_next_free_name_skips_used_case_insensitively() -> None:
     assert index == 2
 
 
+def test_find_next_free_name_defaults_to_index_zero() -> None:
+    """The default ``start=0`` must actually allocate index 0 when it is free.
+
+    ``test_find_next_free_name_skips_used_case_insensitively`` has both index
+    0 and 1 taken, so it would still pass if the default became ``1``.
+    """
+    spec = PatternSpec.compile("MT{n}{n}", BASE36_ALPHABET, field="short_name_pattern")
+    index, name = find_next_free_name(spec, {"MT01"})
+    assert index == 0
+    assert name == "MT00"
+
+
 def test_find_next_free_name_honours_start() -> None:
     spec = PatternSpec.compile("MT{n}{n}", BASE36_ALPHABET, field="short_name_pattern")
     index, name = find_next_free_name(spec, set(), start=5)
@@ -433,3 +504,57 @@ def test_next_free_name_selects_by_field_name(nodes: NodeRepository, db: OdsData
     assert long_name != "Meshtastic MT00"
     _, short_name = nodes.next_free_name(short_spec, is_long=False)
     assert short_name != "MT00"
+
+
+def _fill_namespace(nodes: NodeRepository, spec: PatternSpec, count: int) -> None:
+    """Occupy the first ``count`` names of ``spec``, one node per name."""
+    for index in range(count):
+        nodes.upsert(NodeRecord(node_id=f"deadbe0{index}", short_name=spec.render(index)))
+
+
+def test_next_free_name_warns_near_exhaustion(
+    nodes: NodeRepository, db: OdsDatabase, caplog: pytest.LogCaptureFixture
+) -> None:
+    """9 of 10 names used hits the default 0.9 warn threshold, and still allocates."""
+    spec = PatternSpec.compile("MT{n}", "0123456789", field="short_name_pattern")
+    _fill_namespace(nodes, spec, 9)
+    db.save()
+
+    with caplog.at_level(logging.WARNING, logger="meshprovision.db.nodes"):
+        index, name = nodes.next_free_name(spec)
+
+    assert (index, name) == (9, "MT9")
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("9 of 10 names used" in message for message in messages)
+
+
+def test_next_free_name_stays_quiet_below_the_threshold(
+    nodes: NodeRepository, db: OdsDatabase, caplog: pytest.LogCaptureFixture
+) -> None:
+    spec = PatternSpec.compile("MT{n}", "0123456789", field="short_name_pattern")
+    _fill_namespace(nodes, spec, 5)
+    db.save()
+
+    with caplog.at_level(logging.WARNING, logger="meshprovision.db.nodes"):
+        index, name = nodes.next_free_name(spec)
+
+    assert (index, name) == (5, "MT5")
+    assert caplog.records == []
+
+
+def test_next_free_name_honours_an_explicit_warn_at(
+    nodes: NodeRepository, db: OdsDatabase, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An explicit ``warn_at`` overrides the default threshold in both directions."""
+    spec = PatternSpec.compile("MT{n}", "0123456789", field="short_name_pattern")
+    _fill_namespace(nodes, spec, 5)
+    db.save()
+
+    with caplog.at_level(logging.WARNING, logger="meshprovision.db.nodes"):
+        nodes.next_free_name(spec, warn_at=0.5)
+    assert any("5 of 10 names used" in record.getMessage() for record in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="meshprovision.db.nodes"):
+        nodes.next_free_name(spec, warn_at=0.99)
+    assert caplog.records == []
