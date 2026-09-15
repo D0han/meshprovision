@@ -646,6 +646,111 @@ def test_ods_database_save_backup_true_creates_one_file_under_data_backups(
     assert len(backup_files) == 1
 
 
+def test_ods_database_create_overwrite_true_replaces_an_existing_file(tmp_path: Path) -> None:
+    """`overwrite=True` must actually succeed against an existing file, not just skip the raise.
+
+    The only existing `create()` test exercises the exists-without-overwrite
+    refusal; the overwrite=True success path itself was untested.
+    """
+    path = tmp_path / "db.ods"
+    first = ods.OdsDatabase.create(path)
+    first.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+    first.save()
+
+    second = ods.OdsDatabase.create(path, overwrite=True)
+
+    assert second.rows("Nodes") == ()
+
+
+def test_ods_database_context_manager_unlocks_on_exit(tmp_path: Path) -> None:
+    """`__enter__`/`__exit__` -- the documented context-manager protocol -- must actually work.
+
+    No internal caller uses `OdsDatabase` as a context manager
+    (`CliContext.open_database` builds its own wrapper for CLI-specific
+    lock timing), but it's `__all__`-exported public API and was
+    completely untested.
+    """
+    path = tmp_path / "db.ods"
+    ods.create_empty(path, backup=False)
+    db = ods.OdsDatabase(path)
+    db.lock()
+
+    with db as entered:
+        assert entered is db
+        assert db._lock_cm is not None
+
+    assert db._lock_cm is None
+
+
+def test_ods_database_lock_is_idempotent(tmp_path: Path) -> None:
+    """Calling `lock()` twice on the same instance must not raise or double-acquire."""
+    path = tmp_path / "db.ods"
+    ods.create_empty(path, backup=False)
+    db = ods.OdsDatabase(path)
+    db.lock()
+    db.lock()
+
+    assert db._lock_cm is not None
+    db.unlock()
+
+
+def test_read_raw_stops_after_max_blank_rows_across_separate_row_elements(
+    tmp_path: Path, keypair
+) -> None:
+    """MAX_BLANK_ROWS must accumulate across many separate blank rows, not just one giant one.
+
+    Distinct from MAX_ROW_REPEAT (a single row element with a huge
+    ``numberrowsrepeated`` count, LibreOffice's trailing filler row):
+    each row written via ``write_database`` is its own separate
+    ``table:table-row`` element with an implicit repeat of 1, so
+    ``MAX_BLANK_ROWS + 1`` of them individually exercises the
+    consecutive-blank *accumulation* path instead.
+    """
+    node, pub, priv = _sample_records(keypair)
+    blank_row = {col.name: "" for col in schema.SHEET_SPECS["Nodes"].columns}
+    trailing_node = node.with_updates(node_id="cafe0002")
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path,
+        nodes=[node.to_row(), *([blank_row] * (ods.MAX_BLANK_ROWS + 1)), trailing_node.to_row()],
+        keys=[pub.to_row(), priv.to_row()],
+        backup=False,
+    )
+
+    raw = ods.read_raw(path)
+
+    # The real row that started the run, plus exactly MAX_BLANK_ROWS blanks
+    # before exhaustion kicks in -- the trailing real row after the run of
+    # blanks must never be reached.
+    assert len(raw.sheets["Nodes"].rows) == 1 + ods.MAX_BLANK_ROWS
+    node_id_idx = schema.NODES_SHEET_SPEC.column_index("node_id")
+    seen_node_ids = {row[node_id_idx].text for row in raw.sheets["Nodes"].rows}
+    assert "cafe0002" not in seen_node_ids
+
+
+def test_module_level_verify_returns_the_same_warnings_as_load(tmp_path: Path, keypair) -> None:
+    """`ods.verify()` -- `__all__`-exported public API, unused by any CLI command.
+
+    `mesh db verify` goes through the richer `db/verify.py` module instead,
+    but this thin "load purely for warnings" helper is still documented
+    public API and had zero test coverage. Uses a hand-edited stale-formula
+    cell (the same technique as the stale-cached-formula tests above) so
+    the expected warnings are genuinely non-empty -- otherwise a mutant
+    returning a bare `()` would pass unnoticed against a warning-free file.
+    """
+    from tests.unit.conftest import edit_ods_cell
+
+    path = tmp_path / "db.ods"
+    node, pub, priv = _sample_records(keypair)
+    ods.write_database(path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()])
+    edit_ods_cell(path, "Nodes", "private_key_ref", 2, "WRONG_ref")
+
+    warnings = ods.verify(path)
+
+    assert len(warnings) == 1
+    assert warnings == ods.load_database(path).warnings
+
+
 # ---------------------------------------------------------------------------
 # schema.py units.
 # ---------------------------------------------------------------------------
