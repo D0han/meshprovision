@@ -5,9 +5,9 @@ Defines the ``cli`` group object that ``pyproject.toml``'s
 invokes directly -- there is deliberately no separate ``main()``
 wrapper. Declares every global option, builds the layered
 :class:`~meshprovision.cli.common.Settings` and the shared
-:class:`~meshprovision.cli.common.CliContext`, and registers the five
+:class:`~meshprovision.cli.common.CliContext`, and registers the six
 subcommands produced by the cli-commands group: ``provision``,
-``status``, ``admin``, ``db``, ``adopt``.
+``status``, ``admin``, ``db``, ``adopt``, ``template``.
 
 The group callback itself does no I/O beyond building settings and
 configuring logging -- it never opens the database, loads the template,
@@ -37,6 +37,7 @@ from meshprovision.cli.common import (
 from meshprovision.cli.db_cmd import db
 from meshprovision.cli.provision import provision
 from meshprovision.cli.status import status
+from meshprovision.cli.template_cmd import template
 
 __all__ = ["cli"]
 
@@ -147,5 +148,5 @@ def cli(
     )
 
 
-for command in (provision, status, admin, db, adopt):
+for command in (provision, status, admin, db, adopt, template):
     cli.add_command(command)

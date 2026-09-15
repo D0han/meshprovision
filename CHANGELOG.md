@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Single `mesh` console script (distribution `meshprovision`) with five
-  subcommand groups: `provision`, `status`, `admin`, `db`, and `adopt`.
+- Single `mesh` console script (distribution `meshprovision`) with six
+  subcommand groups: `provision`, `status`, `admin`, `db`, `adopt`, and
+  `template`.
 - `mesh provision`: Serial/BLE/TCP transports with an explicit selection
   priority, FACTORY/PROVISIONED/FOREIGN detection, a pure change planner that
   makes `--dry-run` exact, drift repair, and transactional writes verified by
@@ -33,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mesh db list`: offline counterpart to `mesh status` -- a plain dump of the
   `Nodes` sheet's own content, with no device connection or external data
   source involved.
+- `mesh template validate`: a sixth subcommand group. Validates the
+  configured template file with no database or device needed, letting a
+  template failure be the command's own real result rather than the
+  degraded-to-a-warning treatment `mesh db verify`'s own template
+  cross-check deliberately gives it.
 - `mesh adopt`: strictly read-only inventory of an already-configured,
   already-deployed node -- connects like `mesh provision` but never writes
   to the device, and records live names, admin keys, firmware version,

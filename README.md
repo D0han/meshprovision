@@ -335,7 +335,7 @@ vary.
 
 ## Commands
 
-The toolkit installs **one** console script, `mesh`, with five subcommand
+The toolkit installs **one** console script, `mesh`, with six subcommand
 groups. **Global options go before the subcommand** -- for example
 `mesh --no-cache status --json`, not `mesh status --no-cache`.
 
@@ -617,6 +617,25 @@ mesh db list --json
   management mode, region, role, authorized admin key refs, notes) --
   no device connection, no `MESHPROVISION_CONTACT`, no network round
   trip.
+
+### `mesh template`
+
+```bash
+mesh template validate
+mesh --template-path ./candidate.yaml template validate --json
+```
+
+`validate` checks the configured template file -- name pattern byte
+limits, namespace capacity, `admin_nodes` shape and count, forbidden
+key-material fields -- with no database and no device connection at all.
+`mesh db verify` already runs the same checks as part of validating a
+database, but deliberately *degrades* a template failure to a warning
+there (verifying a database has to keep working even with a broken
+template); `mesh template validate` is the fast, standalone way to check
+"is my template valid" on its own, and lets a template failure be the
+command's own real, non-degraded result. Uses whichever template path
+`--template-path`/`MESHPROVISION_TEMPLATE_PATH`/`.env` resolves to --
+there is no separate override specific to this command.
 
 ### Exit codes
 
