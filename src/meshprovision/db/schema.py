@@ -620,6 +620,19 @@ NODES_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
             secret=True,
             width="4.0in",
         ),
+        ColumnSpec(
+            name="archived_at",
+            description=(
+                "UTC timestamp this node was archived (soft-deleted) via "
+                "'mesh db forget', or empty if it is active. An archived node is "
+                "excluded from mesh status and refused by mesh provision/mesh "
+                "admin bootstrap/mesh adopt, but its row (including "
+                "authorized_admin_keys and notes) is never deleted -- only "
+                "'mesh db list' shows it by default, so audit history survives."
+            ),
+            kind=ColumnKind.TIMESTAMP,
+            width="1.5in",
+        ),
     ),
 )
 

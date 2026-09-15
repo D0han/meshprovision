@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   template failure be the command's own real result rather than the
   degraded-to-a-warning treatment `mesh db verify`'s own template
   cross-check deliberately gives it.
+- `mesh db forget`: archives (soft-deletes) a node via a new
+  `archived_at` column -- the row (including `authorized_admin_keys` and
+  `notes`) is never deleted, so audit history survives. An archived node
+  is excluded from `mesh status`'s default report (an explicit `--node`
+  request for it still wins) and refused outright by `mesh
+  provision`/`mesh admin bootstrap`/`mesh adopt`, with no `--force`
+  bypass. `mesh db list` shows an `Archived` column/field for every node
+  either way.
 - `mesh adopt`: strictly read-only inventory of an already-configured,
   already-deployed node -- connects like `mesh provision` but never writes
   to the device, and records live names, admin keys, firmware version,

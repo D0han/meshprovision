@@ -59,6 +59,7 @@ __all__ = [
     "NameCapacityError",
     "NamePatternError",
     "NamespaceExhaustedError",
+    "NodeArchivedError",
     "NodeIdError",
     "NodeNotEnrolledError",
     "NodeNotFoundError",
@@ -911,6 +912,35 @@ class NodeNotEnrolledError(ProvisioningError):
             message: Human-readable description of what went wrong.
             node_id: The node's id, for display.
             hint: Actionable suggestion; defaults to pointing at --enroll.
+        """
+        super().__init__(message, hint=hint)
+        self.node_id = node_id
+
+
+class NodeArchivedError(ProvisioningError):
+    """A node was archived (soft-deleted) via ``mesh db forget`` and refuses further action.
+
+    Attributes:
+        node_id: The node's id, for display.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        node_id: str,
+        hint: str | None = (
+            "This node was archived via `mesh db forget`. If it's back in service, "
+            "clear the archive first (there is no CLI command for that yet -- edit "
+            "the Nodes sheet's archived_at cell by hand and re-run `mesh db verify`)."
+        ),
+    ) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Human-readable description of what went wrong.
+            node_id: The node's id, for display.
+            hint: Actionable suggestion; defaults to explaining archived_at.
         """
         super().__init__(message, hint=hint)
         self.node_id = node_id

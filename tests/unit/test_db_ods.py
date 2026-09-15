@@ -89,6 +89,36 @@ def test_round_trip_management_mode(tmp_path: Path, keypair, mode: ManagementMod
     assert round_tripped_node.management is mode
 
 
+def test_round_trip_archived_at(tmp_path: Path, keypair) -> None:
+    node, pub, priv = _sample_records(keypair)
+    archived_ts = datetime(2026, 3, 1, tzinfo=UTC)
+    node = node.with_updates(archived_at=archived_ts)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    loaded = ods.load_database(path)
+    assert loaded.warnings == ()
+    round_tripped_node = NodeRecord.from_row(loaded.nodes[0])
+    assert round_tripped_node == node
+    assert round_tripped_node.archived_at == archived_ts
+    assert round_tripped_node.is_archived is True
+
+
+def test_round_trip_archived_at_empty_cell_is_not_archived(tmp_path: Path, keypair) -> None:
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    loaded = ods.load_database(path)
+    round_tripped_node = NodeRecord.from_row(loaded.nodes[0])
+    assert round_tripped_node.archived_at is None
+    assert round_tripped_node.is_archived is False
+
+
 def test_round_trip_unregistered_admin_keys(tmp_path: Path, keypair, keypair_factory) -> None:
     other = keypair_factory()
     unregistered = (encode_key(keypair.public), encode_key(other.public))
@@ -544,12 +574,12 @@ def test_check_header_hint_names_missing_trailing_column(tmp_path: Path, keypair
     ods.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
-    edit_ods_cell(path, "Nodes", "unregistered_admin_keys", 1, "")
+    edit_ods_cell(path, "Nodes", "archived_at", 1, "")
 
     with pytest.raises(SchemaError) as exc_info:
         ods.load_database(path)
     assert exc_info.value.hint is not None
-    assert "unregistered_admin_keys" in exc_info.value.hint
+    assert "archived_at" in exc_info.value.hint
 
 
 def test_check_header_no_hint_for_non_prefix_mismatch(tmp_path: Path, keypair) -> None:

@@ -515,7 +515,14 @@ def run_status(
     )
     try:
         records = load_records(settings.db_path)
-        ids = options.node_ids or tuple(records)
+        # An explicit --node request always wins, even for an archived node
+        # (the operator asked for it by name); the default "show everything"
+        # case excludes archived nodes -- they were deliberately
+        # decommissioned via `mesh db forget` and querying/reporting on them
+        # every run would just show a permanently "offline" ghost entry.
+        ids = options.node_ids or tuple(
+            node_id for node_id, record in records.items() if not record.is_archived
+        )
 
         sources: list[DataSource] = []
         if SOURCE_LORANET in options.sources:

@@ -140,6 +140,13 @@ class NodeRecord(BaseModel):
             adopt, same "observed rows mirror live reality" semantics
             as :attr:`authorized_admin_keys`. The only way to the raw
             bytes is :meth:`unregistered_admin_key_materials`.
+        archived_at: Tz-aware UTC timestamp this node was archived
+            (soft-deleted) via ``mesh db forget``, or ``None`` if it is
+            active. An archived row is never removed -- every other
+            field, including :attr:`authorized_admin_keys` and
+            :attr:`notes`, is preserved for audit history -- but
+            :attr:`is_archived` gates whether commands that act on a
+            live device should touch it.
     """
 
     model_config = ConfigDict(
@@ -165,6 +172,7 @@ class NodeRecord(BaseModel):
     ble_pin: SecretStr | None = None
     management: ManagementMode = ManagementMode.TEMPLATE
     unregistered_admin_keys: tuple[SecretStr, ...] = ()
+    archived_at: datetime | None = None
 
     @field_validator("node_id")
     @classmethod
@@ -332,6 +340,15 @@ class NodeRecord(BaseModel):
         """
         return schema.ref_for(self.node_id, KeyType.CHANNEL_PSK)
 
+    @property
+    def is_archived(self) -> bool:
+        """Whether this node has been archived (soft-deleted) via ``mesh db forget``.
+
+        Returns:
+            ``True`` if :attr:`archived_at` is set.
+        """
+        return self.archived_at is not None
+
     def unregistered_admin_key_materials(self) -> tuple[bytes, ...]:
         """Decode :attr:`unregistered_admin_keys` to raw bytes.
 
@@ -362,7 +379,7 @@ class NodeRecord(BaseModel):
         set via :meth:`with_updates` can never reach disk.
 
         Returns:
-            The full ``{column_name: text}`` row, covering exactly the 22
+            The full ``{column_name: text}`` row, covering exactly the 23
             :data:`~meshprovision.db.schema.NODES_SHEET_SPEC` columns.
         """
         return {
@@ -394,6 +411,9 @@ class NodeRecord(BaseModel):
             "unregistered_admin_keys": schema.format_ref_list(
                 [item.get_secret_value() for item in self.unregistered_admin_keys]
             ),
+            "archived_at": (
+                "" if self.archived_at is None else schema.utc_timestamp(self.archived_at)
+            ),
         }
 
     @classmethod
@@ -420,6 +440,7 @@ class NodeRecord(BaseModel):
         gps_alt_raw = row.get("gps_alt", "")
         first_added_raw = row.get("first_added_ts", "")
         last_updated_raw = row.get("last_updated_ts", "")
+        archived_raw = row.get("archived_at", "")
         ble_pin_raw = row.get("ble_pin", "")
         management = ManagementMode(row.get("management") or ManagementMode.TEMPLATE.value)
         # An empty role/region cell is anomalous for a TEMPLATE row (build_plan
@@ -454,6 +475,7 @@ class NodeRecord(BaseModel):
                 SecretStr(item)
                 for item in schema.normalize_ref_list(row.get("unregistered_admin_keys", ""))
             ),
+            archived_at=schema.parse_timestamp(archived_raw) if archived_raw else None,
         )
 
     def with_updates(self, **changes: object) -> NodeRecord:

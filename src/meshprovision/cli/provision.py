@@ -48,6 +48,7 @@ from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import (
     DeviceNotFoundError,
     ExitCode,
+    NodeArchivedError,
     NodeNotEnrolledError,
     PlanConflictError,
 )
@@ -512,6 +513,8 @@ def run_provision(
             satisfied.
         NamespaceExhaustedError: If a name pattern's namespace is
             exhausted while allocating a new name.
+        NodeArchivedError: If the node's database record was archived
+            via ``mesh db forget``.
         NodeNotEnrolledError: If the node's database record has
             ``management == ManagementMode.OBSERVED`` and ``opts.enroll``
             is not set.
@@ -523,6 +526,12 @@ def run_provision(
     record = db.nodes.find(live.node_id)
     detection = detect.classify(live, db_entry=record)
     ctx.info(detection.summary())
+
+    if record is not None and record.is_archived:
+        raise NodeArchivedError(
+            f"Node {live.node_id.display} was archived via `mesh db forget`.",
+            node_id=live.node_id.display,
+        )
 
     if record is not None and record.management is ManagementMode.OBSERVED and not opts.enroll:
         raise NodeNotEnrolledError(

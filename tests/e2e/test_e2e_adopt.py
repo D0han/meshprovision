@@ -6,6 +6,7 @@ import base64
 import json
 import re
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -97,6 +98,29 @@ def test_refuses_a_template_managed_node_without_force(
     assert result.exit_code != 0
     assert db_fingerprint(db_path) == before
     assert "--force" in result.stderr
+
+
+def test_refuses_an_archived_node_even_with_force(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    """An archived node must never be silently re-adopted, not even with --force.
+
+    Distinct from the template-managed refusal above: --force exists
+    specifically to bypass *that* check, but archiving is a deliberate
+    decommission decision that a different command (mesh db forget) made
+    -- mesh adopt reusing --force to also silently un-archive a node
+    would be a confusing side channel, so there is no bypass here at all.
+    """
+    record = NodeRecord(node_id="deadbe01", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
+    db_path = seed_db(nodes=[record])
+    before = db_fingerprint(db_path)
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--force"], env)
+
+    assert result.exit_code != 0
+    assert db_fingerprint(db_path) == before
+    assert "archived" in result.stderr.lower()
 
 
 def test_force_re_adopts_and_demotes_with_explicit_confirmation(

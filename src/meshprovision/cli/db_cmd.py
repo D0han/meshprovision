@@ -17,12 +17,18 @@ the cross-process write lock -- see :func:`~meshprovision.db.atomic_writer
 .restore_backup`'s docstring and :mod:`meshprovision.db.locking`. ``mesh
 db list`` is the offline counterpart to ``mesh status``: a plain dump of
 the ``Nodes`` sheet's own content, with no device connection or external
-data source involved.
+data source involved. ``mesh db forget`` archives (soft-deletes) a node:
+its row is never removed, only its ``archived_at`` cell is set, so
+``authorized_admin_keys``/``notes`` survive for audit history while
+:attr:`~meshprovision.db.nodes.NodeRecord.is_archived` gates whether
+``mesh status``/``mesh provision``/``mesh admin bootstrap``/``mesh adopt``
+still act on it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -49,6 +55,7 @@ if TYPE_CHECKING:
 __all__ = [
     "db",
     "db_backup",
+    "db_forget",
     "db_list",
     "db_restore",
     "db_verify",
@@ -355,6 +362,11 @@ def db_list(ctx: CliContext, *, json_output: bool) -> None:
                         "role": record.role,
                         "authorized_admin_keys": list(record.authorized_admin_keys),
                         "notes": record.notes,
+                        "archived_at": (
+                            None
+                            if record.archived_at is None
+                            else schema.utc_timestamp(record.archived_at)
+                        ),
                     }
                     for record in records
                 ]
@@ -376,6 +388,7 @@ def db_list(ctx: CliContext, *, json_output: bool) -> None:
     table.add_column("Region")
     table.add_column("Role")
     table.add_column("Admin keys")
+    table.add_column("Archived")
     for record in records:
         table.add_row(
             record.node_id,
@@ -387,5 +400,61 @@ def db_list(ctx: CliContext, *, json_output: bool) -> None:
             record.region or "-",
             record.role or "-",
             ", ".join(record.authorized_admin_keys) or "-",
+            schema.utc_timestamp(record.archived_at) if record.archived_at else "-",
         )
     ctx.err.print(table, markup=False, highlight=False)
+
+
+@db.command(name="forget")
+@click.argument("node_id")
+@click.option("-y", "--yes", is_flag=True, default=False, help="Assume yes to the confirmation.")
+@click.option(
+    "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of human text."
+)
+@pass_cli
+@handle_cli_errors
+def db_forget(ctx: CliContext, *, node_id: str, yes: bool, json_output: bool) -> None:
+    """Archive (soft-delete) a node -- exclude it from mesh status/provision/adopt/admin bootstrap.
+
+    Never deletes the row: every field, including ``authorized_admin_keys``
+    and ``notes``, is preserved for audit history -- only ``archived_at``
+    is set. ``mesh db list`` still shows an archived node (with its
+    ``Archived`` column filled in) by default.
+
+    Args:
+        ctx: The shared CLI context, injected by :data:`~meshprovision.
+            cli.common.pass_cli`.
+        node_id: The node id to archive, in any form
+            :meth:`~meshprovision.nodeid.NodeId.parse` accepts.
+        yes: Whether to assume yes to the confirmation, from ``-y``/``--yes``.
+        json_output: Whether to emit JSON, from ``--json``.
+
+    Raises:
+        NodeNotFoundError: If ``node_id`` does not resolve to a row in
+            the database.
+    """
+    ctx = ctx.with_assume_yes(yes)
+
+    with ctx.open_database(for_write=True) as db:
+        record = db.nodes.get(node_id)
+        display = record.node
+
+        if record.is_archived:
+            ctx.info(f"Node {display.display} is already archived; nothing to do.")
+            return
+
+        question = (
+            f"Archive {display.display}? It will be excluded from `mesh status` and refused "
+            "by `mesh provision`/`mesh admin bootstrap`/`mesh adopt`, but its row (admin keys, "
+            "notes) stays in the database."
+        )
+        if not ctx.confirm(question, default=False):
+            raise click.Abort()
+
+        now = datetime.now(tz=UTC)
+        db.nodes.upsert(record.with_updates(archived_at=now))
+        db.db.save()
+
+    ctx.success(f"Archived {display.display}.")
+    if json_output:
+        echo_json({"node_id": display.hex, "archived_at": schema.utc_timestamp(now)})

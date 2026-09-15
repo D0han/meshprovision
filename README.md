@@ -268,6 +268,8 @@ LibreOffice, not a CSV dump.
 | `channel_psk_ref` | DERIVED, formula `=[.A{row}]&"_psk"` | Reference to this node's channel PSK row in the `Keys` sheet |
 | `ble_pin` | PIN, SECRET | 6-digit `bluetooth.fixed_pin`, stored as text so leading zeros survive; never logged or displayed |
 | `management` | ENUM (dropdown `mp_management`) | `template` (the default; `mesh provision` enforces the template on this node) or `observed` (`mesh adopt` recorded this node's live state as-is; `mesh provision` refuses to touch it until `--enroll`). Empty reads back as `template`, so every pre-existing row keeps its current behavior |
+| `unregistered_admin_keys` | BASE64_KEY_LIST (`;`-separated), SECRET | Raw base64-encoded admin public keys (32 bytes each) `mesh adopt` observed live on this node's `security.adminKey` that aren't registered in the `Keys` sheet -- enables exact-material cross-device duplicate-admin-key detection (CVE-2025-52464) even before either key is ever imported. Marked SECRET to match `key_value`'s treatment, even though an admin key is itself a public, not secret, value |
+| `archived_at` | TIMESTAMP | UTC timestamp this node was archived (soft-deleted) via `mesh db forget`, or empty if active. Excludes the node from `mesh status` and refuses `mesh provision`/`mesh admin bootstrap`/`mesh adopt`, but every other cell on the row is preserved |
 
 ### Keys sheet
 
@@ -414,6 +416,10 @@ gate, since it drives this same pipeline. `--enroll` graduates the row to
 `management=template` on a successful apply; it is a one-time flag --
 once enrolled, ordinary `mesh provision` runs need it again.
 
+A node archived via `mesh db forget` is refused outright, checked before
+the enrollment gate (exit code 5, no bypass flag) -- `mesh admin
+bootstrap` inherits this too.
+
 **Transactional guarantee:** after each `writeConfig(section)` the config
 is re-read and compared to intent; key writes are additionally verified
 by reading the public key back off the device. Any unconfirmed write
@@ -478,7 +484,10 @@ narrow-only rule for a template-managed row, an observed row has no
 desired state to preserve against, so it mirrors reality every time,
 including dropping a ref for a key that's no longer on the device.
 Re-adopting a `management=template` row is refused unless `--force` is
-passed, and the confirmation prompt names the demotion explicitly.
+passed, and the confirmation prompt names the demotion explicitly. A
+node archived via `mesh db forget` is refused outright, `--force`
+included -- archiving is a separate, deliberate decommission decision
+that `mesh adopt` never silently reverses.
 
 **Typical workflow for an existing fleet:**
 
@@ -527,6 +536,9 @@ failure, exits `7`. Pass `--no-fail-on-offline` to suppress that.
 **Cache note:** every outbound request goes through the TTL disk cache; a
 second run inside the TTL performs zero network calls. `--no-cache` /
 `--force-refresh` bypasses reads but still writes the response back.
+
+**Archived nodes** (see `mesh db forget` below) are excluded from the
+default report -- an explicit `--node` request for one still wins.
 
 ### `mesh admin`
 
@@ -583,6 +595,7 @@ mesh db backup --retention 20 --backup-dir /mnt/usb/mesh-backups
 mesh db restore data/backups/nodes_db-20260101T000000.000000Z.ods
 mesh db list
 mesh db list --json
+mesh db forget deadbe01
 ```
 
 | Option | Meaning |
@@ -591,7 +604,7 @@ mesh db list --json
 | `--backup-dir` (`backup`, `restore`) | Directory backups are stored under/read from. Defaults to `data/backups` |
 | `--retention` (`backup`) | Number of backups to retain (default: 20) |
 | `--list` (`backup`) | List existing backups instead of creating one |
-| `-y`/`--yes` (`restore`) | Assume yes to the overwrite confirmation |
+| `-y`/`--yes` (`restore`, `forget`) | Assume yes to the confirmation |
 | `--json` | Emit JSON instead of human text |
 
 - `verify` layers cross-reference checks, a weak-key audit over every key
@@ -616,7 +629,15 @@ mesh db list --json
   `Nodes` sheet's own content (short/long name, hardware model, firmware,
   management mode, region, role, authorized admin key refs, notes) --
   no device connection, no `MESHPROVISION_CONTACT`, no network round
-  trip.
+  trip. Shows an `Archived` column/field for every node, archived or not.
+- `forget` archives (soft-deletes) a node: it's excluded from `mesh
+  status`'s default report and refused by `mesh provision`/`mesh admin
+  bootstrap`/`mesh adopt` (not bypassable with `--force`), but its row --
+  including `authorized_admin_keys` and `notes` -- is never deleted, so
+  audit history survives. `mesh db list` still shows it by default.
+  There is currently no CLI command to un-archive a node; the hint on a
+  refused command names the manual workaround (edit the `archived_at`
+  cell by hand).
 
 ### `mesh template`
 

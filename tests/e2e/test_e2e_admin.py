@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -360,6 +361,20 @@ def test_admin_bootstrap_inherits_the_enroll_gate(
 
     assert result.exit_code == int(ExitCode.PROVISIONING)
     assert "--enroll" in result.stderr
+
+
+def test_admin_bootstrap_inherits_the_archived_gate(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    """admin_bootstrap reuses run_provision wholesale -- confirms it inherits this gate too."""
+    record = NodeRecord(node_id="deadbe01", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
+    seed_db(nodes=[record])
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "archived" in result.stderr.lower()
 
 
 def test_admin_import_registers_a_held_public_key(runner: CliRunner, env: dict[str, str]) -> None:

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.crypto.keys import generate_keypair
+from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType
@@ -530,6 +531,7 @@ def test_db_list_json_reports_every_node(
             "role": "CLIENT",
             "authorized_admin_keys": ["ADMIN1_pub"],
             "notes": "a note",
+            "archived_at": None,
         }
     ]
 
@@ -577,3 +579,83 @@ def test_db_list_never_connects_to_a_device_or_the_network(
     result = invoke(runner, ["db", "list", "--json"], env)
 
     assert result.exit_code == 0
+
+
+def test_db_forget_archives_a_node_without_deleting_its_row(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="deadbe01",
+                short_name="MT00",
+                authorized_admin_keys=("ADMIN1_pub",),
+                notes="a note",
+            )
+        ]
+    )
+
+    result = invoke(runner, ["db", "forget", "deadbe01", "--yes", "--json"], env)
+
+    assert result.exit_code == 0
+    assert "Archived" in result.stderr
+    document = json.loads(result.stdout)
+    assert document["node_id"] == "deadbe01"
+    assert document["archived_at"]
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    row = loaded.nodes[0]
+    assert row["node_id"] == "deadbe01"
+    assert row["archived_at"]
+    # Audit history preserved -- nothing about the row was deleted.
+    assert row["authorized_admin_keys"] == "ADMIN1_pub"
+    assert row["notes"] == "a note"
+
+
+def test_db_forget_is_idempotent(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00")])
+    invoke(runner, ["db", "forget", "deadbe01", "--yes"], env)
+
+    result = invoke(runner, ["db", "forget", "deadbe01", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "already archived" in result.stderr
+
+
+def test_db_forget_refuses_without_confirmation_when_non_interactive(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00")])
+
+    result = invoke(runner, ["db", "forget", "deadbe01"], env)
+
+    assert result.exit_code == 5
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert loaded.nodes[0]["archived_at"] == ""
+
+
+def test_db_forget_unknown_node_id_fails(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[])
+
+    result = invoke(runner, ["db", "forget", "deadbe01", "--yes"], env)
+
+    assert result.exit_code != 0
+    assert "not found" in result.stderr
+
+
+def test_db_list_shows_the_archived_timestamp(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00")])
+    invoke(runner, ["db", "forget", "deadbe01", "--yes"], env)
+
+    json_result = invoke(runner, ["db", "list", "--json"], env)
+    document = json.loads(json_result.stdout)
+    assert document["nodes"][0]["archived_at"]
+
+    text_result = invoke(runner, ["db", "list"], env)
+    assert "deadbe01" in text_result.stderr

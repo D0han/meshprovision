@@ -384,6 +384,51 @@ def test_node_filter_restricts_the_report(
     assert document["nodes"][0]["node_id"] == "deadbe01"
 
 
+def test_archived_node_is_excluded_by_default_but_shown_if_explicitly_requested(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """A node archived via `mesh db forget` must not clutter the default report.
+
+    It was deliberately decommissioned; showing it as perpetually
+    "offline" on every run would be noise, not signal. An explicit
+    `--node` request for it specifically still wins, though -- the
+    operator asked for it by name.
+    """
+    from datetime import UTC, datetime
+
+    from meshprovision.db.nodes import NodeRecord
+
+    active = NodeRecord(node_id="deadbe01", short_name="AAAA", region="EU_868")
+    archived = NodeRecord(
+        node_id="deadbe02",
+        short_name="BBBB",
+        region="EU_868",
+        archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    seed_db(nodes=[active, archived])
+    recent = int(time.time()) - 60
+
+    with mock_sources(
+        nodes={
+            "deadbe01": {"shortName": "AAAA", "seenBy": {"gw1": recent}},
+            "deadbe02": {"shortName": "BBBB", "seenBy": {"gw1": recent}},
+        }
+    ):
+        default_result = invoke(runner, ["status", "--json"], env)
+        explicit_result = invoke(runner, ["status", "--json", "--node", "!deadbe02"], env)
+
+    assert default_result.exit_code == 0
+    default_document = json.loads(default_result.stdout)
+    assert [n["node_id"] for n in default_document["nodes"]] == ["deadbe01"]
+
+    assert explicit_result.exit_code == 0
+    explicit_document = json.loads(explicit_result.stdout)
+    assert [n["node_id"] for n in explicit_document["nodes"]] == ["deadbe02"]
+
+
 def test_threshold_ordering_is_validated(runner: CliRunner, env: dict[str, str]) -> None:
     result = invoke(runner, ["status", "--stale-after", "30", "--offline-after", "10"], env)
     assert result.exit_code == 2

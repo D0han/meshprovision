@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -124,6 +125,26 @@ def test_enroll_graduates_an_observed_node_to_template_management(
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     persisted = NodeRecord.from_row(loaded.nodes[0])
     assert persisted.management is ManagementMode.TEMPLATE
+
+
+def test_provision_refuses_an_archived_node(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    """A node archived via `mesh db forget` must never be silently re-provisioned.
+
+    Checked before the enrollment gate (an archived node is more
+    fundamentally off-limits than a merely-unenrolled one) and before
+    any device write.
+    """
+    record = NodeRecord(node_id="deadbe01", archived_at=datetime(2026, 1, 1, tzinfo=UTC))
+    seed_db(nodes=[record])
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "archived" in result.stderr.lower()
+    assert iface.localNode.written_sections == []
 
 
 def test_template_managed_node_is_unaffected_by_the_enroll_gate(

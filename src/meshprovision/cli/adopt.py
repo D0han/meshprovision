@@ -31,7 +31,7 @@ from meshprovision.cli.provision import TransportOptions, resolve_backend, trans
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
 from meshprovision.db.schema import ManagementMode
-from meshprovision.errors import AdoptionRefusedError, KeyMaterialError
+from meshprovision.errors import AdoptionRefusedError, KeyMaterialError, NodeArchivedError
 from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning import connection, detect
 
@@ -245,6 +245,8 @@ def adopt(
             from ``--show-admin-keys``.
 
     Raises:
+        NodeArchivedError: If the node's database record was archived
+            via ``mesh db forget`` -- not bypassable with ``--force``.
         AdoptionRefusedError: If the node's database record is already
             ``management=template`` and ``--force`` was not passed.
         click.Abort: If the operator declines the confirmation prompt.
@@ -269,6 +271,11 @@ def adopt(
             live = detect.read_live_config(iface)
 
         existing = db.nodes.find(live.node_id)
+        if existing is not None and existing.is_archived:
+            raise NodeArchivedError(
+                f"Node {live.node_id.display} was archived via `mesh db forget`.",
+                node_id=live.node_id.display,
+            )
         if existing is not None and existing.management is ManagementMode.TEMPLATE and not force:
             raise AdoptionRefusedError(
                 f"Node {live.node_id.display} is template-managed; mesh adopt "
