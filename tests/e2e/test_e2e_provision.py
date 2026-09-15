@@ -354,6 +354,39 @@ def test_drift_repair_renames_back_and_updates_role(
     assert bytes(iface.localNode.localConfig.security.public_key) == kp.public
 
 
+def test_rename_reallocates_a_fresh_name_for_an_already_provisioned_node(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """``--rename`` is the one flag that makes ``allocate_names`` actually run again.
+
+    Without it (see ``test_zero_admin_keys_is_a_valid_outcome_never_repaired``
+    and ``test_drift_repair_renames_back_and_updates_role`` above), a second
+    provisioning run of an already-known node keeps its recorded name --
+    ``allocate_names`` returns ``(None, None)`` and ``build_plan`` falls back
+    to the database's current name. Nothing in the e2e suite passed
+    ``--rename`` itself before this test, so the "no change" behavior of the
+    other tests was never actually contrasted against the opt-in case.
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    first = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    node = NodeRecord.from_row(loaded.nodes[0])
+    assert node.short_name == "MT00"
+
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--rename"], env)
+    assert second.exit_code == 0
+    assert "No changes needed." not in second.stderr
+
+    reloaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    renamed = NodeRecord.from_row(reloaded.nodes[0])
+    assert renamed.short_name != "MT00"
+    assert re.fullmatch(r"MT[0-9A-Z]{2}", renamed.short_name)
+    assert renamed.long_name == f"Meshtastic {renamed.short_name}"
+
+
 def test_stale_db_key_is_corrected_by_adopting_the_devices_reported_key(
     runner: CliRunner,
     env: dict[str, str],
