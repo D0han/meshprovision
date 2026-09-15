@@ -20,7 +20,9 @@ from meshprovision.errors import (
     EnumMappingError,
     ExitCode,
     PlanConflictError,
+    ProvisioningError,
     UnsupportedTransportError,
+    WriteVerificationError,
 )
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import apply as apply_module
@@ -46,6 +48,7 @@ from meshprovision.provisioning.plan import (
     SectionChange,
     build_plan,
 )
+from meshprovision.provisioning.plan_admin_keys import KeyPlan
 from tests.unit.conftest import make_security
 
 pytestmark = pytest.mark.unit
@@ -143,11 +146,55 @@ def test_apply_field_unsupported_type_raises() -> None:
         apply_field(msg, "role", object())
 
 
+def test_write_result_as_error_carries_the_redacted_fields_through() -> None:
+    """`WriteResult.as_error()` -- `__all__`-exported public API, unused internally.
+
+    `cli/provision.py` reimplements similar rendering inline for its own
+    CLI-specific message formatting, but this convenience method for
+    library consumers wanting a proper typed exception from a
+    `WriteResult` had zero test coverage.
+    """
+    result = WriteResult(
+        "security",
+        WriteStatus.UNCONFIRMED,
+        "admin key set mismatch: expected 1, got 0",
+        field="admin_key",
+        expected="sha256:aaaa",
+        actual="<none>",
+    )
+
+    error = result.as_error()
+
+    assert isinstance(error, WriteVerificationError)
+    assert error.section == "security"
+    assert error.field == "admin_key"
+    assert error.expected == "sha256:aaaa"
+    assert error.actual == "<none>"
+    assert "admin key set mismatch" in str(error)
+
+
 def test_write_section_unknown_section_raises() -> None:
     iface = _FakeIfaceForApply()
     change = SectionChange(section="not_a_real_section", kind=detect.SectionKind.CONFIG, changes=())
     with pytest.raises(PlanConflictError):
         write_section(iface, change)  # type: ignore[arg-type]
+
+
+def test_write_section_regenerate_without_a_keypair_raises() -> None:
+    """`write_section`'s own regenerate+keypair=None guard, called directly.
+
+    `apply_plan` never triggers this in practice -- it always resolves a
+    keypair before calling write_section when key_plan.regenerate is set
+    -- but write_section is `__all__`-exported and this internal
+    consistency check has its own error message/type worth pinning down
+    directly, the same way the unknown-section guard just above is.
+    """
+    iface = _FakeIfaceForApply()
+    change = SectionChange(section="security", kind=detect.SectionKind.CONFIG, changes=())
+    key_plan = KeyPlan(regenerate=True)
+
+    with pytest.raises(PlanConflictError, match="fresh keypair"):
+        write_section(iface, change, key_plan=key_plan, keypair=None)  # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------------------
@@ -390,6 +437,44 @@ def test_verify_plan_security_scalar_field_confirmed_via_live_security(make_live
     assert result.status == WriteStatus.CONFIRMED
 
 
+def test_verify_plan_only_long_name_changed_does_not_affect_short_name_result(
+    make_live,
+) -> None:
+    """Verifying two independent name fields when only one of them actually changed.
+
+    Every existing name-verify test changes both short_name and long_name
+    (a fresh FACTORY device) or neither -- forced here via
+    dataclasses.replace to pin desired_short_name back to its own current
+    value, simulating a device whose short_name already fit the pattern
+    while long_name still needed rewriting. Confirms short_name's
+    trivially-already-correct result doesn't interfere with or get
+    conflated with long_name's own, separately-computed result.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    plan = dataclasses.replace(
+        plan,
+        name_change=dataclasses.replace(
+            plan.name_change, desired_short_name=plan.name_change.current_short_name
+        ),
+    )
+
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.current_short_name,
+        long_name=plan.name_change.desired_long_name,
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+
+    short_result = next(r for r in results if r.field == "short_name")
+    long_result = next(r for r in results if r.field == "long_name")
+    assert short_result.status == WriteStatus.CONFIRMED
+    assert long_result.status == WriteStatus.CONFIRMED
+
+
 def test_verify_plan_name_truncated_confirmed(make_live) -> None:
     template = _template()
     live = make_live(template, security=make_security(empty=True))
@@ -588,6 +673,40 @@ def test_verify_plan_admin_keys_compared_sorted(make_live, make_admin_key) -> No
     results = verify_plan(plan, live_after, keypair=None)
     admin_result = next(r for r in results if r.field == "admin_key")
     assert admin_result.status == WriteStatus.CONFIRMED
+
+
+def test_verify_plan_admin_keys_mismatch_is_unconfirmed(make_live, make_admin_key) -> None:
+    """The admin-key write-verify mismatch branch, never exercised by any existing test.
+
+    Every other admin-key verify test (including the CONFIRMED case just
+    above) reports the device holding exactly the desired keys -- this is
+    a security-relevant write-verify check, so its failure path deserves
+    direct coverage, not just the happy path.
+    """
+    admin1 = make_admin_key("ADMIN1")
+    template = _template().model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin1,),
+    )
+    plan = build_plan(inputs)
+
+    # The device's post-write admin_key list is empty, not the desired ADMIN1 key.
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    admin_result = next(r for r in results if r.field == "admin_key")
+    assert admin_result.status == WriteStatus.UNCONFIRMED
+    assert admin_result.expected is not None and admin_result.expected.startswith("sha256:")
+    assert admin_result.actual == "<none>"
 
 
 # ---------------------------------------------------------------------------
@@ -979,6 +1098,19 @@ class _FakeIfaceForReconnect:
 
     def close(self) -> None:
         self.closed = True
+
+
+def test_reconnecting_session_interface_raises_before_open() -> None:
+    """Reading `.interface` before `open()`/`refresh()` must raise, not return None-ish garbage.
+
+    Untested caller-error guard: every existing test always calls
+    `open()` or `refresh()` first, so this branch had zero coverage.
+    """
+    backend = _FakeReconnectBackend([_FakeIfaceForReconnect()])
+    session = ReconnectingSession(backend=backend, sleep=lambda _: None)  # type: ignore[arg-type]
+
+    with pytest.raises(ProvisioningError):
+        _ = session.interface
 
 
 def test_reconnecting_session_refresh_succeeds_on_first_attempt() -> None:
