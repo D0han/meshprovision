@@ -264,10 +264,14 @@ class DeviceBus:
             reachable.
         connections: Every ``(transport, target)`` pair a patched
             ``connect()`` call recorded, in call order.
+        timeouts: Every patched ``connect()`` call's backend's
+            ``timeout`` attribute, in call order -- lets a test prove
+            ``--timeout`` actually reached the backend construction.
     """
 
     current: FakeMeshInterface | None = None
     connections: list[tuple[str, str]] = field(default_factory=list)
+    timeouts: list[float] = field(default_factory=list)
 
     def use(self, iface: FakeMeshInterface) -> FakeMeshInterface:
         """Set the interface the next ``connect()`` call should return.
@@ -317,6 +321,7 @@ def bus(monkeypatch: pytest.MonkeyPatch) -> DeviceBus:
 
     def _connect(self: connection.SerialBackend) -> MeshInterface:
         device_bus.connections.append((self.transport, self.target))
+        device_bus.timeouts.append(self.timeout)
         if device_bus.current is None:
             raise ConnectionFailedError(
                 f"no fake device configured for {self.transport} {self.target}",

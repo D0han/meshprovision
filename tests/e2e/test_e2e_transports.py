@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from meshprovision.provisioning import discovery
 from tests.e2e.conftest import FakeMeshInterface, invoke
 
 if TYPE_CHECKING:
@@ -45,6 +46,28 @@ def test_auto_serial_single_port(
     assert result.exit_code == 0
     assert bus.connections == [("serial", "/dev/ttyFAKE0")]
     assert "Using the only serial port found" in result.stderr
+
+
+def test_timeout_reaches_the_connect_backend(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """``--timeout`` is documented but no e2e test proved it reached the backend.
+
+    ``bus``'s patched ``connect()`` records each backend instance's own
+    ``timeout`` attribute (see ``DeviceBus.timeouts`` in conftest.py),
+    which is set from ``ConnectionRequest.timeout`` -- itself built
+    straight from ``opts.timeout`` in ``resolve_backend``.
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(
+        runner,
+        ["provision", "--port", "/dev/ttyFAKE0", "--timeout", "7", "--yes", "--dry-run"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert bus.timeouts == [7]
 
 
 def test_multi_port_interactive_choice(
@@ -127,6 +150,40 @@ def test_ble_via_scan(
 
     assert result.exit_code == 0
     assert bus.connections == [("ble", "AA:BB:CC:DD:EE:FF")]
+
+
+def test_ble_scan_timeout_reaches_discovery(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``--ble-scan-timeout`` is documented but no e2e test proved it reached discovery.
+
+    ``fake_ble_devices`` (used by the other BLE-scan tests) discards its
+    ``**kwargs``, so it can't tell apart a wrong timeout from a right one.
+    This test patches ``discover_ble_devices`` itself to capture the
+    ``timeout`` it was actually called with.
+    """
+    captured: list[float] = []
+
+    def _discover(**kwargs: object) -> tuple[discovery.BleDeviceInfo, ...]:
+        captured.append(kwargs["timeout"])  # type: ignore[arg-type]
+        return (
+            discovery.BleDeviceInfo(address="AA:BB:CC:DD:EE:FF", name="Meshtastic_EEFF", rssi=-60),
+        )
+
+    monkeypatch.setattr(discovery, "discover_ble_devices", _discover)
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(
+        runner,
+        ["provision", "--ble-scan", "--ble-scan-timeout", "2.5", "--yes", "--dry-run"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert captured == [2.5]
 
 
 def test_ble_scan_with_multiple_devices_prompts_the_chooser(
