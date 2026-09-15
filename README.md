@@ -968,7 +968,10 @@ documented here rather than buried.
 
 ## Development
 
-Exact commands, kept character-identical with `.github/workflows/ci.yml`:
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contribution
+workflow (branching, tests-first convention, PR checklist, secret
+hygiene). Exact toolchain commands, kept character-identical with
+`.github/workflows/ci.yml`:
 
 ```bash
 pip install -e ".[dev]"
@@ -998,4 +1001,4 @@ Extend the weak-key blocklist: `python scripts/update_known_bad_keys.py --help`.
 
 ## License
 
-MIT, as declared in `pyproject.toml`.
+MIT. See [`LICENSE`](LICENSE) (also declared in `pyproject.toml`).
