@@ -493,3 +493,87 @@ def test_db_restore_missing_backup_file_is_a_usage_error(
     result = invoke(runner, ["db", "restore", str(tmp_path / "does-not-exist.ods"), "--yes"], env)
 
     assert result.exit_code == 2
+
+
+def test_db_list_json_reports_every_node(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="deadbe01",
+                short_name="MT00",
+                long_name="Meshtastic MT00",
+                hw_model="RAK4631",
+                region="EU_868",
+                role="CLIENT",
+                authorized_admin_keys=("ADMIN1_pub",),
+                notes="a note",
+            )
+        ]
+    )
+
+    result = invoke(runner, ["db", "list", "--json"], env)
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert document["nodes"] == [
+        {
+            "node_id": "deadbe01",
+            "short_name": "MT00",
+            "long_name": "Meshtastic MT00",
+            "hw_model": "RAK4631",
+            "firmware_type": "vanilla",
+            "firmware_version": "",
+            "management": "template",
+            "region": "EU_868",
+            "role": "CLIENT",
+            "authorized_admin_keys": ["ADMIN1_pub"],
+            "notes": "a note",
+        }
+    ]
+
+
+def test_db_list_plain_text_shows_the_node_table(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="deadbe01", short_name="MT00", long_name="Meshtastic MT00", region="EU_868"
+            )
+        ]
+    )
+
+    result = invoke(runner, ["db", "list"], env)
+
+    assert result.exit_code == 0
+    assert "deadbe01" in result.stderr
+    assert "MT00" in result.stderr
+
+
+def test_db_list_no_nodes_reports_none_found(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[])
+
+    result = invoke(runner, ["db", "list"], env)
+
+    assert result.exit_code == 0
+    assert "No nodes found." in result.stdout
+
+
+def test_db_list_never_connects_to_a_device_or_the_network(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """The whole point: this must work with zero device/network dependency.
+
+    No `bus.use(FakeMeshInterface(...))`/`mock_sources()` fixture is set
+    up for this test at all -- if `db list` ever grew a device or network
+    call, this test would hang or error rather than silently pass.
+    """
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+
+    result = invoke(runner, ["db", "list", "--json"], env)
+
+    assert result.exit_code == 0

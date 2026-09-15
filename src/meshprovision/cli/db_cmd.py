@@ -1,4 +1,4 @@
-"""``mesh db`` group -- ``verify`` (schema + weak-key audit), ``backup``, ``restore``.
+"""``mesh db`` group -- ``verify``, ``backup``, ``restore``, ``list``.
 
 ``mesh db verify`` re-validates a database that may already have loaded
 successfully (schema/validation/duplicate-row failures already raised out
@@ -14,7 +14,10 @@ never rewrites the database itself. ``mesh db restore`` is the only
 command in this group that rewrites the live database directly (not via
 the normal load-modify-save session), so unlike ``backup`` it *does* take
 the cross-process write lock -- see :func:`~meshprovision.db.atomic_writer
-.restore_backup`'s docstring and :mod:`meshprovision.db.locking`.
+.restore_backup`'s docstring and :mod:`meshprovision.db.locking`. ``mesh
+db list`` is the offline counterpart to ``mesh status``: a plain dump of
+the ``Nodes`` sheet's own content, with no device connection or external
+data source involved.
 """
 
 from __future__ import annotations
@@ -24,6 +27,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
+from rich import box
+from rich.table import Table
 
 from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_errors, pass_cli
 from meshprovision.crypto import weakkeys
@@ -44,6 +49,7 @@ if TYPE_CHECKING:
 __all__ = [
     "db",
     "db_backup",
+    "db_list",
     "db_restore",
     "db_verify",
 ]
@@ -308,3 +314,78 @@ def db_restore(
     ctx.success(f"Restored {path} from {backup}.")
     if json_output:
         echo_json({"target": str(path), "restored_from": str(backup)})
+
+
+@db.command(name="list")
+@click.option(
+    "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of a table."
+)
+@pass_cli
+@handle_cli_errors
+def db_list(ctx: CliContext, *, json_output: bool) -> None:
+    """List every node recorded in the database, with no device or network dependency.
+
+    The offline counterpart to ``mesh status``: a plain dump of the
+    ``Nodes`` sheet's own content -- for when an operator just wants to
+    see what's recorded without opening the ``.ods`` by hand, without
+    ``MESHPROVISION_CONTACT`` configured, or without any of the fleet
+    actually reachable over the network.
+
+    Args:
+        ctx: The shared CLI context, injected by :data:`~meshprovision.
+            cli.common.pass_cli`.
+        json_output: Whether to emit JSON, from ``--json``.
+    """
+    with ctx.open_database() as db:
+        records = db.nodes.all()
+
+    if json_output:
+        echo_json(
+            {
+                "nodes": [
+                    {
+                        "node_id": record.node_id,
+                        "short_name": record.short_name,
+                        "long_name": record.long_name,
+                        "hw_model": record.hw_model,
+                        "firmware_type": record.firmware_type.value,
+                        "firmware_version": record.firmware_version,
+                        "management": record.management.value,
+                        "region": record.region,
+                        "role": record.role,
+                        "authorized_admin_keys": list(record.authorized_admin_keys),
+                        "notes": record.notes,
+                    }
+                    for record in records
+                ]
+            }
+        )
+        return
+
+    if not records:
+        ctx.print_out("No nodes found.")
+        return
+
+    table = Table(box=box.SIMPLE_HEAVY, header_style="bold")
+    table.add_column("Node")
+    table.add_column("Short")
+    table.add_column("Long")
+    table.add_column("Mgmt")
+    table.add_column("HW model")
+    table.add_column("Firmware")
+    table.add_column("Region")
+    table.add_column("Role")
+    table.add_column("Admin keys")
+    for record in records:
+        table.add_row(
+            record.node_id,
+            record.short_name or "-",
+            record.long_name or "-",
+            record.management.value,
+            record.hw_model or "-",
+            record.firmware_version or "-",
+            record.region or "-",
+            record.role or "-",
+            ", ".join(record.authorized_admin_keys) or "-",
+        )
+    ctx.err.print(table, markup=False, highlight=False)

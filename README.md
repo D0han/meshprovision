@@ -581,6 +581,8 @@ mesh db backup
 mesh db backup --list
 mesh db backup --retention 20 --backup-dir /mnt/usb/mesh-backups
 mesh db restore data/backups/nodes_db-20260101T000000.000000Z.ods
+mesh db list
+mesh db list --json
 ```
 
 | Option | Meaning |
@@ -610,6 +612,11 @@ mesh db restore data/backups/nodes_db-20260101T000000.000000Z.ods
   file is loaded back immediately to confirm it is actually valid --
   restoring a corrupt or non-ODS file fails loudly on the spot rather
   than breaking the next unrelated `mesh` command.
+- `list` is the offline counterpart to `mesh status`: a plain dump of the
+  `Nodes` sheet's own content (short/long name, hardware model, firmware,
+  management mode, region, role, authorized admin key refs, notes) --
+  no device connection, no `MESHPROVISION_CONTACT`, no network round
+  trip.
 
 ### Exit codes
 

@@ -30,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cross-process write lock for the whole operation (unlike `backup`, which is
   deliberately lock-free) and confirming the restored file actually loads
   before reporting success.
+- `mesh db list`: offline counterpart to `mesh status` -- a plain dump of the
+  `Nodes` sheet's own content, with no device connection or external data
+  source involved.
 - `mesh adopt`: strictly read-only inventory of an already-configured,
   already-deployed node -- connects like `mesh provision` but never writes
   to the device, and records live names, admin keys, firmware version,
