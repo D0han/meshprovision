@@ -311,12 +311,23 @@ def admin_bootstrap(
     help="Overwrite an existing, differing key; skip the weak-key/duplicate refusal.",
 )
 @click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Validate and report without registering anything.",
+)
+@click.option(
     "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of human text."
 )
 @pass_cli
 @handle_cli_errors
 def admin_import(
-    ctx: CliContext, *, assignments: tuple[str, ...], force: bool, json_output: bool
+    ctx: CliContext,
+    *,
+    assignments: tuple[str, ...],
+    force: bool,
+    dry_run: bool,
+    json_output: bool,
 ) -> None:
     """Register one or more admin public keys already held elsewhere.
 
@@ -333,6 +344,13 @@ def admin_import(
         assignments: One or more ``REF=BASE64`` tokens.
         force: Whether to skip the differing-material and duplicate-key
             refusals, from ``--force``.
+        dry_run: Whether to run every validation/audit/duplicate check
+            and report the outcome without writing anything, from
+            ``--dry-run``. Matches ``mesh provision``/``mesh adopt``/
+            ``mesh admin bootstrap``'s existing convention -- unlike
+            those commands, ``import`` previously had no way to preview
+            a registration's outcome (weak-key result, duplicate
+            collision, ``--force`` overwrite) before committing it.
         json_output: Whether to emit JSON, from ``--json``.
 
     Raises:
@@ -347,7 +365,7 @@ def admin_import(
     registered: list[dict[str, object]] = []
     skipped: list[dict[str, object]] = []
 
-    with ctx.open_database(for_write=True) as db:
+    with ctx.open_database(for_write=not dry_run) as db:
         known_bad = weakkeys.load_known_bad_keys()
 
         for raw in assignments:
@@ -392,24 +410,27 @@ def admin_import(
                     hint="Pass --force if this is a deliberate alias for the same physical node.",
                 )
 
-            db.keys.upsert(
-                KeyRecord.from_material(
-                    ref, KeyType.ADMIN_PUBLIC, material, created_ts=datetime.now(tz=UTC)
+            if not dry_run:
+                db.keys.upsert(
+                    KeyRecord.from_material(
+                        ref, KeyType.ADMIN_PUBLIC, material, created_ts=datetime.now(tz=UTC)
+                    )
                 )
-            )
-            _drop_now_registered_key(db.nodes, material)
+                _drop_now_registered_key(db.nodes, material)
             registered.append(
                 {"ref": ref, "key_ref": key_ref, "fingerprint": redact.fingerprint(material)}
             )
 
-        db.db.save()
+        if not dry_run:
+            db.db.save()
 
-    ctx.success(f"Registered {len(registered)} admin public key(s) in {db.path}")
+    verb = "Would register" if dry_run else "Registered"
+    ctx.success(f"{verb} {len(registered)} admin public key(s) in {db.path}")
     for entry in registered:
         ctx.info(f"  {entry['key_ref']}  {entry['fingerprint']}")
 
     if json_output:
-        echo_json({"registered": registered, "skipped": skipped})
+        echo_json({"registered": registered, "skipped": skipped, "dry_run": dry_run})
 
 
 @admin.command(name="list")

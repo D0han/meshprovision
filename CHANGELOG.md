@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--json` output, `--watch`, and configurable online/stale/offline thresholds.
 - `mesh admin bootstrap | import | list`: admin-key custody for 0-3 inbound
   admin nodes, including pending cross-authorization reporting.
+- `mesh admin import --dry-run`: preview a registration's outcome (weak-key
+  audit result, duplicate-key collision, `--force` overwrite) without
+  actually registering anything, matching `provision`/`adopt`/`admin
+  bootstrap`'s existing `--dry-run` convention.
 - `mesh db verify | backup`: schema, cross-reference and weak-key verification,
   plus timestamped backups with retention.
 - `mesh db restore`: restore the database from a backup, holding the

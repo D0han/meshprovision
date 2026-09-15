@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from meshprovision.crypto import weakkeys
+from meshprovision.crypto import redact, weakkeys
 from meshprovision.crypto.keys import encode_key, generate_keypair
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
@@ -376,6 +376,55 @@ def test_admin_import_registers_a_held_public_key(runner: CliRunner, env: dict[s
     assert "sha256:" in result.stderr
     assert not _BASE64_KEY_RE.search(result.stdout)
     assert not _BASE64_KEY_RE.search(result.stderr)
+
+
+def test_admin_import_dry_run_reports_without_registering(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    """--dry-run must run every check (audit, dedup) but write nothing.
+
+    admin_import previously had no way to preview a registration's
+    outcome before committing it, unlike provision/adopt/admin bootstrap,
+    which all support --dry-run.
+    """
+    kp = generate_keypair()
+
+    result = invoke(
+        runner, ["admin", "import", f"ADMIN9={kp.public_b64}", "--dry-run", "--json"], env
+    )
+
+    assert result.exit_code == 0
+    assert "Would register" in result.stderr
+    document = json.loads(result.stdout)
+    assert document["dry_run"] is True
+    assert document["registered"] == [
+        {
+            "ref": "ADMIN9",
+            "key_ref": "ADMIN9_pub",
+            "fingerprint": redact.fingerprint(kp.public),
+        }
+    ]
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert loaded.keys == ()
+
+
+def test_admin_import_dry_run_still_refuses_a_weak_key(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    """--dry-run must still run the weak-key audit and refuse, not silently accept.
+
+    Confirms --dry-run previews a *refusal* too, not just a success --
+    the whole point is showing the operator what --force would actually
+    need to override.
+    """
+    bad_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[0]).decode("ascii")
+
+    result = invoke(runner, ["admin", "import", f"ADMIN9={bad_b64}", "--dry-run"], env)
+
+    assert result.exit_code != 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert loaded.keys == ()
 
 
 def test_admin_import_reimporting_identical_material_is_a_noop(

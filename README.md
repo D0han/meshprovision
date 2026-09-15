@@ -539,6 +539,7 @@ mesh admin bootstrap --port /dev/ttyUSB0 --ref ADMIN1
 mesh admin bootstrap --interface tcp --host 192.168.1.50 --ref ADMIN2 --dry-run
 mesh admin import ADMIN3=<base64 32-byte public key>
 mesh admin import ADMIN1=<b64> ADMIN2=<b64> --json
+mesh admin import ADMIN3=<b64> --dry-run
 mesh admin list
 mesh admin list --json
 ```
@@ -556,7 +557,10 @@ mesh admin list --json
 - `import` registers a public key you already hold, without touching a
   device. It validates length and canonical base64, runs the weak-key
   audit, and refuses a key already registered under a different reference
-  unless `--force`.
+  unless `--force`. `--dry-run` runs every one of those checks and
+  reports the outcome (including a refusal) without registering
+  anything, matching `provision`/`adopt`/`admin bootstrap`'s existing
+  `--dry-run` convention.
 - `list` shows each admin's ref, whether the public key is present, a
   redacted fingerprint, whether the private counterpart is on hand,
   whether it is in the template, which node it resolves to, its weak-key
