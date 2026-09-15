@@ -349,6 +349,28 @@ def test_db_backup_create_and_list(
     assert document["backups"][0]["size_bytes"] > 0
 
 
+def test_db_backup_retention_prunes_older_backups(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """``--retention`` is documented but was never proven to prune via the CLI.
+
+    ``prune_backups`` itself is unit-tested, but nothing exercised
+    ``mesh db backup --retention N`` end to end. Three backups created
+    with ``--retention 1`` should leave exactly one file behind, since
+    each call's own prune runs after its own copy succeeds.
+    """
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    backup_dir = tmp_path / "retained-backups"
+
+    for _ in range(3):
+        result = invoke(
+            runner, ["db", "backup", "--backup-dir", str(backup_dir), "--retention", "1"], env
+        )
+        assert result.exit_code == 0
+
+    assert len(list(backup_dir.glob("*.ods"))) == 1
+
+
 def test_db_backup_list_with_no_backups_reports_none_found(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:
