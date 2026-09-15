@@ -377,6 +377,42 @@ def test_admin_bootstrap_inherits_the_archived_gate(
     assert "archived" in result.stderr.lower()
 
 
+def test_admin_bootstrap_inherits_no_reconnect(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """admin_bootstrap reuses run_provision wholesale -- confirms --no-reconnect is honored too.
+
+    README documents that `admin bootstrap` "accepts and honors every
+    option in `mesh provision`'s table," but no test exercised
+    --no-reconnect/--allow-lockdown/--force-regenerate-key through
+    bootstrap specifically until now. All three flow through the same
+    ProvisionOptions construction, so proving the wiring for one
+    (bus.connections is the same real discriminator used for
+    provision's own --no-reconnect test) is strong evidence for the
+    others sharing that exact code path.
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(
+        runner,
+        [
+            "admin",
+            "bootstrap",
+            "--port",
+            "/dev/ttyFAKE0",
+            "--ref",
+            "ADMIN1",
+            "--yes",
+            "--no-reconnect",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert "--no-reconnect" in result.stderr
+    assert len(bus.connections) == 1
+
+
 def test_admin_import_registers_a_held_public_key(runner: CliRunner, env: dict[str, str]) -> None:
     kp = generate_keypair()
     result = invoke(runner, ["admin", "import", f"ADMIN9={kp.public_b64}"], env)

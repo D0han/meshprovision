@@ -111,6 +111,45 @@ def test_factory_provisioning_end_to_end(
     _assert_no_secrets(result.stderr)
 
 
+def test_no_reconnect_skips_the_reconnect_verify_connection(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """--no-reconnect genuinely changes behavior, not just prints a warning.
+
+    A normal run reconnects (closes and reopens the connection) to
+    verify writes against a fresh read from the device -- bus.connections
+    records every backend.connect() call, so a normal run shows more
+    than the one initial connection. --no-reconnect uses InPlaceSession,
+    which never calls backend.connect() again at all.
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(
+        runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--no-reconnect"], env
+    )
+
+    assert result.exit_code == 0
+    assert "--no-reconnect" in result.stderr
+    assert "weaker guarantee" in result.stderr
+    assert len(bus.connections) == 1
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert len(loaded.nodes) == 1
+
+
+def test_a_normal_run_reconnects_more_than_once(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """The baseline `--no-reconnect` is compared against: confirms the assumption above holds."""
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "--no-reconnect" not in result.stderr
+    assert len(bus.connections) > 1
+
+
 def test_enroll_graduates_an_observed_node_to_template_management(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
 ) -> None:
