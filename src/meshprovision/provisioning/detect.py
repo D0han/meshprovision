@@ -266,6 +266,16 @@ class LiveConfig:
         long_name: The device's current ``long_name``.
         hw_model: Canonical ``HardwareModel`` enum name, or ``""`` when
             unknown.
+        hw_model_raw: The device-reported hw_model value ``hw_model``
+            was resolved from (``user["hwModel"]`` or
+            ``metadata.hw_model``, whichever was used), before enum
+            lookup -- ``None`` only when the device reported nothing at
+            all. Distinguishes "not reported" from "reported but not a
+            name :func:`~meshprovision.enums.hw_model_table` recognizes"
+            -- both collapse to ``hw_model == ""``, but only the latter
+            is a call for :func:`~meshprovision.provisioning.adopt.
+            build_adoption_report` to warn about, mirroring how it
+            already handles an unmappable live ``region``/``role``.
         firmware_version: Firmware version string as reported by the
             device.
         security: The live ``config.security`` section.
@@ -287,6 +297,7 @@ class LiveConfig:
     short_name: str = ""
     long_name: str = ""
     hw_model: str = ""
+    hw_model_raw: str | None = None
     firmware_version: str = ""
     security: LiveSecurity = field(default_factory=LiveSecurity)
     sections: Mapping[str, Mapping[str, object]] = field(
@@ -504,6 +515,7 @@ def live_config_from_protobufs(
     short_name: str = "",
     long_name: str = "",
     hw_model: str = "",
+    hw_model_raw: str | None = None,
     firmware_version: str = "",
 ) -> LiveConfig:
     """Build a :class:`LiveConfig` from already-read protobuf config messages.
@@ -516,6 +528,9 @@ def live_config_from_protobufs(
         short_name: The device's current ``short_name``.
         long_name: The device's current ``long_name``.
         hw_model: Canonical ``HardwareModel`` enum name, or ``""``.
+        hw_model_raw: The raw value ``hw_model`` was resolved from, or
+            ``None`` if the device reported nothing. See
+            :attr:`LiveConfig.hw_model_raw`.
         firmware_version: Firmware version string.
 
     Returns:
@@ -553,6 +568,7 @@ def live_config_from_protobufs(
         short_name=short_name,
         long_name=long_name,
         hw_model=hw_model,
+        hw_model_raw=hw_model_raw,
         firmware_version=firmware_version,
         security=security,
         sections=MappingProxyType(sections),
@@ -598,11 +614,13 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
         short_name = str(user.get("shortName", ""))
         long_name = str(user.get("longName", ""))
 
-        hw_model_raw = user.get("hwModel")
-        if hw_model_raw:
-            hw_model = enums.hw_model_table().try_name(str(hw_model_raw)) or ""
+        hw_model_source = user.get("hwModel")
+        if hw_model_source:
+            hw_model_raw: str | None = str(hw_model_source)
+            hw_model = enums.hw_model_table().try_name(hw_model_source) or ""
         else:
             metadata_hw_model = getattr(iface.metadata, "hw_model", None)
+            hw_model_raw = str(metadata_hw_model) if metadata_hw_model is not None else None
             hw_model = (
                 enums.hw_model_table().try_name(metadata_hw_model)
                 if metadata_hw_model is not None
@@ -618,6 +636,7 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
             short_name=short_name,
             long_name=long_name,
             hw_model=hw_model,
+            hw_model_raw=hw_model_raw,
             firmware_version=firmware_version,
         )
     except DetectionError:

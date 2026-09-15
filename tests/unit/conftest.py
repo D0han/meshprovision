@@ -41,6 +41,7 @@ def live_config_from_template(
     short_name: str = "MT00",
     long_name: str = "Meshtastic MT00",
     hw_model: str = "RAK4631",
+    hw_model_raw: str | None = None,
     firmware_version: str = "2.7.11",
     security: LiveSecurity | None = None,
     section_overrides: Mapping[str, Mapping[str, object]] | None = None,
@@ -55,6 +56,9 @@ def live_config_from_template(
         short_name: The device's current ``short_name``.
         long_name: The device's current ``long_name``.
         hw_model: The device's reported hardware model.
+        hw_model_raw: The raw value ``hw_model`` was supposedly resolved
+            from -- only meaningful (and normally only set) alongside
+            ``hw_model=""``, to simulate an unrecognized live hw_model.
         firmware_version: The device's reported firmware version.
         security: The live security section. Defaults to an empty
             :class:`LiveSecurity` when not given.
@@ -106,6 +110,7 @@ def live_config_from_template(
         short_name=short_name,
         long_name=long_name,
         hw_model=hw_model,
+        hw_model_raw=hw_model_raw,
         firmware_version=firmware_version,
         security=security if security is not None else LiveSecurity(),
         sections=frozen_sections,

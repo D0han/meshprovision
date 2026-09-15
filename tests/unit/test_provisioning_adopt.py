@@ -215,6 +215,43 @@ def test_build_adoption_report_region_role_absent(make_live, template) -> None:
     assert report.warnings == ()
 
 
+def test_build_adoption_report_hw_model_unrecognized_warns(make_live, template) -> None:
+    """An unrecognized live hw_model warns, mirroring the region/role convention.
+
+    Regression test: hw_model resolution used to collapse "device
+    reported nothing" and "device reported an hw_model our enum table
+    doesn't recognize" into the same silent ``hw_model == ""``, with no
+    warning either way -- unlike region/role, which explicitly warn on
+    an unmappable value. Here ``hw_model_raw`` simulates the "reported
+    but unrecognized" case specifically.
+    """
+    live = make_live(template, hw_model="", hw_model_raw="FUTURE_BOARD_9000")
+
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    assert report.hw_model == ""
+    assert any("FUTURE_BOARD_9000" in w for w in report.warnings)
+
+
+def test_build_adoption_report_hw_model_not_reported_is_silent(make_live, template) -> None:
+    """A device that simply never reported an hw_model must not warn.
+
+    Distinct from the unrecognized case above: ``hw_model_raw is None``
+    means nothing was reported at all -- genuinely nothing to warn
+    about, same as region/role's own "absent" case.
+    """
+    live = make_live(template, hw_model="", hw_model_raw=None)
+
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    assert report.hw_model == ""
+    assert report.warnings == ()
+
+
 def test_build_adoption_report_firmware_vulnerable(make_live, template) -> None:
     live = make_live(template, firmware_version="2.6.0")
 

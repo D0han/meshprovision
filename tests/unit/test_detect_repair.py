@@ -236,6 +236,35 @@ def test_read_live_config_with_my_info() -> None:
     assert live.hw_model == "RAK4631"
 
 
+def test_read_live_config_hw_model_unrecognized_preserves_raw_value() -> None:
+    """An hw_model the enum table doesn't recognize must still be captured raw.
+
+    Regression test: hw_model_raw exists specifically so a later
+    unrecognized-vs-absent distinction (build_adoption_report's warning)
+    is possible at all -- it must survive resolution failure, not just
+    the successful case already covered by test_read_live_config_with_my_info.
+    """
+    iface = _FakeIface()
+    iface._user["hwModel"] = "FUTURE_BOARD_9000"
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert live.hw_model == ""
+    assert live.hw_model_raw == "FUTURE_BOARD_9000"
+
+
+def test_read_live_config_hw_model_absent_leaves_raw_value_none() -> None:
+    """A device reporting no hw_model at all must leave hw_model_raw None.
+
+    Distinct from the unrecognized case above: None means "nothing to
+    warn about," not "recognized as a known name."
+    """
+    iface = _FakeIface()
+    iface._user["hwModel"] = ""
+    iface.metadata.hw_model = None
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert live.hw_model == ""
+    assert live.hw_model_raw is None
+
+
 def test_read_live_config_falls_back_to_get_my_node_info() -> None:
     iface = _FakeIface(my_info=False)
     iface._info_fallback = {"num": 0xDEADBE01}

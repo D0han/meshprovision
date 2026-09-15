@@ -373,10 +373,10 @@ def build_adoption_report(
             live admin key (see :attr:`AdoptionReport.warnings`).
 
     Returns:
-        The constructed :class:`AdoptionReport`. ``region``/``role`` are
-        the live values only when they map to a known enum name -- an
-        unmappable value is never silently defaulted, only warned about
-        via :attr:`AdoptionReport.warnings`.
+        The constructed :class:`AdoptionReport`. ``hw_model``/``region``/
+        ``role`` are the live values only when they map to a known enum
+        name -- an unmappable value is never silently defaulted, only
+        warned about via :attr:`AdoptionReport.warnings`.
     """
     state = detect.classify(live, db_entry=existing).state
     admin_keys = classify_live_admin_keys(live, public_keys)
@@ -412,6 +412,12 @@ def build_adoption_report(
             )
         else:
             firmware_vulnerable = weakkeys.is_vulnerable_firmware(parsed_firmware)
+
+    if live.hw_model_raw is not None and not live.hw_model:
+        warnings.append(
+            f"live hw_model {live.hw_model_raw!r} is not a recognized hardware model; "
+            "recorded without a hw_model value rather than guessing."
+        )
 
     live_region = live.value("lora", "region")
     region = ""
