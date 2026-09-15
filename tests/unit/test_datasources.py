@@ -32,7 +32,12 @@ from meshprovision.datasources.models import (
     parse_iso8601,
 )
 from meshprovision.enums import role_table
-from meshprovision.errors import InvalidResponseError, MissingContactError, SettingsError
+from meshprovision.errors import (
+    HttpError,
+    InvalidResponseError,
+    MissingContactError,
+    SettingsError,
+)
 from meshprovision.nodeid import NodeId
 
 pytestmark = pytest.mark.unit
@@ -509,6 +514,59 @@ def test_lorastats_node_status_maps_statuses(tmp_path: Path) -> None:
 
     respx.get(url).mock(return_value=httpx.Response(404))
     assert source.node_status("deadbe01", force_refresh=True) is None
+
+
+def test_match_record_skips_a_non_dict_record_without_crashing() -> None:
+    """A non-dict entry in the records list must be skipped, counted, and not crash.
+
+    Regression guard: no existing test exercises a malformed-upstream
+    response containing something other than an object (e.g. a stray
+    string or null in the JSON array) -- realistic if lorastats.pl's
+    output ever partially degrades.
+    """
+    nid = NodeId.from_hex("deadbe01")
+    records: list[object] = ["not a dict", {"NodeId": "deadbe01"}]
+
+    record, skipped = lorastats_module._match_record(records, nid)
+
+    assert record == {"NodeId": "deadbe01"}
+    assert skipped == 1
+
+
+def test_match_record_skips_an_unparsable_node_id_without_crashing() -> None:
+    """A record whose NodeId string doesn't parse must be skipped, counted, and not crash.
+
+    Distinct from the existing "missing NodeId key" case -- this is a
+    NodeId field that's present but garbage, which takes a different
+    branch (NodeIdError from NodeId.from_hex, not the isinstance check).
+    """
+    nid = NodeId.from_hex("deadbe01")
+    records: list[object] = [{"NodeId": "not-valid-hex"}, {"NodeId": "deadbe01"}]
+
+    record, skipped = lorastats_module._match_record(records, nid)
+
+    assert record == {"NodeId": "deadbe01"}
+    assert skipped == 1
+
+
+@respx.mock
+def test_lorastats_node_status_reraises_on_an_unmapped_status(tmp_path: Path) -> None:
+    """A status code that isn't 404/500 must propagate, not silently map to a bool.
+
+    Regression guard: node_status's bare `raise` for any status besides
+    the two explicitly mapped ones had no test -- only 200/500/404 were
+    covered, so a mutation swallowing every other status into a boolean
+    default would have gone unnoticed.
+    """
+    from meshprovision.datasources.lorastats import LORASTATS_STATUS_PATH
+
+    url = f"{LORASTATS_BASE_URL}{LORASTATS_STATUS_PATH.format(node='deadbe01')}"
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid")
+
+    respx.get(url).mock(return_value=httpx.Response(403))
+    with pytest.raises(HttpError):
+        source.node_status("deadbe01", force_refresh=True)
 
 
 # ---------------------------------------------------------------------------
