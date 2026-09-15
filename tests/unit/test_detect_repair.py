@@ -265,6 +265,25 @@ def test_read_live_config_hw_model_absent_leaves_raw_value_none() -> None:
     assert live.hw_model_raw is None
 
 
+def test_read_live_config_falls_back_to_metadata_hw_model_when_user_absent() -> None:
+    """No hwModel from getMyUser(), but iface.metadata.hw_model is set: must resolve from it.
+
+    Regression guard distinct from the "absent" test above: that one
+    only exercises the sub-path where metadata.hw_model is *also* None
+    (hw_model_raw stays None). This exercises the actual "fall back to
+    device metadata" behavior the else-branch exists for -- gutting the
+    metadata->enum resolution entirely would still pass the "absent"
+    test, since neither test alone pins down the successful-fallback
+    case.
+    """
+    iface = _FakeIface()
+    iface._user["hwModel"] = ""
+    # iface.metadata.hw_model defaults to "RAK4631" in _FakeIface.__init__.
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert live.hw_model == "RAK4631"
+    assert live.hw_model_raw == "RAK4631"
+
+
 def test_read_live_config_falls_back_to_get_my_node_info() -> None:
     iface = _FakeIface(my_info=False)
     iface._info_fallback = {"num": 0xDEADBE01}
