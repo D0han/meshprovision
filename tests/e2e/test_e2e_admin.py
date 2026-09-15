@@ -220,6 +220,135 @@ def test_admin_bootstrap_pending_message_names_the_right_ref_and_node_on_rotatio
     assert "pending: authorize ADMIN2_pub on node aaaa0001" not in result.stderr
 
 
+def test_admin_bootstrap_pending_message_for_its_own_ref_names_ref_first_then_node(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """The just-bootstrapped ref's own pending list must render (ref, node), not (node, ref).
+
+    Regression guard distinct from the rotation test above: that one only
+    exercises the *second* comprehension's pending pair (some other
+    admin's ref pending on this node). This one targets the *first*
+    comprehension -- ``new_summary.pending_on``, i.e. nodes that still
+    need *this* bootstrap's own ref authorized on them -- which a tuple-
+    order swap (``(other_hex, new_ref)`` instead of ``(new_ref,
+    other_hex)``) would corrupt into a nonsensical message without the
+    rotation test noticing.
+    """
+    admin1_kp = keypair_factory()
+    placeholder_admin2_kp = keypair_factory()
+    seed_db(
+        nodes=[
+            # Owned by ADMIN1 (identity match) but does not yet authorize
+            # ADMIN2_pub -- the node that should end up pending.
+            NodeRecord(
+                node_id="aaaa0001",
+                management=ManagementMode.TEMPLATE,
+                authorized_admin_keys=("ADMIN1_pub",),
+            ),
+            # Authorizes ADMIN2_pub already, purely so ADMIN2 is
+            # discoverable via collect_admins's extra_refs path before its
+            # own bootstrap below -- not itself owned by anyone.
+            NodeRecord(
+                node_id="bbbb0001",
+                management=ManagementMode.TEMPLATE,
+                authorized_admin_keys=("ADMIN2_pub",),
+            ),
+        ],
+        keys=[
+            *KeyRecord.for_keypair("aaaa0001", admin1_kp),
+            *KeyRecord.for_keypair("ADMIN1", admin1_kp),
+            *KeyRecord.for_keypair("ADMIN2", placeholder_admin2_kp),
+        ],
+    )
+    bus.use(FakeMeshInterface("aaaa0002"))
+
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN2", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert "pending: authorize ADMIN2_pub on node aaaa0001" in result.stderr
+    assert "pending: authorize aaaa0001_pub on node ADMIN2" not in result.stderr
+
+
+def test_admin_bootstrap_uncertain_outcome_skips_reporting_and_exits_nonzero(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """A write-verify failure must skip the pending-report block and still exit non-zero.
+
+    Regression guard for two structurally separate gaps: the ``if
+    result.persisted:`` guard around the whole authorized/pending
+    reporting block was never exercised with ``persisted=False`` (every
+    other admin-bootstrap test either succeeds cleanly or fails via an
+    exception raised earlier, e.g. the enroll gate, which never reaches
+    this block at all) -- nor was the final ``if result.exit_code: raise
+    SystemExit(...)``, specifically for ``admin bootstrap``.
+    ``fail_reads_after_write`` produces exactly this: a normal return
+    from ``run_provision`` with ``persisted=False`` and a nonzero exit
+    code, not a raised exception.
+
+    An existing admin (``EXISTING``, named in the template so the plan
+    actually wants to authorize it here) is seeded so the guard's
+    absence would be observable: ``result.plan`` is still populated on
+    an uncertain outcome (the plan was built and attempted, just not
+    confirmed), so ``authorized_here`` is non-empty regardless of
+    ``persisted`` -- a template with nothing to authorize would make
+    this test pass whether or not the guard fires at all.
+    """
+    existing_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="aaaa0001", authorized_admin_keys=("EXISTING_pub",))],
+        keys=list(KeyRecord.for_keypair("EXISTING", existing_kp)),
+    )
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["EXISTING"]))
+    bus.use(FakeMeshInterface("deadbe01", fail_reads_after_write=True))
+
+    result = invoke(
+        runner, ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"], env
+    )
+
+    assert result.exit_code != 0
+    assert "UNCERTAIN" in result.stderr
+    assert "Authorized on" not in result.stderr
+    assert "pending:" not in result.stderr
+
+
+def test_admin_bootstrap_json_output(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """``--json`` was never exercised for ``admin bootstrap`` by any existing test."""
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes", "--json"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    # run_provision itself also emits a detection/plan JSON document to
+    # stdout when --json is set (printed before admin_bootstrap's own) --
+    # split on the boundary between the two top-level documents and take
+    # the last one, rather than assuming stdout holds a single object.
+    documents = re.split(r"(?<=\})\n(?=\{)", result.stdout.strip())
+    document = json.loads(documents[-1])
+    assert document["node_id"] == "deadbe01"
+    assert document["ref"] == "ADMIN1"
+    assert document["authorized_on_this_node"] == []
+    assert document["pending"] == []
+
+
 def test_admin_bootstrap_inherits_the_enroll_gate(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
 ) -> None:
@@ -449,6 +578,38 @@ def test_admin_import_clears_the_key_from_every_nodes_unregistered_list(
     nodes = {row["node_id"]: NodeRecord.from_row(row) for row in loaded.nodes}
     assert nodes["cafe0001"].unregistered_admin_key_materials() == (other_kp.public,)
     assert nodes["cafe0002"].unregistered_admin_key_materials() == (other_kp.public,)
+
+
+def test_admin_import_leaves_a_node_with_no_unregistered_keys_completely_untouched(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """A node with no ``unregistered_admin_keys`` at all must not be rewritten.
+
+    Regression guard for ``_drop_now_registered_key``'s ``if len(kept)
+    != len(node.unregistered_admin_keys):`` guard: an unconditional
+    upsert would rewrite every node's row (bumping ``last_updated_ts``)
+    on every ``admin import``, even a node with nothing to drop. No
+    existing test seeds a node untouched by the imported key to catch
+    this.
+    """
+    adopted_kp = generate_keypair()
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="cafe0001", unregistered_admin_keys=(encode_key(adopted_kp.public),)
+            ),
+            NodeRecord(node_id="cafe0002"),
+        ]
+    )
+    loaded_before = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    untouched_before = next(row for row in loaded_before.nodes if row["node_id"] == "cafe0002")
+
+    result = invoke(runner, ["admin", "import", f"FRIEND={adopted_kp.public_b64}"], env)
+    assert result.exit_code == 0
+
+    loaded_after = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    untouched_after = next(row for row in loaded_after.nodes if row["node_id"] == "cafe0002")
+    assert untouched_after == untouched_before
 
 
 def test_admin_list_table_shows_the_weak_key_audit_result(
