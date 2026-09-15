@@ -248,6 +248,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on every run but never used, so the inventory report checked firmware
   vulnerability but said nothing about a compromised or structurally weak
   admin key already on the device.
+- `mesh admin bootstrap`'s pending-cross-authorization report no longer
+  conflates two distinct facts when rotating an existing `--ref` onto a
+  new device: it could print a false "authorize X on node Y" claim for
+  an authorization that was already satisfied, while silently dropping
+  the genuine pending one. Not reachable on a first-time bootstrap --
+  only when re-bootstrapping an existing ref.
+- Several `KeyMaterialError` catch sites (`mesh db verify`'s weak-key
+  audit, `mesh adopt`'s admin-key inventory and audit warnings, the
+  live-admin-key-compromise check) no longer report a bare "malformed
+  key material" string -- the actual reason (wrong length, bad
+  encoding, non-canonical base64) is now included, and a NodeDB public
+  key that fails to decode after a write is reported as such instead of
+  silently falling back to a possibly-misleading fingerprint.
+- `mesh adopt` now warns when a device reports an `hw_model` value its
+  enum table doesn't recognize (for example, newer hardware this
+  project hasn't added yet), instead of silently recording an empty
+  `hw_model` indistinguishable from the device simply not reporting one
+  at all -- matching the same warn-on-unmappable-value convention
+  already used for `region`/`role` in the same report.
 
 ### Security
 
