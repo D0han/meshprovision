@@ -9,6 +9,7 @@ description = "Provisioning and read-only monitoring toolkit for Meshtastic mesh
 readme = "README.md"
 requires-python = ">=3.11,<3.15"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "meshprovision contributors" }]
 keywords = ["meshtastic", "lora", "mesh", "provisioning"]
 classifiers = [
@@ -57,7 +58,7 @@ mesh = "meshprovision.cli.main:cli"
 packages = ["src/meshprovision"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "config", "scripts", "README.md", "CHANGELOG.md", ".env.example"]
+include = ["src", "tests", "config", "scripts", "README.md", "CHANGELOG.md", "LICENSE", ".env.example"]
 
 [tool.ruff]
 line-length = 100
