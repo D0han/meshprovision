@@ -1,4 +1,4 @@
-"""``mesh db verify`` (schema, cross-references, weak-key audit) and ``mesh db backup``."""
+"""``mesh db verify``/``backup``/``restore`` (schema, cross-references, weak-key audit)."""
 
 from __future__ import annotations
 
@@ -399,3 +399,97 @@ def test_db_backup_missing_database_exits_four(
     result = invoke(runner, ["db", "backup"], env)
 
     assert result.exit_code == 4
+
+
+def test_db_restore_overwrites_the_live_database(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    backup_dir = tmp_path / "backups"
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="OLD1", region="EU_868")])
+    invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir)], env)
+    old_backup = next(backup_dir.glob("*.ods"))
+
+    seed_db(nodes=[NodeRecord(node_id="deadbe02", short_name="NEW2", region="EU_868")])
+    assert db_path.read_bytes() != old_backup.read_bytes()
+
+    result = invoke(
+        runner, ["db", "restore", str(old_backup), "--yes", "--backup-dir", str(backup_dir)], env
+    )
+
+    assert result.exit_code == 0
+    assert db_path.read_bytes() == old_backup.read_bytes()
+    assert str(db_path) in result.stderr
+    assert str(old_backup) in result.stderr
+
+    # The pre-restore content was itself backed up -- a restore is reversible.
+    assert len(list(backup_dir.glob("*.ods"))) == 2
+
+
+def test_db_restore_json_reports_target_and_source(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    backup_dir = tmp_path / "backups"
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir)], env)
+    backup_file = next(backup_dir.glob("*.ods"))
+
+    result = invoke(
+        runner,
+        ["db", "restore", str(backup_file), "--yes", "--backup-dir", str(backup_dir), "--json"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert document["target"] == str(db_path)
+    assert document["restored_from"] == str(backup_file)
+
+
+def test_db_restore_refuses_without_confirmation_when_non_interactive(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """No --yes, and CliRunner's stdin is never a TTY -- must refuse, never restore silently."""
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    backup_dir = tmp_path / "backups"
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir)], env)
+    backup_file = next(backup_dir.glob("*.ods"))
+    before = db_path.read_bytes()
+
+    result = invoke(
+        runner, ["db", "restore", str(backup_file), "--backup-dir", str(backup_dir)], env
+    )
+
+    assert result.exit_code == 5
+    assert db_path.read_bytes() == before
+
+
+def test_db_restore_of_an_unparsable_backup_reports_a_clear_error(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """A corrupt/non-ODS backup file must fail loudly, not leave a mysteriously-broken database."""
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    bad_backup = tmp_path / "not-an-ods-file.ods"
+    bad_backup.write_text("not a zip file")
+
+    result = invoke(
+        runner, ["db", "restore", str(bad_backup), "--yes", "--backup-dir", str(backup_dir)], env
+    )
+
+    assert result.exit_code == 4
+    assert "does not load as a valid database" in result.stderr
+    assert "mesh db backup --list" in result.stderr
+
+
+def test_db_restore_missing_backup_file_is_a_usage_error(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+
+    result = invoke(runner, ["db", "restore", str(tmp_path / "does-not-exist.ods"), "--yes"], env)
+
+    assert result.exit_code == 2

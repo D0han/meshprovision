@@ -576,14 +576,16 @@ mesh db verify --json
 mesh db backup
 mesh db backup --list
 mesh db backup --retention 20 --backup-dir /mnt/usb/mesh-backups
+mesh db restore data/backups/nodes_db-20260101T000000.000000Z.ods
 ```
 
 | Option | Meaning |
 |---|---|
 | `--strict` (`verify`) | Treat a bare warning (no error or critical problem) as a failing exit code too |
-| `--backup-dir` (`backup`) | Directory to store backups under. Defaults to `data/backups` |
+| `--backup-dir` (`backup`, `restore`) | Directory backups are stored under/read from. Defaults to `data/backups` |
 | `--retention` (`backup`) | Number of backups to retain (default: 20) |
 | `--list` (`backup`) | List existing backups instead of creating one |
+| `-y`/`--yes` (`restore`) | Assume yes to the overwrite confirmation |
 | `--json` | Emit JSON instead of human text |
 
 - `verify` layers cross-reference checks, a weak-key audit over every key
@@ -596,6 +598,14 @@ mesh db backup --retention 20 --backup-dir /mnt/usb/mesh-backups
   group is an informational alias warning.
 - `backup` writes only into the backup directory and never rewrites the
   database itself.
+- `restore` is the only `db` subcommand that rewrites the live database
+  directly, so unlike `backup` it holds the cross-process write lock for
+  the whole operation, excluding a concurrent `mesh provision`/`mesh
+  admin` run. The current database is itself backed up first, so a
+  restore is always reversible via `mesh db backup --list`. The restored
+  file is loaded back immediately to confirm it is actually valid --
+  restoring a corrupt or non-ODS file fails loudly on the spot rather
+  than breaking the next unrelated `mesh` command.
 
 ### Exit codes
 

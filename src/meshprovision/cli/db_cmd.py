@@ -1,4 +1,4 @@
-"""``mesh db`` group -- ``verify`` (schema + weak-key audit) and ``backup``.
+"""``mesh db`` group -- ``verify`` (schema + weak-key audit), ``backup``, ``restore``.
 
 ``mesh db verify`` re-validates a database that may already have loaded
 successfully (schema/validation/duplicate-row failures already raised out
@@ -10,7 +10,11 @@ of :meth:`~meshprovision.cli.common.CliContext.open_database` as
 boundary as exit 4) and layers on cross-reference checks, a weak-key
 audit over every key row, and alias-aware cross-fleet duplicate
 detection. ``mesh db backup`` writes only into the backup directory; it
-never rewrites the database itself.
+never rewrites the database itself. ``mesh db restore`` is the only
+command in this group that rewrites the live database directly (not via
+the normal load-modify-save session), so unlike ``backup`` it *does* take
+the cross-process write lock -- see :func:`~meshprovision.db.atomic_writer
+.restore_backup`'s docstring and :mod:`meshprovision.db.locking`.
 """
 
 from __future__ import annotations
@@ -23,9 +27,15 @@ import click
 
 from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_errors, pass_cli
 from meshprovision.crypto import weakkeys
-from meshprovision.db import atomic_writer, schema
+from meshprovision.db import atomic_writer, locking, ods, schema
 from meshprovision.db.verify import ProblemSeverity, verify_database
-from meshprovision.errors import AdminKeyCapacityError, AtomicWriteError, ConfigError
+from meshprovision.errors import (
+    AdminKeyCapacityError,
+    AtomicWriteError,
+    ConfigError,
+    MeshprovisionError,
+    SchemaError,
+)
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
@@ -34,6 +44,7 @@ if TYPE_CHECKING:
 __all__ = [
     "db",
     "db_backup",
+    "db_restore",
     "db_verify",
 ]
 
@@ -223,3 +234,77 @@ def db_backup(
                 "size_bytes": backup_info.size_bytes,
             }
         )
+
+
+@db.command(name="restore")
+@click.argument("backup", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("-y", "--yes", is_flag=True, default=False, help="Assume yes to the confirmation.")
+@click.option(
+    "--backup-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory the pre-restore safety backup is stored under. Defaults to data/backups.",
+)
+@click.option(
+    "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of human text."
+)
+@pass_cli
+@handle_cli_errors
+def db_restore(
+    ctx: CliContext, *, backup: Path, yes: bool, backup_dir: Path | None, json_output: bool
+) -> None:
+    """Restore the ODS database from a backup file, overwriting the live database.
+
+    Unlike ``mesh db backup``, this rewrites the live database directly,
+    so it holds the cross-process write lock for the whole operation --
+    excluding a concurrent ``mesh provision``/``mesh admin`` run the same
+    way those commands exclude each other. The current database is
+    itself backed up first (by :func:`~meshprovision.db.atomic_writer
+    .restore_backup`), so a restore is always reversible via
+    ``mesh db backup --list``. After restoring, the result is loaded back
+    to confirm it is actually a valid database -- a bad ``backup`` file
+    is caught here, not on the next unrelated ``mesh`` command.
+
+    Args:
+        ctx: The shared CLI context, injected by :data:`~meshprovision.
+            cli.common.pass_cli`.
+        backup: Path to the backup file to restore from.
+        yes: Whether to assume yes to the confirmation, from ``-y``/``--yes``.
+        backup_dir: Pre-restore safety-backup directory override, from
+            ``--backup-dir``.
+        json_output: Whether to emit JSON, from ``--json``.
+
+    Raises:
+        AtomicWriteError: If ``backup`` cannot be read, or the restore
+            write fails.
+        SchemaError: If the restored file does not load as a valid
+            database. The pre-restore backup is still available via
+            ``mesh db backup --list``.
+    """
+    ctx = ctx.with_assume_yes(yes)
+    path = ctx.settings.db_path
+    resolved_backup_dir = backup_dir if backup_dir is not None else atomic_writer.DEFAULT_BACKUP_DIR
+
+    question = (
+        f"Restore {path} from {backup}? The current database is backed up first, "
+        "but this overwrites the live database."
+    )
+    if not ctx.confirm(question, default=False):
+        raise click.Abort()
+
+    with locking.exclusive_lock(path):
+        atomic_writer.restore_backup(backup, path, backup_dir=resolved_backup_dir)
+        try:
+            ods.load_database(path)
+        except MeshprovisionError as exc:
+            raise SchemaError(
+                f"Restored {backup} but it does not load as a valid database: {exc.user_message}",
+                hint=(
+                    "The previous database was backed up before the restore; "
+                    "run `mesh db backup --list` to find it and restore again."
+                ),
+            ) from exc
+
+    ctx.success(f"Restored {path} from {backup}.")
+    if json_output:
+        echo_json({"target": str(path), "restored_from": str(backup)})

@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Single `mesh` console script (distribution `meshprovision`) with four
-  subcommand groups: `provision`, `status`, `admin`, and `db`.
+- Single `mesh` console script (distribution `meshprovision`) with five
+  subcommand groups: `provision`, `status`, `admin`, `db`, and `adopt`.
 - `mesh provision`: Serial/BLE/TCP transports with an explicit selection
   priority, FACTORY/PROVISIONED/FOREIGN detection, a pure change planner that
   makes `--dry-run` exact, drift repair, and transactional writes verified by
@@ -22,6 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   admin nodes, including pending cross-authorization reporting.
 - `mesh db verify | backup`: schema, cross-reference and weak-key verification,
   plus timestamped backups with retention.
+- `mesh db restore`: restore the database from a backup, holding the
+  cross-process write lock for the whole operation (unlike `backup`, which is
+  deliberately lock-free) and confirming the restored file actually loads
+  before reporting success.
 - `mesh adopt`: strictly read-only inventory of an already-configured,
   already-deployed node -- connects like `mesh provision` but never writes
   to the device, and records live names, admin keys, firmware version,
