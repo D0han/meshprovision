@@ -221,6 +221,51 @@ def test_admin_bootstrap_pending_message_names_the_right_ref_and_node_on_rotatio
     assert "pending: authorize ADMIN2_pub on node aaaa0001" not in result.stderr
 
 
+def test_admin_bootstrap_ref_aliases_the_existing_on_file_key_without_regenerating(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """``--ref`` on an already-provisioned node must alias the on-file key, not regenerate.
+
+    Every other admin-bootstrap test in this module uses a fresh FACTORY
+    node, which always forces key regeneration (`keypair is not None`).
+    This is the one path where `keypair is None` in run_provision's
+    `--ref` handling (cli/provision.py) -- the node is already
+    PROVISIONED (in the database) and its live public key matches the
+    Keys sheet exactly, so neither regenerate nor adopt_device_key
+    fires, and the alias must be read straight out of `db.keys` instead.
+    """
+    node_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="aaaa0001", management=ManagementMode.TEMPLATE)],
+        keys=list(KeyRecord.for_keypair("aaaa0001", node_kp)),
+    )
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+
+    iface = bus.use(FakeMeshInterface("aaaa0001"))
+    iface.localNode.localConfig.security.public_key = node_kp.public
+    iface.localNode.localConfig.security.private_key = node_kp.private.reveal()
+
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["ADMIN1_pub"]).material() == node_kp.public
+    assert KeyRecord.from_row(rows["ADMIN1_priv"]).secret().reveal() == node_kp.private.reveal()
+    # The node's own on-file key is untouched -- no regeneration happened.
+    assert KeyRecord.from_row(rows["aaaa0001_pub"]).material() == node_kp.public
+
+
 def test_admin_bootstrap_pending_message_for_its_own_ref_names_ref_first_then_node(
     runner: CliRunner,
     env: dict[str, str],
@@ -476,6 +521,45 @@ def test_admin_import_dry_run_still_refuses_a_weak_key(
     assert result.exit_code != 0
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     assert loaded.keys == ()
+
+
+def test_admin_import_dry_run_still_refuses_differing_material(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    """--dry-run must preview the "differing material without --force" refusal too.
+
+    The weak-key refusal (above) was the only --dry-run refusal path
+    with a dedicated test; this covers the other unconditional-before-
+    the-write-guard raise in admin_import (KeyVerificationError).
+    """
+    kp1 = generate_keypair()
+    kp2 = generate_keypair()
+    first = invoke(runner, ["admin", "import", f"ADMIN9={kp1.public_b64}"], env)
+    assert first.exit_code == 0
+
+    refused = invoke(runner, ["admin", "import", f"ADMIN9={kp2.public_b64}", "--dry-run"], env)
+    assert refused.exit_code == 6
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["ADMIN9_pub"]).material() == kp1.public
+
+
+def test_admin_import_dry_run_still_refuses_duplicate_material(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    """--dry-run must preview the "duplicate material under a second ref" refusal too."""
+    kp = generate_keypair()
+    first = invoke(runner, ["admin", "import", f"ADMIN9={kp.public_b64}"], env)
+    assert first.exit_code == 0
+
+    refused = invoke(runner, ["admin", "import", f"ADMIN10={kp.public_b64}", "--dry-run"], env)
+    assert refused.exit_code == 6
+    assert "already registered" in refused.stderr
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"] for row in loaded.keys}
+    assert "ADMIN10_pub" not in rows
 
 
 def test_admin_import_reimporting_identical_material_is_a_noop(
