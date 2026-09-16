@@ -6,8 +6,39 @@ Serial/BLE/TCP, repairs configuration drift, tracks nodes and keys in a
 hand-editable ODS spreadsheet, and reports network health from
 [loranet.pl](https://loranet.pl) and [lorastats.pl](https://lorastats.pl).
 
+## CLI usage at a glance
+
+One console script, `mesh`, with six subcommand groups. **Global options
+go before the subcommand** -- `mesh --no-cache status --json`, not
+`mesh status --no-cache`. Every command and subcommand supports `-h`/
+`--help`.
+
+| Command | What it does |
+|---|---|
+| `mesh provision` | Provision a connected device from the template: connects, diffs, writes. |
+| `mesh adopt` | Inventory an already-configured device -- strictly read-only toward it. |
+| `mesh status` | Read-only network health from loranet.pl/lorastats.pl, merged with the database. |
+| `mesh admin` | Admin-key custody: `bootstrap`, `import`, `list`. |
+| `mesh db` | Database integrity/backup: `verify`, `backup`, `restore`, `list`, `forget`. |
+| `mesh template` | `validate` a template file -- no database or device needed. |
+
+The five commands you'll actually type most often:
+
+```bash
+mesh db verify                                  # sanity-check the database
+mesh provision --dry-run --port /dev/ttyUSB0    # preview a plan, write nothing
+mesh provision --port /dev/ttyUSB0 --yes        # provision for real
+mesh adopt --port /dev/ttyUSB0                  # inventory an already-deployed device
+mesh status --json                              # machine-readable network health
+```
+
+New to this project? [Quick start](#quick-start) below gets you a working
+`.env`/template/database in five steps. Every flag for every command is
+documented in [Commands](#commands).
+
 ## Contents
 
+- [CLI usage at a glance](#cli-usage-at-a-glance)
 - [What it does](#what-it-does)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -1031,19 +1062,22 @@ documented here rather than buried.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contribution
 workflow (branching, tests-first convention, PR checklist, secret
-hygiene). Exact toolchain commands, kept character-identical with
+hygiene). The `quality` job's checks, kept character-identical with
 `.github/workflows/ci.yml`:
 
 ```bash
 pip install -e ".[dev]"
-pre-commit install
-pre-commit run --all-files
 ruff check .
 ruff format --check .
 mypy --strict src
-pytest --cov --cov-report=term-missing
-python -m build
+pytest --cov --cov-report=term-missing --cov-fail-under=85
 ```
+
+A separate `package` job builds the sdist/wheel (`python -m build`),
+runs `twine check`, and smoke-tests the built wheel's console script
+against all six subcommand groups. Locally, `pre-commit install` plus
+`pre-commit run --all-files` covers the same lint/type/secret checks
+before you push.
 
 Run `pre-commit` from the same virtualenv where you ran
 `pip install -e ".[dev]"` -- the mypy and no-tracked-secrets hooks are

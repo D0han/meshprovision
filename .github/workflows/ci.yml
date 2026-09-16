@@ -65,7 +65,7 @@ jobs:
         # ["src/meshprovision"] from pyproject.toml. [tool.coverage.report]
         # fail_under = 85 already enforces the floor; --cov-fail-under=85 is
         # passed anyway so the floor is visible directly in the CI log and in
-        # this file. The suite currently sits at 96.72% with 1112 tests, so 85
+        # this file. The suite currently sits at 97.09% with 1166 tests, so 85
         # is a real floor with headroom, not a rubber stamp.
         #
         # Deliberately not setting MESHPROVISION_CONTACT or any other
@@ -95,7 +95,7 @@ jobs:
       - name: Smoke-test the built wheel in a clean environment
         # The point of this job: prove the single console script
         # `mesh = "meshprovision.cli.main:cli"` is actually installed and
-        # that the four subcommand groups register, from a built wheel
+        # that all six subcommand groups register, from a built wheel
         # rather than from an editable install.
         #
         # `mesh --help` (and each subcommand's --help) is side-effect free by
@@ -109,9 +109,11 @@ jobs:
           /tmp/smoke/bin/mesh --version
           /tmp/smoke/bin/mesh --help
           /tmp/smoke/bin/mesh provision --help
+          /tmp/smoke/bin/mesh adopt --help
           /tmp/smoke/bin/mesh status --help
           /tmp/smoke/bin/mesh admin --help
           /tmp/smoke/bin/mesh db --help
+          /tmp/smoke/bin/mesh template --help
 
       - uses: actions/upload-artifact@v4
         with:
