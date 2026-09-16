@@ -646,6 +646,35 @@ def test_admin_import_multiple_assignments_reports_registered_and_skipped(
     assert {"ADMIN_A_pub", "ADMIN_B_pub"} <= rows
 
 
+def test_admin_import_dry_run_catches_an_intra_batch_duplicate(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    """--dry-run must refuse the same duplicate a real run would refuse.
+
+    A real run upserts each assignment into the in-memory session as it
+    goes, so a later assignment in the same batch sees an earlier one's
+    material via the dupe check's db.keys.public_key_map() read. Before
+    this fix, --dry-run skipped that upsert entirely (gated on
+    `not dry_run`), so two assignments sharing material in one --dry-run
+    invocation never saw each other and both silently "passed" -- only
+    for the real (non-dry-run) run of the exact same arguments to then
+    abort partway through on the same duplicate.
+    """
+    kp = generate_keypair()
+
+    dry_run_result = invoke(
+        runner,
+        ["admin", "import", f"ADMIN_A={kp.public_b64}", f"ADMIN_B={kp.public_b64}", "--dry-run"],
+        env,
+    )
+
+    assert dry_run_result.exit_code != 0
+    assert "already registered as ADMIN_A_pub" in dry_run_result.stderr
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert loaded.keys == ()
+
+
 def test_admin_import_clears_the_key_from_every_nodes_unregistered_list(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:

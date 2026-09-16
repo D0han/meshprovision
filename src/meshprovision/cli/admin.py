@@ -410,13 +410,18 @@ def admin_import(
                     hint="Pass --force if this is a deliberate alias for the same physical node.",
                 )
 
-            if not dry_run:
-                db.keys.upsert(
-                    KeyRecord.from_material(
-                        ref, KeyType.ADMIN_PUBLIC, material, created_ts=datetime.now(tz=UTC)
-                    )
+            # Upserted into the in-memory session unconditionally, even
+            # under --dry-run: the dupe check above reads db.keys.public_key_map()
+            # fresh each iteration, so a later assignment in the same batch
+            # must see an earlier one's material to catch an intra-batch
+            # duplicate the same way a real run would. Nothing persists
+            # unless db.db.save() runs below, which is still dry_run-gated.
+            db.keys.upsert(
+                KeyRecord.from_material(
+                    ref, KeyType.ADMIN_PUBLIC, material, created_ts=datetime.now(tz=UTC)
                 )
-                _drop_now_registered_key(db.nodes, material)
+            )
+            _drop_now_registered_key(db.nodes, material)
             registered.append(
                 {"ref": ref, "key_ref": key_ref, "fingerprint": redact.fingerprint(material)}
             )
