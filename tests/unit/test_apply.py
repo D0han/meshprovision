@@ -26,6 +26,7 @@ from meshprovision.errors import (
 )
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import apply as apply_module
+from meshprovision.provisioning import apply_session as apply_session_module
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.apply import (
     DEFAULT_SETTLE_SECONDS,
@@ -1144,8 +1145,8 @@ def test_reconnecting_session_refresh_retries_then_succeeds() -> None:
     assert backend.connect_calls == 3
     assert sleeps == [
         DEFAULT_SETTLE_SECONDS,
-        apply_module._RECONNECT_BACKOFF * 1,
-        apply_module._RECONNECT_BACKOFF * 2,
+        apply_session_module._RECONNECT_BACKOFF * 1,
+        apply_session_module._RECONNECT_BACKOFF * 2,
     ]
 
 
@@ -1166,8 +1167,8 @@ def test_reconnecting_session_refresh_exhausts_all_attempts_and_raises() -> None
     # No backoff sleep after the last (3rd) attempt -- only 2 retries follow attempts 1-2.
     assert sleeps == [
         DEFAULT_SETTLE_SECONDS,
-        apply_module._RECONNECT_BACKOFF * 1,
-        apply_module._RECONNECT_BACKOFF * 2,
+        apply_session_module._RECONNECT_BACKOFF * 1,
+        apply_session_module._RECONNECT_BACKOFF * 2,
     ]
 
 
