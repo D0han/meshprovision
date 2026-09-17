@@ -26,7 +26,13 @@ from typing import TYPE_CHECKING
 
 import click
 
-from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_errors, pass_cli
+from meshprovision.cli.common import (
+    CONTEXT_SETTINGS,
+    MeshCommand,
+    echo_json,
+    handle_cli_errors,
+    pass_cli,
+)
 from meshprovision.cli.provision import TransportOptions, resolve_backend, transport_options
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
@@ -174,7 +180,7 @@ def _render_admin_key_lines(
     )
 
 
-@click.command(name="adopt", context_settings=CONTEXT_SETTINGS)
+@click.command(name="adopt", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
 @transport_options
 @click.option(
     "--dry-run",

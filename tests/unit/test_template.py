@@ -322,7 +322,7 @@ def test_load_template_text_empty_document_uses_defaults() -> None:
 
 
 def test_shipped_example_template_loads_cleanly(repo_root: Path) -> None:
-    example = repo_root / "config" / "template.example.yaml"
+    example = repo_root / "src" / "meshprovision" / "examples" / "template.example.yaml"
     cfg = load_template(example)
     warnings = cfg.collect_warnings()
     for warning in warnings:

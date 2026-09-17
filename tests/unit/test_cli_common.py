@@ -362,3 +362,53 @@ class TestResolveNonInteractive:
         monkeypatch.setattr(sys, "stdin", None)
 
         assert resolve_non_interactive(None) is True
+
+
+class TestCliContextBuild:
+    def test_defaults_env_file_to_none(self) -> None:
+        ctx = CliContext.build(settings=Settings(), non_interactive=True, force_refresh=False)
+        assert ctx.env_file is None
+
+    def test_carries_the_given_env_file(self, tmp_path: Path) -> None:
+        explicit = tmp_path / "custom.env"
+        ctx = CliContext.build(
+            settings=Settings(),
+            non_interactive=True,
+            force_refresh=False,
+            env_file=explicit,
+        )
+        assert ctx.env_file == explicit
+
+
+class TestCliContextWithSettings:
+    """Covers the mechanism ``cli.main``'s callback uses.
+
+    A contact the first-run wizard just prompted for must take effect
+    for the rest of the same invocation, without a second ``.env`` parse.
+    """
+
+    def test_replaces_settings_without_mutating_the_original_context(self) -> None:
+        original = CliContext.build(settings=Settings(), non_interactive=True, force_refresh=False)
+        updated_settings = original.settings.with_overrides(contact="ops@example.org")
+
+        updated = original.with_settings(updated_settings)
+
+        assert updated.settings.contact == "ops@example.org"
+        assert original.settings.contact is None
+
+    def test_preserves_every_other_field(self, tmp_path: Path) -> None:
+        original = CliContext.build(
+            settings=Settings(),
+            non_interactive=False,
+            force_refresh=True,
+            env_file=tmp_path / ".env",
+        ).with_assume_yes(True)
+
+        updated = original.with_settings(original.settings.with_overrides(contact="a@b.c"))
+
+        assert updated.non_interactive == original.non_interactive
+        assert updated.force_refresh == original.force_refresh
+        assert updated.assume_yes == original.assume_yes
+        assert updated.env_file == original.env_file
+        assert updated.out is original.out
+        assert updated.err is original.err

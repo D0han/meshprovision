@@ -27,7 +27,7 @@ pytestmark = pytest.mark.e2e
 def test_help_lists_every_subcommand(runner: CliRunner, env: dict[str, str]) -> None:
     result = invoke(runner, ["--help"], env)
     assert result.exit_code == 0
-    for name in ("provision", "status", "admin", "db"):
+    for name in ("provision", "status", "admin", "db", "init"):
         assert name in result.output
 
 
@@ -45,6 +45,7 @@ def test_version_prints_package_version(runner: CliRunner, env: dict[str, str]) 
         ["admin", "--help"],
         ["admin", "bootstrap", "--help"],
         ["db", "--help"],
+        ["init", "--help"],
     ],
 )
 def test_subcommand_help_exits_zero(
@@ -57,6 +58,32 @@ def test_subcommand_help_exits_zero(
 def test_unknown_subcommand_exits_two(runner: CliRunner, env: dict[str, str]) -> None:
     result = invoke(runner, ["not-a-real-command"], env)
     assert result.exit_code == 2
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["db", "verify", "--help"],
+        ["provision", "--help"],
+        ["admin", "bootstrap", "--help"],
+        ["db", "backup", "--help"],
+        ["template", "validate", "--help"],
+    ],
+)
+def test_help_output_never_leaks_docstring_sections_or_rst(
+    runner: CliRunner, env: dict[str, str], args: list[str]
+) -> None:
+    result = invoke(runner, args, env)
+    assert result.exit_code == 0
+    for marker in ("Args:", "Raises:", "Returns:", ":class:", "``"):
+        assert marker not in result.output
+
+
+def test_commands_table_still_lists_a_readable_short_help(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    result = invoke(runner, ["--help"], env)
+    assert "Database integrity and backup helpers" in result.output
 
 
 def test_provision_without_yes_or_interactive_refuses_non_interactively(

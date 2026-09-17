@@ -8,13 +8,14 @@ hand-editable ODS spreadsheet, and reports network health from
 
 ## CLI usage at a glance
 
-One console script, `mesh`, with six subcommand groups. **Global options
-go before the subcommand** -- `mesh --no-cache status --json`, not
-`mesh status --no-cache`. Every command and subcommand supports `-h`/
-`--help`.
+One console script, `mesh`, with seven subcommands/subcommand groups.
+**Global options go before the subcommand** -- `mesh --no-cache status
+--json`, not `mesh status --no-cache`. Every command and subcommand
+supports `-h`/`--help`.
 
 | Command | What it does |
 |---|---|
+| `mesh init` | Create whatever first-run setup (`.env`, template, database) is still missing. |
 | `mesh provision` | Provision a connected device from the template: connects, diffs, writes. |
 | `mesh adopt` | Inventory an already-configured device -- strictly read-only toward it. |
 | `mesh status` | Read-only network health from loranet.pl/lorastats.pl, merged with the database. |
@@ -113,6 +114,12 @@ pip install -e ".[ble]"
 This is a documented alias, kept so the command stays valid: upstream
 `meshtastic` now depends on `bleak` directly, so BLE works without it.
 
+Everything (`dev` + `ble`) in one shot:
+
+```bash
+pip install -e ".[all]"
+```
+
 `pipx`:
 
 ```bash
@@ -134,16 +141,33 @@ script is named `mesh`. It does not collide with the unrelated, abandoned
 
 ## Quick start
 
-1. `cp .env.example .env` then edit `.env` and set `MESHPROVISION_CONTACT`
-   to your own email address or URL. It ships EMPTY on purpose -- there is
-   no default and a whitespace-only value is rejected at startup.
-2. `cp config/template.example.yaml config/template.yaml` and edit it.
-   Both the real template and the real database are gitignored.
-3. `cp data/nodes_db.example.ods data/nodes_db.ods`
-4. `mesh db verify` -- confirms the database loads, the schema validates,
+1. `mesh init` -- prompts for your contact address (the one value with no
+   default) and writes it into a fresh `.env`, copies the bundled
+   provisioning template to `config/template.yaml`, and creates an empty,
+   schema-correct `data/nodes_db.ods`. Only creates what is missing, so
+   it's safe to re-run. Both the real template and the real database are
+   gitignored. Any `mesh` command run interactively offers to do the same
+   thing whenever setup is incomplete, so this step is optional -- but
+   running it explicitly first is the fastest way to get going.
+2. Edit `config/template.yaml` -- at minimum `lora.region`, the name
+   patterns, and `admin_nodes`. See
+   [Template walkthrough](#template-walkthrough-configtemplateyaml) below.
+3. `mesh db verify` -- confirms the database loads, the schema validates,
    and the key rows pass the weak-key audit.
-5. `mesh provision --dry-run --port /dev/ttyUSB0` -- prints the exact
+4. `mesh provision --dry-run --port /dev/ttyUSB0` -- prints the exact
    change plan without writing to the device or the database.
+
+Prefer to do it by hand from a source checkout? The two example files
+`mesh init` copies live at `src/meshprovision/examples/`:
+
+```bash
+cp src/meshprovision/examples/env.example .env
+# edit .env, set MESHPROVISION_CONTACT
+cp src/meshprovision/examples/template.example.yaml config/template.yaml
+# edit config/template.yaml
+mesh init --yes  # .env and the template are already there, so this only
+                  # creates the (empty) database
+```
 
 ## Configuration
 
@@ -157,8 +181,8 @@ script is named `mesh`. It does not collide with the unrelated, abandoned
 | `MESHPROVISION_CACHE_TTL` | `300` | Cache time-to-live, seconds |
 | `MESHPROVISION_CONTACT` | (none -- REQUIRED) | Your contact address, sent in the `User-Agent` to lorastats.pl |
 | `MESHPROVISION_LOG_LEVEL` | `INFO` | `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` |
-| `MESHPROVISION_KNOWN_BAD_KEYS` | `data/known_bad_keys.txt` | Override path to the weak-key blocklist. Read directly by the crypto layer; not listed in `.env.example`. |
-| `MESHPROVISION_LOCK_TIMEOUT` | `5.0` | Seconds a write command polls the database write lock before giving up. Not listed in `.env.example`; mainly useful for scripting against a slow/contended database. A value that is not a finite, non-negative number is rejected with exit 2 rather than silently ignored. |
+| `MESHPROVISION_KNOWN_BAD_KEYS` | `data/known_bad_keys.txt` | Override path to the weak-key blocklist. Read directly by the crypto layer; not listed in the bundled `env.example`. |
+| `MESHPROVISION_LOCK_TIMEOUT` | `5.0` | Seconds a write command polls the database write lock before giving up. Not listed in the bundled `env.example`; mainly useful for scripting against a slow/contended database. A value that is not a finite, non-negative number is rejected with exit 2 rather than silently ignored. |
 
 Precedence, highest to lowest: **CLI flag > environment variable > `.env`
 file > built-in default**. `.env` is found by searching upward from the
@@ -171,7 +195,8 @@ would make someone else wear your traffic.
 
 ### Template walkthrough (`config/template.yaml`)
 
-The shipped `config/template.example.yaml` starts with:
+The bundled `src/meshprovision/examples/template.example.yaml` (`mesh
+init`'s source for `config/template.yaml`) starts with:
 
 ```yaml
 version: 1
@@ -339,7 +364,10 @@ LibreOffice, not a CSV dump.
 
 ### The shipped example
 
-`data/nodes_db.example.ods` ships three fake nodes:
+`data/nodes_db.example.ods` is a **reference file**, not a starting
+point -- `mesh init` deliberately creates an empty database rather than
+copying it (see [`mesh init`](#mesh-init) above). It ships three fake
+nodes:
 
 - `deadbe01` / `MT01` / "Meshtastic MT01" / `HELTEC_V3` -- authorizes the
   `example-admin` admin key.
@@ -368,9 +396,10 @@ vary.
 
 ## Commands
 
-The toolkit installs **one** console script, `mesh`, with six subcommand
-groups. **Global options go before the subcommand** -- for example
-`mesh --no-cache status --json`, not `mesh status --no-cache`.
+The toolkit installs **one** console script, `mesh`, with seven
+subcommands/subcommand groups. **Global options go before the
+subcommand** -- for example `mesh --no-cache status --json`, not
+`mesh status --no-cache`.
 
 **Output contract:** STDOUT carries machine-readable output only
 (`--json` documents, the `mesh status` table, and `--dry-run` change
@@ -394,6 +423,35 @@ lines); logging, prompts, warnings, and errors all go to STDERR -- so
 
 `--non-interactive` is auto-enabled whenever stdin is not a TTY, and it
 turns every prompt into an error -- which is what makes `mesh` cron-safe.
+
+### `mesh init`
+
+Creates whatever first-run artifacts (`.env`, `config/template.yaml`,
+`data/nodes_db.ods`) are still missing. Prompts for
+`MESHPROVISION_CONTACT` -- the one value with no default -- unless
+`--contact` is given. Only ever creates what is missing, so it is safe to
+re-run. The database is created empty via the same schema-writer `mesh db
+restore` uses, **never** copied from `data/nodes_db.example.ods`, which
+carries fake illustrative rows.
+
+Any `mesh` command run interactively offers this same wizard whenever
+setup is incomplete, before the command it was actually asked to run gets
+a chance to fail with a "file not found" error. That offer never fires
+for a help-only invocation, for `mesh init` itself, or when
+`--non-interactive`/a non-TTY stdin applies -- a non-interactive run with
+missing setup keeps failing exactly as it always has, with the same hint.
+
+```bash
+mesh init                                      # prompts for everything missing
+mesh init --yes --contact ops@example.org      # fully scriptable
+mesh init --json                               # machine-readable summary
+```
+
+| Option | Meaning |
+|---|---|
+| `-y`, `--yes` | Create every missing file without asking |
+| `--contact` | Value for `MESHPROVISION_CONTACT`; skips the prompt |
+| `--json` | Emit JSON instead of human text |
 
 ### `mesh provision`
 
@@ -913,9 +971,9 @@ this project has (or could yet) fix.
 
 | Path | Tracked in git? | What it is |
 |---|---|---|
-| `.env.example` | tracked | Variable names only, no values. `MESHPROVISION_CONTACT` ships empty. |
+| `src/meshprovision/examples/env.example` | tracked, ships in every install | Variable names only, no values. `MESHPROVISION_CONTACT` ships empty. `mesh init`'s source for `.env`. |
 | `.env`, `.env.*` | IGNORED | Your real environment, including your contact address |
-| `config/template.example.yaml` | tracked | Example template, generic `MT{n}{n}` naming |
+| `src/meshprovision/examples/template.example.yaml` | tracked, ships in every install | Example template, generic `MT{n}{n}` naming. `mesh init`'s source for `config/template.yaml`. |
 | `config/template.yaml` | IGNORED | Your operational template |
 | `data/nodes_db.example.ods` | tracked | Fake nodes, ASCII placeholder "keys" |
 | `data/nodes_db.ods` | IGNORED | Your real database -- contains live private keys and BLE PINs |

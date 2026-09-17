@@ -1128,8 +1128,8 @@ def load_template(path: Path | str) -> TemplateConfig:
             f"Template file not found: {resolved}",
             field=None,
             hint=(
-                "Copy config/template.example.yaml to config/template.yaml and "
-                "edit it, or set MESHPROVISION_TEMPLATE_PATH."
+                "Run `mesh init`, copy config/template.example.yaml to "
+                "config/template.yaml and edit it, or set MESHPROVISION_TEMPLATE_PATH."
             ),
         )
     try:

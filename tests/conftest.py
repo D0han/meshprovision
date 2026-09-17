@@ -51,7 +51,9 @@ from meshprovision.db import ods  # noqa: E402
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 """Absolute path to the repository root (the parent of ``tests/``)."""
 
-EXAMPLE_TEMPLATE: Final[Path] = REPO_ROOT / "config" / "template.example.yaml"
+EXAMPLE_TEMPLATE: Final[Path] = (
+    REPO_ROOT / "src" / "meshprovision" / "examples" / "template.example.yaml"
+)
 """Path to the shipped, read-only example provisioning template."""
 
 KNOWN_BAD_KEYS_FILE: Final[Path] = REPO_ROOT / "data" / "known_bad_keys.txt"

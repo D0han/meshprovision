@@ -3,7 +3,6 @@ data/nodes_db.ods
 config/template.yaml
 .env
 .env.*
-!.env.example
 .cache/
 data/backups/*
 !data/backups/.gitkeep

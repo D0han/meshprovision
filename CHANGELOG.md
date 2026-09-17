@@ -9,9 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Single `mesh` console script (distribution `meshprovision`) with six
-  subcommand groups: `provision`, `status`, `admin`, `db`, `adopt`, and
-  `template`.
+- Single `mesh` console script (distribution `meshprovision`) with seven
+  subcommands/subcommand groups: `init`, `provision`, `status`, `admin`,
+  `db`, `adopt`, and `template`.
+- `mesh init`: creates whatever first-run artifacts (`.env`,
+  `config/template.yaml`, `data/nodes_db.ods`) are still missing --
+  prompts once for `MESHPROVISION_CONTACT`, the one setting with no
+  default, unless `--contact` is given; `--yes`/`--json` make it fully
+  scriptable. Only ever creates what is missing, so it is safe to re-run.
+  The database is always created empty (never copied from
+  `data/nodes_db.example.ods`, which carries fake illustrative rows). Any
+  `mesh` command run interactively now offers this same wizard whenever
+  setup is incomplete, before the command it was actually asked to run
+  gets a chance to fail with a "file not found" error; the offer never
+  fires for a help-only invocation, for `mesh init` itself, or when
+  `--non-interactive`/a non-TTY stdin applies. The two example files
+  `mesh init` copies moved from `.env.example`/`config/template.example.yaml`
+  into `src/meshprovision/examples/`, so they ship inside every
+  `pip`/`pipx` install rather than only a source checkout.
 - `mesh provision`: Serial/BLE/TCP transports with an explicit selection
   priority, FACTORY/PROVISIONED/FOREIGN detection, a pure change planner that
   makes `--dry-run` exact, drift repair, and transactional writes verified by
@@ -83,11 +98,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Packaging, lint/type/test configuration, pre-commit hooks, a 3.11/3.12/3.13
   GitHub Actions CI matrix with a package-build check, a tag-triggered release
   workflow, and Dependabot for `pip` and `github-actions`.
+- `all` extra (`pip install -e ".[all]"`), a self-referential alias for
+  `[ble,dev]` together, for a one-shot full development install.
 - README covering installation, the template and `.ods` walkthroughs, every
   command, the security model, and Linux Mint troubleshooting.
 
 ### Fixed
 
+- `mesh --help` and every subcommand's `--help` no longer render the
+  command's raw Google-style docstring verbatim, which used to dump
+  developer-facing `Args:`/`Returns:`/`Raises:` sections (and leaked
+  Sphinx cross-reference roles like `` :class:`~a.b.C` `` and rST
+  literals like ` ``--flag`` `) straight into operator-facing help text.
+  Help now shows only the docstring's prose, up through its first such
+  section header, with roles and literals rendered as plain text.
 - `mesh status`'s lorastats source no longer falls back to an unrelated
   record when no exact node-id match is found in a per-node query response;
   a non-matching record is now treated as "no observation" rather than

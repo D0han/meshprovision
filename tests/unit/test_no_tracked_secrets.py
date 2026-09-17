@@ -122,8 +122,8 @@ def test_matcher_flags_known_bad_paths(path: str) -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        ".env.example",
-        "config/template.example.yaml",
+        "src/meshprovision/examples/env.example",
+        "src/meshprovision/examples/template.example.yaml",
         "data/nodes_db.example.ods",
         "data/known_bad_keys.txt",
         "data/backups/.gitkeep",

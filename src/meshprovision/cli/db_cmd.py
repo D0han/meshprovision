@@ -36,7 +36,13 @@ import click
 from rich import box
 from rich.table import Table
 
-from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_errors, pass_cli
+from meshprovision.cli.common import (
+    CONTEXT_SETTINGS,
+    MeshGroup,
+    echo_json,
+    handle_cli_errors,
+    pass_cli,
+)
 from meshprovision.crypto import weakkeys
 from meshprovision.db import atomic_writer, locking, ods, schema
 from meshprovision.db.verify import ProblemSeverity, verify_database
@@ -62,7 +68,7 @@ __all__ = [
 ]
 
 
-@click.group(name="db", context_settings=CONTEXT_SETTINGS)
+@click.group(name="db", cls=MeshGroup, context_settings=CONTEXT_SETTINGS)
 def db() -> None:
     """Database integrity and backup helpers for the ODS node database."""
 

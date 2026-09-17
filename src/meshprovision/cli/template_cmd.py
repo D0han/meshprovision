@@ -19,7 +19,13 @@ from typing import TYPE_CHECKING
 
 import click
 
-from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_errors, pass_cli
+from meshprovision.cli.common import (
+    CONTEXT_SETTINGS,
+    MeshGroup,
+    echo_json,
+    handle_cli_errors,
+    pass_cli,
+)
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
@@ -30,7 +36,7 @@ __all__ = [
 ]
 
 
-@click.group(name="template", context_settings=CONTEXT_SETTINGS)
+@click.group(name="template", cls=MeshGroup, context_settings=CONTEXT_SETTINGS)
 def template() -> None:
     """Provisioning template file operations."""
 

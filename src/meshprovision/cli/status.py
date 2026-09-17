@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 import click
 
-from meshprovision.cli.common import CONTEXT_SETTINGS, handle_cli_errors, pass_cli
+from meshprovision.cli.common import CONTEXT_SETTINGS, MeshCommand, handle_cli_errors, pass_cli
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.lorastats import DEFAULT_REGIONS
 from meshprovision.errors import ExitCode, SettingsError
@@ -137,7 +137,7 @@ def _run_once(ctx: CliContext, options: StatusOptions, client: CachedHTTPClient)
     return run_status(ctx.settings, options, client=client)
 
 
-@click.command(name="status", context_settings=CONTEXT_SETTINGS)
+@click.command(name="status", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
 @click.option(
     "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of a table."
 )

@@ -50,6 +50,9 @@ dev = [
   "pre-commit",
   "detect-secrets",
 ]
+# Everything above, in one shot: `pip install -e ".[all]"`. Self-referential
+# extra (PEP 621, pip >= 21.2) -- update this list if a new extra is ever added.
+all = ["meshprovision[ble,dev]"]
 
 [project.scripts]
 mesh = "meshprovision.cli.main:cli"
@@ -58,7 +61,7 @@ mesh = "meshprovision.cli.main:cli"
 packages = ["src/meshprovision"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "config", "scripts", "README.md", "CHANGELOG.md", "LICENSE", ".env.example"]
+include = ["src", "tests", "config", "scripts", "README.md", "CHANGELOG.md", "LICENSE"]
 
 [tool.ruff]
 line-length = 100

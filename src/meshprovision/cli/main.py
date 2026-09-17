@@ -5,14 +5,17 @@ Defines the ``cli`` group object that ``pyproject.toml``'s
 invokes directly -- there is deliberately no separate ``main()``
 wrapper. Declares every global option, builds the layered
 :class:`~meshprovision.cli.common.Settings` and the shared
-:class:`~meshprovision.cli.common.CliContext`, and registers the six
+:class:`~meshprovision.cli.common.CliContext`, and registers the seven
 subcommands produced by the cli-commands group: ``provision``,
-``status``, ``admin``, ``db``, ``adopt``, ``template``.
+``status``, ``admin``, ``db``, ``adopt``, ``template``, ``init``.
 
-The group callback itself does no I/O beyond building settings and
-configuring logging -- it never opens the database, loads the template,
-or touches the network -- so ``mesh --help`` and ``mesh <cmd> --help``
-stay instant and side-effect free.
+The group callback does no I/O beyond building settings and configuring
+logging on a help-only invocation -- ``mesh --help`` and ``mesh <cmd>
+--help`` (at any nesting depth) stay instant and side-effect free. On an
+*interactive* run of an actual command, it additionally offers to create
+whatever first-run artifacts (``.env``, the template, the database) are
+still missing, via :func:`~meshprovision.cli.init_cmd.maybe_offer_setup`
+-- see that module for the wizard itself.
 """
 
 from __future__ import annotations
@@ -29,12 +32,14 @@ from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
     LOG_LEVELS,
     CliContext,
+    MeshGroup,
     build_settings,
     configure_logging,
     handle_cli_errors,
     resolve_non_interactive,
 )
 from meshprovision.cli.db_cmd import db
+from meshprovision.cli.init_cmd import init, maybe_offer_setup
 from meshprovision.cli.provision import provision
 from meshprovision.cli.status import status
 from meshprovision.cli.template_cmd import template
@@ -47,7 +52,7 @@ lowercase form actually passed to ``click.Choice``, so the choices
 themselves are declared lowercase to match."""
 
 
-@click.group(name="mesh", context_settings=CONTEXT_SETTINGS)
+@click.group(name="mesh", cls=MeshGroup, context_settings=CONTEXT_SETTINGS)
 @click.version_option(version=__version__, prog_name="mesh", message="%(prog)s %(version)s")
 @click.option(
     "--log-level",
@@ -113,6 +118,11 @@ def cli(
 ) -> None:
     """Provision and monitor Meshtastic mesh nodes on the PL mesh.
 
+    Run interactively with setup incomplete, it offers to create
+    whatever's missing (``.env``, the template, the database) before the
+    command you asked for gets a chance to fail. Run ``mesh init``
+    directly to do the same thing on your own terms.
+
     Args:
         ctx: The click context. ``ctx.obj`` is set to the shared
             :class:`~meshprovision.cli.common.CliContext` every
@@ -141,12 +151,21 @@ def cli(
         log_level=log_level,
     )
     configure_logging(settings.log_level)
-    ctx.obj = CliContext.build(
+    cli_ctx = CliContext.build(
         settings=settings,
         non_interactive=resolve_non_interactive(non_interactive),
         force_refresh=no_cache or force_refresh,
+        env_file=env_file,
     )
 
+    outcome = maybe_offer_setup(cli_ctx, click_ctx=ctx)
+    if outcome is not None and outcome.contact is not None:
+        # A fresh .env was written and a contact prompted for: layer it
+        # onto the live settings rather than re-reading the .env it just
+        # wrote, so it takes effect for the rest of this run.
+        cli_ctx = cli_ctx.with_settings(settings.with_overrides(contact=outcome.contact))
+    ctx.obj = cli_ctx
 
-for command in (provision, status, admin, db, adopt, template):
+
+for command in (provision, status, admin, db, adopt, template, init):
     cli.add_command(command)

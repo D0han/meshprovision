@@ -137,8 +137,8 @@ class Settings(BaseModel):
         """Expand a leading ``~`` in a path field.
 
         Relative paths are left relative to the current working
-        directory (documented in ``.env.example``); only user-home
-        expansion happens here.
+        directory (documented in the bundled ``env.example``); only
+        user-home expansion happens here.
 
         Args:
             value: The path as parsed so far.
@@ -154,9 +154,10 @@ class Settings(BaseModel):
         """Treat a blank or whitespace-only contact string as unset.
 
         ``MESHPROVISION_CONTACT=`` in ``.env`` is the documented shape of
-        ``.env.example`` for "not configured yet"; this validator turns
-        that into ``None`` so :meth:`require_contact` sees it as unset
-        rather than as an empty, technically-present value.
+        the bundled ``env.example`` for "not configured yet"; this
+        validator turns that into ``None`` so :meth:`require_contact`
+        sees it as unset rather than as an empty, technically-present
+        value.
 
         Args:
             value: The raw value supplied for ``contact``.
@@ -342,7 +343,8 @@ def load_settings(
 
     if unrecognized:
         _logger.warning(
-            "Unrecognized %s variable(s), ignored: %s. See .env.example for every supported name.",
+            "Unrecognized %s variable(s), ignored: %s. Run `mesh init` or see the bundled "
+            "env.example for every supported name.",
             ENV_PREFIX.rstrip("_"),
             ", ".join(sorted(unrecognized)),
         )
@@ -361,7 +363,7 @@ def load_settings(
     except ValidationError as exc:
         raise SettingsError(
             format_validation_error(exc, source="environment/.env"),
-            hint="See .env.example for every supported variable.",
+            hint="Run `mesh init` or see the bundled env.example for every supported variable.",
         ) from exc
 
 

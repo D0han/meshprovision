@@ -21,7 +21,13 @@ from typing import TYPE_CHECKING
 
 import click
 
-from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_errors, pass_cli
+from meshprovision.cli.common import (
+    CONTEXT_SETTINGS,
+    MeshGroup,
+    echo_json,
+    handle_cli_errors,
+    pass_cli,
+)
 from meshprovision.cli.provision import (
     ProvisionOptions,
     TransportOptions,
@@ -140,7 +146,7 @@ def parse_assignment(raw: str) -> tuple[str, str]:
     return ref, b64
 
 
-@click.group(name="admin", context_settings=CONTEXT_SETTINGS)
+@click.group(name="admin", cls=MeshGroup, context_settings=CONTEXT_SETTINGS)
 def admin() -> None:
     """Manage admin-key custody: bootstrap, import, and list configured admins."""
 

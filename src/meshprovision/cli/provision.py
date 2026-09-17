@@ -39,7 +39,13 @@ from typing import TYPE_CHECKING, Any, Final, TypeVar
 
 import click
 
-from meshprovision.cli.common import CONTEXT_SETTINGS, echo_json, handle_cli_errors, pass_cli
+from meshprovision.cli.common import (
+    CONTEXT_SETTINGS,
+    MeshCommand,
+    echo_json,
+    handle_cli_errors,
+    pass_cli,
+)
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
 from meshprovision.crypto.redact import SecretBytes
@@ -703,7 +709,7 @@ def run_provision(
     )
 
 
-@click.command(name="provision", context_settings=CONTEXT_SETTINGS)
+@click.command(name="provision", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
 @transport_options
 @provisioning_options
 @click.option(
