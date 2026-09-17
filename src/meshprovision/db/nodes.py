@@ -698,20 +698,40 @@ class NodeRepository:
         return True
 
     def used_short_names(self) -> frozenset[str]:
-        """Return every ``short_name`` currently in use.
+        """Return every ``short_name`` currently in use by an active node.
+
+        Excludes archived nodes (``mesh db forget``): their row is kept
+        for audit history, never deleted, but a decommissioned node's
+        name must be free for a replacement device to take -- there is
+        no unarchive command, so treating an archived name as
+        permanently reserved would leak a slot out of the pattern's
+        namespace (and its finite capacity, see
+        :func:`~meshprovision.config.template.ensure_capacity_available`)
+        for good every time a node is retired.
 
         Returns:
-            The non-empty ``short_name`` values across every node.
+            The non-empty ``short_name`` values across every
+            non-archived node.
         """
-        return frozenset(record.short_name for record in self.all() if record.short_name)
+        return frozenset(
+            record.short_name
+            for record in self.all()
+            if record.short_name and not record.is_archived
+        )
 
     def used_long_names(self) -> frozenset[str]:
-        """Return every ``long_name`` currently in use.
+        """Return every ``long_name`` currently in use by an active node.
+
+        See :meth:`used_short_names` -- the same archived-node exclusion
+        applies here.
 
         Returns:
-            The non-empty ``long_name`` values across every node.
+            The non-empty ``long_name`` values across every non-archived
+            node.
         """
-        return frozenset(record.long_name for record in self.all() if record.long_name)
+        return frozenset(
+            record.long_name for record in self.all() if record.long_name and not record.is_archived
+        )
 
     def next_free_name(
         self,

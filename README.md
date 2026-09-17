@@ -665,10 +665,12 @@ mesh db forget deadbe01
   status`'s default report and refused by `mesh provision`/`mesh admin
   bootstrap`/`mesh adopt` (not bypassable with `--force`), but its row --
   including `authorized_admin_keys` and `notes` -- is never deleted, so
-  audit history survives. `mesh db list` still shows it by default.
-  There is currently no CLI command to un-archive a node; the hint on a
-  refused command names the manual workaround (edit the `archived_at`
-  cell by hand).
+  audit history survives. `mesh db list` still shows it by default. Its
+  `short_name`/`long_name` are freed for a replacement device to reuse
+  (an archived node's name is excluded from the pattern's used-name
+  count, unlike every other field on the row). There is currently no
+  CLI command to un-archive a node; the hint on a refused command names
+  the manual workaround (edit the `archived_at` cell by hand).
 
 ### `mesh template`
 

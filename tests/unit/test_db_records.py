@@ -506,6 +506,39 @@ def test_next_free_name_selects_by_field_name(nodes: NodeRepository, db: OdsData
     assert short_name != "MT00"
 
 
+def test_archived_node_frees_its_name_for_reuse(nodes: NodeRepository, db: OdsDatabase) -> None:
+    """An archived node's name must not be reserved forever.
+
+    ``mesh db forget`` never deletes the row (audit history survives)
+    and there is no unarchive command, so if used_short_names()/
+    used_long_names() kept counting an archived node's name as "in
+    use," that name's slot would be permanently unusable by any
+    replacement device -- a real leak against the pattern's finite
+    capacity every time a node is decommissioned.
+    """
+    long_spec = PatternSpec.compile(
+        "Meshtastic MT{n}{n}", BASE36_ALPHABET, field="long_name_pattern"
+    )
+    short_spec = PatternSpec.compile("MT{n}{n}", BASE36_ALPHABET, field="short_name_pattern")
+
+    record = NodeRecord(
+        node_id="deadbe01",
+        short_name="MT00",
+        long_name="Meshtastic MT00",
+        archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    nodes.upsert(record)
+    db.save()
+
+    assert "MT00" not in nodes.used_short_names()
+    assert "Meshtastic MT00" not in nodes.used_long_names()
+
+    _, short_name = nodes.next_free_name(short_spec, is_long=False)
+    assert short_name == "MT00"
+    _, long_name = nodes.next_free_name(long_spec, is_long=True)
+    assert long_name == "Meshtastic MT00"
+
+
 def _fill_namespace(nodes: NodeRepository, spec: PatternSpec, count: int) -> None:
     """Occupy the first ``count`` names of ``spec``, one node per name."""
     for index in range(count):
