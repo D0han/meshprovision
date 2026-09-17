@@ -36,10 +36,12 @@ from meshprovision.cli.common import (
 from meshprovision.cli.provision import TransportOptions, resolve_backend, transport_options
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
-from meshprovision.db.schema import ManagementMode
+from meshprovision.db.keys import KeyRecord
+from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import AdoptionRefusedError, KeyMaterialError, NodeArchivedError
 from meshprovision.provisioning import adopt as adopt_mod
-from meshprovision.provisioning import connection, detect
+from meshprovision.provisioning import connection, detect, observed_keys
+from meshprovision.provisioning.key_registry import adopt_canonical_ref, register_observed_key
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
@@ -112,7 +114,19 @@ def _duplicate_admin_key_warnings(
     Comparing only against ``other``'s *unregistered* keys avoids this:
     that data source is node-scoped, not derived from the same global
     map, so it can genuinely differ between two devices reporting the
-    same still-unimported material.
+    same still-unimported material. The same reasoning extends to the
+    second tier below, which checks ``other.authorized_admin_keys`` for
+    the ``observed-*`` ref this key would resolve to: a key already
+    registered under a real ref is never *also* left sitting under an
+    ``observed-*`` one (:func:`~meshprovision.provisioning.key_registry.
+    adopt_canonical_ref` guarantees that on every node whenever a real ref
+    is created), so this tier can only ever fire on genuinely
+    still-unregistered material, exactly like the first.
+
+    Both tiers are pure lookups against already-loaded rows -- run
+    *before* this adopt's own keys are registered (see ``adopt()``'s
+    write phase below), so a key observed on ``other`` via an earlier
+    adopt is what they compare against, never this run's own writes.
 
     Args:
         db_nodes: The open :class:`~meshprovision.db.nodes.NodeRepository`.
@@ -128,6 +142,7 @@ def _duplicate_admin_key_warnings(
         if other.node_id == live_node_id:
             continue
         other_unregistered_material = other.unregistered_admin_key_materials()
+        other_authorized = frozenset(other.authorized_admin_keys)
         for key in admin_keys:
             if any(key.material == material for material in other_unregistered_material):
                 warnings.append(
@@ -135,28 +150,41 @@ def _duplicate_admin_key_warnings(
                     f"{other.node_id} during a previous adopt -- the CVE-2025-52464 vendor "
                     "key-cloning failure mode."
                 )
+            observed_ref = observed_keys.observed_key_ref(key.material)
+            if observed_ref in other_authorized:
+                warnings.append(
+                    f"admin key {key.fingerprint} is also authorized, under the same "
+                    f"observed ref {observed_ref!r}, on node {other.node_id} -- the "
+                    "CVE-2025-52464 vendor key-cloning failure mode."
+                )
     return tuple(warnings)
 
 
 def _render_admin_key_lines(
     report: adopt_mod.AdoptionReport, *, show_admin_keys: bool
 ) -> tuple[str, ...]:
-    """Render the human-mode lines describing unregistered admin keys.
+    """Render the human-mode lines describing admin keys about to be auto-registered.
+
+    Unless ``--dry-run``, ``adopt()``'s write phase files every one of
+    these keys under a synthetic ``observed-*`` ref (see
+    :mod:`meshprovision.provisioning.observed_keys`) so it always resolves
+    to a real ``Keys`` sheet row -- these lines describe that, and give
+    the operator the ``mesh admin import`` command that renames the
+    synthetic ref to a real one once the key's true owner is known.
 
     Args:
         report: The adoption report to render.
         show_admin_keys: Whether ``--show-admin-keys`` was passed.
 
     Returns:
-        One paste-ready ``mesh admin import`` line per unregistered key
-        when ``show_admin_keys`` is set (or, for a key whose material is
-        not exactly 32 bytes -- reachable from a device reporting
-        malformed data, ``detect.py`` applies no length check -- a
-        ``#``-prefixed line noting it can't be rendered rather than a
-        crash or a silently wrong encoding; the report's own warnings
-        already flag the malformed key separately); otherwise a single
-        count hint line, or nothing when every key is already
-        registered.
+        One line per unregistered key when ``show_admin_keys`` is set
+        (or, for a key whose material is not exactly 32 bytes --
+        reachable from a device reporting malformed data, ``detect.py``
+        applies no length check -- a ``#``-prefixed line noting it can't
+        be rendered or registered at all, rather than a crash or a
+        silently wrong encoding; the report's own warnings already flag
+        the malformed key separately); otherwise a single count hint
+        line, or nothing when every key is already registered.
     """
     unregistered = [key for key in report.admin_keys if not key.refs]
     if not unregistered:
@@ -169,14 +197,18 @@ def _render_admin_key_lines(
             except KeyMaterialError:
                 lines.append(
                     f"# admin key {key.fingerprint}: cannot render an import command "
-                    "(malformed key material)"
+                    "(malformed key material); it will not be registered either"
                 )
                 continue
-            lines.append(f"mesh admin import <REF>={encoded}")
+            observed_ref = observed_keys.observed_key_ref(key.material)
+            lines.append(
+                f"admin key {key.fingerprint} will be filed under {observed_ref!r}; "
+                f"rename it once its owner is known: mesh admin import <REF>={encoded}"
+            )
         return tuple(lines)
     return (
-        f"{len(unregistered)} admin key(s) not registered in the Keys sheet; "
-        "re-run with --show-admin-keys for import commands.",
+        f"{len(unregistered)} admin key(s) will be filed under a synthetic observed-* ref "
+        "in the Keys sheet; re-run with --show-admin-keys for import commands to rename them.",
     )
 
 
@@ -341,7 +373,58 @@ def adopt(
         if not ctx.confirm(question, default=False):
             raise click.Abort()
 
-        record = adopt_mod.adopted_record(report, now=datetime.now(tz=UTC))
+        now = datetime.now(tz=UTC)
+
+        # The node's own keypair, so public_key_ref/private_key_ref
+        # actually resolve (see NodeRecord.public_key_ref/private_key_ref)
+        # -- mirrors what mesh provision records via KeyRecord.for_keypair,
+        # public half always, private half only when the device exposes
+        # it. Registered *before* the observed-admin-key loop below, so a
+        # device that also lists its own key on security.adminKey
+        # resolves that entry to this real ref rather than minting a
+        # fresh observed one for it.
+        node_public = live.security.public_key
+        node_private = live.security.private_key
+        if live.security.has_public_key and node_public is not None:
+            if live.security.has_private_key and node_private is not None:
+                pair = crypto_keys.KeyPair(private=node_private, public=node_public)
+                pub_record, priv_record = KeyRecord.for_keypair(
+                    live.node_id.hex, pair, created_ts=now
+                )
+                db.keys.upsert(pub_record)
+                db.keys.upsert(priv_record)
+            else:
+                db.keys.upsert(
+                    KeyRecord.from_material(
+                        live.node_id.hex, KeyType.ADMIN_PUBLIC, node_public, created_ts=now
+                    )
+                )
+            # Reconcile: this key may already sit on some other node's row
+            # under a synthetic observed-* ref from an earlier adopt, back
+            # before its real owner was known.
+            adopt_canonical_ref(
+                db.nodes, db.keys, material=node_public, canonical_owner=live.node_id.hex
+            )
+
+        # Every admin key the device reports that resolved to no Keys
+        # sheet ref gets one now, minted content-addressed from its own
+        # material (see meshprovision.provisioning.observed_keys) -- a
+        # malformed-length key (detect.py applies no length check) is
+        # simply skipped, same degrade-not-crash treatment as everywhere
+        # else in this module; adopted_record() below then falls back to
+        # recording it on unregistered_admin_keys, exactly as before.
+        observed_refs: dict[bytes, str] = {}
+        for key in report.admin_keys:
+            if key.preferred_ref is not None:
+                continue
+            try:
+                observed_refs[key.material] = register_observed_key(
+                    db.nodes, db.keys, key.material, created_ts=now
+                )
+            except KeyMaterialError:
+                continue
+
+        record = adopt_mod.adopted_record(report, now=now, observed_refs=observed_refs)
         db.nodes.upsert(record)
         db.db.save()
 

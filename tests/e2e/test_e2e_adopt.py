@@ -16,8 +16,9 @@ from meshprovision.crypto.keys import encode_key
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import ManagementMode
+from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import ExitCode
+from meshprovision.provisioning.observed_keys import observed_key_ref
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -83,6 +84,98 @@ def test_dry_run_writes_nothing_to_the_database(
     assert result.exit_code == 0
     assert db_fingerprint(db_path) == before
     assert "deadbe01" in result.stderr
+
+
+def test_dry_run_registers_no_keys_either(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """--dry-run must not mint an observed ref or register the node's own key."""
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+    kp = keypair_factory()
+    stray_kp = keypair_factory()
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+    iface.localNode.localConfig.security.admin_key.append(stray_kp.public)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--dry-run"], env)
+
+    assert result.exit_code == 0
+    assert db_fingerprint(db_path) == before
+
+
+def test_adopt_registers_the_nodes_own_public_and_private_key(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """A device exposing both key halves gets both Keys sheet rows."""
+    kp = keypair_factory()
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    keys_by_ref = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert set(keys_by_ref) == {"deadbe01_pub", "deadbe01_priv"}
+    assert keys_by_ref["deadbe01_pub"].material() == kp.public
+    assert keys_by_ref["deadbe01_priv"].secret().reveal() == kp.private.reveal()
+    node = NodeRecord.from_row(loaded.nodes[0])
+    assert node.public_key_ref == "deadbe01_pub"
+    assert node.private_key_ref == "deadbe01_priv"
+
+
+def test_adopt_registers_only_the_nodes_public_key_when_private_is_absent(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """A device exposing only its public key gets only the _pub row."""
+    kp = keypair_factory()
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    keys_by_ref = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert set(keys_by_ref) == {"deadbe01_pub"}
+    assert keys_by_ref["deadbe01_pub"].material() == kp.public
+
+
+def test_adopting_the_true_owner_renames_a_stale_observed_ref(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Adopting node A first, then the key's true owner B, renames A's ref to B's."""
+    kp = keypair_factory()
+    observed_ref = observed_key_ref(kp.public)
+    seed_db(
+        nodes=[NodeRecord(node_id="aaaa0001", authorized_admin_keys=(observed_ref,))],
+        keys=[
+            KeyRecord.from_material(
+                observed_ref.removesuffix("_pub"), KeyType.ADMIN_PUBLIC, kp.public
+            )
+        ],
+    )
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes_by_id = {row["node_id"]: NodeRecord.from_row(row) for row in loaded.nodes}
+    assert nodes_by_id["aaaa0001"].authorized_admin_keys == ("deadbe01_pub",)
+    key_refs = {row["key_ref"] for row in loaded.keys}
+    assert observed_ref not in key_refs
+    assert "deadbe01_pub" in key_refs
 
 
 def test_refuses_a_template_managed_node_without_force(
@@ -268,11 +361,24 @@ def test_adopt_discover_then_import_then_reconcile_a_friends_admin_key(
     revealed_b64 = first_doc["admin_keys"][0]["material"]
     assert base64.b64decode(revealed_b64) == friend_kp.public
 
+    # mesh adopt auto-registers a not-yet-recognized admin key under a
+    # synthetic, content-addressed observed-* ref -- never leaving it
+    # dangling in authorized_admin_keys or unregistered_admin_keys.
+    observed_ref = observed_key_ref(friend_kp.public)
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
-    assert NodeRecord.from_row(loaded.nodes[0]).authorized_admin_keys == ()
+    adopted = NodeRecord.from_row(loaded.nodes[0])
+    assert adopted.authorized_admin_keys == (observed_ref,)
+    assert adopted.unregistered_admin_keys == ()
 
     import_result = invoke(runner, ["admin", "import", f"FRIEND={revealed_b64}"], env)
     assert import_result.exit_code == 0
+
+    # mesh admin import reconciles immediately: the observed-* ref is
+    # renamed to the real one on every node that carried it, and the
+    # superseded observed-* Keys row is gone -- no second adopt needed.
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert NodeRecord.from_row(loaded.nodes[0]).authorized_admin_keys == ("FRIEND_pub",)
+    assert observed_ref not in {row["key_ref"] for row in loaded.keys}
 
     bus.use(iface)
     second = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
@@ -314,8 +420,11 @@ def test_adopt_single_unregistered_admin_key_reports_one_present_zero_recognized
     assert len(document["admin_keys"]) == 1
     assert document["admin_keys"][0]["refs"] == []
 
+    # Still auto-registered under a synthetic ref, even without --show-admin-keys.
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
-    assert NodeRecord.from_row(loaded.nodes[0]).authorized_admin_keys == ()
+    adopted = NodeRecord.from_row(loaded.nodes[0])
+    assert adopted.authorized_admin_keys == (observed_key_ref(stray_kp.public),)
+    assert adopted.unregistered_admin_keys == ()
 
 
 def test_adopt_then_enroll_round_trip(
@@ -462,6 +571,45 @@ def test_adopt_does_not_warn_when_the_live_key_is_already_a_known_registered_adm
     assert result.exit_code == 0
     document = json.loads(result.stdout)
     assert not any("CVE-2025-52464" in w for w in document["warnings"])
+
+
+def test_adopt_warns_on_a_duplicate_admin_key_already_filed_as_observed(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """The second tier: the other node's copy was already auto-registered.
+
+    Once the first cloned device has been adopted under the new
+    auto-registration behavior, its copy no longer sits on
+    ``unregistered_admin_keys`` at all -- it is ``authorized_admin_keys``
+    under a synthetic ``observed-*`` ref. This is the scenario that tier
+    exists to keep catching.
+    """
+    cloned_kp = keypair_factory()
+    observed_ref = observed_key_ref(cloned_kp.public)
+    seed_db(
+        nodes=[NodeRecord(node_id="cafe0001", authorized_admin_keys=(observed_ref,))],
+        keys=[
+            KeyRecord.from_material(
+                observed_ref.removesuffix("_pub"), KeyType.ADMIN_PUBLIC, cloned_kp.public
+            )
+        ],
+    )
+    bus.use(FakeMeshInterface("deadbe01")).localNode.localConfig.security.admin_key.append(
+        cloned_kp.public
+    )
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert any(
+        "cafe0001" in w and "CVE-2025-52464" in w and observed_ref in w
+        for w in document["warnings"]
+    )
 
 
 def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
@@ -776,16 +924,27 @@ def test_fleet_adopt_heterogeneous_batch(
         assert nodes[spec.node_id].firmware_version == spec.firmware
 
     for spec in _FLEET_SPECS:
-        if spec.admin_key == "a":
+        if spec.admin_key is None:
+            assert nodes[spec.node_id].authorized_admin_keys == ()
+        elif spec.admin_key == "a":
+            # Already registered under FRIENDA_pub -- resolved directly,
+            # never given a synthetic ref.
             assert nodes[spec.node_id].authorized_admin_keys == ("FRIENDA_pub",)
         else:
-            assert nodes[spec.node_id].authorized_admin_keys == ()
+            # b/c/d are each unregistered and used by exactly one node --
+            # auto-registered under their own content-addressed ref.
+            assert nodes[spec.node_id].authorized_admin_keys == (
+                observed_key_ref(key_lookup[spec.admin_key]),
+            )
+        assert nodes[spec.node_id].unregistered_admin_keys == ()
 
     verify_result = invoke(runner, ["db", "verify", "--json"], env)
     verify_doc = json.loads(verify_result.stdout)
     assert verify_result.exit_code == 0, verify_doc["problems"]
     assert verify_doc["node_count"] == 12
-    assert verify_doc["key_count"] == 2
+    # FRIENDA pub+priv, plus one freshly minted observed-* row each for
+    # the three distinct, single-node, never-imported keys (b, c, d).
+    assert verify_doc["key_count"] == 5
     assert verify_doc["problems"] == []
 
     before = db_fingerprint(Path(env["MESHPROVISION_DB_PATH"]))

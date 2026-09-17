@@ -140,6 +140,21 @@ _ALIASED = b"\x11" * 32
             id="two-node-ids-tie-broken-lexicographically",
         ),
         pytest.param({"other_pub": b"\x22" * 32}, (), id="no-match"),
+        pytest.param(
+            {"observed-ab12cd34_pub": _ALIASED, "deadbe01_pub": _ALIASED},
+            ("deadbe01_pub", "observed-ab12cd34_pub"),
+            id="node-id-shape-outranks-an-observed-ref",
+        ),
+        pytest.param(
+            {"observed-ab12cd34_pub": _ALIASED, "ADMIN1_pub": _ALIASED},
+            ("ADMIN1_pub", "observed-ab12cd34_pub"),
+            id="human-label-outranks-an-observed-ref",
+        ),
+        pytest.param(
+            {"observed-ffffffff_pub": _ALIASED, "observed-00000001_pub": _ALIASED},
+            ("observed-00000001_pub", "observed-ffffffff_pub"),
+            id="two-observed-refs-tie-broken-lexicographically",
+        ),
     ],
 )
 def test_match_admin_key_refs_orders_refs_preferred_first(

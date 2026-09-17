@@ -49,12 +49,12 @@ from meshprovision.errors import (
     WeakKeyError,
     WeakKeySeverity,
 )
-from meshprovision.provisioning import connection
+from meshprovision.provisioning import connection, observed_keys
 from meshprovision.provisioning.admin_custody import build_admin_table, collect_admins
+from meshprovision.provisioning.key_registry import adopt_canonical_ref
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
-    from meshprovision.db.nodes import NodeRepository
 
 __all__ = [
     "admin",
@@ -73,9 +73,15 @@ def _validate_admin_ref(ref: str) -> None:
 
     Raises:
         SettingsError: If ``ref`` does not match
-            :data:`meshprovision.db.schema.REF_PATTERN`, or ends in
+            :data:`meshprovision.db.schema.REF_PATTERN`, ends in
             ``_pub``, ``_priv``, or ``_psk`` (mirroring the template
-            validator's own rule for ``admin_nodes`` entries).
+            validator's own rule for ``admin_nodes`` entries), or starts
+            with :data:`~meshprovision.provisioning.observed_keys.
+            OBSERVED_PREFIX` -- that namespace is reserved for the
+            synthetic refs ``mesh adopt`` mints for a not-yet-recognized
+            admin key (see :mod:`meshprovision.provisioning.
+            observed_keys`), so a human-chosen ref can never collide with
+            one.
     """
     if not schema.REF_PATTERN.match(ref):
         raise SettingsError(
@@ -87,34 +93,14 @@ def _validate_admin_ref(ref: str) -> None:
             f"Admin reference {ref!r} must not end in '_pub', '_priv', or '_psk'.",
             hint="meshprovision appends these suffixes itself when resolving Keys sheet rows.",
         )
-
-
-def _drop_now_registered_key(db_nodes: NodeRepository, material: bytes) -> None:
-    """Clear a just-registered key from every node's ``unregistered_admin_keys``.
-
-    ``mesh adopt`` persists an admin key it could not resolve to a ``Keys``
-    sheet ref onto the adopting node's ``unregistered_admin_keys``. Once
-    ``mesh admin import`` files that same material under a ref, the field
-    is stale, and :func:`meshprovision.cli.adopt._duplicate_admin_key_warnings`
-    would describe the key as "unregistered" until the node is re-adopted.
-    Mutates the in-memory session only; the caller owns the transaction.
-
-    Args:
-        db_nodes: The open :class:`~meshprovision.db.nodes.NodeRepository`.
-        material: The raw public key that was just registered.
-    """
-    for node in db_nodes.all():
-        kept = tuple(
-            encoded
-            for encoded, raw in zip(
-                node.unregistered_admin_keys,
-                node.unregistered_admin_key_materials(),
-                strict=True,
-            )
-            if raw != material
+    if observed_keys.is_observed_owner(ref):
+        raise SettingsError(
+            f"Admin reference {ref!r} must not start with {observed_keys.OBSERVED_PREFIX!r}.",
+            hint=(
+                "That prefix is reserved for refs mesh adopt mints automatically for an "
+                "unrecognized admin key. Choose a different name."
+            ),
         )
-        if len(kept) != len(node.unregistered_admin_keys):
-            db_nodes.upsert(node.with_updates(unregistered_admin_keys=kept))
 
 
 def parse_assignment(raw: str) -> tuple[str, str]:
@@ -339,10 +325,14 @@ def admin_import(
 
     Never touches a device. Validates key length and canonical base64
     encoding, runs the weak-key audit, and refuses a duplicate public key
-    already registered under a different reference, unless ``--force`` is
-    passed. Registering a key also drops it from every node's
-    ``unregistered_admin_keys`` (see :func:`_drop_now_registered_key`),
-    which ``mesh adopt`` records for keys it could not resolve to a ref.
+    already registered under a different (non-``observed-*``) reference,
+    unless ``--force`` is passed. Registering a key also reconciles it
+    onto its real ref everywhere else in the database (see
+    :func:`~meshprovision.provisioning.key_registry.adopt_canonical_ref`):
+    a synthetic ``observed-*`` row ``mesh adopt`` minted for this exact
+    material is deleted and every node's ``authorized_admin_keys``
+    rewritten to point at the real ref instead, and any legacy
+    ``unregistered_admin_keys`` entry for the same material is dropped.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
@@ -401,10 +391,17 @@ def admin_import(
                 for line in audit.summary().splitlines():
                     ctx.warn(line)
 
+            # A duplicate under an observed-* ref is not a collision to
+            # refuse -- it is exactly the reconciliation this command
+            # performs (see the adopt_canonical_ref() call below), so it
+            # is excluded before the refusal check, not just from its
+            # message.
             dupes = [
                 existing_ref
                 for existing_ref, existing_material in db.keys.public_key_map().items()
-                if existing_ref != key_ref and existing_material == material
+                if existing_ref != key_ref
+                and existing_material == material
+                and not observed_keys.is_observed_ref(existing_ref)
             ]
             if dupes and not force:
                 raise WeakKeyError(
@@ -427,7 +424,7 @@ def admin_import(
                     ref, KeyType.ADMIN_PUBLIC, material, created_ts=datetime.now(tz=UTC)
                 )
             )
-            _drop_now_registered_key(db.nodes, material)
+            adopt_canonical_ref(db.nodes, db.keys, material=material, canonical_owner=ref)
             registered.append(
                 {"ref": ref, "key_ref": key_ref, "fingerprint": redact.fingerprint(material)}
             )

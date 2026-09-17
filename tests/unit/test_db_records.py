@@ -310,6 +310,25 @@ def test_key_repo_get_missing_raises(keys: KeyRepository) -> None:
         keys.get("deadbe01_pub")
 
 
+def test_key_repo_upsert_find_delete(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
+    pub, _ = KeyRecord.for_keypair("deadbe01", keypair)
+    keys.upsert(pub)
+    db.save()
+
+    found = keys.find("deadbe01_pub")
+    assert found is not None
+    assert found.material() == keypair.public
+
+    assert keys.delete("deadbe01_pub") is True
+    db.save()
+    assert keys.find("deadbe01_pub") is None
+    assert keys.delete("deadbe01_pub") is False
+
+
+def test_key_repo_delete_missing_returns_false(keys: KeyRepository) -> None:
+    assert keys.delete("deadbe01_pub") is False
+
+
 def test_resolve_admin_refs_unknown_ref_hint_mentions_both_bootstrap_commands(
     keys: KeyRepository,
 ) -> None:

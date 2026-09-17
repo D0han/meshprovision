@@ -61,6 +61,7 @@ from meshprovision.errors import (
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import apply, connection, detect, discovery, plan_render, repair
 from meshprovision.provisioning import plan as plan_mod
+from meshprovision.provisioning.key_registry import adopt_canonical_ref
 from meshprovision.provisioning.pipeline import (
     allocate_names,
     audit_live_admin_keys,
@@ -677,6 +678,13 @@ def run_provision(
                         opts.admin_ref, KeyType.ADMIN_PRIVATE, private_material, created_ts=now
                     )
                 )
+            # This alias's material may already sit on some other node's
+            # row under a synthetic observed-* ref an earlier mesh adopt
+            # minted before this alias existed -- collapse it now, same
+            # as mesh admin import does.
+            adopt_canonical_ref(
+                db.nodes, db.keys, material=public_material, canonical_owner=opts.admin_ref
+            )
 
     persisted = apply.persist_result(
         outcome,

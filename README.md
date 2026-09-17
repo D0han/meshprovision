@@ -255,9 +255,12 @@ admin_nodes: []
 capacity. Each entry is a **label**, not a key, and must resolve to a
 `<ref>_pub` row in the `Keys` sheet at provisioning time. meshprovision
 appends `_pub`/`_priv`/`_psk` itself, so a ref must not already end in one
-of those. An unresolvable ref is an error naming the ref and pointing at
-`mesh admin bootstrap` / `mesh admin import`. Zero admins is a legitimate,
-deliberate configuration and is never "repaired" toward three.
+of those, and `observed-` is reserved for the synthetic refs `mesh
+adopt` mints on its own (see the Keys sheet table below), so a ref must
+not start with that either. An unresolvable ref is an error naming the
+ref and pointing at `mesh admin bootstrap` / `mesh admin import`. Zero
+admins is a legitimate, deliberate configuration and is never "repaired"
+toward three.
 
 `device` (role: `CLIENT`), `lora`, `position`, `power`, and `telemetry`
 blocks follow. Fields omitted from any of these blocks are left at the
@@ -324,7 +327,7 @@ LibreOffice, not a CSV dump.
 | `channel_psk_ref` | DERIVED, formula `=[.A{row}]&"_psk"` | Reference to this node's channel PSK row in the `Keys` sheet |
 | `ble_pin` | PIN, SECRET | 6-digit `bluetooth.fixed_pin`, stored as text so leading zeros survive; never logged or displayed |
 | `management` | ENUM (dropdown `mp_management`) | `template` (the default; `mesh provision` enforces the template on this node) or `observed` (`mesh adopt` recorded this node's live state as-is; `mesh provision` refuses to touch it until `--enroll`). Empty reads back as `template`, so every pre-existing row keeps its current behavior |
-| `unregistered_admin_keys` | BASE64_KEY_LIST (`;`-separated), SECRET | Raw base64-encoded admin public keys (32 bytes each) `mesh adopt` observed live on this node's `security.adminKey` that aren't registered in the `Keys` sheet -- enables exact-material cross-device duplicate-admin-key detection (CVE-2025-52464) even before either key is ever imported. Marked SECRET to match `key_value`'s treatment, even though an admin key is itself a public, not secret, value |
+| `unregistered_admin_keys` | BASE64_KEY_LIST (`;`-separated), SECRET | Legacy/hand-edit-only column: raw base64-encoded admin public keys (32 bytes each) observed live on this node's `security.adminKey` that couldn't be resolved to any `Keys` sheet ref. `mesh adopt` no longer writes into this column -- every admin key it observes now gets a real `Keys` sheet row instead (see `observed-*` refs below) -- and drains it on any node it re-adopts. A value here is only ever a leftover from a database written before that change, and not yet re-adopted; `mesh db verify` and `mesh adopt` still check it for the CVE-2025-52464 cross-device duplicate signature it used to be the sole record of. Marked SECRET to match `key_value`'s treatment, even though an admin key is itself a public, not secret, value |
 | `archived_at` | TIMESTAMP | UTC timestamp this node was archived (soft-deleted) via `mesh db forget`, or empty if active. Excludes the node from `mesh status` and refuses `mesh provision`/`mesh admin bootstrap`/`mesh adopt`, but every other cell on the row is preserved |
 
 ### Keys sheet
@@ -332,10 +335,31 @@ LibreOffice, not a CSV dump.
 | Column | Kind | Notes |
 |---|---|---|
 | `key_ref` | primary key, DERIVED | `owner_node_id` plus a suffix determined by `key_type` (`_pub`/`_priv`/`_psk`) |
-| `owner_node_id` | KEY_REF, required | A node_id hex value, or a template `admin_nodes` label |
+| `owner_node_id` | KEY_REF, required | A node_id hex value, a template `admin_nodes` label, or an `observed-<fingerprint>` synthetic owner `mesh adopt` mints for a key it can't otherwise name (see below) |
 | `key_type` | ENUM (dropdown `mp_key_type`) | `admin_public`, `admin_private`, or `channel_psk` |
 | `key_value` | BASE64_KEY, required, SECRET | Base64 of 32 raw X25519 bytes. Never logged or displayed |
 | `created_ts` | TIMESTAMP | UTC timestamp this key was recorded |
+
+**`observed-*` rows.** Every admin key `mesh adopt` observes on a
+device's `security.adminKey` now gets a `Keys` sheet row, even when
+nobody has told meshprovision who it belongs to yet. A key that already
+resolves to a real ref (registered via `mesh admin import`/`mesh admin
+bootstrap`, or belonging to one of the fleet's own already-adopted
+nodes) uses that ref, as before; one that doesn't is filed under
+`owner_node_id = observed-<8 hex chars of its own sha256 fingerprint>`
+-- content-addressed, so the *same* key observed on several devices
+resolves to one shared row every one of them references, which is what
+lets a shared `observed-*` ref across two nodes' `authorized_admin_keys`
+stand as the CVE-2025-52464 cross-device duplicate signature (`mesh db
+verify` reports it CRITICAL). `observed-` is a reserved owner prefix
+(see the `admin_nodes` rules above) -- a human-assigned ref can never
+collide with one. An `observed-*` row is meant to be temporary: as soon
+as its key's real owner becomes known -- that node itself gets adopted,
+or an operator runs `mesh admin import`/`mesh admin bootstrap` for it --
+every node authorizing the `observed-*` ref is rewritten to the real one
+and the `observed-*` row is deleted. `mesh adopt --show-admin-keys`
+prints the `observed-*` ref an unrecognized key was (or will be) filed
+under, alongside the `mesh admin import` command that renames it.
 
 ### How the spreadsheet behaves
 
@@ -556,16 +580,27 @@ mesh adopt --port /dev/ttyUSB0 --force
 | `-y`, `--yes` | Assume yes to every confirmation |
 | `--json` | Emit JSON instead of human text |
 | `--force` | Re-adopt (demote) a node that is currently `management=template` |
-| `--show-admin-keys` | Print paste-ready `mesh admin import` commands for admin keys the device reports that aren't in the `Keys` sheet |
+| `--show-admin-keys` | Print the `mesh admin import` command (and the raw base64) for each admin key the device reports that isn't already registered under a real ref |
 
-An admin key already on the device but not yet in your `Keys` sheet --
-for example a trusted friend's admin key, whose private half you never
-hold and never need to -- is reported by fingerprint only by default,
-never its raw material. `--show-admin-keys` is the one deliberate,
-narrow exception to that rule: it prints the actual base64 so you can
-register it yourself with `mesh admin import <REF>=<base64>`, choosing
-your own meaningful ref (e.g. `FRIEND`). `mesh adopt` never invents a ref
-or writes a `Keys` sheet row on your behalf.
+`mesh adopt` also records the node's own keypair -- its public half
+always, and its private half too when the device exposes one -- the same
+`<node_id>_pub`/`<node_id>_priv` shape `mesh provision` writes, so
+`public_key_ref`/`private_key_ref` on the Nodes row actually resolve.
+
+Every admin key the device reports gets a real `Keys` sheet row: one
+already registered (via `mesh admin import`/`mesh admin bootstrap`, or
+belonging to one of the fleet's own nodes) resolves to that ref; one
+that isn't is auto-filed under a synthetic `observed-*` ref (see the
+Keys sheet table above) rather than left dangling. An admin key already
+on the device but not yet given a human-chosen ref -- for example a
+trusted friend's admin key, whose private half you never hold and never
+need to -- is reported by fingerprint only by default, never its raw
+material. `--show-admin-keys` is the one deliberate, narrow exception to
+that rule: it prints the actual base64 alongside the `observed-*` ref
+the key is (or will be) filed under, so you can rename it to something
+meaningful with `mesh admin import <REF>=<base64>` (e.g. `FRIEND`) --
+that rename immediately supersedes the `observed-*` row everywhere it
+was authorized.
 
 Re-adopting an already-`observed` node **replaces** `authorized_admin_keys`
 with exactly what's currently live -- unlike `mesh provision`'s
@@ -658,10 +693,14 @@ mesh admin list --json
 - `import` registers a public key you already hold, without touching a
   device. It validates length and canonical base64, runs the weak-key
   audit, and refuses a key already registered under a different reference
-  unless `--force`. `--dry-run` runs every one of those checks and
-  reports the outcome (including a refusal) without registering
-  anything, matching `provision`/`adopt`/`admin bootstrap`'s existing
-  `--dry-run` convention.
+  unless `--force` -- except when that other reference is one of `mesh
+  adopt`'s own `observed-*` refs, which is not a collision to refuse but
+  exactly the rename this command performs: the `observed-*` row is
+  deleted and every node authorizing it is rewritten to the ref you just
+  chose. `--dry-run` runs every one of those checks and reports the
+  outcome (including a refusal) without registering anything, matching
+  `provision`/`adopt`/`admin bootstrap`'s existing `--dry-run`
+  convention.
 - `list` shows each admin's ref, whether the public key is present, a
   redacted fingerprint, whether the private counterpart is on hand,
   whether it is in the template, which node it resolves to, its weak-key
@@ -670,7 +709,9 @@ mesh admin list --json
   pending. Exits `2` if a
   template-listed admin is missing from the `Keys` sheet.
 
-A REF is a label, never a key, and must not end in `_pub`/`_priv`/`_psk`.
+A REF is a label, never a key, and must not end in `_pub`/`_priv`/`_psk`
+or start with `observed-` (reserved for `mesh adopt`'s own synthetic
+refs -- see the Keys sheet table above).
 
 ### `mesh db`
 

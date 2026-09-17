@@ -34,6 +34,7 @@ from meshprovision.db.ods import IntegrityWarningKind
 from meshprovision.db.schema import KeyType
 from meshprovision.errors import ExitCode, KeyMaterialError, WeakKeySeverity
 from meshprovision.nodeid import NodeId
+from meshprovision.provisioning import observed_keys
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -240,13 +241,21 @@ def verify_database(
     keyed by its sorted member tuple, so a two-member group never
     produces two lines.
 
-    That ``Keys``-sheet pass is blind to admin keys ``mesh adopt``
-    observed live but that were never imported, so a second pass folds
-    every node's :meth:`~meshprovision.db.nodes.NodeRecord
-    .unregistered_admin_key_materials` into the comparison -- the same
-    two-tier check :func:`meshprovision.cli.adopt.
-    _duplicate_admin_key_warnings` performs at adopt time for one
-    device, here run fleet-wide. Without it the exact CVE-2025-52464
+    That ``Keys``-sheet pass is blind to a cloned admin key that ``mesh
+    adopt`` auto-registered under a synthetic ``observed-*`` ref (see
+    :mod:`meshprovision.provisioning.observed_keys`): because that
+    registration is content-addressed, the *same* cloned key observed on
+    several nodes resolves to one shared ``Keys`` row every one of them
+    authorizes, not several rows holding equal material -- the shape
+    :func:`_check_duplicate_keys` looks for. :func:`_check_duplicate_observed_refs`
+    covers this instead, by ref rather than by material: any
+    ``observed-*`` ref appearing in more than one node's
+    ``authorized_admin_keys`` is the same CVE-2025-52464 signature. A
+    further pass folds every node's legacy :meth:`~meshprovision.db.nodes
+    .NodeRecord.unregistered_admin_key_materials` into the comparison too
+    -- data only a database written before this feature, and not yet
+    re-adopted, still carries; a fresh adopt always resolves this
+    material to a ref instead. Without these, the exact CVE-2025-52464
     scenario of two cloned devices *neither* of which was ever imported
     is invisible to ``mesh db verify``.
 
@@ -283,6 +292,7 @@ def verify_database(
         *_check_weak_keys(keys, known_bad),
         *_check_admin_key_mismatch(keys),
         *_check_duplicate_keys(keys),
+        *_check_duplicate_observed_refs(nodes),
         *_check_unregistered_duplicate_keys(nodes, keys),
     ]
 
@@ -512,18 +522,79 @@ def _check_duplicate_keys(keys: KeyRepository) -> list[DbProblem]:
                 )
             )
         else:
+            # A group can legitimately mix an observed-* ref with a real
+            # one here: adopt_canonical_ref() deletes the observed row as
+            # soon as it registers the real one, so this state is
+            # reachable only from a hand-edited file (an observed-* row
+            # restored or added by hand) rather than normal operation --
+            # still worth calling out explicitly, since the fix is a
+            # rename, not "these are both legitimately yours."
+            stale_refs = tuple(ref for ref in group if observed_keys.is_observed_ref(ref))
+            stale_note = (
+                f" {', '.join(stale_refs)} looks like a stale mesh-adopt-minted ref that "
+                "should have been superseded by now; re-run `mesh admin import` for its "
+                "real owner to clean it up."
+                if stale_refs
+                else ""
+            )
             problems.append(
                 DbProblem(
                     kind=DbProblemKind.ALIAS_PUBLIC_KEY,
                     severity=ProblemSeverity.WARNING,
                     message=(
                         f"{group[0]} shares its public key with {', '.join(rest)} "
-                        "(alias for the same node)."
+                        f"(alias for the same node).{stale_note}"
                     ),
                     sheet="Keys",
                     ref=",".join(group),
                 )
             )
+    return problems
+
+
+def _check_duplicate_observed_refs(nodes: NodeRepository) -> list[DbProblem]:
+    """Detect an ``observed-*`` admin-key ref authorized on more than one node.
+
+    Under the current scheme (see :mod:`meshprovision.provisioning.
+    observed_keys`/:mod:`meshprovision.provisioning.key_registry`), the
+    same cloned admin key observed on several devices resolves to the
+    *same* content-addressed ``Keys`` sheet row every one of them
+    authorizes -- so the CVE-2025-52464 signature here is not two
+    distinct ``Keys`` rows holding equal material (:func:`_check_duplicate_keys`'s
+    job); it is one ``observed-*`` ref shared across more than one node's
+    ``authorized_admin_keys``.
+
+    Args:
+        nodes: The already-open node repository.
+
+    Returns:
+        One CRITICAL :class:`DbProblem` per ``observed-*`` ref authorized
+        on two or more distinct nodes.
+    """
+    owners: dict[str, list[str]] = {}
+    for record in nodes.all():
+        for ref in record.authorized_admin_keys:
+            if observed_keys.is_observed_ref(ref):
+                owners.setdefault(ref, []).append(record.node_id)
+
+    problems: list[DbProblem] = []
+    for ref, node_ids in owners.items():
+        if len(node_ids) < 2:
+            continue
+        sorted_ids = tuple(sorted(node_ids))
+        problems.append(
+            DbProblem(
+                kind=DbProblemKind.DUPLICATE_PUBLIC_KEY,
+                severity=ProblemSeverity.CRITICAL,
+                message=(
+                    f"Admin key {ref} is authorized, under the same observed ref, on "
+                    f"{len(sorted_ids)} distinct nodes: {', '.join(sorted_ids)} -- the "
+                    "CVE-2025-52464 vendor key-cloning signature."
+                ),
+                sheet="Nodes",
+                ref=",".join(sorted_ids),
+            )
+        )
     return problems
 
 

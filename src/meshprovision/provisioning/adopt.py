@@ -37,6 +37,7 @@ was captured.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 from meshprovision import enums
@@ -461,7 +462,12 @@ def build_adoption_report(
     )
 
 
-def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
+def adopted_record(
+    report: AdoptionReport,
+    *,
+    now: datetime,
+    observed_refs: Mapping[bytes, str] = MappingProxyType({}),
+) -> NodeRecord:
     """Build the ``Nodes`` sheet row an adoption intends to persist.
 
     ``authorized_admin_keys`` is a **full replace**, deliberately unlike
@@ -474,17 +480,28 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
     correctly drops that ref too, rather than keeping stale last-known
     state the way a template-managed row does.
 
-    Never writes a ``Keys`` sheet row: an unregistered admin key
-    (``preferred_ref is None``) contributes its raw material to
-    ``unregistered_admin_keys`` instead (same full-replace treatment as
-    ``authorized_admin_keys``), but never a ``Keys`` sheet entry --
-    registering it there is a separate, explicit ``mesh admin import``
-    action for the operator.
+    Every live admin key ends up with a real ``Keys`` sheet ref: a key
+    already registered resolves via ``preferred_ref``, and one that is
+    not yet registered resolves via ``observed_refs`` -- built by the
+    caller (``cli/adopt.py``) calling
+    :func:`~meshprovision.provisioning.key_registry.register_observed_key`
+    for each such key *before* this function runs, since minting a
+    ``Keys`` row is a repository-aware operation this pure module cannot
+    perform itself. ``unregistered_admin_keys`` is therefore only ever
+    populated by a key ``observed_refs`` has no entry for -- material that
+    failed to mint a ref at all (not exactly 32 bytes; unreachable from a
+    device reporting well-formed data, but ``detect.py`` applies no length
+    check). Passing an empty ``observed_refs`` (the default) reproduces
+    the field's old role as the sole record of an unregistered key.
 
     Args:
         report: The adoption report to persist.
         now: Timestamp for the touch. Supplied by the caller -- this
             module never reads the clock itself.
+        observed_refs: ``{material: key_ref}`` for every live admin key
+            the caller has already registered under a synthetic
+            ``observed-*`` ref (or found already registered under one
+            from an earlier adopt). Defaults to empty.
 
     Returns:
         A new :class:`~meshprovision.db.nodes.NodeRecord`, built from
@@ -521,29 +538,25 @@ def adopted_record(report: AdoptionReport, *, now: datetime) -> NodeRecord:
     seen_refs: set[str] = set()
     admin_key_refs: list[str] = []
     for key in report.admin_keys:
-        if key.preferred_ref is not None and key.preferred_ref not in seen_refs:
-            seen_refs.add(key.preferred_ref)
-            admin_key_refs.append(key.preferred_ref)
+        ref = key.preferred_ref or observed_refs.get(key.material)
+        if ref is not None and ref not in seen_refs:
+            seen_refs.add(ref)
+            admin_key_refs.append(ref)
 
-    # Same de-duplicated, first-seen, full-replace treatment as
-    # admin_key_refs above, for the complementary (unregistered) subset --
-    # this is what lets a later mesh adopt on a *different* node detect a
-    # CVE-2025-52464 cloned keypair even when neither key has ever been
-    # imported into the Keys sheet (see cli/adopt.py's
-    # _duplicate_admin_key_warnings). The raw material is persisted, not
-    # just its fingerprint -- an admin key is a public key, not secret
-    # (see crypto.keys.KeyPair's own docstring), so this is the same
-    # exact-material comparison already used against registered keys,
-    # rather than a fingerprint-collision-prone approximation of it. A
-    # key whose material is not exactly 32 bytes -- reachable from a
-    # device reporting malformed data, detect.py applies no length
-    # check -- is simply skipped here, the same degrade-not-crash
-    # treatment AdoptionReport.to_json_dict already gives it; the
-    # report's own warnings already flag the malformed key separately.
+    # What is left after preferred_ref/observed_refs above is material
+    # that could not be given any ref at all -- not exactly 32 bytes, the
+    # one case register_observed_key() (and, before it,
+    # crypto_keys.encode_key() here) both refuse. De-duplicated,
+    # first-seen, same full-replace treatment as admin_key_refs above;
+    # the same degrade-not-crash handling AdoptionReport.to_json_dict
+    # already gives this material, since the report's own warnings
+    # already flag it separately.
     seen_materials: set[bytes] = set()
     unregistered_encoded: list[str] = []
     for key in report.admin_keys:
-        if key.preferred_ref is not None or key.material in seen_materials:
+        if key.preferred_ref is not None or key.material in observed_refs:
+            continue
+        if key.material in seen_materials:
             continue
         seen_materials.add(key.material)
         try:

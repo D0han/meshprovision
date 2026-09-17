@@ -26,6 +26,7 @@ from meshprovision.db.verify import (
     ProblemSeverity,
     _check_admin_key_mismatch,
     _check_duplicate_keys,
+    _check_duplicate_observed_refs,
     _check_permissions,
     _check_template_refs,
     _check_unregistered_duplicate_keys,
@@ -33,6 +34,7 @@ from meshprovision.db.verify import (
     _check_weak_keys,
     verify_database,
 )
+from meshprovision.provisioning.observed_keys import observed_key_ref
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -252,6 +254,58 @@ def test_check_duplicate_keys_distinct_keys_produce_no_problem(
     keys.upsert(KeyRecord.from_material("deadbe02", KeyType.ADMIN_PUBLIC, keypair_factory().public))
 
     assert _check_duplicate_keys(keys) == []
+
+
+def test_check_duplicate_keys_mixed_observed_and_real_alias_names_the_stale_ref(
+    keys: KeyRepository, keypair: KeyPair
+) -> None:
+    """A hand-edited leftover observed-* row alongside a real one is called out by name."""
+    observed_ref = observed_key_ref(keypair.public)
+    keys.upsert(
+        KeyRecord.from_material(
+            observed_ref.removesuffix("_pub"), KeyType.ADMIN_PUBLIC, keypair.public
+        )
+    )
+    keys.upsert(KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, keypair.public))
+
+    problems = _check_duplicate_keys(keys)
+
+    assert len(problems) == 1
+    assert problems[0].kind == DbProblemKind.ALIAS_PUBLIC_KEY
+    assert observed_ref in problems[0].message
+    assert "stale" in problems[0].message
+
+
+def test_check_duplicate_observed_refs_shared_across_two_nodes_is_critical(
+    nodes: NodeRepository, keypair: KeyPair
+) -> None:
+    """The same observed-* ref authorized on two nodes is the clone signature."""
+    ref = observed_key_ref(keypair.public)
+    nodes.upsert(NodeRecord(node_id="deadbe01", authorized_admin_keys=(ref,)))
+    nodes.upsert(NodeRecord(node_id="deadbe02", authorized_admin_keys=(ref,)))
+
+    problems = _check_duplicate_observed_refs(nodes)
+
+    assert len(problems) == 1
+    assert problems[0].kind == DbProblemKind.DUPLICATE_PUBLIC_KEY
+    assert problems[0].severity == ProblemSeverity.CRITICAL
+    assert "deadbe01, deadbe02" in problems[0].message
+
+
+def test_check_duplicate_observed_refs_single_node_is_clean(
+    nodes: NodeRepository, keypair: KeyPair
+) -> None:
+    ref = observed_key_ref(keypair.public)
+    nodes.upsert(NodeRecord(node_id="deadbe01", authorized_admin_keys=(ref,)))
+
+    assert _check_duplicate_observed_refs(nodes) == []
+
+
+def test_check_duplicate_observed_refs_ignores_real_refs(nodes: NodeRepository) -> None:
+    nodes.upsert(NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",)))
+    nodes.upsert(NodeRecord(node_id="deadbe02", authorized_admin_keys=("ADMIN1_pub",)))
+
+    assert _check_duplicate_observed_refs(nodes) == []
 
 
 def test_check_admin_key_mismatch_flags_a_private_key_that_does_not_derive_its_public(

@@ -515,3 +515,23 @@ class KeyRepository:
             updated_rows.append(new_row)
         self._db.replace(schema.KEYS_SHEET, updated_rows)
         return record
+
+    def delete(self, key_ref: str) -> bool:
+        """Delete a key's row, in memory only.
+
+        Mirrors :meth:`~meshprovision.db.nodes.NodeRepository.delete`. Does
+        not write to disk; call ``self.db.save()`` to persist.
+
+        Args:
+            key_ref: The ``key_ref`` of the row to delete.
+
+        Returns:
+            ``True`` if a row was removed; ``False`` if no matching row
+            existed.
+        """
+        rows = list(self._db.rows(schema.KEYS_SHEET))
+        filtered = [row for row in rows if row.get("key_ref") != key_ref]
+        if len(filtered) == len(rows):
+            return False
+        self._db.replace(schema.KEYS_SHEET, filtered)
+        return True

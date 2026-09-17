@@ -14,6 +14,7 @@ from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType
+from meshprovision.provisioning.observed_keys import observed_key_ref
 from tests.e2e.conftest import invoke
 
 if TYPE_CHECKING:
@@ -224,6 +225,36 @@ def test_db_verify_hex_shaped_labels_sharing_a_key_are_an_alias_not_critical(
     kinds = {problem["kind"] for problem in document["problems"]}
     assert "duplicate_public_key" not in kinds
     assert "alias_public_key" in kinds
+
+
+def test_db_verify_shared_observed_ref_across_two_nodes_exits_six(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """The same mesh-adopt-minted observed-* ref on two nodes is the clone signature.
+
+    A cloned admin key neither node has had imported resolves, under the
+    content-addressed observed-key scheme, to one shared Keys row rather
+    than two distinct rows holding equal material -- so this is a
+    different shape than ``test_db_verify_duplicate_public_key_across_
+    nodes_exits_six`` above, and must be caught separately.
+    """
+    kp = generate_keypair()
+    ref = observed_key_ref(kp.public)
+    owner = ref.removesuffix("_pub")
+    node_a = NodeRecord(node_id="deadbe01", short_name="MT00", authorized_admin_keys=(ref,))
+    node_b = NodeRecord(node_id="deadbe02", short_name="MT01", authorized_admin_keys=(ref,))
+    observed_pub = KeyRecord.from_material(owner, KeyType.ADMIN_PUBLIC, kp.public)
+    seed_db(nodes=[node_a, node_b], keys=[observed_pub])
+
+    result = invoke(runner, ["db", "verify", "--json"], env)
+
+    assert result.exit_code == 6
+    document = json.loads(result.stdout)
+    kinds = {problem["kind"] for problem in document["problems"]}
+    assert "duplicate_public_key" in kinds
+    critical = next(p for p in document["problems"] if p["kind"] == "duplicate_public_key")
+    assert "CVE-2025-52464" in critical["message"]
+    assert "deadbe01, deadbe02" in critical["message"]
 
 
 def test_db_verify_alias_public_key_is_a_warning_unless_strict(

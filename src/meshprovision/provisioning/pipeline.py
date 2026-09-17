@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Final
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.errors import KeyMaterialError, NamespaceExhaustedError
 from meshprovision.provisioning import detect
+from meshprovision.provisioning.observed_keys import is_observed_ref
 from meshprovision.provisioning.plan_admin_keys import ResolvedAdminKey
 
 if TYPE_CHECKING:
@@ -49,7 +50,7 @@ _NODE_ID_SHAPE_RE: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{8}")
 """Matches an owner portion shaped like a raw node id (e.g. ``"deadbe01"``)."""
 
 
-def _ref_sort_key(ref: str) -> tuple[bool, str]:
+def _ref_sort_key(ref: str) -> tuple[bool, bool, str]:
     """Sort key implementing :func:`match_admin_key_refs`'s ``PREFERRED`` order.
 
     Args:
@@ -57,14 +58,21 @@ def _ref_sort_key(ref: str) -> tuple[bool, str]:
             for the entries this module sorts).
 
     Returns:
-        ``(owner_looks_like_a_node_id, ref)``. Sorting ascending on this
-        key puts a human-labeled ref (``"ADMIN1_pub"``) before a
-        node-id-shaped ref (``"deadbe01_pub"``), and breaks ties within
-        each group lexicographically.
+        ``(is_observed, owner_looks_like_a_node_id, ref)``. Sorting
+        ascending on this key puts a human-labeled ref (``"ADMIN1_pub"``)
+        before a node-id-shaped one (``"deadbe01_pub"``), and both before a
+        synthetic ``mesh adopt``-minted ref
+        (``"observed-ab12cd34_pub"``, see
+        :mod:`meshprovision.provisioning.observed_keys`) -- so once an
+        observed key is later registered under a real ref (``mesh admin
+        import``) or turns out to be one of the fleet's own node keys, the
+        real ref wins automatically over the synthetic one every caller
+        of :func:`match_admin_key_refs` still sees. Ties within each group
+        are broken lexicographically.
     """
     owner = ref[:-4] if ref.endswith("_pub") else ref
     looks_like_node_id = bool(_NODE_ID_SHAPE_RE.fullmatch(owner))
-    return (looks_like_node_id, ref)
+    return (is_observed_ref(ref), looks_like_node_id, ref)
 
 
 def match_admin_key_refs(material: bytes, public_keys: Mapping[str, bytes]) -> tuple[str, ...]:

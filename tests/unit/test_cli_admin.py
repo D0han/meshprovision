@@ -66,6 +66,18 @@ def test_validate_admin_ref_rejects_an_invalid_shape(ref: str) -> None:
         admin._validate_admin_ref(ref)
 
 
+@pytest.mark.parametrize("ref", ["observed-ab12cd34", "observed-", "observed-anything"])
+def test_validate_admin_ref_rejects_the_reserved_observed_prefix(ref: str) -> None:
+    """A human-chosen ref must never collide with mesh adopt's own namespace."""
+    with pytest.raises(SettingsError):
+        admin._validate_admin_ref(ref)
+
+
+def test_validate_admin_ref_accepts_a_ref_that_merely_contains_observed() -> None:
+    """Only a leading observed- is reserved; the substring elsewhere is fine."""
+    admin._validate_admin_ref("pre-observed")
+
+
 def test_admin_list_table_column_order(
     cli_env: dict[str, str], empty_ods: Path, write_template: Callable[..., Path]
 ) -> None:

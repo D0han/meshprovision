@@ -69,10 +69,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `management` column on the `Nodes` sheet (`template`/`observed`, default
   `template`) gates `mesh provision`/`mesh admin bootstrap`: touching an
   observed node now requires an explicit `--enroll`, checked before any
-  admin-key resolution and before `--dry-run`'s early return. Unregistered
-  admin keys are reported by fingerprint only by default; `--show-admin-keys`
-  is the one deliberate exception, printing paste-ready `mesh admin import`
-  commands. Re-adopting fully replaces `authorized_admin_keys` with current
+  admin-key resolution and before `--dry-run`'s early return. Every admin
+  key the device reports now gets a real `Keys` sheet row: one already
+  registered resolves to that ref, and one that isn't is auto-filed under
+  a synthetic, content-addressed `observed-<fingerprint>` ref (`mesh
+  admin import`/`mesh admin bootstrap` reject a human-chosen ref starting
+  with `observed-`, and treat a collision against one as the rename it
+  is, not a refusal) rather than left dangling on the now-legacy
+  `unregistered_admin_keys` column. `mesh adopt` also records the node's
+  own keypair (public half always, private half when the device exposes
+  it), so `public_key_ref`/`private_key_ref` resolve. An unregistered key
+  is still reported by fingerprint only by default; `--show-admin-keys`
+  is the one deliberate exception, printing the `observed-*` ref
+  alongside a paste-ready `mesh admin import` command to rename it. The
+  same cloned key observed on two devices now collapses to one shared
+  `observed-*` row both authorize, so `mesh db verify` gained a dedicated
+  check (any `observed-*` ref shared by 2+ nodes) alongside its existing
+  `unregistered_admin_keys`-based one for not-yet-re-adopted data.
+  Re-adopting fully replaces `authorized_admin_keys` with current
   live reality (unlike `mesh provision`'s narrow-only rule for a
   template-managed row); re-adopting an already-`management=template` node
   is refused unless `--force`, with an explicit demotion warning.

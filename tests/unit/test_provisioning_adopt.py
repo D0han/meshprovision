@@ -432,6 +432,61 @@ def test_adopted_record_persists_unregistered_admin_keys_only(
     assert record.unregistered_admin_key_materials() == (unregistered_key,)
 
 
+def test_adopted_record_uses_observed_refs_for_an_unregistered_key(
+    make_live, template, keypair_factory
+) -> None:
+    """A caller-supplied observed_refs entry resolves the key, draining the column."""
+    key = keypair_factory().public
+    live = make_live(template, security=make_security(admin_keys=(key,)))
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    record = adopted_record(
+        report, now=datetime(2026, 1, 1, tzinfo=UTC), observed_refs={key: "observed-ab12cd34_pub"}
+    )
+
+    assert record.authorized_admin_keys == ("observed-ab12cd34_pub",)
+    assert record.unregistered_admin_key_materials() == ()
+
+
+def test_adopted_record_omitting_observed_refs_preserves_old_behavior(
+    make_live, template, keypair_factory
+) -> None:
+    """The default empty observed_refs reproduces the pre-registration behavior."""
+    key = keypair_factory().public
+    live = make_live(template, security=make_security(admin_keys=(key,)))
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert record.authorized_admin_keys == ()
+    assert record.unregistered_admin_key_materials() == (key,)
+
+
+def test_adopted_record_malformed_key_ignores_observed_refs(
+    make_live, template, keypair_factory
+) -> None:
+    """observed_refs has no entry for malformed material; it still lands nowhere."""
+    good_key = keypair_factory().public
+    malformed = b"\x01\x02\x03"
+    live = make_live(template, security=make_security(admin_keys=(good_key, malformed)))
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    record = adopted_record(
+        report,
+        now=datetime(2026, 1, 1, tzinfo=UTC),
+        observed_refs={good_key: "observed-ab12cd34_pub"},
+    )
+
+    assert record.authorized_admin_keys == ("observed-ab12cd34_pub",)
+    assert record.unregistered_admin_key_materials() == ()
+
+
 def test_adopted_record_deduplicates_unregistered_key_reported_twice(
     make_live, template, keypair_factory
 ) -> None:
