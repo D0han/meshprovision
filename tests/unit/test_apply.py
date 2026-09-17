@@ -438,6 +438,43 @@ def test_verify_plan_security_scalar_field_confirmed_via_live_security(make_live
     assert result.status == WriteStatus.CONFIRMED
 
 
+def test_verify_plan_serial_enabled_confirmed_via_live_security(make_live) -> None:
+    """serial_enabled -- like admin_channel_enabled -- must confirm via LiveConfig.security.
+
+    template.security.serial_enabled defaults to None ("leave the
+    device alone") and no other test in this suite ever sets it to a
+    concrete value, so this readback path had zero coverage before this
+    test despite serial_enabled being a real, documented template
+    field (see the matching plan.py test for the plan-build half).
+    """
+    template = _template()
+    opinionated_template = template.model_copy(
+        update={"security": template.security.model_copy(update={"serial_enabled": True})}
+    )
+    live = make_live(template, security=make_security(serial_enabled=False))
+    inputs = PlanInputs(
+        live=live, template=opinionated_template, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+    serial_change = next(
+        c
+        for section in plan.sections
+        for c in section.changes
+        if section.section == "security" and c.field == "serial_enabled"
+    )
+    assert serial_change.desired is True
+
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        security=make_security(serial_enabled=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    result = next(r for r in results if r.section == "security" and r.field == "serial_enabled")
+    assert result.status == WriteStatus.CONFIRMED
+
+
 def test_verify_plan_only_long_name_changed_does_not_affect_short_name_result(
     make_live,
 ) -> None:
@@ -779,6 +816,42 @@ def test_apply_plan_dry_run_never_writes(make_live) -> None:
     assert outcome.dry_run is True
     assert iface.localNode.written_sections == []
     assert all(r.status == WriteStatus.SKIPPED for r in outcome.results)
+
+
+def test_apply_plan_dry_run_skips_a_rename_too(make_live) -> None:
+    """--dry-run's owner/rename preview line was untested.
+
+    Only empty-name-change plans exercised dry_run before this (see
+    test_apply_plan_dry_run_never_writes, whose FACTORY plan has no
+    desired_short_name/desired_long_name override, so
+    plan.name_change.is_empty is always True there and apply_plan's
+    `if not plan.name_change.is_empty:` branch never ran).
+    """
+    template = _template()
+    live = make_live(
+        template, short_name="be01", long_name="Meshtastic be01", security=make_security(empty=True)
+    )
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="MT01",
+        desired_long_name="Meshtastic MT01",
+    )
+    plan = build_plan(inputs)
+    assert plan.name_change.is_empty is False
+    kp = generate_keypair()
+
+    iface = _FakeIfaceForApply()
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp, dry_run=True)
+
+    assert outcome.dry_run is True
+    assert iface.localNode.written_sections == []
+    owner_result = next(r for r in outcome.results if r.section == "owner")
+    assert owner_result.status == WriteStatus.SKIPPED
+    assert owner_result.message == "dry run"
 
 
 def test_apply_plan_success_confirmed_and_persist_result(tmp_path, make_live) -> None:

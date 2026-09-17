@@ -13,6 +13,7 @@ from meshprovision.errors import AdminKeyCapacityError, LockdownRefusedError
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan import (
     SECTION_ORDER,
+    FieldChange,
     PlanInputs,
     build_plan,
 )
@@ -1154,6 +1155,51 @@ def test_admin_channel_enabled_forced_false(make_live, template, keypair) -> Non
     assert change.reason == "forced"
 
 
+def test_serial_and_debug_log_api_enabled_diffed_against_template(
+    make_live, template, keypair
+) -> None:
+    """template.security.serial_enabled/debug_log_api_enabled must actually be diffed.
+
+    Both fields default to None ("leave the device alone") and are never
+    set to a concrete value anywhere else in this test suite, so the
+    `if template_sec.serial_enabled is not None:` branches in
+    _plan_security_section (and the matching apply.py verify-readback)
+    had zero coverage before this test -- a field-name typo or a
+    comparison bug in either path would have gone undetected end to end.
+    """
+    live = make_live(
+        template,
+        security=make_security(keypair=keypair, serial_enabled=False, debug_log_api_enabled=False),
+    )
+    opinionated_template = template.model_copy(
+        update={
+            "security": template.security.model_copy(
+                update={"serial_enabled": True, "debug_log_api_enabled": True}
+            )
+        }
+    )
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live,
+        template=opinionated_template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+    )
+
+    plan = build_plan(inputs)
+
+    security = plan.section("security")
+    assert security is not None
+    serial_change = next(c for c in security.changes if c.field == "serial_enabled")
+    assert serial_change.current is False
+    assert serial_change.desired is True
+    assert serial_change.reason == "template"
+    debug_change = next(c for c in security.changes if c.field == "debug_log_api_enabled")
+    assert debug_change.current is False
+    assert debug_change.desired is True
+    assert debug_change.reason == "template"
+
+
 def test_foreign_state_adds_warning(make_live, template, keypair) -> None:
     live = make_live(template, security=make_security(keypair=keypair))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FOREIGN)
@@ -1269,6 +1315,21 @@ def test_plan_inputs_repr_redacts_secrets(make_live, template) -> None:
     text = repr(inputs)
     assert "998877" not in text
     assert ("x" * 32) not in text
+    assert "<redacted>" in text
+
+
+def test_field_change_repr_redacts_secret() -> None:
+    """A ``secret=True`` FieldChange's repr must never leak its raw value.
+
+    Guards specifically against the BLE PIN FieldChange -- a regression
+    dropping this redaction would leak a raw PIN into any log line or
+    traceback that reprs a FieldChange, with no test failure to catch it.
+    """
+    change = FieldChange(
+        section="bluetooth", field="fixed_pin", current=0, desired=998877, secret=True
+    )
+    text = repr(change)
+    assert "998877" not in text
     assert "<redacted>" in text
 
 

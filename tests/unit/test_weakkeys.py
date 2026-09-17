@@ -554,6 +554,24 @@ def test_default_known_bad_keys_path_env_nonexistent_raises(
         default_known_bad_keys_path()
 
 
+def test_default_known_bad_keys_path_env_existing_file_wins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The documented, intended use of the override env var: point it at a real file.
+
+    The two existing env-var tests only cover a nonexistent path
+    (raises) and the var being unset entirely (falls through to the
+    bundled candidates) -- the actual documented behavior (README.md's
+    "override path to the weak-key blocklist"), a valid override file
+    being returned as-is rather than silently ignored, had no test.
+    """
+    override = tmp_path / "custom_known_bad.txt"
+    override.write_text("# custom blocklist\n")
+    monkeypatch.setenv(KNOWN_BAD_KEYS_ENV, str(override))
+
+    assert default_known_bad_keys_path() == override
+
+
 def _candidate_paths() -> tuple[Path, Path | None, Path]:
     """The three non-env candidates default_known_bad_keys_path tries, in order."""
     import meshprovision.crypto.weakkeys as weakkeys_module
