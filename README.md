@@ -40,7 +40,7 @@ Full details: [Installation](docs/installation.md).
 ## Install
 
 ```bash
-git clone <your-fork-or-clone-url> meshprovision
+git clone https://github.com/D0han/meshprovision.git
 cd meshprovision
 python3.11 -m venv .venv
 source .venv/bin/activate

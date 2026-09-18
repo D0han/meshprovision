@@ -17,7 +17,7 @@ Part of the meshprovision docs — see the [README](../README.md).
 The only supported route today — this project is not published to PyPI:
 
 ```bash
-git clone <your-fork-or-clone-url> meshprovision
+git clone https://github.com/D0han/meshprovision.git
 cd meshprovision
 python3.11 -m venv .venv
 source .venv/bin/activate
