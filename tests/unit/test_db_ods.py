@@ -368,6 +368,149 @@ def test_blank_trailing_row_with_coerced_cell_produces_no_warnings(tmp_path: Pat
 
 
 # ---------------------------------------------------------------------------
+# LibreOffice round trip.
+#
+# LibreOffice Calc is a documented, supported way to hand-edit the
+# database (README: "Run `mesh db verify` after every hand-edit"), so a
+# plain "open, resize a column, save" must not corrupt or break the
+# file. It does two things this project's own writer never does: drops
+# a plain cell's cached ``office:string-value``, and -- on any cell
+# carrying an ``office:annotation`` (every header cell has one, holding
+# its column description) -- reorders that annotation ahead of the
+# cell's own text and adds a ``<dc:date>`` child to it.
+# ---------------------------------------------------------------------------
+
+
+def test_libreoffice_saved_header_still_loads(tmp_path: Path, keypair) -> None:
+    from tests.unit.conftest import libreoffice_round_trip
+
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+    before = ods.load_database(path)
+
+    libreoffice_round_trip(path)
+
+    after = ods.load_database(path)
+    assert after.nodes == before.nodes
+    assert after.keys == before.keys
+    assert after.warnings == ()
+
+
+def test_libreoffice_comment_on_data_cell_does_not_leak_into_its_value(
+    tmp_path: Path, keypair
+) -> None:
+    """A comment an operator adds to a *data* cell must not corrupt that cell's value.
+
+    Before the fix, ``_extract_cell``'s fallback path recursed into the
+    whole cell -- comment included -- so this indistinguishable from the
+    header bug on a data cell would silently prepend the comment text to
+    the cell's value instead of erroring or warning.
+    """
+    from odf import office as odf_office
+    from odf import opendocument
+    from odf import table as odf_table
+    from odf import text as odf_text
+
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    doc = opendocument.load(str(path))
+    nodes_table = next(
+        t
+        for t in doc.spreadsheet.getElementsByType(odf_table.Table)
+        if t.getAttribute("name") == "Nodes"
+    )
+    notes_index = schema.NODES_SHEET_SPEC.column_index("notes")
+    data_row = nodes_table.getElementsByType(odf_table.TableRow)[1]
+    cell = data_row.getElementsByType(odf_table.TableCell)[notes_index]
+    cell.removeAttribute("stringvalue")
+    annotation = odf_office.Annotation()
+    annotation.addElement(odf_text.P(text="operator comment, not data"))
+    cell.insertBefore(annotation, cell.firstChild)
+    with path.open("wb") as fh:
+        doc.write(fh)
+
+    loaded = ods.load_database(path)
+    assert loaded.nodes[0]["notes"] == "a note"
+
+
+def test_libreoffice_multi_paragraph_cell_reads_back_with_newline(tmp_path: Path, keypair) -> None:
+    from odf import opendocument
+    from odf import table as odf_table
+    from odf import text as odf_text
+
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    doc = opendocument.load(str(path))
+    nodes_table = next(
+        t
+        for t in doc.spreadsheet.getElementsByType(odf_table.Table)
+        if t.getAttribute("name") == "Nodes"
+    )
+    notes_index = schema.NODES_SHEET_SPEC.column_index("notes")
+    data_row = nodes_table.getElementsByType(odf_table.TableRow)[1]
+    cell = data_row.getElementsByType(odf_table.TableCell)[notes_index]
+    cell.removeAttribute("stringvalue")
+    for child in list(cell.childNodes):
+        cell.removeChild(child)
+    cell.addElement(odf_text.P(text="line one"))
+    cell.addElement(odf_text.P(text="line two"))
+    with path.open("wb") as fh:
+        doc.write(fh)
+
+    loaded = ods.load_database(path)
+    assert loaded.nodes[0]["notes"] == "line one\nline two"
+
+
+def test_string_value_fast_path_still_preferred_over_own_text(tmp_path: Path, keypair) -> None:
+    """A cell's cached ``office:string-value`` still wins when present.
+
+    Guards against a regression that makes every cell take the slower
+    (and, for a formula cell, wrong -- it would read the formula's
+    *cached result*, not its source text) paragraph-extraction path
+    unconditionally.
+    """
+    from odf import opendocument
+    from odf import table as odf_table
+    from odf import text as odf_text
+
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    doc = opendocument.load(str(path))
+    nodes_table = next(
+        t
+        for t in doc.spreadsheet.getElementsByType(odf_table.Table)
+        if t.getAttribute("name") == "Nodes"
+    )
+    notes_index = schema.NODES_SHEET_SPEC.column_index("notes")
+    data_row = nodes_table.getElementsByType(odf_table.TableRow)[1]
+    cell = data_row.getElementsByType(odf_table.TableCell)[notes_index]
+    cell.setAttribute("stringvalue", "cached value")
+    for child in list(cell.childNodes):
+        cell.removeChild(child)
+    cell.addElement(odf_text.P(text="on-screen text disagrees"))
+    with path.open("wb") as fh:
+        doc.write(fh)
+
+    loaded = ods.load_database(path)
+    assert loaded.nodes[0]["notes"] == "cached value"
+
+
+# ---------------------------------------------------------------------------
 # Validation errors on load.
 # ---------------------------------------------------------------------------
 
@@ -582,7 +725,7 @@ def test_check_header_hint_names_missing_trailing_column(tmp_path: Path, keypair
     assert "archived_at" in exc_info.value.hint
 
 
-def test_check_header_no_hint_for_non_prefix_mismatch(tmp_path: Path, keypair) -> None:
+def test_check_header_hint_names_renamed_column(tmp_path: Path, keypair) -> None:
     from tests.unit.conftest import edit_ods_cell
 
     node, pub, priv = _sample_records(keypair)
@@ -594,7 +737,50 @@ def test_check_header_no_hint_for_non_prefix_mismatch(tmp_path: Path, keypair) -
 
     with pytest.raises(SchemaError) as exc_info:
         ods.load_database(path)
-    assert exc_info.value.hint is None
+    assert exc_info.value.hint is not None
+    assert "role" in exc_info.value.hint
+    assert "not_a_real_column" in exc_info.value.hint
+
+
+def test_check_header_reports_both_sheets_when_both_are_mangled(tmp_path: Path, keypair) -> None:
+    """A file with two broken headers is diagnosed in one run, not one-at-a-time."""
+    from tests.unit.conftest import edit_ods_cell
+
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+    edit_ods_cell(path, "Nodes", "role", 1, "not_a_real_column")
+    edit_ods_cell(path, "Keys", "key_type", 1, "also_not_real")
+
+    with pytest.raises(SchemaError) as exc_info:
+        ods.load_database(path)
+    message = str(exc_info.value)
+    assert "Nodes sheet" in message
+    assert "Keys sheet" in message
+    assert exc_info.value.hint is not None
+    assert "Nodes:" in exc_info.value.hint
+    assert "Keys:" in exc_info.value.hint
+
+
+def test_check_headers_skips_a_sheet_missing_entirely() -> None:
+    """``_check_headers`` tolerates a missing sheet rather than raising a bare ``KeyError``.
+
+    Defensive: ``load_database`` always confirms both sheets are present
+    before calling this, so the branch is unreachable through the public
+    API today -- covered directly here so it stays correct if that
+    ordering ever changes.
+    """
+    raw = ods.DatabaseData(
+        path=Path("unused"),
+        sheets={
+            "Nodes": ods.SheetData(
+                name="Nodes", header=schema.NODES_SHEET_SPEC.column_names(), rows=()
+            )
+        },
+    )
+    ods._check_headers(raw)  # Keys sheet absent entirely; must not raise.
 
 
 def test_file_missing_keys_sheet_raises_schema_error(tmp_path: Path) -> None:

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -24,6 +26,8 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.e2e
 
+_SOFFICE = shutil.which("soffice")
+
 
 def test_db_verify_clean_database_ok(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
@@ -32,6 +36,51 @@ def test_db_verify_clean_database_ok(
     node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
     pub, priv = KeyRecord.for_keypair("deadbe01", kp)
     seed_db(nodes=[node], keys=[pub, priv])
+
+    result = invoke(runner, ["db", "verify"], env)
+
+    assert result.exit_code == 0
+    assert "Database OK." in result.stderr
+
+
+@pytest.mark.skipif(_SOFFICE is None, reason="LibreOffice (soffice) is not installed")
+def test_db_verify_survives_a_real_libreoffice_save(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    tmp_path: Path,
+) -> None:
+    """Regression test for the exact operator report this guards against.
+
+    Opening the database in LibreOffice Calc, resizing a column, and
+    saving must not break ``mesh db verify`` -- simulated everywhere else
+    in the suite (``tests.unit.conftest.libreoffice_round_trip``, kept
+    deterministic and soffice-free) but exercised here against the real
+    binary, skipped where it isn't installed.
+    """
+    kp = generate_keypair()
+    node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
+    pub, priv = KeyRecord.for_keypair("deadbe01", kp)
+    db_path = seed_db(nodes=[node], keys=[pub, priv])
+
+    out_dir = tmp_path / "libreoffice_out"
+    subprocess.run(
+        [
+            _SOFFICE,
+            "--headless",
+            "--convert-to",
+            "ods",
+            "--outdir",
+            str(out_dir),
+            str(db_path),
+        ],
+        check=True,
+        capture_output=True,
+        timeout=120,
+    )
+    resaved = out_dir / db_path.name
+    assert resaved.is_file()
+    shutil.copyfile(resaved, db_path)
 
     result = invoke(runner, ["db", "verify"], env)
 

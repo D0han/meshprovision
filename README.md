@@ -385,6 +385,11 @@ under, alongside the `mesh admin import` command that renames it.
 - Run `mesh db verify` after every hand-edit.
 - `mesh db backup` before a risky edit; every save also writes a
   timestamped backup into `data/backups/` with a retention limit.
+- Opening the database in LibreOffice Calc, resizing columns, and saving
+  is safe -- including adding your own comments to a cell. Every header
+  cell carries its column's description as a built-in Calc comment
+  (visible on hover); that comment is documentation only and is ignored
+  when the file is read back, along with any comment you add yourself.
 
 ### The shipped example
 

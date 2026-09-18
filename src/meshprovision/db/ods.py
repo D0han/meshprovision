@@ -55,7 +55,7 @@ from odf import text as odf_text
 from odf.element import Node
 from odf.opendocument import OpenDocumentSpreadsheet
 
-from meshprovision.db import locking, schema
+from meshprovision.db import header_diff, locking, schema
 from meshprovision.db.atomic_writer import DEFAULT_RETENTION, atomic_write
 from meshprovision.errors import DbIntegrityError, DuplicateNodeError, SchemaError
 
@@ -284,13 +284,64 @@ def _int_attr(elem: Any, name: str, *, default: int) -> int:
         return default
 
 
+_PARAGRAPH_QNAMES: Final[frozenset[tuple[str, str]]] = frozenset(
+    {(odf_text.TEXTNS, "p"), (odf_text.TEXTNS, "h")}
+)
+"""``text:p``/``text:h`` -- the only children of a cell that hold its own text.
+
+A cell can also carry an ``office:annotation`` (a Calc comment) and, once
+LibreOffice has touched the file, ``draw:*`` shapes anchoring that
+comment's on-screen box. Neither is part of the cell's value, so
+:func:`_cell_own_text` walks only these direct children instead of
+recursing into the whole cell.
+"""
+
+
+def _cell_own_text(cell_elem: Any) -> str:
+    r"""Extract a cell's own text, ignoring any attached comment.
+
+    ``teletype.extractText`` recurses into *every* descendant, comment
+    included -- harmless for a file this project wrote (whose header
+    cells carry their column description as an ``office:annotation``,
+    see :func:`_build_header_row`) only because ``_extract_cell`` prefers
+    the cached ``office:string-value`` and never reaches this function
+    for that cell. LibreOffice, on saving the file back, drops that
+    cached ``office:string-value`` (it uses ``calcext:value-type``
+    instead) and reorders the annotation ahead of the text paragraph, so
+    a plain "open, resize a column, save" round-trip through Calc used
+    to make every touched cell's fallback path read as
+    ``annotation-text + own-text`` -- for a header cell, the column's
+    entire description prepended to its name. Reading only the cell's
+    direct ``text:p``/``text:h`` children (still run through
+    ``teletype.extractText`` each, since that is what correctly unwraps
+    ``text:s``/``text:tab``/``text:line-break`` runs *within* one
+    paragraph) fixes both the header and a hand-added comment on a data
+    cell silently corrupting that cell's value.
+
+    Args:
+        cell_elem: The odfpy ``TableCell`` element.
+
+    Returns:
+        The cell's own paragraphs, joined with ``"\\n"`` (a cell written
+        as several ``text:p`` children is a multi-line value).
+    """
+    paragraphs = [
+        teletype.extractText(child)
+        for child in cell_elem.childNodes
+        if getattr(child, "nodeType", None) == Node.ELEMENT_NODE
+        and child.qname in _PARAGRAPH_QNAMES
+    ]
+    return "\n".join(paragraphs)
+
+
 def _extract_cell(cell_elem: Any) -> CellValue:
     """Defensively extract one ``table:table-cell``'s content.
 
     Prefers the cached ``office:string-value`` when the cell is
-    explicitly typed as a string; otherwise falls back to the extracted
-    paragraph text, which is what a numeric/date-typed cell (one
-    LibreOffice may have coerced) still yields.
+    explicitly typed as a string; otherwise falls back to the cell's own
+    extracted paragraph text (see :func:`_cell_own_text`), which is what
+    a numeric/date-typed cell (one LibreOffice may have coerced) still
+    yields.
 
     Args:
         cell_elem: The odfpy ``TableCell`` element.
@@ -305,7 +356,7 @@ def _extract_cell(cell_elem: Any) -> CellValue:
     if value_type == "string" and string_value is not None:
         text = string_value
     else:
-        text = teletype.extractText(cell_elem)
+        text = _cell_own_text(cell_elem)
     return CellValue(text=text, formula=formula, value_type=value_type)
 
 
@@ -421,36 +472,68 @@ def read_raw(path: Path) -> DatabaseData:
 def _check_header(sheet_data: SheetData, sheet_spec: schema.SheetSpec) -> None:
     """Confirm a sheet's header row matches its expected column order.
 
-    Trailing extra blank columns are tolerated -- order is otherwise
-    strict, since the ODF formulas reference fixed column letters.
+    Each cell is stripped before comparing, so incidental leading/
+    trailing whitespace (an easy hand-edit slip) is not itself a
+    mismatch, and trailing extra blank columns are tolerated entirely --
+    order is otherwise strict, since the ODF formulas reference fixed
+    column letters.
 
     Args:
         sheet_data: The sheet's raw data.
         sheet_spec: The expected column layout.
 
     Raises:
-        SchemaError: If the header does not match, naming what was
-            expected and what was found.
+        SchemaError: If the header does not match, with a
+            :func:`~meshprovision.db.header_diff.describe_header_mismatch`
+            table as the message and a best-guess diagnosis as the hint.
     """
     expected = sheet_spec.column_names()
-    trimmed = list(sheet_data.header)
-    while trimmed and not trimmed[-1].strip():
-        trimmed.pop()
-    if tuple(trimmed) != expected:
-        hint: str | None = None
-        if len(trimmed) < len(expected) and expected[: len(trimmed)] == tuple(trimmed):
-            hint = (
-                f"Missing trailing column(s): {expected[len(trimmed) :]!r}. If this file "
-                f"predates a schema update, regenerate the example and re-apply your data, "
-                f"or add the missing header cell(s) by hand: "
-                f"`python scripts/generate_example_db.py` shows the current column layout."
-            )
-        raise SchemaError(
-            f"{sheet_spec.name} sheet header does not match the expected schema: "
-            f"expected {expected!r}, found {tuple(trimmed)!r}",
-            sheet=sheet_spec.name,
-            hint=hint,
-        )
+    found = tuple(cell.strip() for cell in sheet_data.header)
+    while found and not found[-1]:
+        found = found[:-1]
+    if found == expected:
+        return
+    message, hint = header_diff.describe_header_mismatch(
+        sheet=sheet_spec.name, found=found, expected=expected
+    )
+    raise SchemaError(message, sheet=sheet_spec.name, hint=hint)
+
+
+def _check_headers(raw: DatabaseData) -> None:
+    """Confirm every present sheet's header matches its schema, in one pass.
+
+    Checking both sheets before loading either row means a database with
+    two mangled headers (for example, every cell touched by the same
+    LibreOffice save) reports both problems in a single ``mesh db
+    verify`` run, rather than making the operator fix ``Nodes`` and
+    re-run to discover ``Keys`` is broken too.
+
+    Args:
+        raw: The database's raw sheet contents.
+
+    Raises:
+        SchemaError: If any present sheet's header does not match its
+            schema. Naming every offending sheet when more than one
+            fails; :func:`_check_header`'s own error, unchanged, when
+            exactly one does.
+    """
+    problems: list[SchemaError] = []
+    for sheet_name, sheet_spec in schema.SHEET_SPECS.items():
+        sheet_data = raw.sheets.get(sheet_name)
+        if sheet_data is None:
+            continue
+        try:
+            _check_header(sheet_data, sheet_spec)
+        except SchemaError as exc:
+            problems.append(exc)
+    if not problems:
+        return
+    if len(problems) == 1:
+        raise problems[0]
+    raise SchemaError(
+        "\n\n".join(exc.message for exc in problems),
+        hint="\n\n".join(f"{exc.sheet}: {exc.hint}" for exc in problems if exc.hint),
+    )
 
 
 def _row_values(
@@ -636,6 +719,7 @@ def load_database(path: Path) -> LoadedDatabase:
             raise SchemaError(
                 f"{path} is missing the required {sheet_name!r} sheet", sheet=sheet_name
             )
+    _check_headers(raw)
 
     warnings: list[IntegrityWarning] = []
     nodes = _load_sheet_rows(raw.sheets[schema.NODES_SHEET], schema.NODES_SHEET_SPEC, warnings)

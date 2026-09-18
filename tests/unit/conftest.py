@@ -17,6 +17,8 @@ from pathlib import Path
 from types import MappingProxyType
 
 import pytest
+from odf import dc as odf_dc
+from odf import office as odf_office
 from odf import opendocument
 from odf import table as odf_table
 from odf import text as odf_text
@@ -256,6 +258,51 @@ def edit_ods_cell(
     if value_type == "string":
         cell.setAttribute("stringvalue", new_text)
     cell.addElement(odf_text.P(text=new_text))
+
+    with path.open("wb") as fh:
+        doc.write(fh)
+
+
+def libreoffice_round_trip(path: Path) -> None:
+    """Rewrite an ``.ods`` in place into the exact shape LibreOffice Calc saves.
+
+    Simulates "open in Calc, resize a column, save" deterministically and
+    without shelling out to ``soffice`` -- verified against a real
+    ``soffice --headless --convert-to ods`` round trip of
+    ``data/nodes_db.example.ods`` to produce the identical cell shape.
+    LibreOffice's rewrite does two things this project's own writer never
+    does:
+
+    - Drops every plain (non-formula) cell's cached ``office:string-value``
+      -- a formula cell keeps it, since LibreOffice still caches that
+      cell's *computed* value.
+    - On any cell carrying an ``office:annotation`` (a Calc comment --
+      every header cell has one, holding its column description, see
+      :func:`meshprovision.db.ods._build_header_row`), moves the
+      annotation ahead of the cell's own ``text:p`` and adds a
+      ``<dc:date>`` child to it.
+
+    Args:
+        path: Path to the ``.ods`` file to rewrite in place.
+    """
+    doc = opendocument.load(str(path))
+    for table_elem in doc.spreadsheet.getElementsByType(odf_table.Table):
+        for cell in table_elem.getElementsByType(odf_table.TableCell):
+            if not cell.getAttribute("formula") and cell.getAttribute("stringvalue") is not None:
+                cell.removeAttribute("stringvalue")
+            annotation = next(
+                (
+                    child
+                    for child in list(cell.childNodes)
+                    if getattr(child, "qname", None) == (odf_office.OFFICENS, "annotation")
+                ),
+                None,
+            )
+            if annotation is None:
+                continue
+            cell.removeChild(annotation)
+            annotation.insertBefore(odf_dc.Date(text="2026-01-01T00:00:00"), annotation.firstChild)
+            cell.insertBefore(annotation, cell.firstChild)
 
     with path.open("wb") as fh:
         doc.write(fh)

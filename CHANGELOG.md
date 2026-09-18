@@ -330,6 +330,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hw_model` indistinguishable from the device simply not reporting one
   at all -- matching the same warn-on-unmappable-value convention
   already used for `region`/`role` in the same report.
+- Opening the database in LibreOffice Calc and saving -- even a no-op
+  save, like resizing a column -- no longer breaks `mesh db verify`
+  with every cell reporting as a garbled mix of its column's built-in
+  description and its own value. LibreOffice rewrites a saved cell
+  without the cached value the loader used to prefer, and reorders a
+  cell's attached comment ahead of its text; the loader now reads only
+  a cell's own text, never a comment attached to it. The same bug could
+  silently splice a hand-added comment on a *data* cell into that
+  cell's value instead of erroring; it no longer can.
+- `mesh db verify`'s header-mismatch error no longer dumps two raw
+  Python tuples (every column name and description concatenated into
+  one wall of text once the bug above is hit) as its only diagnostic.
+  It now renders an aligned table of what was expected against what was
+  found, collapsing matching columns to one summary line, and a
+  best-guess hint identifying a deleted, inserted, renamed, or
+  reordered column plus how to roll back. A database with both sheets'
+  headers mangled now reports both in one run instead of only the first.
 
 ### Security
 
