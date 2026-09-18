@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
     from meshtastic.mesh_interface import MeshInterface
 
 __all__ = [
+    "DEFAULT_CLOSE_TIMEOUT",
     "DEFAULT_CONNECT_TIMEOUT",
     "TRANSPORTS",
     "BLEBackend",
@@ -707,12 +709,26 @@ def backend_for(
     )
 
 
-def close_interface(iface: MeshInterface) -> None:
-    """Close a ``MeshInterface``, never masking a caller's real error.
+DEFAULT_CLOSE_TIMEOUT: Final[float] = 3.0
+"""How long :func:`close_interface` waits for ``iface.close()`` before
+abandoning it.
 
-    Intended for use in a ``finally`` block (see :func:`connected`):
-    logs at DEBUG on failure rather than raising, so a close-time problem
-    never hides whatever exception was already propagating.
+Exists because of a confirmed reentrancy bug in meshtastic 2.7.11's
+``BLEInterface``: its ``disconnected_callback`` (``ble_interface.py``,
+``BLEInterface.connect``) calls ``self.close()`` again whenever ``bleak``
+observes a disconnect -- including the disconnect ``close()`` itself just
+caused via ``client.disconnect()``. That second ``close()`` re-sends a
+``ToRadio{disconnect: true}`` write with no timeout of its own
+(``BLEClient.async_await(coro, timeout=None)``), which hangs forever once
+the client is already torn down. Not fixable on our side of that boundary
+-- this bounds our own exposure to it instead, so a command that already
+obtained its real result (e.g. ``mesh adopt``'s ``read_live_config``) is
+never held hostage by a stuck disconnect.
+"""
+
+
+def _close_ignoring_errors(iface: MeshInterface) -> None:
+    """Call ``iface.close()``, swallowing the errors :func:`close_interface` always has.
 
     Args:
         iface: The interface to close.
@@ -721,6 +737,37 @@ def close_interface(iface: MeshInterface) -> None:
         iface.close()
     except (OSError, AttributeError, RuntimeError):
         _logger.debug("Failed to close MeshInterface cleanly.", exc_info=True)
+
+
+def close_interface(iface: MeshInterface, *, timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:
+    """Close a ``MeshInterface``, never masking a caller's real error -- and never hanging.
+
+    Intended for use in a ``finally`` block (see :func:`connected`): a
+    close-time problem never hides whatever exception was already
+    propagating, since the actual close runs on a daemon thread and any
+    ``OSError``/``AttributeError``/``RuntimeError`` it raises is logged at
+    DEBUG rather than re-raised (see :func:`_close_ignoring_errors`).
+
+    Beyond that existing guarantee, this also never *blocks* longer than
+    ``timeout``: ``iface.close()`` runs on a daemon thread, and if it has
+    not finished within ``timeout`` seconds, a warning is logged and this
+    function returns anyway, abandoning that thread -- harmless, since it
+    is a daemon and therefore never blocks process exit. See
+    :data:`DEFAULT_CLOSE_TIMEOUT` for why this exists.
+
+    Args:
+        iface: The interface to close.
+        timeout: Seconds to wait for the close before abandoning it.
+    """
+    thread = threading.Thread(target=_close_ignoring_errors, args=(iface,), daemon=True)
+    thread.start()
+    thread.join(timeout=timeout)
+    if thread.is_alive():
+        _logger.warning(
+            "iface.close() did not complete within %ss; abandoning it "
+            "(see meshprovision.provisioning.connection.DEFAULT_CLOSE_TIMEOUT).",
+            timeout,
+        )
 
 
 @contextlib.contextmanager

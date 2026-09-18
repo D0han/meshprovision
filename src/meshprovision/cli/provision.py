@@ -494,6 +494,7 @@ def device_session(
         else:
             yield session
     finally:
+        ctx.info("Disconnecting...")
         session.close()
 
 
@@ -529,6 +530,7 @@ def connected_with_progress(
     try:
         yield iface
     finally:
+        ctx.info("Disconnecting...")
         connection.close_interface(iface)
 
 

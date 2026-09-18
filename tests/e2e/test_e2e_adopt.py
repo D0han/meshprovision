@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1034,3 +1035,52 @@ def test_adopt_batch_flags_only_the_vulnerable_firmware_nodes(
     nodes = {row["node_id"]: NodeRecord.from_row(row) for row in loaded.nodes}
     assert set(nodes) == {n for n, _ in specs}
     assert all(n.management is ManagementMode.OBSERVED for n in nodes.values())
+
+
+def test_adopt_survives_a_hung_ble_close(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hung ``iface.close()`` must never swallow an already-obtained result.
+
+    Reproduces, at the CLI level, a confirmed reentrancy bug in meshtastic
+    2.7.11's ``BLEInterface``: its ``disconnected_callback`` re-invokes
+    ``close()`` on disconnect, and that second call can hang forever on a
+    GATT write against an already-torn-down client (see
+    :data:`meshprovision.provisioning.connection.DEFAULT_CLOSE_TIMEOUT`).
+    ``mesh adopt`` had already obtained everything it needs
+    (``read_live_config`` succeeds before the hang) -- a hung close must
+    not prevent it from reporting that result and exiting.
+
+    The fake's ``close()`` blocks on a never-set ``threading.Event``
+    rather than ``time.sleep`` -- the root ``tests/conftest.py``
+    monkeypatches ``time.sleep`` to a no-op for every test, which would
+    make a ``time.sleep``-based fake return instantly instead of hanging.
+    The real default timeout (``DEFAULT_CLOSE_TIMEOUT``) is patched down
+    for this test only, so it runs at unit-test speed rather than waiting
+    out the real multi-second bound.
+    """
+    from meshprovision.provisioning import connection as connection_module
+
+    real_close_interface = connection_module.close_interface
+
+    def _fast_close_interface(iface: object, *, timeout: float = 0.05) -> None:
+        real_close_interface(iface, timeout=timeout)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(connection_module, "close_interface", _fast_close_interface)
+
+    iface = bus.use(FakeMeshInterface("deadbe01", short_name="AB01", long_name="Adopted Node 01"))
+    monkeypatch.setattr(iface, "close", threading.Event().wait)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "deadbe01" in result.stderr
+    assert "did not complete" in result.stderr
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = [NodeRecord.from_row(row) for row in loaded.nodes]
+    assert len(nodes) == 1
+    assert nodes[0].node_id == "deadbe01"

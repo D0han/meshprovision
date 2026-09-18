@@ -130,6 +130,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closing a device connection (`mesh adopt`, `mesh provision`, `mesh admin
+  bootstrap`) could hang the process forever after the command had already
+  obtained everything it needed. Root cause: a confirmed reentrancy bug in
+  meshtastic 2.7.11's `BLEInterface` -- its `disconnected_callback`
+  re-invokes `close()` on disconnect, including the disconnect `close()`
+  itself just caused, and that second call can hang indefinitely on a GATT
+  write against an already-torn-down client. `close_interface()` now runs
+  the close on a background thread with a 3-second bound; if it does not
+  return in time, a warning is logged and the command proceeds with its
+  already-obtained result instead of hanging.
 - `mesh --help` and every subcommand's `--help` no longer render the
   command's raw Google-style docstring verbatim, which used to dump
   developer-facing `Args:`/`Returns:`/`Raises:` sections (and leaked
