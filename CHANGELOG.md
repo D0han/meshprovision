@@ -217,6 +217,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing the `types-PyYAML`/`types-protobuf` stub packages mypy needs for
   those imports; a long-lived local venv that happened to have them
   installed separately masked the gap. Added both to `dev`.
+- The stub fix above treated the symptom, not the hole: `PyYAML`,
+  `protobuf`, and `pyserial` are imported directly by `src/` (`yaml` in
+  `config/template.py` and `provisioning/backup.py`; `google.protobuf` in
+  `provisioning/backup.py`, `provisioning/apply.py`, and
+  `provisioning/detect.py`; `serial.tools` in `provisioning/discovery.py`)
+  but were never declared in `[project.dependencies]` -- they only reached
+  the environment as transitive dependencies of `meshtastic`. Had
+  `meshtastic` ever dropped or re-scoped one, both the imports and the
+  mypy gate would have broken again. All three are now declared directly,
+  with version bounds matching `meshtastic`'s own. Added
+  `tests/unit/test_declared_dependencies.py`, an AST-based guard that
+  fails locally the moment `src/` imports something outside
+  `[project.dependencies]` (an import guarded by `try`/`except
+  ImportError`, like `bleak`'s, is exempt) or a mypy stub package drifts
+  out of sync with its runtime counterpart.
 - `mesh status`'s Short/Long columns (and the JSON `short_name`/`long_name`
   fields) rendered `-` for a node that had names on file in the `Nodes`
   sheet but wasn't reported by loranet.pl or lorastats.pl this run --

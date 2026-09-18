@@ -33,6 +33,14 @@ dependencies = [
   "odfpy",
   "python-dotenv",
   "platformdirs",
+  # Imported directly by this package, not just pulled in by meshtastic:
+  # yaml (config/template.py, provisioning/backup.py), google.protobuf
+  # (provisioning/backup.py, apply.py, detect.py) and serial.tools
+  # (provisioning/discovery.py). Bounds match meshtastic's own so pip has one
+  # interval to satisfy, not two that could drift apart.
+  "PyYAML>=6.0.1,<7",
+  "protobuf>=4.21.12",
+  "pyserial>=3.5,<4",
 ]
 
 [project.optional-dependencies]
@@ -47,11 +55,12 @@ dev = [
   "responses",
   "ruff",
   "mypy",
-  # `mypy --strict` needs stubs for two untyped-at-runtime imports: `yaml`
-  # (config/template.py) and `google.protobuf.descriptor`
-  # (provisioning/detect.py, provisioning/apply.py). Without these, a clean
-  # `pip install -e ".[dev]"` fails `mypy --strict src` with import-untyped
-  # errors that a venv carrying them from some other install won't show.
+  # PyYAML and protobuf (declared above, in [project.dependencies]) ship no
+  # `py.typed` marker, so `mypy --strict` needs a stub package for each or it
+  # fails `import-untyped` on `config/template.py`, `provisioning/backup.py`,
+  # `provisioning/apply.py`, and `provisioning/detect.py`. pyserial needs no
+  # stub: `[[tool.mypy.overrides]]` below already sets
+  # ignore_missing_imports for `serial.*`.
   "types-PyYAML",
   "types-protobuf",
   "pre-commit",
