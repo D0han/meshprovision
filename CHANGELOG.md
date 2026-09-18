@@ -130,6 +130,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status`'s Short/Long columns (and the JSON `short_name`/`long_name`
+  fields) rendered `-` for a node that had names on file in the `Nodes`
+  sheet but wasn't reported by loranet.pl or lorastats.pl this run --
+  those columns only ever consulted live observations, never the
+  database. A node's name now falls back to its `Nodes` sheet row when no
+  source reported one this run; a live-observed name still wins.
 - Closing a device connection (`mesh adopt`, `mesh provision`, `mesh admin
   bootstrap`) could hang the process forever after the command had already
   obtained everything it needed. Root cause: a confirmed reentrancy bug in

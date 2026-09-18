@@ -96,6 +96,47 @@ def test_unobserved_node_in_database() -> None:
     assert merged.observed is False
 
 
+def test_unobserved_node_falls_back_to_database_names() -> None:
+    """No source has ever seen this node, but its DB row has names.
+
+    Regression test for `mesh status` showing "-" for Short/Long on a
+    node whose names are known -- just not from loranet/lorastats.
+    """
+    record = NodeRecord(node_id="deadbe01", short_name="MT01", long_name="Meshtastic MT01")
+    merged = merge_observations(NID, [], record=record, now=NOW)
+    assert merged.short_name == "MT01"
+    assert merged.long_name == "Meshtastic MT01"
+    assert merged.sources == ()
+    assert merged.availability is Availability.UNKNOWN
+
+
+def test_observed_name_beats_database_name() -> None:
+    """A live-reported name still wins over the database's own row."""
+    record = NodeRecord(node_id="deadbe01", short_name="MT01", long_name="Meshtastic MT01")
+    obs = _obs(SOURCE_LORANET, short_name="LNET", long_name="Loranet Long Name", last_seen=NOW)
+    merged = merge_observations(NID, [obs], record=record, now=NOW)
+    assert merged.short_name == "LNET"
+    assert merged.long_name == "Loranet Long Name"
+
+
+def test_observation_with_no_name_still_falls_back_to_database() -> None:
+    """A node observed for telemetry but with no reported name gets the DB name."""
+    record = NodeRecord(node_id="deadbe01", short_name="MT01", long_name="Meshtastic MT01")
+    obs = _obs(SOURCE_LORANET, battery_level=90, last_seen=NOW)
+    merged = merge_observations(NID, [obs], record=record, now=NOW)
+    assert merged.short_name == "MT01"
+    assert merged.long_name == "Meshtastic MT01"
+    assert merged.sources == (SOURCE_LORANET,)
+
+
+def test_blank_database_name_still_renders_as_unknown() -> None:
+    """A DB row with names left at their default ("") is absent, not a real name."""
+    record = NodeRecord(node_id="deadbe01")
+    merged = merge_observations(NID, [], record=record, now=NOW)
+    assert merged.short_name is None
+    assert merged.long_name is None
+
+
 def test_classify_age_boundaries() -> None:
     thresholds = Thresholds()
     assert classify_age(thresholds.stale_after, thresholds) is Availability.ONLINE
@@ -167,6 +208,22 @@ def test_merged_node_to_json_dict_never_contains_secrets() -> None:
         "region": "EU_868",
         "management": "template",
     }
+
+
+def test_to_json_dict_top_level_name_falls_back_while_database_stays_the_raw_row() -> None:
+    """The top-level name may fall back to the DB row; `"database"` never does.
+
+    An unobserved node's top-level ``short_name``/``long_name`` come from
+    the fallback (rule 4a), while the nested ``"database"`` object always
+    reflects the row exactly as stored -- here the two happen to agree.
+    """
+    record = NodeRecord(node_id="deadbe01", short_name="MT01", long_name="Meshtastic MT01")
+    merged = merge_observations(NID, [], record=record, now=NOW)
+    payload = merged.to_json_dict()
+    assert payload["short_name"] == "MT01"
+    assert payload["long_name"] == "Meshtastic MT01"
+    assert payload["database"]["short_name"] == "MT01"
+    assert payload["database"]["long_name"] == "Meshtastic MT01"
 
 
 def test_merged_node_management_is_none_when_not_in_database() -> None:

@@ -149,8 +149,11 @@ class MergedNode:
         record: This node's row in the ``Nodes`` sheet, or ``None`` when
             the node is not in the database.
         short_name: Best-known short display name (see
-            :func:`merge_observations` for the precedence rule).
-        long_name: Best-known long display name.
+            :func:`merge_observations` for the precedence rule -- may
+            come from an observation or, when no source reported one,
+            from :attr:`record`).
+        long_name: Best-known long display name (same fallback as
+            :attr:`short_name`).
         hw_model: Best-known hardware model.
         role: Best-known device role.
         region: Best-known LoRa region.
@@ -232,7 +235,12 @@ class MergedNode:
         Never emits ``ble_pin``, any key material, or a ``key_ref`` --
         :attr:`record` is never serialized wholesale; only its
         ``short_name``/``long_name``/``role``/``region``/``management``
-        are picked into a nested ``"database"`` object.
+        are picked into a nested ``"database"`` object. The top-level
+        ``short_name``/``long_name`` may themselves have fallen back to
+        :attr:`record` when no source observed this node (see
+        :func:`merge_observations`) -- the two can coincide, but
+        ``"database"`` reflects the row as stored, independent of that
+        fallback.
 
         Returns:
             A mapping with insertion-ordered keys, safe to pass to
@@ -491,6 +499,13 @@ def merge_observations(
        ``last_seen`` descending (``None`` last), ties broken by
        :data:`SOURCE_PRIORITY`. A node that was renamed shows its newest
        name.
+    4a. ``short_name``/``long_name`` only, one further fallback: when no
+        observation supplied a name (the recency scan above yields
+        ``None``), fall back to ``record.short_name``/``record.long_name``
+        -- so a node no source has seen still shows the name the database
+        already knows. A blank cell (``""``, the field's default) counts
+        as absent and falls through, same as ``None``. This fallback does
+        *not* apply to the other identity fields in rule 4.
     5. ``sources`` = the ``source`` of every observation, in
        :data:`SOURCE_PRIORITY` order.
     6. ``age = now - last_seen`` when ``last_seen`` is set; ``age_text =
@@ -502,7 +517,8 @@ def merge_observations(
     :class:`MergedNode` with ``sources=()``,
     ``availability=Availability.UNKNOWN``, ``age_text="never"``, and
     ``record`` attached -- this is how "in the database but nobody has
-    seen it" is represented.
+    seen it" is represented. Its ``short_name``/``long_name`` still come
+    from ``record`` per rule 4a, rather than staying ``None``.
 
     Args:
         node_id: The node id being merged.
@@ -525,11 +541,18 @@ def merge_observations(
     if now.tzinfo is None:
         raise ValueError("now must be timezone-aware")
 
+    # Rule 4a: a blank database cell is the field's default, not a real
+    # name -- treat it the same as absent so it falls through to `None`.
+    db_short_name = record.short_name or None if record is not None else None
+    db_long_name = record.long_name or None if record is not None else None
+
     if not observations:
         return MergedNode(
             node_id=node_id,
             sources=(),
             record=record,
+            short_name=db_short_name,
+            long_name=db_long_name,
             age_text="never",
             availability=Availability.UNKNOWN,
         )
@@ -546,8 +569,10 @@ def merge_observations(
     neighbor_count = _first_non_none(by_priority, lambda obs: obs.neighbor_count)
     uptime_seconds = _first_non_none(by_priority, lambda obs: obs.uptime_seconds)
 
-    short_name = _first_non_none(by_recency, lambda obs: obs.short_name)
-    long_name = _first_non_none(by_recency, lambda obs: obs.long_name)
+    # Rule 4a: an observed but blank/absent name falls back to the
+    # database row before giving up and rendering as unknown.
+    short_name = _first_non_none(by_recency, lambda obs: obs.short_name) or db_short_name
+    long_name = _first_non_none(by_recency, lambda obs: obs.long_name) or db_long_name
     hw_model = _first_non_none(by_recency, lambda obs: obs.hw_model)
     role = _first_non_none(by_recency, lambda obs: obs.role)
     region = _first_non_none(by_recency, lambda obs: obs.region)

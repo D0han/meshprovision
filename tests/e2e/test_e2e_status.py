@@ -166,6 +166,38 @@ def test_offline_node_exit_code_and_no_fail_on_offline(
         assert ok.exit_code == 0
 
 
+def test_unobserved_node_still_shows_its_database_name(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """A node no source has ever seen must still be identifiable by name.
+
+    Regression test: the Short/Long columns (and JSON `short_name`/
+    `long_name`) used to fall back to nothing but the observations, so a
+    node absent from both loranet.pl and lorastats.pl rendered `-` even
+    though its name was sitting right there in the `Nodes` sheet.
+    """
+    from meshprovision.db.nodes import NodeRecord
+
+    _seed_one_node(seed_db, NodeRecord)
+
+    with mock_sources():  # neither source reports this (or any) node
+        json_result = invoke(runner, ["status", "--json", "--no-fail-on-offline"], env)
+        table_result = invoke(runner, ["status", "--no-fail-on-offline"], env)
+
+    assert json_result.exit_code == 0
+    (node_doc,) = json.loads(json_result.stdout)["nodes"]
+    assert node_doc["short_name"] == "MTa1"
+    assert node_doc["long_name"] == "Meshtastic MTa1"
+    assert node_doc["sources"] == []
+    assert node_doc["database"]["short_name"] == "MTa1"
+
+    assert table_result.exit_code == 0
+    assert "MTa1" in table_result.stdout
+
+
 def test_invalid_region_returns_html_with_http_200(
     runner: CliRunner,
     env: dict[str, str],

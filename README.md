@@ -656,6 +656,10 @@ mesh status --no-fail-on-offline
 The rendered table columns are: Node, Short, Long, Mgmt, Status, Last seen,
 Timestamp, Batt, Volt, ChUtil, AirTx, Nbrs, Sources.
 
+Short/Long prefer the most recently observed name; a node no source has seen
+this run still shows the name already on file in the `Nodes` sheet, so it
+stays identifiable instead of rendering `-`.
+
 `--watch` respects the cache TTL (default poll interval = the cache TTL,
 floored at 5 s) and prints a per-poll cache hit/miss/request line to
 stderr.
