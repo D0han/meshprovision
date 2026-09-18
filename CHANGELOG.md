@@ -114,8 +114,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workflow, and Dependabot for `pip` and `github-actions`.
 - `all` extra (`pip install -e ".[all]"`), a self-referential alias for
   `[ble,dev]` together, for a one-shot full development install.
-- README covering installation, the template and `.ods` walkthroughs, every
-  command, the security model, and Linux Mint troubleshooting.
+- `build` and `twine` added to the `dev` extra, so `pip install -e ".[dev]"`
+  is now enough to run the packaging checks (`python -m build`,
+  `twine check dist/*`) locally, matching the CI `package` job.
+- Documentation covering installation, the template and `.ods` walkthroughs,
+  every command, the security model, and Linux Mint troubleshooting: a
+  landing-page README plus a `docs/` directory (see `### Changed` below).
 - `-v`/`--verbose` (repeatable, global): `-v` raises this tool's own logs to
   `DEBUG`; `-vv` additionally unmutes `meshtastic`/`httpx`; `-vvv` also
   unmutes `bleak`/`httpcore`/`urllib3`. An explicit `--log-level` still wins.
@@ -127,6 +131,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   several minutes inside the `meshtastic`/`bleak` libraries' own re-scans and
   timeouts) is now visibly still alive rather than indistinguishable from a
   hang.
+
+### Changed
+
+- Documentation restructured: `README.md` is now a landing page (pitch,
+  requirements, install, quick start, command cheat sheet, a docs index) and
+  the full reference material -- installation details, configuration and the
+  template walkthrough, the `.ods` database schema, every command's options,
+  the security model, firmware 2.8 compatibility notes, deliberate spec
+  deviations, and Linux Mint troubleshooting -- moved into topic pages under
+  `docs/`.
 
 ### Fixed
 

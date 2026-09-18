@@ -561,9 +561,10 @@ def test_default_known_bad_keys_path_env_existing_file_wins(
 
     The two existing env-var tests only cover a nonexistent path
     (raises) and the var being unset entirely (falls through to the
-    bundled candidates) -- the actual documented behavior (README.md's
-    "override path to the weak-key blocklist"), a valid override file
-    being returned as-is rather than silently ignored, had no test.
+    bundled candidates) -- the actual documented behavior
+    (docs/configuration.md's "override path to the weak-key blocklist"),
+    a valid override file being returned as-is rather than silently
+    ignored, had no test.
     """
     override = tmp_path / "custom_known_bad.txt"
     override.write_text("# custom blocklist\n")

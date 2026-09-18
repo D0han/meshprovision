@@ -371,9 +371,10 @@ def test_blank_trailing_row_with_coerced_cell_produces_no_warnings(tmp_path: Pat
 # LibreOffice round trip.
 #
 # LibreOffice Calc is a documented, supported way to hand-edit the
-# database (README: "Run `mesh db verify` after every hand-edit"), so a
-# plain "open, resize a column, save" must not corrupt or break the
-# file. It does two things this project's own writer never does: drops
+# database (docs/database.md: "Run `mesh db verify` after every
+# hand-edit"), so a plain "open, resize a column, save" must not corrupt
+# or break the file. It does two things this project's own writer never
+# does: drops
 # a plain cell's cached ``office:string-value``, and -- on any cell
 # carrying an ``office:annotation`` (every header cell has one, holding
 # its column description) -- reorders that annotation ahead of the
