@@ -47,6 +47,13 @@ dev = [
   "responses",
   "ruff",
   "mypy",
+  # `mypy --strict` needs stubs for two untyped-at-runtime imports: `yaml`
+  # (config/template.py) and `google.protobuf.descriptor`
+  # (provisioning/detect.py, provisioning/apply.py). Without these, a clean
+  # `pip install -e ".[dev]"` fails `mypy --strict src` with import-untyped
+  # errors that a venv carrying them from some other install won't show.
+  "types-PyYAML",
+  "types-protobuf",
   "pre-commit",
   "detect-secrets",
   "build",

@@ -144,6 +144,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mypy --strict` failed on a clean `pip install -e ".[dev]"` (including in
+  CI, on all three supported Python versions) with `import-untyped` errors
+  for `yaml` (`config/template.py`) and `google.protobuf.descriptor`
+  (`provisioning/detect.py`, `provisioning/apply.py`). The `dev` extra was
+  missing the `types-PyYAML`/`types-protobuf` stub packages mypy needs for
+  those imports; a long-lived local venv that happened to have them
+  installed separately masked the gap. Added both to `dev`.
 - `mesh status`'s Short/Long columns (and the JSON `short_name`/`long_name`
   fields) rendered `-` for a node that had names on file in the `Nodes`
   sheet but wasn't reported by loranet.pl or lorastats.pl this run --
