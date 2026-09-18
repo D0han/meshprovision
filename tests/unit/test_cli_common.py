@@ -234,7 +234,7 @@ class TestBuildSettings:
         settings = build_settings()
 
         assert settings.cache_ttl == DEFAULT_CACHE_TTL
-        assert settings.log_level == "INFO"
+        assert settings.log_level == "WARNING"
 
     def test_a_none_override_never_clobbers_the_environment(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

@@ -182,6 +182,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Default logging verbosity dropped from `INFO` to `WARNING`, so a plain
+  `mesh status` (and every other command) no longer prints per-request
+  "fetching ..." lines to stderr. The `-v`/`--verbose` ladder shifted down
+  to compensate: `-v` now raises this tool's own loggers to `INFO`
+  (restoring the fetch trace), `-vv` to `DEBUG` plus unmuting
+  `meshtastic`/`httpx`, `-vvv` also unmuting `bleak`/`httpcore`/`urllib3` --
+  each `-v` reaches everything the old ladder needed one fewer `-v` for.
+  The HTTP fetch log line itself now includes the request's query string
+  (e.g. lorastats.pl's `?node=<hex>`), so the four lorastats.pl requests a
+  `mesh status` run makes are no longer indistinguishable at `-v`.
 - Documentation restructured: `README.md` is now a landing page (pitch,
   requirements, install, quick start, command cheat sheet, a docs index) and
   the full reference material -- installation details, configuration and the

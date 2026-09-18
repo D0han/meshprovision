@@ -865,7 +865,7 @@ def test_adopt_prints_connect_progress_over_ble(
 def test_adopt_debug_logs_are_hidden_by_default_and_shown_with_verbose(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:
-    """This project's own DEBUG logs stay out of the default run and appear under `-v`.
+    """This project's own DEBUG logs stay out of the default run and appear under `-vv`.
 
     Uses :func:`~meshprovision.provisioning.detect.read_live_config`'s own
     debug log rather than a connection-backend one: the `bus` fixture
@@ -874,6 +874,11 @@ def test_adopt_debug_logs_are_hidden_by_default_and_shown_with_verbose(
     debug log *inside* the real ``connect()`` implementation would never
     fire in this harness -- ``read_live_config`` runs unmodified against
     the fake interface, same as the real connect path.
+
+    ``-vv`` rather than a single ``-v``: the ladder is staged so ``-v``
+    alone only reaches ``INFO`` (see
+    :func:`~meshprovision.cli.common.resolve_log_level`); ``DEBUG``
+    needs a second ``-v``.
     """
     bus.use(FakeMeshInterface("deadbe01"))
     needle = "Read live config from !deadbe01"
@@ -883,7 +888,7 @@ def test_adopt_debug_logs_are_hidden_by_default_and_shown_with_verbose(
     assert needle not in quiet.stderr
 
     bus.use(FakeMeshInterface("deadbe02", short_name="AB02"))
-    verbose = invoke(runner, ["-v", "adopt", "--port", "/dev/ttyFAKE1", "--yes"], env)
+    verbose = invoke(runner, ["-vv", "adopt", "--port", "/dev/ttyFAKE1", "--yes"], env)
     assert verbose.exit_code == 0
     assert "Read live config from !deadbe02" in verbose.stderr
 

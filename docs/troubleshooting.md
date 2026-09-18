@@ -74,8 +74,9 @@ Part of the meshprovision docs — see the [README](../README.md).
 
 ## General
 
-- Add `--log-level debug` (before the subcommand) for a full trace of
-  this tool's own logic. Key material is redacted at every log level.
+- Add `-v` (before the subcommand) to see this tool's own HTTP fetch
+  trace, or `--log-level debug` for a full trace of its own logic. Key
+  material is redacted at every log level.
 - A connect (BLE especially) hanging with no output? `mesh` always
   prints a `Connecting over ...` line and a `still connecting... Ns /
   Ms` heartbeat every 10s while it waits, so a stalled connect is

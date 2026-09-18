@@ -47,8 +47,11 @@ class TestResolveLogLevel:
         """Neither given: caller's env/.env/default layers must still decide."""
         assert resolve_log_level(None, 0) is None
 
-    @pytest.mark.parametrize("verbose", [1, 2, 3])
-    def test_any_verbose_count_implies_debug_absent_explicit_level(self, verbose: int) -> None:
+    def test_single_v_implies_info_absent_explicit_level(self) -> None:
+        assert resolve_log_level(None, 1) == "INFO"
+
+    @pytest.mark.parametrize("verbose", [2, 3])
+    def test_double_or_triple_v_implies_debug_absent_explicit_level(self, verbose: int) -> None:
         assert resolve_log_level(None, verbose) == "DEBUG"
 
 

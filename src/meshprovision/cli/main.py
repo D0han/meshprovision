@@ -59,15 +59,15 @@ themselves are declared lowercase to match."""
     "--log-level",
     type=click.Choice(_LOG_LEVEL_CHOICES, case_sensitive=False),
     default=None,
-    help="Logging verbosity (default: MESHPROVISION_LOG_LEVEL, else INFO).",
+    help="Logging verbosity (default: MESHPROVISION_LOG_LEVEL, else WARNING).",
 )
 @click.option(
     "-v",
     "--verbose",
     count=True,
     help=(
-        "Increase log detail; repeatable. -v: this tool's own logs (DEBUG). "
-        "-vv: also meshtastic/httpx. -vvv: also bleak/httpcore/urllib3. "
+        "Increase log detail; repeatable. -v: this tool's own logs (INFO). "
+        "-vv: DEBUG, plus meshtastic/httpx. -vvv: also bleak/httpcore/urllib3. "
         "Overridden by an explicit --log-level."
     ),
 )
@@ -144,9 +144,9 @@ def cli(
             Wins over ``verbose`` when both are given -- see
             :func:`~meshprovision.cli.common.resolve_log_level`.
         verbose: The ``-v``/``--verbose`` count. With no explicit
-            ``--log-level``, any count implies ``DEBUG`` for this
-            project's own loggers; a count of 2 or 3 additionally
-            unmutes third-party loggers -- see
+            ``--log-level``, a count of 1 raises this project's own
+            loggers to ``INFO``, 2 or 3 to ``DEBUG``; a count of 2 or 3
+            additionally unmutes third-party loggers -- see
             :func:`~meshprovision.cli.common.configure_logging`.
         db_path: ODS database path override, from ``--db-path``.
         template_path: Provisioning template path override, from

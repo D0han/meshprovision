@@ -119,6 +119,53 @@ def test_table_run_shows_short_name_and_online_label(
     assert result.stderr == ""
 
 
+def test_default_run_is_silent_on_stderr_with_the_builtin_log_level(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """Regression test: a plain ``mesh status`` must not print "fetching ..." lines.
+
+    Unlike the sibling table-run test above, this one removes
+    ``MESHPROVISION_LOG_LEVEL`` from ``env`` (``tests/conftest.py``
+    pins it to ``WARNING`` for the whole suite) so the built-in
+    default -- not the test harness's override -- is what is actually
+    exercised.
+    """
+    from meshprovision.db.nodes import NodeRecord
+
+    del env["MESHPROVISION_LOG_LEVEL"]
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}):
+        result = invoke(runner, ["status"], env)
+
+    assert result.exit_code == 0
+    assert result.stderr == ""
+
+
+def test_verbose_flag_restores_the_fetch_trace(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """``-v`` is the documented way back to the per-request fetch trace."""
+    from meshprovision.db.nodes import NodeRecord
+
+    del env["MESHPROVISION_LOG_LEVEL"]
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}):
+        result = invoke(runner, ["-v", "status"], env)
+
+    assert result.exit_code == 0
+    assert "fetching GET" in result.stderr
+
+
 def test_table_run_never_interprets_a_node_name_as_rich_markup(
     runner: CliRunner,
     env: dict[str, str],

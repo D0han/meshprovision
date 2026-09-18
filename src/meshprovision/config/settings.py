@@ -66,7 +66,7 @@ DEFAULT_TEMPLATE_PATH: Final[Path] = Path("config/template.yaml")
 DEFAULT_CACHE_TTL: Final[float] = 300.0
 """Default HTTP response cache time-to-live, in seconds."""
 
-DEFAULT_LOG_LEVEL: Final[str] = "INFO"
+DEFAULT_LOG_LEVEL: Final[str] = "WARNING"
 """Default logging verbosity."""
 
 LogLevel: TypeAlias = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
@@ -115,6 +115,10 @@ class Settings(BaseModel):
             ``User-Agent`` header. ``None`` when unset -- there is
             deliberately no default value.
         log_level: Logging verbosity for the ``mesh`` console script.
+            Defaults to ``"WARNING"`` -- a plain run stays quiet on
+            stderr; ``-v`` raises this project's own loggers to
+            ``INFO``, ``-vv``/``-vvv`` to ``DEBUG`` (see
+            :func:`~meshprovision.cli.common.resolve_log_level`).
     """
 
     model_config = ConfigDict(
@@ -129,7 +133,7 @@ class Settings(BaseModel):
     cache_dir: Path = Field(default_factory=default_cache_dir)
     cache_ttl: float = Field(default=DEFAULT_CACHE_TTL, ge=0.0)
     contact: str | None = None
-    log_level: LogLevel = "INFO"
+    log_level: LogLevel = "WARNING"
 
     @field_validator("db_path", "template_path", "cache_dir", mode="after")
     @classmethod

@@ -81,17 +81,20 @@ def test_dotenv_via_explicit_env_file_is_honored_absent_any_higher_layer(
 
     No ``MESHPROVISION_LOG_LEVEL`` in the environment and no
     ``--log-level`` flag: the ``.env`` file passed via ``--env-file`` is
-    the only source, so its value must be the one that lands.
+    the only source, so its value must be the one that lands. Uses
+    ``ERROR`` rather than ``WARNING`` deliberately -- ``WARNING`` is now
+    the built-in default, so asserting it here would pass even if
+    ``--env-file`` were silently ignored.
     """
     dotenv_path = tmp_path / "precedence.env"
-    dotenv_path.write_text("MESHPROVISION_LOG_LEVEL=WARNING\n")
+    dotenv_path.write_text("MESHPROVISION_LOG_LEVEL=ERROR\n")
     del env["MESHPROVISION_LOG_LEVEL"]
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template())
 
     result = invoke(runner, ["--env-file", str(dotenv_path), "template", "validate"], env)
 
     assert result.exit_code == 0
-    assert logging.getLogger().level == logging.WARNING
+    assert logging.getLogger().level == logging.ERROR
 
 
 def test_db_path_and_template_path_flags_beat_conflicting_env_vars(

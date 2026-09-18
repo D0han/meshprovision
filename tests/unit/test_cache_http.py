@@ -178,6 +178,60 @@ def test_cache_key_is_64_lowercase_hex() -> None:
 
 
 # ---------------------------------------------------------------------------
+# _display_url: the query string shown in the "fetching ..." log line.
+# ---------------------------------------------------------------------------
+
+
+def test_display_url_without_params_is_unchanged() -> None:
+    from meshprovision.cache.http import _display_url
+
+    assert _display_url(URL, None) == URL
+    assert _display_url(URL, {}) == URL
+
+
+def test_display_url_appends_params_in_input_order() -> None:
+    from meshprovision.cache.http import _display_url
+
+    assert _display_url(URL, {"node": "ab446357"}) == f"{URL}?node=ab446357"
+    assert (
+        _display_url(URL, [("b", "2"), ("a", "1")]) == f"{URL}?b=2&a=1"
+    )  # order preserved, unlike cache_key's sort
+
+
+@respx.mock
+def test_fetch_log_line_includes_the_query_string(tmp_path: Path, caplog) -> None:
+    """Distinct per-node requests (lorastats.pl's ``?node=<hex>``) must log distinctly.
+
+    Regression test: the fetch log previously rendered only the bare
+    URL, so four distinct ``?node=`` requests during ``mesh status``
+    printed as four identical "fetching ..." lines.
+    """
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with caplog.at_level("INFO", logger="meshprovision.cache.http"):
+        client.get(URL, params={"node": "ab446357"})
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("node=ab446357" in message for message in messages)
+
+
+@respx.mock
+def test_fetch_log_line_has_no_trailing_question_mark_without_params(
+    tmp_path: Path, caplog
+) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with caplog.at_level("INFO", logger="meshprovision.cache.http"):
+        client.get(URL)
+
+    messages = [r.getMessage() for r in caplog.records if "fetching" in r.getMessage()]
+    assert messages
+    assert all("?" not in message for message in messages)
+
+
+# ---------------------------------------------------------------------------
 # Retry policy.
 # ---------------------------------------------------------------------------
 

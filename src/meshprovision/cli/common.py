@@ -409,22 +409,29 @@ def resolve_log_level(log_level: str | None, verbose: int) -> str | None:
     An explicit ``--log-level`` always wins, preserving the existing
     flag > environment > ``.env`` precedence (:func:`build_settings`
     layers whatever this returns the same way it already layered
-    ``log_level``). Otherwise, any ``-v`` implies ``DEBUG`` for this
-    project's own loggers; with neither given, ``None`` is returned so
-    the environment/``.env``/default layers decide, exactly as before
-    this flag existed.
+    ``log_level``). Otherwise, ``-v`` raises this project's own loggers
+    to ``INFO`` and ``-vv``/``-vvv`` to ``DEBUG`` (the extra count
+    beyond 2 has no further effect here -- it instead releases
+    third-party loggers, via :func:`_stage_third_party_loggers`); with
+    no flag and no ``-v`` at all, ``None`` is returned so the
+    environment/``.env``/default (``WARNING``) layers decide.
 
     Args:
         log_level: The raw ``--log-level`` value, or ``None``.
         verbose: The ``-v``/``--verbose`` count.
 
     Returns:
-        ``log_level`` unchanged when given; otherwise ``"DEBUG"`` if
-        ``verbose >= 1``; otherwise ``None``.
+        ``log_level`` unchanged when given; otherwise ``"INFO"`` if
+        ``verbose == 1``, ``"DEBUG"`` if ``verbose >= 2``; otherwise
+        ``None``.
     """
     if log_level is not None:
         return log_level
-    return "DEBUG" if verbose >= 1 else None
+    if verbose >= 2:
+        return "DEBUG"
+    if verbose == 1:
+        return "INFO"
+    return None
 
 
 def configure_logging(
@@ -463,7 +470,11 @@ def configure_logging(
             :func:`_stage_third_party_loggers`: ``0``/``1`` leave every
             name in :data:`_LIBRARY_STAGES` at WARNING; ``2`` releases
             ``meshtastic``/``httpx``; ``3`` also releases
-            ``bleak``/``httpcore``/``urllib3``.
+            ``bleak``/``httpcore``/``urllib3``. This only governs the
+            third-party loggers -- ``level`` itself (typically resolved
+            by :func:`resolve_log_level`, one rung ahead: ``-v`` ->
+            INFO, ``-vv``/``-vvv`` -> DEBUG) is what raises this
+            project's own loggers above the ``WARNING`` default.
 
     Raises:
         SchemaError: If ``level`` is not one of :data:`LOG_LEVELS`.

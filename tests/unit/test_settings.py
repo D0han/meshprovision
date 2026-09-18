@@ -161,7 +161,7 @@ def test_with_overrides_returns_new_revalidated_instance() -> None:
     updated = settings.with_overrides(log_level="debug")
     assert updated is not settings
     assert updated.log_level == "DEBUG"
-    assert settings.log_level == "INFO"
+    assert settings.log_level == "WARNING"
 
 
 def test_tilde_expansion_on_path_fields(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

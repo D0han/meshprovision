@@ -17,8 +17,8 @@ lines); logging, prompts, warnings, and errors all go to STDERR — so
 
 | Option | Meaning |
 |---|---|
-| `--log-level` | Logging verbosity (default: `MESHPROVISION_LOG_LEVEL`, else `INFO`) |
-| `-v`, `--verbose` | Increase log detail; repeatable. `-v`: this tool's own logs (`DEBUG`). `-vv`: also `meshtastic`/`httpx`. `-vvv`: also `bleak`/`httpcore`/`urllib3`. An explicit `--log-level` overrides `-v` |
+| `--log-level` | Logging verbosity (default: `MESHPROVISION_LOG_LEVEL`, else `WARNING`) |
+| `-v`, `--verbose` | Increase log detail; repeatable. `-v`: this tool's own logs (`INFO`). `-vv`: `DEBUG`, plus `meshtastic`/`httpx`. `-vvv`: also `bleak`/`httpcore`/`urllib3`. An explicit `--log-level` overrides `-v` |
 | `--db-path` | Override the ODS node database path |
 | `--template-path` | Override the provisioning template path |
 | `--cache-ttl` | HTTP response cache time-to-live, in seconds |

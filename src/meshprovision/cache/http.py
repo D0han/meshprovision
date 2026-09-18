@@ -68,6 +68,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import urlencode
 
 import httpx
 
@@ -144,6 +145,66 @@ _HTTP_SUCCESS_MIN: Final[int] = 200
 _HTTP_SUCCESS_MAX: Final[int] = 300
 
 
+def _param_pairs(
+    params: Mapping[str, object] | Sequence[tuple[str, object]] | None,
+) -> list[tuple[str, str]]:
+    """Coerce loose query params into ``(key, value)`` string pairs, in input order.
+
+    Shared by :func:`cache_key` (which sorts the result before hashing)
+    and :func:`_display_url` (which keeps input order, so a logged URL
+    reads like the request that actually went out).
+
+    Args:
+        params: Query parameters, as a mapping or a sequence of
+            ``(key, value)`` pairs. List/tuple values expand into one
+            pair per item; ``None`` becomes an empty string; ``bool``
+            becomes ``"true"``/``"false"``; everything else is
+            stringified.
+
+    Returns:
+        The coerced ``(key, value)`` pairs, in input order.
+    """
+    pairs: list[tuple[str, str]] = []
+    if not params:
+        return pairs
+    items = params.items() if isinstance(params, Mapping) else params
+    for raw_key, raw_value in items:
+        if isinstance(raw_value, (list, tuple)):
+            pairs.extend((str(raw_key), str(item)) for item in raw_value)
+        elif raw_value is None:
+            pairs.append((str(raw_key), ""))
+        elif isinstance(raw_value, bool):
+            pairs.append((str(raw_key), "true" if raw_value else "false"))
+        else:
+            pairs.append((str(raw_key), str(raw_value)))
+    return pairs
+
+
+def _display_url(
+    url: str, params: Mapping[str, object] | Sequence[tuple[str, object]] | None
+) -> str:
+    """Render ``url`` with ``params`` appended as a query string, for logging only.
+
+    Never used for the actual request (httpx handles that encoding) or
+    for the cache key (:func:`cache_key` sorts pairs; this preserves
+    input order instead, so distinct per-node requests -- e.g.
+    lorastats.pl's ``?node=<hex>`` -- read as distinct log lines).
+
+    Args:
+        url: The request URL, exactly as passed to the client.
+        params: Query parameters, in the same shape :func:`cache_key`
+            accepts.
+
+    Returns:
+        ``url`` unchanged if ``params`` is empty; otherwise ``url``
+        with a ``?``-prefixed, urlencoded query string appended.
+    """
+    pairs = _param_pairs(params)
+    if not pairs:
+        return url
+    return f"{url}?{urlencode(pairs)}"
+
+
 def cache_key(
     method: str,
     url: str,
@@ -169,19 +230,7 @@ def cache_key(
         A 64-character lowercase hex sha256 digest.
     """
     parts = [method.strip().upper(), url.strip()]
-    pairs: list[tuple[str, str]] = []
-    if params:
-        items = params.items() if isinstance(params, Mapping) else params
-        for raw_key, raw_value in items:
-            if isinstance(raw_value, (list, tuple)):
-                pairs.extend((str(raw_key), str(item)) for item in raw_value)
-            elif raw_value is None:
-                pairs.append((str(raw_key), ""))
-            elif isinstance(raw_value, bool):
-                pairs.append((str(raw_key), "true" if raw_value else "false"))
-            else:
-                pairs.append((str(raw_key), str(raw_value)))
-    parts.extend(f"{k}={v}" for k, v in sorted(pairs))
+    parts.extend(f"{k}={v}" for k, v in sorted(_param_pairs(params)))
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
@@ -979,9 +1028,10 @@ class CachedHTTPClient:
                 retried automatically).
         """
         last_exc: Exception | None = None
+        display_url = _display_url(url, params)
         for attempt in range(self._max_retries + 1):
             self._stats = replace(self._stats, network_requests=self._stats.network_requests + 1)
-            _logger.info("fetching %s %s (attempt %d)", method, url, attempt + 1)
+            _logger.info("fetching %s %s (attempt %d)", method, display_url, attempt + 1)
             try:
                 # `params` is typed `Mapping[str, object]` at this class's public
                 # boundary (any stringifiable value is accepted, matching
