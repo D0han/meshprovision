@@ -36,6 +36,7 @@ from meshprovision.cli.common import (
     build_settings,
     configure_logging,
     handle_cli_errors,
+    resolve_log_level,
     resolve_non_interactive,
 )
 from meshprovision.cli.db_cmd import db
@@ -59,6 +60,16 @@ themselves are declared lowercase to match."""
     type=click.Choice(_LOG_LEVEL_CHOICES, case_sensitive=False),
     default=None,
     help="Logging verbosity (default: MESHPROVISION_LOG_LEVEL, else INFO).",
+)
+@click.option(
+    "-v",
+    "--verbose",
+    count=True,
+    help=(
+        "Increase log detail; repeatable. -v: this tool's own logs (DEBUG). "
+        "-vv: also meshtastic/httpx. -vvv: also bleak/httpcore/urllib3. "
+        "Overridden by an explicit --log-level."
+    ),
 )
 @click.option(
     "--db-path",
@@ -108,6 +119,7 @@ def cli(
     ctx: click.Context,
     *,
     log_level: str | None,
+    verbose: int,
     db_path: Path | None,
     template_path: Path | None,
     cache_ttl: float | None,
@@ -129,6 +141,13 @@ def cli(
             subcommand receives via :data:`~meshprovision.cli.common.
             pass_cli`.
         log_level: Logging verbosity override, from ``--log-level``.
+            Wins over ``verbose`` when both are given -- see
+            :func:`~meshprovision.cli.common.resolve_log_level`.
+        verbose: The ``-v``/``--verbose`` count. With no explicit
+            ``--log-level``, any count implies ``DEBUG`` for this
+            project's own loggers; a count of 2 or 3 additionally
+            unmutes third-party loggers -- see
+            :func:`~meshprovision.cli.common.configure_logging`.
         db_path: ODS database path override, from ``--db-path``.
         template_path: Provisioning template path override, from
             ``--template-path``.
@@ -148,14 +167,15 @@ def cli(
         db_path=db_path,
         template_path=template_path,
         cache_ttl=cache_ttl,
-        log_level=log_level,
+        log_level=resolve_log_level(log_level, verbose),
     )
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, verbosity=verbose)
     cli_ctx = CliContext.build(
         settings=settings,
         non_interactive=resolve_non_interactive(non_interactive),
         force_refresh=no_cache or force_refresh,
         env_file=env_file,
+        verbosity=verbose,
     )
 
     outcome = maybe_offer_setup(cli_ctx, click_ctx=ctx)

@@ -440,6 +440,7 @@ lines); logging, prompts, warnings, and errors all go to STDERR -- so
 | Option | Meaning |
 |---|---|
 | `--log-level` | Logging verbosity (default: `MESHPROVISION_LOG_LEVEL`, else `INFO`) |
+| `-v`, `--verbose` | Increase log detail; repeatable. `-v`: this tool's own logs (`DEBUG`). `-vv`: also `meshtastic`/`httpx`. `-vvv`: also `bleak`/`httpcore`/`urllib3`. An explicit `--log-level` overrides `-v` |
 | `--db-path` | Override the ODS node database path |
 | `--template-path` | Override the provisioning template path |
 | `--cache-ttl` | HTTP response cache time-to-live, in seconds |
@@ -1159,8 +1160,14 @@ documented here rather than buried.
 
 ### General
 
-- Add `--log-level debug` (before the subcommand) for a full trace. Key
-  material is redacted at every log level.
+- Add `--log-level debug` (before the subcommand) for a full trace of
+  this tool's own logic. Key material is redacted at every log level.
+- A connect (BLE especially) hanging with no output? `mesh` always
+  prints a `Connecting over ...` line and a `still connecting... Ns /
+  Ms` heartbeat every 10s while it waits, so a stalled connect is
+  visible without any flag. For the underlying library's own trace, add
+  `-vv` (`meshtastic`/`httpx`) or `-vvv` (also `bleak`'s raw GATT
+  chatter) before the subcommand, e.g. `mesh -vvv adopt --ble-scan`.
 - `mesh db verify` after any hand-edit; `mesh --version` to confirm which
   build is on `PATH`; `which mesh` if you have more than one venv.
 

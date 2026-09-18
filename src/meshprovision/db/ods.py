@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import time
 import xml.parsers.expat
 import zipfile
 from collections.abc import Mapping, Sequence
@@ -713,6 +714,7 @@ def load_database(path: Path) -> LoadedDatabase:
         DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
         DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
     """
+    started = time.monotonic()
     raw = read_raw(path)
     for sheet_name in schema.SHEET_NAMES:
         if sheet_name not in raw.sheets:
@@ -728,6 +730,14 @@ def load_database(path: Path) -> LoadedDatabase:
     _check_unique_node_ids(nodes)
     _check_unique_key_refs(keys)
 
+    _logger.debug(
+        "Loaded %s in %.2fs: %d node(s), %d key(s), %d warning(s).",
+        path,
+        time.monotonic() - started,
+        len(nodes),
+        len(keys),
+        len(warnings),
+    )
     return LoadedDatabase(path=path, nodes=nodes, keys=keys, warnings=tuple(warnings))
 
 
@@ -1246,7 +1256,9 @@ class OdsDatabase:
             AtomicWriteError: If the write or backup fails.
         """
         if not self._is_dirty:
+            _logger.debug("save() called on a clean database; nothing to write.")
             return
+        started = time.monotonic()
         write_database(
             self._path,
             nodes=self._rows.get(schema.NODES_SHEET, ()),
@@ -1256,6 +1268,14 @@ class OdsDatabase:
             retention=self._retention,
         )
         self._is_dirty = False
+        _logger.debug(
+            "Saved %s in %.2fs (backup=%s): %d node(s), %d key(s).",
+            self._path,
+            time.monotonic() - started,
+            backup,
+            len(self._rows.get(schema.NODES_SHEET, ())),
+            len(self._rows.get(schema.KEYS_SHEET, ())),
+        )
 
     @classmethod
     def create(

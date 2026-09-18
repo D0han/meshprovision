@@ -158,8 +158,9 @@ class SerialBackend:
         from meshtastic.mesh_interface import MeshInterface
         from meshtastic.serial_interface import SerialInterface
 
+        _logger.debug("Connecting over serial to %s (timeout=%ss).", self.port, self.timeout)
         try:
-            return SerialInterface(devPath=self.port, timeout=self.timeout)
+            iface = SerialInterface(devPath=self.port, timeout=self.timeout)
         except (OSError, ValueError, RuntimeError, MeshInterface.MeshInterfaceError) as exc:
             raise ConnectionFailedError(
                 f"Failed to connect over serial to {self.port}: {exc}",
@@ -170,6 +171,8 @@ class SerialBackend:
                     "program, and that your user is in the 'dialout' group."
                 ),
             ) from exc
+        _logger.debug("Connected over serial to %s.", self.port)
+        return iface
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,11 +224,20 @@ class BLEBackend:
                 transport="ble",
                 hint=discovery.BLE_UNAVAILABLE_HINT,
             ) from exc
+        from bleak.exc import BleakError
         from meshtastic.mesh_interface import MeshInterface
 
+        _logger.debug("Connecting over BLE to %s (timeout=%ss).", self.address, self.timeout)
         try:
-            return BLEInterface(address=self.address, timeout=self.timeout)
-        except (OSError, ValueError, RuntimeError, MeshInterface.MeshInterfaceError) as exc:
+            iface = BLEInterface(address=self.address, timeout=self.timeout)
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            MeshInterface.MeshInterfaceError,
+            BLEInterface.BLEError,
+            BleakError,
+        ) as exc:
             raise ConnectionFailedError(
                 f"Failed to connect over BLE to {self.address}: {exc}",
                 transport="ble",
@@ -235,6 +247,8 @@ class BLEBackend:
                     "connected from another program."
                 ),
             ) from exc
+        _logger.debug("Connected over BLE to %s.", self.address)
+        return iface
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,8 +296,9 @@ class TCPBackend:
         from meshtastic.mesh_interface import MeshInterface
         from meshtastic.tcp_interface import TCPInterface
 
+        _logger.debug("Connecting over TCP to %s (timeout=%ss).", self.target, self.timeout)
         try:
-            return TCPInterface(hostname=self.host, portNumber=self.port, timeout=self.timeout)
+            iface = TCPInterface(hostname=self.host, portNumber=self.port, timeout=self.timeout)
         except (OSError, ValueError, RuntimeError, MeshInterface.MeshInterfaceError) as exc:
             raise ConnectionFailedError(
                 f"Failed to connect over TCP to {self.target}: {exc}",
@@ -291,6 +306,8 @@ class TCPBackend:
                 target=self.target,
                 hint="Check the host is reachable and the Meshtastic API port is open.",
             ) from exc
+        _logger.debug("Connected over TCP to %s.", self.target)
+        return iface
 
 
 @dataclass(frozen=True, slots=True)
@@ -581,6 +598,7 @@ def _choose_one(
             transport=transport,
             candidates=tuple(summaries),
         )
+    _logger.debug("Chose %s candidate %d of %d.", transport, index, len(summaries))
     return build(index)
 
 
@@ -627,6 +645,13 @@ def select_backend(
         UnsupportedTransportError: If ``request.interface`` names a
             transport outside :data:`TRANSPORTS`.
     """
+    _logger.debug(
+        "Selecting a backend: interface=%s explicit=%s serial_ports=%d ble_devices=%d",
+        request.interface,
+        _count_explicit_targets(request),
+        len(discovery_result.serial_ports),
+        len(discovery_result.ble_devices),
+    )
     explicit = _count_explicit_targets(request)
     if len(explicit) > 1:
         raise AmbiguousDeviceError(

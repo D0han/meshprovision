@@ -234,3 +234,28 @@ def test_end_to_end_log_output_never_leaks_key_material(
     assert kp.public.hex() not in output
     assert "<redacted" in output
     assert "a_pub" in output
+
+
+def test_unmuted_third_party_logger_at_max_verbosity_still_scrubs(
+    keypair_factory,
+) -> None:
+    """A third-party logger released by ``-vvv`` still runs through the redactor.
+
+    ``meshtastic``/``bleak`` are only unmuted at high ``-v`` counts
+    (:func:`meshprovision.cli.common._stage_third_party_loggers`) so that
+    library GATT/protobuf traces become visible -- but
+    :func:`meshprovision.crypto.redact.redact_processor` must still be
+    the last thing to touch those records before they render, exactly as
+    it is for this project's own loggers.
+    """
+    kp = keypair_factory()
+    buf = io.StringIO()
+    configure_logging("DEBUG", stream=buf, colors=False, verbosity=3)
+
+    logging.getLogger("bleak").debug("leaked %s", kp.public_b64)
+    logging.getLogger("meshtastic").debug("key=%s", SecretBytes(kp.private.reveal()))
+
+    output = buf.getvalue()
+    assert kp.public_b64 not in output
+    assert kp.private_b64() not in output
+    assert "<redacted" in output

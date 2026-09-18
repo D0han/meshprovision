@@ -42,6 +42,7 @@ check stays robust even if the exact convention differs on some hardware.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -76,6 +77,8 @@ __all__ = [
     "live_config_from_protobufs",
     "read_live_config",
 ]
+
+_logger = logging.getLogger(__name__)
 
 FACTORY_LONG_NAME_PREFIX: Final[str] = "Meshtastic "
 """Prefix of the firmware's factory-default ``long_name``."""
@@ -629,7 +632,7 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
 
         firmware_version = getattr(iface.metadata, "firmware_version", "") or ""
 
-        return live_config_from_protobufs(
+        live = live_config_from_protobufs(
             iface.localNode.localConfig,
             iface.localNode.moduleConfig,
             node_id=node_id,
@@ -639,6 +642,14 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
             hw_model_raw=hw_model_raw,
             firmware_version=firmware_version,
         )
+        _logger.debug(
+            "Read live config from %s: hw_model=%s (raw=%s) firmware=%s",
+            node_id.display,
+            hw_model or "?",
+            hw_model_raw,
+            firmware_version or "?",
+        )
+        return live
     except DetectionError:
         raise
     except (AttributeError, TypeError, ValueError, KeyError) as exc:

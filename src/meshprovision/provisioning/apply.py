@@ -582,6 +582,13 @@ def verify_plan(
     if admin_result is not None:
         results.append(admin_result)
 
+    confirmed = sum(1 for r in results if r.status == WriteStatus.CONFIRMED)
+    _logger.debug(
+        "Verified %d field(s): %d confirmed, %d unconfirmed.",
+        len(results),
+        confirmed,
+        len(results) - confirmed,
+    )
     return tuple(results)
 
 

@@ -116,6 +116,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `[ble,dev]` together, for a one-shot full development install.
 - README covering installation, the template and `.ods` walkthroughs, every
   command, the security model, and Linux Mint troubleshooting.
+- `-v`/`--verbose` (repeatable, global): `-v` raises this tool's own logs to
+  `DEBUG`; `-vv` additionally unmutes `meshtastic`/`httpx`; `-vvv` also
+  unmutes `bleak`/`httpcore`/`urllib3`. An explicit `--log-level` still wins.
+  Every connect (serial/BLE/TCP, including `mesh adopt`, which previously
+  printed nothing at all between device selection and its report) now prints
+  a `Connecting over ...` line and, while the connection is in flight, a
+  `still connecting... Ns / Ms` heartbeat every 10 seconds -- always on, not
+  gated behind `-v` -- so a stalled BLE connect (which can silently block for
+  several minutes inside the `meshtastic`/`bleak` libraries' own re-scans and
+  timeouts) is now visibly still alive rather than indistinguishable from a
+  hang.
 
 ### Fixed
 
@@ -347,6 +358,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   best-guess hint identifying a deleted, inserted, renamed, or
   reordered column plus how to roll back. A database with both sheets'
   headers mangled now reports both in one run instead of only the first.
+- `--log-level debug` could never actually surface `meshtastic`'s or
+  `bleak`'s own progress logging: the third-party noise floor used
+  `max(numeric_level, WARNING)`, which -- because a lower number means
+  more verbose -- can only ever raise the effective minimum, never lower
+  it, so requesting more detail than WARNING had no effect on those two
+  loggers. Fixed by the new `-vv`/`-vvv` staging described above; a plain
+  `--log-level debug` with no `-v` still leaves them at WARNING, matching
+  prior behavior exactly (see the `Added` entry for what changed).
+- `Ctrl-C` during a command (most notably a long, silent BLE connect) used
+  to exit with no message at all, indistinguishable from a hang or a crash.
+  It now prints `Interrupted.` to stderr before exiting, matching the
+  existing declined-prompt (`click.Abort` -> `Aborted.`) behavior.
+- A BLE connect failure raised directly by the `meshtastic`/`bleak`
+  libraries themselves (`BLEInterface.BLEError`, `bleak.exc.BleakError` --
+  for example "No Meshtastic BLE peripheral ... found" from the library's
+  own internal re-scan) used to escape as a raw, unredacted Python
+  traceback instead of the hinted `ConnectionFailedError` every other BLE
+  connect failure already produces. Both exception types are now caught
+  alongside the others.
 
 ### Security
 

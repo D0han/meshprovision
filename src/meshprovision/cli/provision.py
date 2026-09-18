@@ -46,6 +46,7 @@ from meshprovision.cli.common import (
     handle_cli_errors,
     pass_cli,
 )
+from meshprovision.cli.progress import heartbeat
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
 from meshprovision.crypto.redact import SecretBytes
@@ -71,6 +72,8 @@ from meshprovision.provisioning.pipeline import (
 )
 
 if TYPE_CHECKING:
+    from meshtastic.mesh_interface import MeshInterface
+
     from meshprovision.cli.common import CliContext, DbSession
     from meshprovision.config.template import TemplateConfig
 
@@ -78,6 +81,7 @@ __all__ = [
     "ProvisionOptions",
     "ProvisionResult",
     "TransportOptions",
+    "connected_with_progress",
     "device_session",
     "provision",
     "provisioning_options",
@@ -90,6 +94,44 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _backend_timeout(backend: connection.ConnectionBackend) -> float:
+    """Best-effort connect timeout for a backend, for heartbeat display only.
+
+    Every concrete backend (:class:`~meshprovision.provisioning.
+    connection.SerialBackend`/``BLEBackend``/``TCPBackend``) carries its
+    own ``timeout`` field, but :class:`~meshprovision.provisioning.
+    connection.ConnectionBackend` is a bare structural ``Protocol`` with
+    no such member, so a test double need not declare one. Falls back to
+    :data:`~meshprovision.provisioning.connection.DEFAULT_CONNECT_TIMEOUT`
+    -- this value is purely cosmetic (the heartbeat's "``/ Ns``" label);
+    it never enforces anything itself.
+
+    Args:
+        backend: The backend about to be connected.
+
+    Returns:
+        ``backend.timeout`` if present, else the default connect timeout.
+    """
+    return float(getattr(backend, "timeout", connection.DEFAULT_CONNECT_TIMEOUT))
+
+
+def _discover_ble_devices_with_progress(
+    ctx: CliContext, *, timeout: float
+) -> tuple[discovery.BleDeviceInfo, ...]:
+    """Scan for BLE devices with a heartbeat ticking through the wait.
+
+    Args:
+        ctx: The shared CLI context.
+        timeout: The scan duration, in seconds (``--ble-scan-timeout``).
+
+    Returns:
+        The discovered devices, per
+        :func:`~meshprovision.provisioning.discovery.discover_ble_devices`.
+    """
+    with heartbeat(ctx, "scanning", timeout=timeout):
+        return discovery.discover_ble_devices(timeout=timeout)
 
 
 @dataclass(frozen=True, slots=True)
@@ -361,7 +403,7 @@ def resolve_backend(ctx: CliContext, opts: TransportOptions) -> connection.Conne
 
     if opts.interface == "ble":
         ctx.info("Scanning for BLE devices...")
-        ble_devices = discovery.discover_ble_devices(timeout=opts.ble_scan_timeout)
+        ble_devices = _discover_ble_devices_with_progress(ctx, timeout=opts.ble_scan_timeout)
         return connection.select_backend(
             request, connection.DiscoveryResult(ble_devices=ble_devices), chooser=ctx.chooser
         )
@@ -371,7 +413,7 @@ def resolve_backend(ctx: CliContext, opts: TransportOptions) -> connection.Conne
 
     if opts.ble_scan:
         ctx.info("Scanning for BLE devices...")
-        ble_devices = discovery.discover_ble_devices(timeout=opts.ble_scan_timeout)
+        ble_devices = _discover_ble_devices_with_progress(ctx, timeout=opts.ble_scan_timeout)
         if not ble_devices:
             raise DeviceNotFoundError(
                 "No BLE device found.",
@@ -401,7 +443,7 @@ def resolve_backend(ctx: CliContext, opts: TransportOptions) -> connection.Conne
     if not ctx.non_interactive and ctx.confirm(
         "No serial device found. Scan for BLE devices?", default=True
     ):
-        ble_devices = discovery.discover_ble_devices(timeout=opts.ble_scan_timeout)
+        ble_devices = _discover_ble_devices_with_progress(ctx, timeout=opts.ble_scan_timeout)
         scanned_ble = ble_devices
     if scanned_ble:
         return connection.select_backend(
@@ -443,11 +485,51 @@ def device_session(
             "(weaker guarantee; see firmware issue #7449)."
         )
     session = apply.ReconnectingSession(backend=backend)
-    with session:
+    with heartbeat(ctx, "connecting", timeout=_backend_timeout(backend)):
+        session.open()
+    ctx.info("Connected.")
+    try:
         if no_reconnect:
             yield apply.InPlaceSession(session.interface)
         else:
             yield session
+    finally:
+        session.close()
+
+
+@contextlib.contextmanager
+def connected_with_progress(
+    ctx: CliContext, backend: connection.ConnectionBackend
+) -> Iterator[MeshInterface]:
+    """Connect once, with progress output, and always close on exit.
+
+    The read-only sibling of :func:`device_session`: like
+    :func:`meshprovision.provisioning.connection.connected`, but prints a
+    "Connecting over ..." line and ticks a :func:`~meshprovision.cli.
+    progress.heartbeat` while the (potentially multi-minute, entirely
+    silent) ``backend.connect()`` call is in flight. Used by ``mesh
+    adopt``, which -- unlike :func:`device_session` -- must never open a
+    :class:`~meshprovision.provisioning.apply.ReconnectingSession`: it is
+    strictly read-only against the device.
+
+    Args:
+        ctx: The shared CLI context, used to print progress.
+        backend: The resolved connection backend to open.
+
+    Yields:
+        The connected interface.
+
+    Raises:
+        ConnectionFailedError: If the connection attempt fails.
+    """
+    ctx.info(f"Connecting over {backend.describe()}...")
+    with heartbeat(ctx, "connecting", timeout=_backend_timeout(backend)):
+        iface = backend.connect()
+    ctx.info("Connected. Reading live config...")
+    try:
+        yield iface
+    finally:
+        connection.close_interface(iface)
 
 
 def render_plan(

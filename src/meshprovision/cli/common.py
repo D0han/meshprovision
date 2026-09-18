@@ -83,6 +83,7 @@ __all__ = [
     "handle_cli_errors",
     "help_requested",
     "pass_cli",
+    "resolve_log_level",
     "resolve_non_interactive",
 ]
 
@@ -304,11 +305,27 @@ class MeshGroup(MeshCommand, click.Group):
         return super().parse_args(ctx, args)
 
 
-_NOISY_WARNING_ONLY: Final[tuple[str, ...]] = ("httpcore", "bleak", "urllib3")
-"""Third-party loggers forced to WARNING regardless of the resolved level."""
+_LIBRARY_STAGES: Final[tuple[tuple[str, ...], ...]] = (
+    ("meshtastic", "httpx"),
+    ("bleak", "httpcore", "urllib3"),
+)
+"""Third-party loggers held back until ``-v`` reaches their stage.
 
-_NOISY_AT_LEAST_WARNING: Final[tuple[str, ...]] = ("httpx", "meshtastic")
-"""Third-party loggers floored at WARNING but allowed louder if requested."""
+Stage ``i`` (0-indexed) is released once ``--verbose``'s count is at least
+``i + 2`` -- i.e. the *second* ``-v`` (``-vv``) releases stage 0
+(``meshtastic``/``httpx``), and the *third* (``-vvv``) releases stage 1
+(``bleak``/``httpcore``/``urllib3``). Before release, stage 0 tracks the
+root level with a WARNING floor (``max(numeric_level, WARNING)`` -- the
+same pre-``-v`` behavior this project has always had: an explicit
+``--log-level error`` quiets these two further, but nothing quiets them
+below WARNING); stage 1 is pinned to exactly WARNING regardless of the
+root level, matching its pre-``-v`` behavior. Release itself is the new
+capability this stage table exists for -- previously nothing could ever
+make these *louder* than WARNING (the old ``max(numeric_level,
+WARNING)`` floor could only ever raise the effective minimum, never
+lower it), so ``--log-level debug`` alone could never surface library
+detail no matter how loud requested; ``-vv``/``-vvv`` now can.
+"""
 
 _ERR_CONSOLE: Final[Console] = Console(stderr=True)
 """Module-level stderr console used by :func:`_emit_error`."""
@@ -355,23 +372,66 @@ def _resolve_colors(colors: bool | None) -> bool:
         return False
 
 
-def _quiet_third_party_loggers(numeric_level: int) -> None:
-    """Floor noisy third-party loggers at WARNING regardless of ``--log-level``.
+def _stage_third_party_loggers(numeric_level: int, verbosity: int) -> None:
+    """Floor noisy third-party loggers at WARNING until ``-v`` releases them.
+
+    Each :data:`_LIBRARY_STAGES` entry is held back until ``verbosity``
+    reaches that stage's threshold, at which point it is set to
+    ``NOTSET`` so it inherits the root logger's own level instead --
+    ``--log-level warning -vvv`` therefore still means WARNING, while
+    plain ``-vvv`` (root at DEBUG, via :func:`resolve_log_level`) lets it
+    through at DEBUG. Before release, stage 0 (``meshtastic``/``httpx``)
+    is floored at ``max(numeric_level, WARNING)`` -- quietable below
+    WARNING by an explicit ``--log-level``, never raisable above it
+    without ``-vv`` -- and stage 1 (``bleak``/``httpcore``/``urllib3``)
+    is pinned to exactly WARNING.
 
     Args:
-        numeric_level: The resolved numeric level for the root logger,
-            used to keep ``httpx``/``meshtastic`` at least as verbose as
-            WARNING without ever making them quieter than the operator
-            asked for.
+        numeric_level: The resolved numeric level for the root logger.
+        verbosity: The ``-v``/``--verbose`` count.
     """
-    for name in _NOISY_WARNING_ONLY:
-        logging.getLogger(name).setLevel(logging.WARNING)
-    for name in _NOISY_AT_LEAST_WARNING:
-        logging.getLogger(name).setLevel(max(numeric_level, logging.WARNING))
+    for index, names in enumerate(_LIBRARY_STAGES):
+        released = verbosity >= index + 2
+        for name in names:
+            if released:
+                level = logging.NOTSET
+            elif index == 0:
+                level = max(numeric_level, logging.WARNING)
+            else:
+                level = logging.WARNING
+            logging.getLogger(name).setLevel(level)
+
+
+def resolve_log_level(log_level: str | None, verbose: int) -> str | None:
+    """Resolve the effective ``--log-level`` value from the flag and ``-v`` count.
+
+    An explicit ``--log-level`` always wins, preserving the existing
+    flag > environment > ``.env`` precedence (:func:`build_settings`
+    layers whatever this returns the same way it already layered
+    ``log_level``). Otherwise, any ``-v`` implies ``DEBUG`` for this
+    project's own loggers; with neither given, ``None`` is returned so
+    the environment/``.env``/default layers decide, exactly as before
+    this flag existed.
+
+    Args:
+        log_level: The raw ``--log-level`` value, or ``None``.
+        verbose: The ``-v``/``--verbose`` count.
+
+    Returns:
+        ``log_level`` unchanged when given; otherwise ``"DEBUG"`` if
+        ``verbose >= 1``; otherwise ``None``.
+    """
+    if log_level is not None:
+        return log_level
+    return "DEBUG" if verbose >= 1 else None
 
 
 def configure_logging(
-    level: str, *, stream: TextIO | None = None, colors: bool | None = None
+    level: str,
+    *,
+    stream: TextIO | None = None,
+    colors: bool | None = None,
+    verbosity: int = 0,
 ) -> None:
     """Configure the process-wide structlog + stdlib logging pipeline.
 
@@ -398,6 +458,11 @@ def configure_logging(
             ``sys.stderr``.
         colors: Whether to emit ANSI colors. ``None`` auto-detects from
             whether the target stream is a TTY.
+        verbosity: The ``-v``/``--verbose`` count, staged through
+            :func:`_stage_third_party_loggers`: ``0``/``1`` leave every
+            name in :data:`_LIBRARY_STAGES` at WARNING; ``2`` releases
+            ``meshtastic``/``httpx``; ``3`` also releases
+            ``bleak``/``httpcore``/``urllib3``.
 
     Raises:
         SchemaError: If ``level`` is not one of :data:`LOG_LEVELS`.
@@ -441,7 +506,7 @@ def configure_logging(
         cache_logger_on_first_use=False,
     )
 
-    _quiet_third_party_loggers(numeric_level)
+    _stage_third_party_loggers(numeric_level, verbosity)
 
 
 def resolve_non_interactive(flag: bool | None) -> bool:
@@ -546,13 +611,16 @@ def handle_cli_errors(func: Callable[P, R]) -> Callable[P, R | None]:
       and exits with the error's own mapped code.
     - ``click.Abort``: prints ``"Aborted."`` and exits
       :attr:`~meshprovision.errors.ExitCode.INTERRUPTED`.
-    - ``KeyboardInterrupt``: exits
-      :attr:`~meshprovision.errors.ExitCode.INTERRUPTED` silently. This
-      arm is the default backstop, not the only pattern: a command whose
-      Ctrl-C has domain-specific meaning catches it locally instead and
-      never reaches here -- ``mesh status --watch`` converts Ctrl-C into
-      the last observed fleet's exit code, because stopping a monitor
-      loop is the expected way to end it, not an abnormal interruption.
+    - ``KeyboardInterrupt``: prints ``"Interrupted."`` and exits
+      :attr:`~meshprovision.errors.ExitCode.INTERRUPTED`. A silent exit
+      here used to be indistinguishable from a hang or a crash --
+      especially after a long, quiet BLE connect -- so this arm now
+      matches ``click.Abort``'s. This arm is the default backstop, not
+      the only pattern: a command whose Ctrl-C has domain-specific
+      meaning catches it locally instead and never reaches here --
+      ``mesh status --watch`` converts Ctrl-C into the last observed
+      fleet's exit code, because stopping a monitor loop is the expected
+      way to end it, not an abnormal interruption.
     - ``OSError``: prints ``f"{type(exc).__name__}: {exc}"`` and exits
       :attr:`~meshprovision.errors.ExitCode.ERROR`.
 
@@ -582,6 +650,7 @@ def handle_cli_errors(func: Callable[P, R]) -> Callable[P, R | None]:
             _emit_error("Aborted.")
             raise SystemExit(int(ExitCode.INTERRUPTED)) from None
         except KeyboardInterrupt:
+            _emit_error("Interrupted.")
             raise SystemExit(int(ExitCode.INTERRUPTED)) from None
         except OSError as exc:
             _emit_error(f"{type(exc).__name__}: {exc}")
@@ -676,6 +745,11 @@ class CliContext:
             subcommand -- ``mesh init`` in particular -- can target the
             same ``.env`` path the root group would have read from,
             without redoing the upward search itself.
+        verbosity: The ``-v``/``--verbose`` count from the root group,
+            carried here so a command can size its own progress output
+            (e.g. how chatty a heartbeat should be) without re-deriving
+            it from ``settings.log_level``, which only reflects the
+            *resolved* level, not how many ``-v``s produced it.
     """
 
     settings: Settings
@@ -685,6 +759,7 @@ class CliContext:
     out: Console
     err: Console
     env_file: Path | None = None
+    verbosity: int = 0
 
     @classmethod
     def build(
@@ -694,6 +769,7 @@ class CliContext:
         non_interactive: bool,
         force_refresh: bool,
         env_file: Path | None = None,
+        verbosity: int = 0,
     ) -> CliContext:
         """Construct a :class:`CliContext` with fresh consoles and ``assume_yes=False``.
 
@@ -702,6 +778,7 @@ class CliContext:
             non_interactive: The resolved ``--non-interactive`` setting.
             force_refresh: The resolved cache-bypass setting.
             env_file: The explicit ``--env-file`` value, or ``None``.
+            verbosity: The ``-v``/``--verbose`` count from ``--verbose``.
 
         Returns:
             A new :class:`CliContext`.
@@ -714,6 +791,7 @@ class CliContext:
             out=Console(),
             err=Console(stderr=True),
             env_file=env_file,
+            verbosity=verbosity,
         )
 
     def with_assume_yes(self, value: bool) -> CliContext:

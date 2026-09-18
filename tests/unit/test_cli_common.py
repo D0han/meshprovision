@@ -121,10 +121,15 @@ def test_click_abort_prints_aborted_and_exits_interrupted(
     assert captured.out == ""
 
 
-def test_keyboard_interrupt_exits_interrupted_silently(
+def test_keyboard_interrupt_prints_interrupted_and_exits_interrupted(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``KeyboardInterrupt`` maps to INTERRUPTED without printing anything."""
+    """``KeyboardInterrupt`` is reported on stderr and mapped to INTERRUPTED.
+
+    A silent exit here is indistinguishable from a hang or a crash --
+    especially after a long, quiet BLE connect -- so this now matches
+    ``click.Abort``'s behavior instead of exiting without a trace.
+    """
 
     @handle_cli_errors
     def _command() -> None:
@@ -135,7 +140,7 @@ def test_keyboard_interrupt_exits_interrupted_silently(
 
     assert excinfo.value.code == int(ExitCode.INTERRUPTED)
     captured = capsys.readouterr()
-    assert captured.err == ""
+    assert "Interrupted." in captured.err
     assert captured.out == ""
 
 

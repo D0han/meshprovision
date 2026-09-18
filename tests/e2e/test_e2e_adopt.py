@@ -840,6 +840,52 @@ def test_declining_the_adopt_prompt_writes_nothing(
     assert db_fingerprint(db_path) == before
 
 
+def test_adopt_prints_connect_progress_over_ble(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """`mesh adopt --ble-scan` always announces the connect, with no flag needed.
+
+    It used to print nothing between device selection and its report -- the
+    whole connect was silent (see the ``-v``/progress CHANGELOG entry).
+    """
+    bus.use(FakeMeshInterface("deadbe01", short_name="AB01", long_name="Adopted Node 01"))
+
+    result = invoke(runner, ["adopt", "--ble-address", "AA:BB:CC:DD:EE:FF", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "Connecting over ble AA:BB:CC:DD:EE:FF..." in result.stderr
+    assert "Connected. Reading live config..." in result.stderr
+    # The heartbeat itself only ticks after its interval elapses, which the
+    # fake, instantaneous `connect()` never reaches -- covered directly in
+    # tests/unit/test_progress.py.
+
+
+def test_adopt_debug_logs_are_hidden_by_default_and_shown_with_verbose(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """This project's own DEBUG logs stay out of the default run and appear under `-v`.
+
+    Uses :func:`~meshprovision.provisioning.detect.read_live_config`'s own
+    debug log rather than a connection-backend one: the `bus` fixture
+    monkeypatches ``connect()`` at the class level (replacing it outright,
+    to inject :class:`FakeMeshInterface` without a real transport), so a
+    debug log *inside* the real ``connect()`` implementation would never
+    fire in this harness -- ``read_live_config`` runs unmodified against
+    the fake interface, same as the real connect path.
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+    needle = "Read live config from !deadbe01"
+
+    quiet = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert quiet.exit_code == 0
+    assert needle not in quiet.stderr
+
+    bus.use(FakeMeshInterface("deadbe02", short_name="AB02"))
+    verbose = invoke(runner, ["-v", "adopt", "--port", "/dev/ttyFAKE1", "--yes"], env)
+    assert verbose.exit_code == 0
+    assert "Read live config from !deadbe02" in verbose.stderr
+
+
 @dataclass(frozen=True)
 class _FleetSpec:
     node_id: str

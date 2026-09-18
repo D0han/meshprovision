@@ -25,7 +25,9 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import ipaddress
+import logging
 import re
+import time
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Final
@@ -34,6 +36,8 @@ from serial.tools import list_ports
 from serial.tools.list_ports_common import ListPortInfo
 
 from meshprovision.errors import ConnectionBackendError, UnsupportedTransportError
+
+_logger = logging.getLogger(__name__)
 
 __all__ = [
     "BLE_UNAVAILABLE_HINT",
@@ -301,7 +305,9 @@ def discover_serial_ports(*, include_all: bool = False) -> tuple[SerialPortInfo,
     infos = [_to_serial_port_info(port) for port in ports]
     if not include_all:
         infos = [info for info in infos if info.vid is None or info.vid not in EXCLUDED_VIDS]
-    return tuple(sorted(infos, key=lambda info: (not info.is_likely_meshtastic, info.device)))
+    result = tuple(sorted(infos, key=lambda info: (not info.is_likely_meshtastic, info.device)))
+    _logger.debug("Serial enumeration found %d port(s) (include_all=%s).", len(result), include_all)
+    return result
 
 
 def ble_available() -> bool:
@@ -370,10 +376,13 @@ def discover_ble_devices(
     if service_uuid is not None:
         kwargs["service_uuids"] = [service_uuid]
 
+    _logger.debug("BLE scan starting (timeout=%ss, service_uuid=%s).", timeout, service_uuid)
+    started = time.monotonic()
     try:
         result = asyncio.run(bleak.BleakScanner.discover(timeout=timeout, **kwargs))
     except (TimeoutError, BleakError, OSError, RuntimeError) as exc:
         raise ConnectionBackendError(f"BLE scan failed: {exc}", transport="ble") from exc
+    elapsed = time.monotonic() - started
 
     wanted_uuid = service_uuid.lower() if service_uuid is not None else None
     devices: list[BleDeviceInfo] = []
@@ -391,6 +400,12 @@ def discover_ble_devices(
         )
 
     devices.sort(key=lambda d: (-(d.rssi if d.rssi is not None else -999), d.address))
+    _logger.debug(
+        "BLE scan finished in %.1fs: %d raw device(s), %d matching service_uuid.",
+        elapsed,
+        len(result),
+        len(devices),
+    )
     return tuple(devices)
 
 

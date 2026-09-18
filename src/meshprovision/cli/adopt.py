@@ -3,9 +3,10 @@
 This module MUST NOT reference ``apply_plan``, ``ReconnectingSession``,
 ``InPlaceSession``, ``device_session``, ``writeConfig``, or ``setOwner`` --
 nothing here ever writes to a **device**. It connects through
-:func:`meshprovision.provisioning.connection.connected`, the plain
+:func:`meshprovision.cli.provision.connected_with_progress`, a plain
 connect/yield/close context manager (never a write-verification-oriented
-session), reads the device's live state via
+session) that additionally prints progress and a heartbeat while the
+connect is in flight, reads the device's live state via
 :func:`meshprovision.provisioning.detect.read_live_config`, and builds an
 :class:`~meshprovision.provisioning.adopt.AdoptionReport` through that
 module's pure logic.
@@ -33,7 +34,12 @@ from meshprovision.cli.common import (
     handle_cli_errors,
     pass_cli,
 )
-from meshprovision.cli.provision import TransportOptions, resolve_backend, transport_options
+from meshprovision.cli.provision import (
+    TransportOptions,
+    connected_with_progress,
+    resolve_backend,
+    transport_options,
+)
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
 from meshprovision.db.keys import KeyRecord
@@ -305,7 +311,7 @@ def adopt(
         )
         backend = resolve_backend(ctx, transport_opts)
 
-        with connection.connected(backend) as iface:
+        with connected_with_progress(ctx, backend) as iface:
             live = detect.read_live_config(iface)
 
         existing = db.nodes.find(live.node_id)
