@@ -44,6 +44,7 @@ def test_version_prints_package_version(runner: CliRunner, env: dict[str, str]) 
         ["status", "--help"],
         ["admin", "--help"],
         ["admin", "bootstrap", "--help"],
+        ["adopt", "--help"],
         ["db", "--help"],
         ["init", "--help"],
     ],
@@ -66,6 +67,7 @@ def test_unknown_subcommand_exits_two(runner: CliRunner, env: dict[str, str]) ->
         ["db", "verify", "--help"],
         ["provision", "--help"],
         ["admin", "bootstrap", "--help"],
+        ["adopt", "--help"],
         ["db", "backup", "--help"],
         ["template", "validate", "--help"],
     ],
@@ -131,3 +133,10 @@ def test_provision_and_bootstrap_share_an_identical_transport_surface() -> None:
     }
     for command in (provision, admin_bootstrap):
         assert shared <= {param.name for param in command.params}
+
+
+def test_adopt_help_lists_the_from_backup_surface(runner: CliRunner, env: dict[str, str]) -> None:
+    result = invoke(runner, ["adopt", "--help"], env)
+    assert result.exit_code == 0
+    for flag in ("--from-backup", "--node-id", "--no-lookup", "--no-channel-psk"):
+        assert flag in result.output

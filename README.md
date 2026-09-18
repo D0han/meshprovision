@@ -3,8 +3,9 @@
 Provisioning and read-only monitoring toolkit for Meshtastic mesh nodes on
 the Polish (PL) mesh. It provisions devices from a template over
 Serial/BLE/TCP, repairs configuration drift, tracks nodes and keys in a
-hand-editable ODS spreadsheet, and reports network health from
-[loranet.pl](https://loranet.pl) and [lorastats.pl](https://lorastats.pl).
+real, hand-editable ODS spreadsheet meant to be opened and corrected in
+LibreOffice — not hidden behind commands — and reports network health
+from [loranet.pl](https://loranet.pl) and [lorastats.pl](https://lorastats.pl).
 
 ## What it does
 
@@ -22,7 +23,10 @@ hand-editable ODS spreadsheet, and reports network health from
   import paths and pending-cross-authorization reporting.
 - A hand-editable ODS node database with real spreadsheet features:
   OpenFormula formulas for every derived column, dropdown validation,
-  and a frozen header row.
+  a frozen header row, and a free-form `notes` column that's yours
+  alone — nothing in the project ever writes to it. A known-good safety
+  copy is refreshed on every successful read or write, so a hand-edit
+  gone wrong is always recoverable via `mesh db restore --known-good`.
 - Strictly read-only network status reporting (`mesh status`), merging
   loranet.pl and lorastats.pl through a TTL disk cache.
 
@@ -61,7 +65,8 @@ covered in [Installation](docs/installation.md).
    patterns, and `admin_nodes`. See the
    [template walkthrough](docs/configuration.md#template-walkthrough-configtemplateyaml).
 3. `mesh db verify` — confirms the database loads, the schema validates,
-   and the key rows pass the weak-key audit.
+   and the key rows pass the weak-key audit. Run it after any hand-edit;
+   if it ever fails, `mesh db restore --known-good` undoes the edit.
 4. `mesh provision --dry-run --port /dev/ttyUSB0` — prints the exact
    change plan without writing to the device or the database.
 

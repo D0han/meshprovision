@@ -598,6 +598,133 @@ def test_db_restore_missing_backup_file_is_a_usage_error(
     assert result.exit_code == 2
 
 
+# --- the known-good safety copy ---------------------------------------------------
+
+
+def test_load_failure_hint_names_the_known_good_copy(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """The core remediation story: a hand-edit corruption's error points at the safety copy."""
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+
+    # Any successful load refreshes the known-good copy -- db verify is
+    # the documented post-hand-edit ritual, so use that one.
+    first = invoke(runner, ["db", "verify"], env)
+    assert first.exit_code == 0
+
+    # Simulate a hand-edit that destroys the file (a truncated/corrupted save).
+    db_path.write_bytes(b"not a zip file at all")
+
+    second = invoke(runner, ["db", "verify"], env)
+
+    assert second.exit_code == 4
+    assert "not a readable ODF spreadsheet" in second.stderr
+    assert "A known-good copy from" in second.stderr
+    assert "mesh db restore --known-good" in second.stderr
+
+
+def test_load_failure_with_no_known_good_copy_gets_no_extra_hint(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    """No prior successful load ever happened -- there is nothing to point at yet."""
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    db_path.write_bytes(b"not a zip file at all")
+
+    result = invoke(runner, ["db", "verify"], env)
+
+    assert result.exit_code == 4
+    assert "A known-good copy" not in result.stderr
+
+
+def test_db_restore_known_good_restores_it(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    good_bytes = db_path.read_bytes()
+
+    assert invoke(runner, ["db", "verify"], env).exit_code == 0  # refreshes the known-good copy
+    db_path.write_bytes(b"not a zip file at all")
+    assert invoke(runner, ["db", "verify"], env).exit_code == 4
+
+    result = invoke(runner, ["db", "restore", "--known-good", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert db_path.read_bytes() == good_bytes
+    assert invoke(runner, ["db", "verify"], env).exit_code == 0
+
+
+def test_db_restore_known_good_and_a_path_together_is_a_usage_error(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    invoke(runner, ["db", "verify"], env)
+    backup_dir = Path("data/backups")
+    known_good = backup_dir / f"{Path(env['MESHPROVISION_DB_PATH']).stem}.known-good.ods"
+
+    result = invoke(runner, ["db", "restore", str(known_good), "--known-good", "--yes"], env)
+
+    assert result.exit_code == 2
+    assert "not both" in result.stderr
+
+
+def test_db_restore_neither_a_path_nor_known_good_is_a_usage_error(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+
+    result = invoke(runner, ["db", "restore", "--yes"], env)
+
+    assert result.exit_code == 2
+
+
+def test_db_restore_known_good_with_none_yet_is_a_clear_error(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+
+    result = invoke(runner, ["db", "restore", "--known-good", "--yes"], env)
+
+    assert result.exit_code == 4
+    assert "No known-good copy exists yet" in result.stderr
+
+
+def test_db_backup_list_shows_the_known_good_line_when_present(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    invoke(runner, ["db", "verify"], env)  # refreshes the known-good copy at the default location
+
+    result = invoke(runner, ["db", "backup", "--list"], env)
+
+    assert result.exit_code == 0
+    assert "known-good:" in result.stdout
+
+    as_json = invoke(runner, ["db", "backup", "--list", "--json"], env)
+    document = json.loads(as_json.stdout)
+    assert "known_good" in document
+    assert document["known_good"]["size_bytes"] > 0
+
+
+def test_db_backup_list_omits_the_known_good_line_when_absent(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    custom_dir = tmp_path / "isolated-backups"
+
+    result = invoke(runner, ["db", "backup", "--list", "--backup-dir", str(custom_dir)], env)
+
+    assert result.exit_code == 0
+    assert "known-good:" not in result.stdout
+
+    as_json = invoke(
+        runner, ["db", "backup", "--list", "--backup-dir", str(custom_dir), "--json"], env
+    )
+    document = json.loads(as_json.stdout)
+    assert "known_good" not in document
+
+
 def test_db_list_json_reports_every_node(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:

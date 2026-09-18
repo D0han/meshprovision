@@ -2,17 +2,21 @@
 
 This module MUST NOT reference ``apply_plan``, ``ReconnectingSession``,
 ``InPlaceSession``, ``device_session``, ``writeConfig``, or ``setOwner`` --
-nothing here ever writes to a **device**. It connects through
-:func:`meshprovision.cli.provision.connected_with_progress`, a plain
-connect/yield/close context manager (never a write-verification-oriented
-session) that additionally prints progress and a heartbeat while the
-connect is in flight, reads the device's live state via
+nothing here ever writes to a **device**. For a live device, it connects
+through :func:`meshprovision.cli.provision.connected_with_progress`, a
+plain connect/yield/close context manager (never a write-verification-
+oriented session) that additionally prints progress and a heartbeat while
+the connect is in flight, reads the device's live state via
 :func:`meshprovision.provisioning.detect.read_live_config`, and builds an
 :class:`~meshprovision.provisioning.adopt.AdoptionReport` through that
-module's pure logic.
+module's pure logic. With ``--from-backup``, no device is touched at
+all -- the same :class:`~meshprovision.provisioning.detect.LiveConfig`
+shape is built instead from an exported Meshtastic app config backup via
+:func:`meshprovision.provisioning.backup.live_config_from_backup`, for a
+node that cannot currently be reached.
 
-Unlike ``cli/status.py`` -- which additionally guarantees the **database**
-is never touched -- this module legitimately uses ``OdsDatabase``,
+Unlike ``cli/status.py`` -- which additionally guarantees the **live
+database file** is never written to -- this module legitimately uses ``OdsDatabase``,
 ``NodeRepository``, ``KeyRepository``, ``ctx.open_database``, and
 ``upsert``: recording what was read from the device is this command's
 whole purpose. The guarantee this module keeps is narrower than
@@ -22,7 +26,9 @@ does write to the database.
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
@@ -42,18 +48,40 @@ from meshprovision.cli.provision import (
 )
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
+from meshprovision.datasources.loranet import LoranetSource
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyType, ManagementMode
-from meshprovision.errors import AdoptionRefusedError, KeyMaterialError, NodeArchivedError
+from meshprovision.errors import (
+    AdoptionRefusedError,
+    DataSourceError,
+    KeyMaterialError,
+    NodeArchivedError,
+    NodeIdentityError,
+)
+from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import adopt as adopt_mod
+from meshprovision.provisioning import backup as backup_mod
 from meshprovision.provisioning import connection, detect, observed_keys
 from meshprovision.provisioning.key_registry import adopt_canonical_ref, register_observed_key
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
+    from meshprovision.db.keys import KeyRepository
     from meshprovision.db.nodes import NodeRepository
 
 __all__ = ["adopt"]
+
+_TRANSPORT_FLAG_NAMES = "--port/--ble-address/--ble-scan/--host/--interface"
+
+_AES256_PSK_LENGTH = 32
+"""The only channel-PSK byte length this project's Keys sheet can hold.
+
+A firmware channel PSK also comes in a 0-byte (no encryption), 1-byte
+("default" preset, an index into a firmware-side table, not real key
+material), or 16-byte (AES128) form -- none of which fit the
+:data:`~meshprovision.crypto.keys.X25519_KEY_SIZE`-shaped ``BASE64_KEY``
+column every other ``Keys`` sheet row already uses.
+"""
 
 
 def _duplicate_name_warnings(
@@ -218,8 +246,271 @@ def _render_admin_key_lines(
     )
 
 
+def _own_keypair_warnings(
+    live: detect.LiveConfig, *, known_bad: frozenset[bytes]
+) -> tuple[str, ...]:
+    """Audit a node's own public/private keypair, when a backup reports both.
+
+    A ``.cfg``/``.yaml`` backup is the one place ``mesh adopt`` ever sees
+    a node's *private* key without touching the device (a live device
+    also reports it, but ``build_adoption_report`` has never audited it --
+    only the device's *admin* keys). :func:`~meshprovision.crypto.weakkeys.
+    audit_keypair` covers both the structural/blocklist battery and the
+    public-derived-from-private consistency check (firmware issue
+    #7449) in one call.
+
+    Args:
+        live: The backup's normalized live configuration.
+        known_bad: The loaded weak-key blocklist.
+
+    Returns:
+        Zero or one warning line. Silently does nothing when either key
+        is absent (nothing to audit) or malformed (already surfaced
+        elsewhere; :func:`~meshprovision.crypto.weakkeys.audit_keypair`
+        itself would raise on a non-32-byte key, which
+        :mod:`meshprovision.provisioning.detect` never guarantees).
+    """
+    public = live.security.public_key
+    private = live.security.private_key
+    if public is None or private is None:
+        return ()
+    try:
+        audit = weakkeys.audit_keypair(
+            private, public, node_id=live.node_id.display, known_bad=known_bad
+        )
+    except KeyMaterialError:
+        return ()
+    if not audit.findings:
+        return ()
+    return (f"the node's own keypair failed the weak-key audit: {audit.summary()}",)
+
+
+def _suggest_node_ids(ctx: CliContext, long_name: str) -> tuple[NodeId, ...]:
+    """Search loranet for nodes named ``long_name``, for a ``--node-id`` hint.
+
+    loranet is the only name-searchable source (see
+    :mod:`meshprovision.provisioning.backup`'s module docstring for why
+    lorastats cannot be); a dead or unreachable source degrades to "no
+    suggestion" with a warning, never an error -- this hint is a
+    convenience on top of an already-failing resolution, not something
+    worth failing harder over. Never bypasses the HTTP cache
+    (``force_refresh`` is never set), so a warm cache costs zero network
+    calls.
+
+    Args:
+        ctx: The shared CLI context, used to build the HTTP client and
+            print the degraded-source warning.
+        long_name: The backup's ``long_name`` to search for.
+
+    Returns:
+        Every matching node id, per
+        :func:`meshprovision.provisioning.backup.suggest_node_ids_by_name`.
+        Empty if the lookup failed or found nothing.
+    """
+    try:
+        with ctx.http_client(require_contact=False) as client:
+            observations = LoranetSource(client).fetch_all()
+    except DataSourceError as exc:
+        ctx.warn(f"loranet lookup for a --node-id suggestion failed, skipping: {exc.message}")
+        return ()
+    return backup_mod.suggest_node_ids_by_name(observations, long_name=long_name)
+
+
+def resolve_node_id(
+    ctx: CliContext,
+    bundle: backup_mod.BackupBundle,
+    *,
+    node_id_opt: str | None,
+    db_keys: KeyRepository,
+    no_lookup: bool,
+    force: bool,
+) -> NodeId:
+    """Resolve the authoritative node id for a ``--from-backup`` adopt.
+
+    A backup file never asserts its own node id with any authority (a
+    ``.cfg`` carries none at all; a node-db export's ``myNodeNum`` is
+    exactly the kind of self-reported value a hand-edited or mismatched
+    file could get wrong) -- so unlike a live device (whose id comes
+    straight off the connected interface's own handshake), this
+    resolution never trusts a single unconfirmed source. Precedence,
+    each strictly stronger evidence than the next:
+
+    1. ``--node-id`` -- an explicit operator assertion.
+    2. A ``Keys`` sheet public-key match -- the backup's own public key
+       equals an already-registered, non-``observed-*`` ``<id>_pub``
+       row: a cryptographic binding to a node already in the database.
+    3. A paired node-db export's ``myNodeNum``.
+    4. (Advisory only, via :func:`_suggest_node_ids`) A loranet
+       long-name match -- never sufficient on its own; only ever
+       produces a ``--node-id`` hint on the raised error.
+
+    Args:
+        ctx: The shared CLI context.
+        bundle: The merged backup bundle.
+        node_id_opt: The raw ``--node-id`` value, or ``None``.
+        db_keys: The open ``Keys`` sheet repository.
+        no_lookup: Whether to skip the loranet long-name suggestion.
+        force: Whether to proceed despite conflicting evidence, per the
+            precedence order above, instead of refusing.
+
+    Returns:
+        The resolved :class:`~meshprovision.nodeid.NodeId`.
+
+    Raises:
+        NodeIdentityError: If nothing above resolves a node id, or two
+            of (1)-(3) resolve to different ids and ``force`` is
+            ``False``.
+    """
+    explicit = NodeId.parse(node_id_opt) if node_id_opt is not None else None
+
+    pubkey_match: NodeId | None = None
+    if bundle.public_key is not None:
+        for ref, material in db_keys.public_key_map().items():
+            if material != bundle.public_key:
+                continue
+            candidate = NodeId.try_parse(ref.removesuffix("_pub"))
+            if candidate is not None:
+                pubkey_match = candidate
+                break
+
+    nodedb_id = bundle.nodedb_entry.node_id if bundle.nodedb_entry is not None else None
+
+    candidates: dict[str, NodeId] = {
+        label: value
+        for label, value in (
+            ("--node-id", explicit),
+            ("a registered public key", pubkey_match),
+            ("the node-db export's myNodeNum", nodedb_id),
+        )
+        if value is not None
+    }
+    if len({value.num for value in candidates.values()}) > 1 and not force:
+        detail = "; ".join(f"{label} says {value.display}" for label, value in candidates.items())
+        raise NodeIdentityError(
+            f"Conflicting node id evidence: {detail}.",
+            candidates=tuple(value.display for value in candidates.values()),
+            hint="Pass --force to proceed anyway (uses the highest-precedence source: "
+            "--node-id, then a public-key match, then myNodeNum).",
+        )
+
+    if explicit is not None:
+        return explicit
+    if pubkey_match is not None:
+        return pubkey_match
+    if nodedb_id is not None:
+        return nodedb_id
+
+    if not no_lookup and bundle.long_name:
+        suggestions = _suggest_node_ids(ctx, bundle.long_name)
+        if suggestions:
+            names = ", ".join(node_id.display for node_id in suggestions)
+            raise NodeIdentityError(
+                "Could not determine this node's id from the backup file(s), but loranet "
+                f"has {len(suggestions)} node(s) named {bundle.long_name!r}: {names}.",
+                candidates=tuple(node_id.display for node_id in suggestions),
+                hint=(
+                    f"Re-run with --node-id {suggestions[0].display} once you've confirmed "
+                    "it's this node."
+                ),
+            )
+
+    raise NodeIdentityError(
+        "Could not determine this node's id from the backup file(s): no --node-id was given, "
+        "no public key in the backup matched a node already in the database, and no paired "
+        "node-db export provided myNodeNum.",
+        hint="Pass --node-id explicitly, e.g. --node-id !a0cb5cc4.",
+    )
+
+
+def _load_backup_bundle(
+    ctx: CliContext,
+    paths: tuple[Path, ...],
+    *,
+    db_keys: KeyRepository,
+    node_id_opt: str | None,
+    no_lookup: bool,
+    force: bool,
+) -> tuple[backup_mod.BackupBundle, NodeId]:
+    """Load and merge every ``--from-backup`` file, then resolve its node id.
+
+    Args:
+        ctx: The shared CLI context.
+        paths: Every ``--from-backup`` path, in the order given.
+        db_keys: The open ``Keys`` sheet repository.
+        node_id_opt: The raw ``--node-id`` value, or ``None``.
+        no_lookup: Whether to skip the loranet long-name suggestion.
+        force: Whether to proceed despite conflicting node-id evidence.
+
+    Returns:
+        ``(bundle, node_id)``.
+
+    Raises:
+        click.UsageError: If more than one profile file, or more than
+            one node-db file, was given.
+        meshprovision.errors.BackupParseError: If a file cannot be read
+            or parsed, or two backups disagree about which node they
+            describe.
+        NodeIdentityError: See :func:`resolve_node_id`.
+    """
+    profile: backup_mod.ProfileBackup | None = None
+    nodedb: backup_mod.NodeDbBackup | None = None
+    for path in paths:
+        parsed = backup_mod.load_backup(path)
+        if isinstance(parsed, backup_mod.ProfileBackup):
+            if profile is not None:
+                raise click.UsageError(
+                    f"--from-backup was given two profile files: {profile.source} and "
+                    f"{parsed.source}."
+                )
+            profile = parsed
+        else:
+            if nodedb is not None:
+                raise click.UsageError(
+                    f"--from-backup was given two node-db exports: {nodedb.source} and "
+                    f"{parsed.source}."
+                )
+            nodedb = parsed
+
+    bundle = backup_mod.merge_backups(profile=profile, nodedb=nodedb)
+    node_id = resolve_node_id(
+        ctx, bundle, node_id_opt=node_id_opt, db_keys=db_keys, no_lookup=no_lookup, force=force
+    )
+    return bundle, node_id
+
+
 @click.command(name="adopt", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
 @transport_options
+@click.option(
+    "--from-backup",
+    "backup_paths",
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    metavar="PATH",
+    help=(
+        "Adopt from an exported Meshtastic app config backup instead of a device -- "
+        f"mutually exclusive with {_TRANSPORT_FLAG_NAMES}. Repeatable: pass a .cfg/.yaml "
+        "profile and/or a node-db JSON export; format is auto-detected."
+    ),
+)
+@click.option(
+    "--node-id",
+    "node_id_opt",
+    default=None,
+    metavar="ID",
+    help="Authoritative node id for --from-backup (any form NodeId.parse accepts).",
+)
+@click.option(
+    "--no-lookup",
+    is_flag=True,
+    default=False,
+    help="With --from-backup, skip the loranet long-name lookup used to suggest --node-id.",
+)
+@click.option(
+    "--no-channel-psk",
+    is_flag=True,
+    default=False,
+    help="With --from-backup, do not record the channel PSK decoded from channel_url.",
+)
 @click.option(
     "--dry-run",
     is_flag=True,
@@ -256,6 +547,10 @@ def adopt(
     interface: str | None,
     timeout: int,
     ble_scan_timeout: float,
+    backup_paths: tuple[Path, ...],
+    node_id_opt: str | None,
+    no_lookup: bool,
+    no_channel_psk: bool,
     dry_run: bool,
     yes: bool,
     json_output: bool,
@@ -270,6 +565,16 @@ def adopt(
     against or writes to the device; a later ``mesh provision --enroll``
     is required before the node is touched by template enforcement.
 
+    With ``--from-backup``, no device is touched at all: the same report
+    and write path is driven instead by an exported Meshtastic app config
+    backup (a ``.cfg``/``.yaml`` ``DeviceProfile``, a node-db JSON export,
+    or one of each -- see :mod:`meshprovision.provisioning.backup`), for
+    a node the operator owns but cannot currently reach. A backup never
+    asserts its own node id with authority, so one must be resolved from
+    ``--node-id``, a ``Keys`` sheet public-key match, or a paired node-db
+    export's ``myNodeNum`` -- see :func:`resolve_node_id`; a bare
+    long-name match is only ever offered as a hint, never used to adopt.
+
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
             cli.common.pass_cli`.
@@ -280,39 +585,91 @@ def adopt(
         interface: Forced transport name, from ``--interface``.
         timeout: Connect timeout, in seconds, from ``--timeout``.
         ble_scan_timeout: BLE scan duration, from ``--ble-scan-timeout``.
+        backup_paths: Backup file(s) to adopt from, from ``--from-backup``.
+            Empty means adopt from a live device, as before.
+        node_id_opt: The raw ``--node-id`` value, or ``None``.
+        no_lookup: Whether to skip the loranet long-name suggestion, from
+            ``--no-lookup``.
+        no_channel_psk: Whether to skip recording a decoded channel PSK,
+            from ``--no-channel-psk``.
         dry_run: Whether to skip the database write, from ``--dry-run``.
         yes: Whether to assume yes to confirmations, from ``-y``/``--yes``.
         json_output: Whether to emit JSON, from ``--json``.
         force: Whether to allow re-adopting (demoting) a template-managed
-            node, from ``--force``.
+            node, and to proceed despite conflicting ``--from-backup``
+            node-id evidence, from ``--force``.
         show_admin_keys: Whether to print import-ready admin key material,
             from ``--show-admin-keys``.
 
     Raises:
+        click.UsageError: If ``--from-backup`` is combined with a
+            transport flag, if ``--node-id`` is passed without
+            ``--from-backup``, or if ``--from-backup`` is given more than
+            one profile file or more than one node-db file.
+        meshprovision.errors.BackupParseError: If a ``--from-backup`` file
+            cannot be read or parsed, or two backup files disagree about
+            which node they describe.
+        NodeIdentityError: If ``--from-backup``'s node id cannot be
+            resolved, or resolves ambiguously and ``--force`` was not
+            passed. See :func:`resolve_node_id`.
         NodeArchivedError: If the node's database record was archived
             via ``mesh db forget`` -- not bypassable with ``--force``.
         AdoptionRefusedError: If the node's database record is already
             ``management=template`` and ``--force`` was not passed.
         click.Abort: If the operator declines the confirmation prompt.
     """
+    transport_given = any((port, ble_address, ble_scan, host, interface))
+    if backup_paths and transport_given:
+        raise click.UsageError(f"--from-backup cannot be combined with {_TRANSPORT_FLAG_NAMES}.")
+    if node_id_opt is not None and not backup_paths:
+        raise click.UsageError("--node-id only applies together with --from-backup.")
+
     ctx = ctx.with_assume_yes(yes)
     template = ctx.load_template()
 
     with ctx.open_database(for_write=not dry_run) as db:
         known_bad = weakkeys.load_known_bad_keys()
-        transport_opts = TransportOptions(
-            interface=connection.Transport(interface) if interface is not None else None,
-            port=port,
-            ble_address=ble_address,
-            ble_scan=ble_scan,
-            host=host,
-            timeout=timeout,
-            ble_scan_timeout=ble_scan_timeout,
-        )
-        backend = resolve_backend(ctx, transport_opts)
+        channel: backup_mod.ChannelInfo | None = None
+        fixed_position: backup_mod.FixedPosition | None = None
+        extra_warnings: tuple[str, ...] = ()
 
-        with connected_with_progress(ctx, backend) as iface:
-            live = detect.read_live_config(iface)
+        if backup_paths:
+            bundle, node_id = _load_backup_bundle(
+                ctx,
+                backup_paths,
+                db_keys=db.keys,
+                node_id_opt=node_id_opt,
+                no_lookup=no_lookup,
+                force=force,
+            )
+            live = backup_mod.live_config_from_backup(bundle, node_id=node_id)
+            fixed_position = bundle.fixed_position
+            extra_warnings = (*bundle.warnings, *_own_keypair_warnings(live, known_bad=known_bad))
+            if not no_channel_psk and bundle.channel is not None:
+                channel = bundle.channel
+                if len(channel.psk) != _AES256_PSK_LENGTH:
+                    extra_warnings = (
+                        *extra_warnings,
+                        f"channel {channel.name!r} PSK is {len(channel.psk)} byte(s), not the "
+                        "32-byte AES256 form this project's Keys sheet can hold (a 1-byte PSK "
+                        "is a firmware preset index, not real key material; 16 bytes is "
+                        "AES128); channel_psk not recorded.",
+                    )
+                    channel = None
+        else:
+            transport_opts = TransportOptions(
+                interface=connection.Transport(interface) if interface is not None else None,
+                port=port,
+                ble_address=ble_address,
+                ble_scan=ble_scan,
+                host=host,
+                timeout=timeout,
+                ble_scan_timeout=ble_scan_timeout,
+            )
+            backend = resolve_backend(ctx, transport_opts)
+
+            with connected_with_progress(ctx, backend) as iface:
+                live = detect.read_live_config(iface)
 
         existing = db.nodes.find(live.node_id)
         if existing is not None and existing.is_archived:
@@ -335,6 +692,15 @@ def adopt(
             template=template,
             known_bad=known_bad,
         )
+        if backup_paths:
+            report = dataclasses.replace(
+                report,
+                source=f"backup: {', '.join(str(path) for path in backup_paths)}",
+                gps_lat=fixed_position.latitude if fixed_position is not None else None,
+                gps_lon=fixed_position.longitude if fixed_position is not None else None,
+                gps_alt=fixed_position.altitude if fixed_position is not None else None,
+                warnings=(*report.warnings, *extra_warnings),
+            )
 
         duplicate_warnings = _duplicate_name_warnings(
             db.nodes,
@@ -410,6 +776,18 @@ def adopt(
             # before its real owner was known.
             adopt_canonical_ref(
                 db.nodes, db.keys, material=node_public, canonical_owner=live.node_id.hex
+            )
+
+        # A --from-backup profile's channel_url, decoded to its primary
+        # channel's PSK -- only ever a 32-byte AES256 key (see the
+        # channel/no-channel-psk handling above): a 1-byte "default"
+        # preset or 16-byte AES128 PSK cannot round-trip through this
+        # column, which was built for X25519-sized (32-byte) material.
+        if channel is not None:
+            db.keys.upsert(
+                KeyRecord.from_material(
+                    live.node_id.hex, KeyType.CHANNEL_PSK, channel.psk, created_ts=now
+                )
             )
 
         # Every admin key the device reports that resolved to no Keys

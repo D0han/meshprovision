@@ -300,6 +300,7 @@ def test_read_only_guarantee_across_run_modes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    from meshprovision.db import atomic_writer
     from meshprovision.db.nodes import NodeRecord
 
     node_hex = _seed_one_node(seed_db, NodeRecord)
@@ -311,8 +312,18 @@ def test_read_only_guarantee_across_run_modes(
         invoke(runner, ["status"], env)
         assert db_fingerprint(db_path) == before
 
+        # The one intended exception: a successful load refreshes the
+        # known-good safety copy (a side-channel file, never a write to
+        # the live database itself -- see load_database()'s docstring).
+        known_good = atomic_writer.known_good_info(db_path)
+        assert known_good is not None
+        first_known_good_mtime = known_good.path.stat().st_mtime
+
         invoke(runner, ["status", "--json"], env)
         assert db_fingerprint(db_path) == before
+        # Unchanged database -> the refresh is a no-op stat() call, not a
+        # rewrite (see refresh_known_good()'s mtime-skip).
+        assert known_good.path.stat().st_mtime == first_known_good_mtime
 
         calls = {"n": 0}
 
@@ -326,7 +337,8 @@ def test_read_only_guarantee_across_run_modes(
         assert db_fingerprint(db_path) == before
 
     backups_dir = tmp_path / "data" / "backups"
-    assert not backups_dir.exists() or not any(backups_dir.iterdir())
+    assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
+    assert [p.resolve() for p in backups_dir.iterdir()] == [known_good.path.resolve()]
 
 
 def test_missing_contact_exits_two(runner: CliRunner, env: dict[str, str]) -> None:

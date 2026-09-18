@@ -157,8 +157,13 @@ def test_transactional_write_failure_drop_security_keys(
     loaded = ods.load_database(db_path)
     assert len(loaded.keys) == 0
 
+    # No *timestamped* backup was created -- the write never got far
+    # enough to call atomic_write()'s pre-write backup+replace. The
+    # earlier read (inside open_database) does refresh the known-good
+    # safety copy, per load_database()'s own contract -- that is
+    # expected, not a leak of this refused write.
     backups_dir = tmp_path / "data" / "backups"
-    assert not backups_dir.exists() or not any(backups_dir.iterdir())
+    assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
 
 
 def test_observed_node_is_refused_without_enroll(
@@ -210,8 +215,13 @@ def test_post_reconnect_verify_read_failure_leaves_the_database_untouched(
     assert "the database was NOT updated" in result.stderr
     assert db_fingerprint(db_path) == before
 
+    # No *timestamped* backup was created -- the write never got far
+    # enough to call atomic_write()'s pre-write backup+replace. The
+    # earlier read (inside open_database) does refresh the known-good
+    # safety copy, per load_database()'s own contract -- that is
+    # expected, not a leak of this refused write.
     backups_dir = tmp_path / "data" / "backups"
-    assert not backups_dir.exists() or not any(backups_dir.iterdir())
+    assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
 
 
 def test_transactional_write_failure_section_raises(
@@ -228,5 +238,10 @@ def test_transactional_write_failure_section_raises(
     assert "the database was NOT updated" in result.stderr
     assert db_fingerprint(db_path) == before
 
+    # No *timestamped* backup was created -- the write never got far
+    # enough to call atomic_write()'s pre-write backup+replace. The
+    # earlier read (inside open_database) does refresh the known-good
+    # safety copy, per load_database()'s own contract -- that is
+    # expected, not a leak of this refused write.
     backups_dir = tmp_path / "data" / "backups"
-    assert not backups_dir.exists() or not any(backups_dir.iterdir())
+    assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))

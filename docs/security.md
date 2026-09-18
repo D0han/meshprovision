@@ -128,6 +128,11 @@ it private key material. Override the file's location with
   admin key the device reports that isn't yet in the `Keys` sheet. It is
   off by default; without it, an unregistered admin key is reported by
   fingerprint only, in both human and `--json` output.
+- `mesh adopt --from-backup`'s report follows the same rule as a
+  live-device adopt: the node's own keypair and any decoded channel PSK
+  are never rendered raw, in human or `--json` output — only fingerprints
+  and a weak-key-audit summary (see [`mesh adopt`](commands.md#mesh-adopt)).
+  The **input file itself** is a different matter — see the table below.
 
 ## Sensitive vs example files
 
@@ -139,9 +144,10 @@ it private key material. Override the file's location with
 | `config/template.yaml` | IGNORED | Your operational template |
 | `data/nodes_db.example.ods` | tracked | Fake nodes, ASCII placeholder "keys" |
 | `data/nodes_db.ods` | IGNORED | Your real database — contains live private keys and BLE PINs |
-| `data/backups/` | IGNORED (except `.gitkeep`) | Timestamped database backups |
+| `data/backups/` | IGNORED (except `.gitkeep`) | Timestamped database backups, plus the single `nodes_db.known-good.ods` safety copy (same directory, same `0700`/`0600` treatment, same ignore rule — see [Recovering from a bad hand-edit](database.md#recovering-from-a-bad-hand-edit)) |
 | `data/known_bad_keys.txt` | tracked | Public small-order X25519 points; no private material |
 | `.cache/` and the platform cache dir | IGNORED | HTTP TTL response cache |
+| A Meshtastic app `.cfg`/`.yaml`/node-db `.json` backup (for `mesh adopt --from-backup`) | never tracked; not covered by `.gitignore` since it can live anywhere | A `.cfg`/`.yaml` profile carries the node's **private key** and, when set, a channel PSK, both in clear — treat it exactly like `data/nodes_db.ods`. Keep it outside the repo, or under a path your own `.gitignore` already excludes |
 | `*.key`, `*.pem`, `secrets/`, `*.log`, `logs/`, `*.ods.bak` | IGNORED | Never commit |
 
 This is enforced by three independent layers: (1) `.gitignore`, (2) the

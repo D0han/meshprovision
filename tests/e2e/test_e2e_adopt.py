@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from meshtastic.protobuf import apponly_pb2, clientonly_pb2, config_pb2
 
 from meshprovision.crypto.keys import encode_key
 from meshprovision.db import ods
@@ -1084,3 +1085,517 @@ def test_adopt_survives_a_hung_ble_close(
     nodes = [NodeRecord.from_row(row) for row in loaded.nodes]
     assert len(nodes) == 1
     assert nodes[0].node_id == "deadbe01"
+
+
+# --- mesh adopt --from-backup ---------------------------------------------------
+
+
+def _write_profile_cfg(
+    path: Path,
+    *,
+    long_name: str = "Meshtastic MT01",
+    short_name: str = "MT01",
+    channel_url: str = "",
+    public_key: bytes = b"",
+    private_key: bytes = b"",
+) -> Path:
+    """Write a synthetic ``.cfg`` ``DeviceProfile`` backup to ``path``."""
+    profile = clientonly_pb2.DeviceProfile()
+    profile.long_name = long_name
+    profile.short_name = short_name
+    if channel_url:
+        profile.channel_url = channel_url
+    profile.config.lora.region = config_pb2.Config.LoRaConfig.EU_868
+    profile.config.device.role = config_pb2.Config.DeviceConfig.CLIENT
+    if public_key:
+        profile.config.security.public_key = public_key
+    if private_key:
+        profile.config.security.private_key = private_key
+    path.write_bytes(profile.SerializeToString())
+    return path
+
+
+def _write_nodedb_json(
+    path: Path, *, num: int, node_id: str, long_name: str, short_name: str, public_key: bytes = b""
+) -> Path:
+    """Write a synthetic node-db JSON export to ``path``."""
+    entry: dict[str, object] = {
+        "num": num,
+        "id": node_id,
+        "longName": long_name,
+        "shortName": short_name,
+        "hwModel": "TBEAM",
+        "role": "CLIENT",
+        "metadata": {"firmwareVersion": "2.6.11"},
+    }
+    if public_key:
+        entry["publicKey"] = base64.b64encode(public_key).decode()
+    payload = {
+        "schemaVersion": 1,
+        "exportedAt": "2026-01-01T00:00:00Z",
+        "myNodeNum": num,
+        "nodes": [entry],
+    }
+    path.write_text(json.dumps(payload))
+    return path
+
+
+def test_from_backup_never_touches_any_connection_backend(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, tmp_path: Path
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg")
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert bus.connections == []
+
+
+def test_from_backup_persists_an_observed_record(
+    runner: CliRunner,
+    env: dict[str, str],
+    tmp_path: Path,
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    kp = keypair_factory()
+    cfg = _write_profile_cfg(
+        tmp_path / "profile.cfg", public_key=kp.public, private_key=kp.private.reveal()
+    )
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = [NodeRecord.from_row(row) for row in loaded.nodes]
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node.node_id == "a0cb5cc4"
+    assert node.management is ManagementMode.OBSERVED
+    assert node.short_name == "MT01"
+    assert node.long_name == "Meshtastic MT01"
+    assert node.region == "EU_868"
+    assert node.role == "CLIENT"
+
+    keys = {row["key_ref"]: row for row in loaded.keys}
+    assert "a0cb5cc4_pub" in keys
+    assert "a0cb5cc4_priv" in keys
+
+
+def test_from_backup_dry_run_writes_nothing(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg")
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--dry-run"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert db_fingerprint(db_path) == before
+
+
+def test_from_backup_conflicts_with_a_transport_flag(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg")
+
+    result = invoke(runner, ["adopt", "--from-backup", str(cfg), "--port", "/dev/ttyFAKE0"], env)
+
+    assert result.exit_code != 0
+    assert "--from-backup cannot be combined" in result.stderr
+
+
+def test_node_id_without_from_backup_is_rejected(runner: CliRunner, env: dict[str, str]) -> None:
+    result = invoke(runner, ["adopt", "--node-id", "!a0cb5cc4"], env)
+
+    assert result.exit_code != 0
+    assert "--node-id only applies together with --from-backup" in result.stderr
+
+
+def test_from_backup_without_any_identity_evidence_refuses(
+    runner: CliRunner,
+    env: dict[str, str],
+    tmp_path: Path,
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg", long_name="Meshtastic Nobody Knows")
+
+    with mock_sources():  # no source has ever heard of this node
+        result = invoke(runner, ["adopt", "--from-backup", str(cfg)], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "Could not determine this node's id" in result.stderr
+
+
+def test_from_backup_suggests_a_node_id_via_loranet_long_name_match(
+    runner: CliRunner,
+    env: dict[str, str],
+    tmp_path: Path,
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg", long_name="Meshtastic Rooftop")
+
+    with mock_sources(nodes={"a0cb5cc4": {"longName": "Meshtastic Rooftop"}}):
+        result = invoke(runner, ["adopt", "--from-backup", str(cfg)], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "!a0cb5cc4" in result.stderr
+    assert "--node-id !a0cb5cc4" in result.stderr
+
+
+def test_from_backup_no_lookup_skips_the_suggestion_and_never_calls_out(
+    runner: CliRunner,
+    env: dict[str, str],
+    tmp_path: Path,
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg", long_name="Meshtastic Rooftop")
+
+    with mock_sources(nodes={"deadbeef": {"longName": "Meshtastic Rooftop"}}) as router:
+        result = invoke(runner, ["adopt", "--from-backup", str(cfg), "--no-lookup"], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "loranet" not in result.stderr
+    assert router.calls.call_count == 0
+
+
+def test_from_backup_public_key_match_resolves_node_id(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    tmp_path: Path,
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    kp = keypair_factory()
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="a0cb5cc4",
+                short_name="OLD1",
+                long_name="Old Node",
+                management=ManagementMode.OBSERVED,
+            )
+        ],
+        keys=[KeyRecord.from_material("a0cb5cc4", KeyType.ADMIN_PUBLIC, kp.public)],
+    )
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg", public_key=kp.public)
+
+    result = invoke(runner, ["adopt", "--from-backup", str(cfg), "--no-lookup", "--yes"], env)
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = [NodeRecord.from_row(row) for row in loaded.nodes]
+    assert len(nodes) == 1
+    assert nodes[0].node_id == "a0cb5cc4"
+
+
+def test_from_backup_paired_nodedb_resolves_via_my_node_num(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg")
+    nodedb = _write_nodedb_json(
+        tmp_path / "nodedb.json",
+        num=0xA0CB5CC4,
+        node_id="!a0cb5cc4",
+        long_name="Meshtastic MT01",
+        short_name="MT01",
+    )
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--from-backup", str(nodedb), "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = [NodeRecord.from_row(row) for row in loaded.nodes]
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node.node_id == "a0cb5cc4"
+    assert node.hw_model == "TBEAM"
+    assert node.firmware_version == "2.6.11"
+
+
+def test_from_backup_conflicting_node_id_refuses_without_force(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg")
+    nodedb = _write_nodedb_json(
+        tmp_path / "nodedb.json",
+        num=0xA0CB5CC4,
+        node_id="!a0cb5cc4",
+        long_name="Meshtastic MT01",
+        short_name="MT01",
+    )
+
+    result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(cfg),
+            "--from-backup",
+            str(nodedb),
+            "--node-id",
+            "!deadbeef",
+            "--no-lookup",
+        ],
+        env,
+    )
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "Conflicting node id evidence" in result.stderr
+
+
+def test_from_backup_conflicting_node_id_force_uses_precedence(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg")
+    nodedb = _write_nodedb_json(
+        tmp_path / "nodedb.json",
+        num=0xA0CB5CC4,
+        node_id="!a0cb5cc4",
+        long_name="Meshtastic MT01",
+        short_name="MT01",
+    )
+
+    result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(cfg),
+            "--from-backup",
+            str(nodedb),
+            "--node-id",
+            "!deadbeef",
+            "--no-lookup",
+            "--force",
+            "--yes",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = [NodeRecord.from_row(row) for row in loaded.nodes]
+    assert nodes[0].node_id == "deadbeef"
+
+
+def test_from_backup_records_channel_psk(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    psk = bytes(range(32))
+    profile = clientonly_pb2.DeviceProfile()
+    profile.long_name = "Meshtastic MT01"
+    profile.short_name = "MT01"
+    channel_set = apponly_pb2.ChannelSet()
+    channel_set.settings.add(psk=psk, name="Primary")
+    frag = base64.urlsafe_b64encode(channel_set.SerializeToString()).decode().rstrip("=")
+    profile.channel_url = f"https://meshtastic.org/e/#{frag}"
+    profile.config.lora.region = config_pb2.Config.LoRaConfig.EU_868
+    cfg_path = tmp_path / "profile.cfg"
+    cfg_path.write_bytes(profile.SerializeToString())
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg_path), "--node-id", "!a0cb5cc4", "--no-lookup", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    keys = {row["key_ref"]: row for row in loaded.keys}
+    assert "a0cb5cc4_psk" in keys
+    assert encode_key(psk) == keys["a0cb5cc4_psk"]["key_value"]
+
+
+def test_from_backup_no_channel_psk_suppresses_the_write(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    psk = bytes(range(32))
+    profile = clientonly_pb2.DeviceProfile()
+    profile.long_name = "Meshtastic MT01"
+    profile.short_name = "MT01"
+    channel_set = apponly_pb2.ChannelSet()
+    channel_set.settings.add(psk=psk, name="Primary")
+    frag = base64.urlsafe_b64encode(channel_set.SerializeToString()).decode().rstrip("=")
+    profile.channel_url = f"https://meshtastic.org/e/#{frag}"
+    profile.config.lora.region = config_pb2.Config.LoRaConfig.EU_868
+    cfg_path = tmp_path / "profile.cfg"
+    cfg_path.write_bytes(profile.SerializeToString())
+
+    result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(cfg_path),
+            "--node-id",
+            "!a0cb5cc4",
+            "--no-lookup",
+            "--no-channel-psk",
+            "--yes",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    keys = {row["key_ref"] for row in loaded.keys}
+    assert "a0cb5cc4_psk" not in keys
+
+
+def test_from_backup_non_aes256_psk_is_skipped_with_a_warning(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    """A 1-byte "default preset" PSK cannot round-trip through the Keys sheet."""
+    cfg = _write_profile_cfg(
+        tmp_path / "profile.cfg", channel_url="https://meshtastic.org/e/#CgMSAQE"
+    )
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    # rich wraps stderr at the terminal width, which can land mid-phrase --
+    # collapse whitespace before matching so the assertion is wrap-width-safe.
+    normalized_stderr = " ".join(result.stderr.split())
+    assert "channel_psk not recorded" in normalized_stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    keys = {row["key_ref"] for row in loaded.keys}
+    assert "a0cb5cc4_psk" not in keys
+
+
+def test_from_backup_flags_a_mismatched_own_keypair(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    cfg = _write_profile_cfg(
+        tmp_path / "profile.cfg", public_key=bytes(range(32)), private_key=bytes(range(32, 64))
+    )
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--json"],
+        env,
+    )
+
+    payload = json.loads(result.stdout)
+    assert any("weak-key audit" in warning for warning in payload["warnings"])
+    assert not _BASE64_KEY_RE.search(result.stdout)
+    assert not _BASE64_KEY_RE.search(result.stderr)
+
+
+def test_from_backup_json_output_never_leaks_key_material(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    kp = keypair_factory()
+    cfg = _write_profile_cfg(
+        tmp_path / "profile.cfg",
+        public_key=kp.public,
+        private_key=kp.private.reveal(),
+        channel_url="https://meshtastic.org/e/#CgMSAQE",
+    )
+
+    result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(cfg),
+            "--node-id",
+            "!a0cb5cc4",
+            "--no-lookup",
+            "--json",
+            "--dry-run",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert not _BASE64_KEY_RE.search(result.stdout)
+    assert not _BASE64_KEY_RE.search(result.stderr)
+
+
+def test_from_backup_source_line_appears_in_human_output(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg")
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--dry-run"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert f"source: backup: {cfg}" in result.stderr
+
+
+def test_from_backup_two_profile_files_is_rejected(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    cfg1 = _write_profile_cfg(tmp_path / "one.cfg")
+    cfg2 = _write_profile_cfg(tmp_path / "two.cfg")
+
+    result = invoke(runner, ["adopt", "--from-backup", str(cfg1), "--from-backup", str(cfg2)], env)
+
+    assert result.exit_code != 0
+    assert "two profile files" in result.stderr
+
+
+def test_from_backup_unrecognized_file_format_refuses(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    garbage = tmp_path / "garbage.bin"
+    garbage.write_bytes(b"\x00\x01not any recognized format at all\xff\xfe")
+
+    result = invoke(runner, ["adopt", "--from-backup", str(garbage)], env)
+
+    assert result.exit_code == int(ExitCode.CONFIG)
+    assert "not a recognized backup format" in result.stderr
+
+
+def test_from_backup_preserves_hw_model_on_re_adopt_without_nodedb(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """Re-adopting from a .cfg-only backup must not blank a previously-recorded hw_model."""
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="a0cb5cc4",
+                hw_model="TBEAM",
+                firmware_version="2.6.11",
+                management=ManagementMode.OBSERVED,
+            )
+        ]
+    )
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg")
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    node = NodeRecord.from_row(loaded.nodes[0])
+    assert node.hw_model == "TBEAM"
+    assert node.firmware_version == "2.6.11"

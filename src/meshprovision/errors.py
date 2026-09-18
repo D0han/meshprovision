@@ -33,6 +33,7 @@ __all__ = [
     "AdoptionRefusedError",
     "AmbiguousDeviceError",
     "AtomicWriteError",
+    "BackupParseError",
     "CacheError",
     "ConfigError",
     "ConnectionBackendError",
@@ -61,6 +62,7 @@ __all__ = [
     "NamespaceExhaustedError",
     "NodeArchivedError",
     "NodeIdError",
+    "NodeIdentityError",
     "NodeNotEnrolledError",
     "NodeNotFoundError",
     "NonInteractiveError",
@@ -242,6 +244,38 @@ class TemplateValidationError(ConfigError):
         """
         super().__init__(message, hint=hint)
         self.field = field
+
+
+class BackupParseError(ConfigError):
+    """An operator-supplied Meshtastic app config backup could not be parsed.
+
+    Covers every failure mode of ``mesh adopt --from-backup``'s file
+    handling: an unreadable path, a format that matches none of the
+    supported shapes (``DeviceProfile`` protobuf, its YAML twin, or a
+    node-db JSON export), a structurally invalid document, or two backup
+    files that disagree about which node they describe.
+
+    Attributes:
+        source: The offending file's path (or a label naming which of two
+            merged backups disagreed), when known.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        source: str | None = None,
+        hint: str | None = None,
+    ) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Human-readable description of what went wrong.
+            source: The offending file's path, when known.
+            hint: Optional actionable suggestion for resolving the error.
+        """
+        super().__init__(message, hint=hint)
+        self.source = source
 
 
 class NamePatternError(TemplateValidationError):
@@ -969,6 +1003,38 @@ class AdoptionRefusedError(ProvisioningError):
         """
         super().__init__(message, hint=hint)
         self.node_id = node_id
+
+
+class NodeIdentityError(ProvisioningError):
+    """``mesh adopt --from-backup``'s node id could not be resolved or is ambiguous.
+
+    Raised when none of ``--node-id``, a ``Keys`` sheet public-key match,
+    and a paired node-db export's ``myNodeNum`` produced a node id, or
+    when two of those sources disagree and ``--force`` was not passed. A
+    long-name match against loranet is never sufficient on its own -- it
+    is surfaced as a hint on this error, never as a silent resolution.
+
+    Attributes:
+        candidates: Every node id this run found some evidence for, for
+            display -- empty when nothing at all was found.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        candidates: tuple[str, ...] = (),
+        hint: str | None = None,
+    ) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Human-readable description of what went wrong.
+            candidates: Every node id this run found some evidence for.
+            hint: Optional actionable suggestion for resolving the error.
+        """
+        super().__init__(message, hint=hint)
+        self.candidates = candidates
 
 
 class PlanConflictError(ProvisioningError):

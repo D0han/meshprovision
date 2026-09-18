@@ -131,6 +131,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   several minutes inside the `meshtastic`/`bleak` libraries' own re-scans and
   timeouts) is now visibly still alive rather than indistinguishable from a
   hang.
+- `mesh adopt --from-backup PATH`: adopt a node from an exported Meshtastic
+  app config backup instead of a live connection, for a node you own but
+  can't currently reach -- no device interface is ever opened. Repeatable;
+  accepts a `.cfg`/`.yaml` `DeviceProfile` (Radio Config -> Backup & Restore
+  -> Export in the app, or `meshtastic --export-config`'s YAML), a node-db
+  JSON export (Settings -> Export node database), or one of each -- format
+  is auto-detected, and the two are complementary: a `.cfg` carries names,
+  full config, the node's own keys, and any admin keys, but no node id, hw
+  model, or firmware version; a node-db export carries exactly those three
+  plus `myNodeNum`, but no private key, admin keys, region, or channel. A
+  backup never asserts its own node id with authority, so it is resolved,
+  in order, from an explicit `--node-id`, a `Keys` sheet public-key match,
+  or a paired node-db export's `myNodeNum`; two of those disagreeing is a
+  refusal (new `NodeIdentityError`) unless `--force` is passed, and when
+  none resolve anything, an unmatched loranet long-name lookup (skippable
+  with `--no-lookup`) is offered only as a `--node-id` hint, never used to
+  adopt. A `.cfg`'s `channel_url` is decoded and, only when its primary
+  channel's PSK is the full 32-byte AES256 form, recorded as a new
+  `<node_id>_psk` `Keys` sheet row (`--no-channel-psk` to skip) -- finally
+  giving the `channel_psk_ref` derived column, present since the schema's
+  first version but never before written, a writer; a `.cfg`'s
+  `fixed_position`, when set, fills `gps_lat`/`gps_lon`/`gps_alt`. Both, like
+  `hw_model`/`firmware_version`, are only ever added on re-adopt, never
+  used to blank a value a previous adopt recorded. Because a `.cfg`/YAML
+  backup is the one place `mesh adopt` ever sees a node's own private key
+  without touching the device, its keypair is now also run through the
+  weak-key audit (consistency check included) -- the live-device path has
+  never done this, since the report only ever audited admin keys. New
+  `meshprovision.provisioning.backup` module and `BackupParseError` exit
+  code (2, `CONFIG`).
+- A single, stable known-good safety copy of the database
+  (`data/backups/nodes_db.known-good.ods`), refreshed by
+  `meshprovision.db.atomic_writer.refresh_known_good` on *every*
+  successful database load anywhere in the codebase -- not just a write,
+  and not just through `mesh db backup`/`--retention`'s existing
+  timestamped rotation, which it sits alongside without being part of
+  (its name never matches that rotation's glob, so it's never pruned or
+  listed by it). Best-effort: a refresh failure (full disk, a read-only
+  backup directory) is logged and swallowed, never breaks the read it
+  rode in on. `mesh status`/`mesh db list`/every other read-only command
+  now write this small side-channel file on a changed database (a no-op
+  `stat()` otherwise) -- the live database file itself is still never
+  written by any of them. When a load fails outright (a hand-edit that
+  breaks the schema, corrupts the ODF zip, or introduces a duplicate
+  row), the resulting error's hint now names the known-good copy's
+  timestamp and `mesh db restore --known-good`, a new flag that restores
+  it without needing to know its path. `mesh db backup --list` also
+  reports its timestamp when one exists.
 
 ### Changed
 
@@ -144,6 +192,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh adopt`'s `adopted_record()` unconditionally overwrote `hw_model`
+  and `firmware_version` from the current report, unlike the "empty is no
+  new information" guard `role`/`region` already had. Unreachable from a
+  live device (which always reports both truthily), but a `mesh adopt
+  --from-backup` profile alone reports neither at all, so re-adopting a
+  node from a `.cfg`-only backup would silently blank a value a previous
+  (live or paired-node-db) adopt had recorded. Given the same
+  non-clobbering guard as `role`/`region`.
 - `mypy --strict` failed on a clean `pip install -e ".[dev]"` (including in
   CI, on all three supported Python versions) with `import-untyped` errors
   for `yaml` (`config/template.py`) and `google.protobuf.descriptor`

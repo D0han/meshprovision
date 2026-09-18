@@ -49,6 +49,7 @@ from meshprovision.config.settings import Settings, load_settings
 from meshprovision.crypto import redact
 from meshprovision.errors import (
     AmbiguousDeviceError,
+    DbError,
     ExitCode,
     MeshprovisionError,
     NonInteractiveError,
@@ -1035,7 +1036,18 @@ class CliContext:
             SettingsError: If ``for_write`` is true and
                 ``MESHPROVISION_LOCK_TIMEOUT`` is set to a malformed
                 value.
+
+        A load failure that is specifically a :class:`~meshprovision.
+        errors.DbError` (the file loaded but its *content* is bad --
+        unreadable ODF, a missing sheet, a header mismatch, a bad cell,
+        a duplicate row) gets its ``hint`` extended with a pointer at the
+        known-good safety copy (see :func:`meshprovision.db.atomic_writer
+        .refresh_known_good`), when one exists, naming the exact
+        ``mesh db restore --known-good`` command to run. A locking or
+        atomic-write failure is left alone -- those aren't about bad
+        file content, so a known-good copy isn't the relevant remedy.
         """
+        from meshprovision.db import atomic_writer, schema
         from meshprovision.db import ods as ods_module
         from meshprovision.db.keys import KeyRepository
         from meshprovision.db.nodes import NodeRepository
@@ -1059,6 +1071,16 @@ class CliContext:
             else:
                 ods_module.create_empty(path, backup=False)
                 db.load(force=True)
+        except DbError as exc:
+            known_good = atomic_writer.known_good_info(path)
+            if known_good is not None:
+                remediation = (
+                    f"A known-good copy from {schema.utc_timestamp(known_good.created_at)} "
+                    "is available. Run: mesh db restore --known-good"
+                )
+                exc.hint = f"{exc.hint}\n{remediation}" if exc.hint else remediation
+            db.unlock()
+            raise
         except BaseException:
             db.unlock()
             raise

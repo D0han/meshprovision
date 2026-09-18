@@ -6,9 +6,16 @@ This module MUST NOT reference ``OdsDatabase``, ``NodeRepository``,
 :meth:`meshprovision.cli.common.CliContext.open_database`, or any
 ``save``/``replace``/``upsert``/``delete`` name. Everything flows through
 :func:`meshprovision.status.report.run_status`, which is itself certified
-read-only (an e2e test asserts the ODS file's mtime is unchanged across a
-full ``mesh status`` run). This module docstring restates that guarantee
-so a future reader does not have to rediscover it.
+read-only (an e2e test asserts the **live** ODS file's mtime is unchanged
+across a full ``mesh status`` run). This module docstring restates that
+guarantee so a future reader does not have to rediscover it.
+
+The one exception: a successful load also best-effort refreshes the
+known-good safety copy under ``data/backups/`` (see
+:func:`meshprovision.db.atomic_writer.refresh_known_good`, wired in at
+:func:`meshprovision.db.ods.load_database`) -- a side-channel copy, never
+a write to the live database file itself, so it does not affect the
+mtime guarantee above.
 """
 
 from __future__ import annotations

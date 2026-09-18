@@ -51,13 +51,18 @@ __all__ = [
     "BACKUP_TIMESTAMP_FORMAT",
     "DEFAULT_BACKUP_DIR",
     "DEFAULT_RETENTION",
+    "KNOWN_GOOD_SUFFIX",
     "BackupInfo",
     "atomic_write",
     "backup_dir_for",
     "backup_name",
     "create_backup",
+    "known_good_info",
+    "known_good_name",
+    "known_good_path",
     "list_backups",
     "prune_backups",
+    "refresh_known_good",
     "restore_backup",
     "write_bytes_atomic",
 ]
@@ -72,6 +77,16 @@ DEFAULT_RETENTION: Final[int] = 20
 
 BACKUP_TIMESTAMP_FORMAT: Final[str] = "%Y%m%dT%H%M%S.%fZ"
 """``strftime``/``strptime`` format embedded in a backup file's name."""
+
+KNOWN_GOOD_SUFFIX: Final[str] = ".known-good"
+"""Marker inserted between a target's stem and suffix for its known-good copy.
+
+Deliberately a ``.`` immediately after the stem, not a ``-``, so
+``known_good_name``'s output never matches :func:`list_backups`'/
+:func:`prune_backups`' ``f"{target.stem}-*{target.suffix}"`` glob -- the
+known-good copy is a single stable slot outside the timestamped
+rotation, never pruned and never listed alongside it.
+"""
 
 _LEGACY_BACKUP_TIMESTAMP_FORMAT: Final[str] = "%Y%m%dT%H%M%SZ"
 """Second-resolution format used before backup names carried microseconds.
@@ -330,6 +345,125 @@ def create_backup(
         created_at=when,
         size_bytes=size_bytes,
     )
+
+
+def known_good_name(target: Path) -> str:
+    """Build the stable known-good file name for one target file.
+
+    Args:
+        target: The file the known-good copy is for.
+
+    Returns:
+        For example ``"nodes_db.known-good.ods"``.
+    """
+    return f"{target.stem}{KNOWN_GOOD_SUFFIX}{target.suffix}"
+
+
+def known_good_path(target: Path, backup_dir: Path | None = None) -> Path:
+    """Resolve the known-good copy's path for a target file.
+
+    Args:
+        target: The file the known-good copy is for.
+        backup_dir: An explicit backup directory to use instead of the
+            default.
+
+    Returns:
+        ``backup_dir_for(target, backup_dir) / known_good_name(target)``.
+    """
+    return backup_dir_for(target, backup_dir) / known_good_name(target)
+
+
+def known_good_info(target: Path, *, backup_dir: Path | None = None) -> BackupInfo | None:
+    """Look up the current known-good copy of a target file, if any.
+
+    Pure ``stat()``, no write.
+
+    Args:
+        target: The file to look up a known-good copy for.
+        backup_dir: Directory the known-good copy is stored under.
+            Defaults to :func:`backup_dir_for`'s resolution.
+
+    Returns:
+        Its metadata (``created_at`` taken from its mtime, since it has
+        no embedded timestamp the way a rotated backup does), or
+        ``None`` if no known-good copy exists yet, or it vanished or
+        could not be stat'd between the existence check and the stat
+        call (a concurrent refresh mid-replace -- treated the same as
+        "none yet" rather than raised).
+    """
+    path = known_good_path(target, backup_dir)
+    try:
+        stat_result = path.stat()
+    except OSError:
+        return None
+    return BackupInfo(
+        path=path,
+        source=target,
+        created_at=datetime.fromtimestamp(stat_result.st_mtime, tz=UTC),
+        size_bytes=stat_result.st_size,
+    )
+
+
+def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> BackupInfo | None:
+    """Refresh the single, stable known-good copy of a target file.
+
+    Unlike every other function in this module, **this never raises**.
+    It is called from :func:`meshprovision.db.ods.load_database` on
+    *every* successful load -- including read-only commands such as
+    ``mesh status``/``mesh db list`` -- so a read must never fail just
+    because a safety copy of it could not be written (a full disk, a
+    read-only-mounted backup directory, a permissions problem): any such
+    failure is logged at ``WARNING`` and swallowed.
+
+    A no-op, cheap ``stat()``-only call when the known-good copy already
+    matches ``target``'s current content: ``shutil.copy2`` (used here,
+    same as :func:`create_backup`) preserves the source's mtime onto the
+    copy, so a known-good copy whose mtime equals ``target``'s current
+    mtime is already current -- this is what keeps a polling loop (for
+    example ``mesh status --watch``) from rewriting an unchanged copy on
+    every single load.
+
+    Args:
+        target: The file to refresh a known-good copy of.
+        backup_dir: Directory to store the known-good copy under.
+            Defaults to :func:`backup_dir_for`'s resolution.
+
+    Returns:
+        The refreshed (or already-current) copy's metadata, or ``None``
+        if ``target`` does not exist, or the refresh itself failed.
+    """
+    if not target.exists():
+        return None
+
+    resolved_dir = backup_dir_for(target, backup_dir)
+    destination = resolved_dir / known_good_name(target)
+    tmp_destination: Path | None = None
+    try:
+        target_mtime = target.stat().st_mtime
+        if destination.is_file() and destination.stat().st_mtime == target_mtime:
+            return known_good_info(target, backup_dir=backup_dir)
+
+        resolved_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            resolved_dir.chmod(_BACKUP_DIR_MODE)
+        except OSError:
+            _logger.debug("Failed to chmod backup directory %s", resolved_dir)
+
+        tmp_destination = resolved_dir / f".{destination.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+        shutil.copy2(target, tmp_destination)
+        try:
+            tmp_destination.chmod(_FILE_MODE)
+        except OSError:
+            _logger.debug("Failed to chmod known-good copy %s", tmp_destination)
+        tmp_destination.replace(destination)
+    except OSError as exc:
+        _logger.warning("Failed to refresh known-good copy of %s: %s", target, exc)
+        if tmp_destination is not None:
+            with contextlib.suppress(OSError):
+                tmp_destination.unlink()
+        return None
+
+    return known_good_info(target, backup_dir=backup_dir)
 
 
 def _parse_backup_timestamp(name: str, target: Path) -> datetime | None:

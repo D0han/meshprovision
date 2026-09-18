@@ -22,7 +22,7 @@ LibreOffice, not a CSV dump.
 | `first_added_ts` | TIMESTAMP (ISO-8601 UTC, e.g. `2026-08-25T03:14:10Z`) | UTC timestamp this node was first added to the database |
 | `last_updated_ts` | TIMESTAMP | UTC timestamp this node's record was last updated |
 | `authorized_admin_keys` | KEY_REF_LIST (`;`-separated) | Semicolon-separated `key_ref` list of admin public keys authorized on this node's `security.adminKey`. Deliberately **not** a formula: it records what was actually written to the device — narrowed when a run revokes a live admin key it names, but never rebuilt from the device, so a live key that was never recorded stays unrecorded — which is not a function of any other cell on the row |
-| `notes` | TEXT | Free-form operator notes |
+| `notes` | TEXT | Free-form operator notes — yours alone. Nothing in meshprovision ever reads or writes this column; it exists purely so you have somewhere in the database itself to record whatever context matters to you (a node's physical location, why it's on a particular firmware, a reminder to revisit its key) |
 | `private_key_ref` | DERIVED, formula `=[.A{row}]&"_priv"` | Reference to this node's private key row in the `Keys` sheet |
 | `public_key_ref` | DERIVED, formula `=[.A{row}]&"_pub"` | Reference to this node's public key row in the `Keys` sheet |
 | `role` | ENUM (dropdown `mp_role`) | Device role, from the installed `Config.DeviceConfig.Role` protobuf enum |
@@ -40,8 +40,18 @@ LibreOffice, not a CSV dump.
 | `key_ref` | primary key, DERIVED | `owner_node_id` plus a suffix determined by `key_type` (`_pub`/`_priv`/`_psk`) |
 | `owner_node_id` | KEY_REF, required | A node_id hex value, a template `admin_nodes` label, or an `observed-<fingerprint>` synthetic owner `mesh adopt` mints for a key it can't otherwise name (see below) |
 | `key_type` | ENUM (dropdown `mp_key_type`) | `admin_public`, `admin_private`, or `channel_psk` |
-| `key_value` | BASE64_KEY, required, SECRET | Base64 of 32 raw X25519 bytes. Never logged or displayed |
+| `key_value` | BASE64_KEY, required, SECRET | Base64 of exactly 32 raw bytes: an X25519 key for `admin_public`/`admin_private`, or an AES256 channel PSK for `channel_psk`. Never logged or displayed |
 | `created_ts` | TIMESTAMP | UTC timestamp this key was recorded |
+
+A `channel_psk` row is only ever written by `mesh adopt --from-backup`
+(see [`mesh adopt`](commands.md#mesh-adopt)), decoded from a `.cfg`
+profile's `channel_url`, and only when the primary channel's PSK is the
+full 32-byte AES256 form — the 0-byte (no encryption), 1-byte ("default"
+preset, a firmware-side table index rather than real key material), and
+16-byte (AES128) forms cannot round-trip through this column and are
+reported as a warning instead. No live-device path writes this row
+today: `mesh provision`/`mesh adopt` against a connected device never
+read channel configuration at all.
 
 ### `observed-*` rows
 
@@ -96,7 +106,8 @@ otherwise reported by fingerprint only, never its raw material;
   why the project uses `odfpy` directly and not `pandas`: a hex node id
   like `1234567e8` is otherwise parsed as a float in scientific notation,
   silently corrupting the primary key.
-- Run `mesh db verify` after every hand-edit.
+- Run `mesh db verify` after every hand-edit. If it fails, see
+  **Recovering from a bad hand-edit** below before doing anything else.
 - `mesh db backup` before a risky edit; every save also writes a
   timestamped backup into `data/backups/` with a retention limit.
 - Opening the database in LibreOffice Calc, resizing columns, and saving
@@ -104,6 +115,42 @@ otherwise reported by fingerprint only, never its raw material;
   cell carries its column's description as a built-in Calc comment
   (visible on hover); that comment is documentation only and is ignored
   when the file is read back, along with any comment you add yourself.
+
+### Recovering from a bad hand-edit
+
+Beyond the timestamped backups `mesh db backup`/`--retention` manage,
+meshprovision keeps a single **known-good safety copy** — refreshed
+automatically every time *any* `mesh` command successfully loads the
+database, read or write alike, not just when you remember to run
+`mesh db backup` yourself. It always lives at
+`data/backups/nodes_db.known-good.ods` (the default backup location,
+regardless of any `--backup-dir` a specific `db backup`/`db restore`
+invocation used), and it is a best-effort, silent side effect: if it
+can't be written (a full disk, a read-only-mounted `data/backups/`), the
+command that triggered it still succeeds normally.
+
+If a hand-edit breaks the file badly enough that it no longer loads at
+all, the resulting error names the known-good copy's timestamp and the
+exact command to undo the damage:
+
+```
+error: nodes_db.ods is not a readable ODF spreadsheet: File is not a zip file
+Hint: A known-good copy from 2026-09-18T14:02:11Z is available. Run: mesh db restore --known-good
+```
+
+```bash
+mesh db restore --known-good      # restores it, after the usual confirmation
+mesh db verify                    # confirms you're back to a good state
+```
+
+`mesh db backup --list` also reports the known-good copy's timestamp
+directly, so you can check how fresh it is before relying on it.
+Because it is refreshed on every load, it is normally very recent — but
+it is still only as good as the last database state some `mesh` command
+actually saw, so a hand-edit that both breaks the schema *and* happens
+between two edits with no `mesh` command run in between will lose
+whatever changed since that last successful load, not just the bad edit
+itself.
 
 ## The shipped example
 

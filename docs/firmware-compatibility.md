@@ -61,3 +61,16 @@ property meshprovision cannot see or control from a single provisioning
 connection, and it has not been verified against a real 2.8 device or an
 updated library. It's recorded here as a known, unresolved risk to
 revisit once real 2.8 tooling exists.
+
+**The same node-identity-trust concern, in a different shape:**
+`mesh adopt --from-backup` (see [`mesh adopt`](commands.md#mesh-adopt))
+records a node from an exported Meshtastic app config backup instead of
+a live connection, and a backup file never asserts its own node id with
+any authority a live device's handshake would. That command refuses to
+guess: it requires an explicit `--node-id`, a `Keys` sheet public-key
+match, or a paired node-db export's `myNodeNum` before writing anything,
+and a bare long-name match is offered only as a hint, never used to
+adopt. This is the same class of spoofing concern as the anti-spoofing
+check above — an attacker-crafted backup naming someone else's node id
+is exactly what that resolution order exists to make hard to do by
+accident.

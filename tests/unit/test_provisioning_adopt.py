@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
 import re
 from datetime import UTC, datetime
 
@@ -639,6 +640,101 @@ def test_adopted_record_first_time_adopt_with_unmapped_role_region_stays_blank(
 
     assert record.role == ""
     assert record.region == ""
+
+
+def test_adopted_record_preserves_hw_model_firmware_when_report_has_none(
+    make_live, template
+) -> None:
+    """Regression test: a backup-only re-adopt must not blank hw_model/firmware.
+
+    A ``mesh adopt --from-backup`` profile alone (no paired node-db
+    export) reports hw_model/firmware_version as "" -- exactly like an
+    unmapped live role/region, that must mean "this source did not
+    report one," not "clear what we already know."
+    """
+    live = make_live(template)
+    live = dataclasses.replace(live, hw_model="", hw_model_raw=None, firmware_version="")
+    existing = NodeRecord(node_id="deadbe01", hw_model="TBEAM", firmware_version="2.6.11")
+    report = build_adoption_report(
+        live, existing=existing, public_keys={}, template=template, known_bad=frozenset()
+    )
+    assert report.hw_model == ""
+    assert report.firmware_version == ""
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert record.hw_model == "TBEAM"
+    assert record.firmware_version == "2.6.11"
+
+
+def test_adopted_record_first_time_adopt_with_no_hw_model_firmware_stays_blank(
+    make_live, template
+) -> None:
+    """A first-time adopt with no hw_model/firmware must record them as blank, not omit them."""
+    live = make_live(template)
+    live = dataclasses.replace(live, hw_model="", hw_model_raw=None, firmware_version="")
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert record.hw_model == ""
+    assert record.firmware_version == ""
+
+
+def test_adopted_record_writes_gps_from_report(make_live, template) -> None:
+    """gps_lat/gps_lon/gps_alt are written when the report carries them (backup adopt only)."""
+    live = make_live(template)
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+    report = dataclasses.replace(report, gps_lat=52.0, gps_lon=21.0, gps_alt=100)
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert record.gps_lat == 52.0
+    assert record.gps_lon == 21.0
+    assert record.gps_alt == 100
+
+
+def test_adopted_record_leaves_gps_untouched_when_report_has_none(make_live, template) -> None:
+    """A re-adopt whose report carries no GPS (gps_lat is None) must not clear a recorded fix."""
+    live = make_live(template)
+    existing = NodeRecord(node_id="deadbe01", gps_lat=52.0, gps_lon=21.0, gps_alt=100)
+    report = build_adoption_report(
+        live, existing=existing, public_keys={}, template=template, known_bad=frozenset()
+    )
+    assert report.gps_lat is None
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert record.gps_lat == 52.0
+    assert record.gps_lon == 21.0
+    assert record.gps_alt == 100
+
+
+def test_describe_appends_source_line_only_when_not_device(make_live, template) -> None:
+    live = make_live(template)
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+    assert not any(line.startswith("source:") for line in report.describe())
+
+    backup_report = dataclasses.replace(report, source="backup: profile.cfg")
+    lines = backup_report.describe()
+    assert lines[-1] == "source: backup: profile.cfg"
+
+
+def test_to_json_dict_includes_source(make_live, template) -> None:
+    live = make_live(template)
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+    assert report.to_json_dict()["source"] == "device"
+
+    backup_report = dataclasses.replace(report, source="backup: profile.cfg")
+    assert backup_report.to_json_dict()["source"] == "backup: profile.cfg"
 
 
 def test_adopted_record_captures_ble_pin(make_live, template) -> None:

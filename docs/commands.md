@@ -156,14 +156,20 @@ mesh adopt --port /dev/ttyUSB0
 mesh adopt --dry-run --interface tcp --host 192.168.1.50
 mesh adopt --port /dev/ttyUSB0 --yes --show-admin-keys
 mesh adopt --port /dev/ttyUSB0 --force
+mesh adopt --from-backup Meshtastic_MT01.cfg --node-id !a0cb5cc4
+mesh adopt --from-backup profile.cfg --from-backup nodedb.json --yes
 ```
 
 | Option | Meaning |
 |---|---|
+| `--from-backup PATH` | Adopt from an exported Meshtastic app config backup instead of a device — repeatable, see below |
+| `--node-id ID` | Authoritative node id for `--from-backup` (any form `mesh` accepts: `!a0cb5cc4`, `a0cb5cc4`, or decimal) |
+| `--no-lookup` | With `--from-backup`, skip the loranet long-name lookup used to suggest `--node-id` |
+| `--no-channel-psk` | With `--from-backup`, don't record the channel PSK decoded from `channel_url` |
 | `--dry-run` | Print the report without writing to the database |
 | `-y`, `--yes` | Assume yes to every confirmation |
 | `--json` | Emit JSON instead of human text |
-| `--force` | Re-adopt (demote) a node that is currently `management=template` |
+| `--force` | Re-adopt (demote) a node that is currently `management=template`; with `--from-backup`, also proceeds despite conflicting node-id evidence (see below) |
 | `--show-admin-keys` | Print the `mesh admin import` command (and the raw base64) for each admin key the device reports that isn't already registered under a real ref |
 
 `mesh adopt` also records the node's own keypair — its public half
@@ -198,6 +204,58 @@ mesh provision --port /dev/ttyUSB0 --enroll        # only when you're ready for 
 
 The last step is optional and per-node — a fleet can stay `observed`
 indefinitely; `mesh status` and `mesh db verify` work the same either way.
+
+**Adopting from a config backup, for a node you can't currently reach:**
+`--from-backup` builds the exact same report and does the exact same
+writes as a live-device adopt, from a Meshtastic app export instead of a
+device — no interface is ever opened. Pass one or two files (repeat the
+flag), auto-detected by content:
+
+- A **`.cfg` profile** — Radio Config → Backup & Restore → Export in the
+  app. Carries names, `channel_url`, full config (including the node's
+  own public/private key and any admin keys), the BLE PIN, and an
+  optional fixed position. Carries no node id, hardware model, or
+  firmware version.
+- A **node-db JSON export** — Settings → Export node database in the
+  app (`Meshtastic_nodedb_<SHORT>_<ts>.json`). Carries `myNodeNum` and,
+  for the exporting node's own entry, its id, hardware model, role, and
+  firmware version. Carries no private key, admin keys, region, or
+  channel — the two files are complementary.
+- A **YAML profile** — `meshtastic --export-config`'s output (the Python
+  CLI, not the app). Same content as a `.cfg`.
+
+A backup never asserts its own node id with authority — even a node-db
+export's `myNodeNum` is a self-reported value a hand-edited or
+mismatched file could get wrong — so `mesh adopt` resolves one from,
+in order of strength: an explicit `--node-id`; a `Keys` sheet public-key
+match (the backup's own public key already belongs to a registered
+`<id>_pub` row); or a paired node-db export's `myNodeNum`. Two of these
+disagreeing is a refusal unless `--force` is passed (which then falls
+back to the same precedence order). If none of them resolve anything,
+and `--no-lookup` wasn't passed, `mesh adopt` searches loranet's dump for
+a `long_name` match and prints it as a `--node-id` hint — **this is
+advisory only**; a name match is never enough on its own to adopt a
+node, since names collide and a `.cfg`'s `long_name` is exactly the kind
+of thing an attacker crafting a lookalike backup could set. See
+[Firmware 2.8 and beyond](firmware-compatibility.md) for the broader
+node-identity-trust concern this mirrors.
+
+A `.cfg`'s `channel_url` is decoded and, when the primary channel's PSK
+is the full 32-byte AES256 form, recorded as a `<node_id>_psk` row (the
+one case this project's `Keys` sheet can hold — see
+[Keys sheet](database.md#keys-sheet)); a 1-byte "default preset" or
+16-byte AES128 PSK is reported as a warning and never written.
+`--no-channel-psk` skips this entirely. A `.cfg`'s `fixed_position`, when
+set, fills `gps_lat`/`gps_lon`/`gps_alt`. Both, like `hw_model` and
+`firmware_version`, are only ever *added* on re-adopt — a `--from-backup`
+run that doesn't report one never blanks a value a previous adopt
+recorded.
+
+Because a `.cfg`/YAML profile is the one place `mesh adopt` ever sees a
+node's *private* key without touching the device, it also runs the
+weak-key audit against the node's own keypair (consistency included) —
+the live-device path has never done this, since `build_adoption_report`
+only audits admin keys.
 
 ## `mesh status`
 
@@ -301,6 +359,7 @@ mesh db backup
 mesh db backup --list
 mesh db backup --retention 20 --backup-dir /mnt/usb/mesh-backups
 mesh db restore data/backups/nodes_db-20260101T000000.000000Z.ods
+mesh db restore --known-good
 mesh db list
 mesh db list --json
 mesh db forget deadbe01
@@ -309,9 +368,10 @@ mesh db forget deadbe01
 | Option | Meaning |
 |---|---|
 | `--strict` (`verify`) | Treat a bare warning (no error or critical problem) as a failing exit code too |
-| `--backup-dir` (`backup`, `restore`) | Directory backups are stored under/read from. Defaults to `data/backups` |
+| `--backup-dir` (`backup`, `restore`) | Directory backups are stored under/read from. Defaults to `data/backups`. Never affects where the known-good copy lives (see below) — that's always the default location |
 | `--retention` (`backup`) | Number of backups to retain (default: 20) |
-| `--list` (`backup`) | List existing backups instead of creating one |
+| `--list` (`backup`) | List existing backups instead of creating one; also reports the known-good copy's timestamp, when one exists |
+| `--known-good` (`restore`) | Restore the known-good safety copy instead of naming a `BACKUP` path — mutually exclusive with it |
 | `-y`/`--yes` (`restore`, `forget`) | Assume yes to the confirmation |
 | `--json` | Emit JSON instead of human text |
 
@@ -332,7 +392,11 @@ mesh db forget deadbe01
   restore is always reversible via `mesh db backup --list`. The restored
   file is loaded back immediately to confirm it is actually valid —
   restoring a corrupt or non-ODS file fails loudly on the spot rather
-  than breaking the next unrelated `mesh` command.
+  than breaking the next unrelated `mesh` command. Pass either a
+  `BACKUP` path or `--known-good`, never both — the latter restores the
+  single safety copy every successful database load refreshes (see
+  [Recovering from a bad hand-edit](database.md#recovering-from-a-bad-hand-edit)),
+  which is also exactly what a load-failure error's hint points at.
 - `list` is the offline counterpart to `mesh status`: a plain dump of the
   `Nodes` sheet's own content (short/long name, hardware model, firmware,
   management mode, region, role, authorized admin key refs, notes) —
@@ -396,4 +460,12 @@ Exit code 5 (`PROVISIONING`) also covers two `mesh adopt`/`--enroll`
 refusals: `NodeNotEnrolledError` (a `management=observed` node touched by
 `mesh provision` without `--enroll`) and `AdoptionRefusedError` (a
 `management=template` node re-adopted without `--force`) — again
-disambiguated by message text, not exit code.
+disambiguated by message text, not exit code. `mesh adopt --from-backup`
+adds `NodeIdentityError` to this same code: its node id could not be
+resolved at all, or resolved ambiguously without `--force` (see
+[Adopting from a config backup](#mesh-adopt) above).
+
+Exit code 2 (`CONFIG`) also covers `mesh adopt --from-backup`'s
+`BackupParseError`: an unreadable path, a file matching none of the
+three supported backup shapes, a structurally invalid one, or two
+backup files that disagree about which node they describe.

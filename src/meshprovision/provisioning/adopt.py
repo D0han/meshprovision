@@ -242,6 +242,21 @@ class AdoptionReport:
             admin key (device order), then a firmware-version warning (if
             any), then an unmappable-region warning (if any), then an
             unmappable-role warning (if any).
+        gps_lat: A fixed-position latitude to record, or ``None`` if the
+            source carried none (never clears an existing recorded
+            value). Set only by ``mesh adopt --from-backup``, whose
+            ``DeviceProfile.fixed_position`` is outside
+            :class:`~meshprovision.provisioning.detect.LiveConfig`'s
+            ``config.position`` section entirely -- a live device adopt
+            leaves this ``None``.
+        gps_lon: Companion to :attr:`gps_lat`.
+        gps_alt: Companion to :attr:`gps_lat`, in meters.
+        source: Where this report's data came from: ``"device"`` for a
+            live connection (the default), or a label naming the backup
+            file(s) for ``mesh adopt --from-backup``. Rendered by
+            :meth:`describe`/:meth:`to_json_dict` only when not
+            ``"device"``, so an ordinary device adopt's output is
+            unchanged.
     """
 
     node_id: NodeId
@@ -258,6 +273,10 @@ class AdoptionReport:
     is_managed: bool
     ble_pin: str | None
     warnings: tuple[str, ...]
+    gps_lat: float | None = None
+    gps_lon: float | None = None
+    gps_alt: int | None = None
+    source: str = "device"
 
     def describe(self) -> tuple[str, ...]:
         """Render this report as ready-to-print inventory lines.
@@ -299,6 +318,10 @@ class AdoptionReport:
             lines.append("no fixed BLE PIN captured; enrolling this node will set a new one")
 
         lines.extend(self.warnings)
+
+        if self.source != "device":
+            lines.append(f"source: {self.source}")
+
         return tuple(lines)
 
     def to_json_dict(self, *, show_key_material: bool = False) -> dict[str, object]:
@@ -343,6 +366,7 @@ class AdoptionReport:
             "is_managed": self.is_managed,
             "ble_pin_captured": self.ble_pin is not None,
             "warnings": list(self.warnings),
+            "source": self.source,
         }
 
 
@@ -509,21 +533,27 @@ def adopted_record(
         ``existing`` is ``None``), with ``management`` set to
         :attr:`~meshprovision.db.schema.ManagementMode.OBSERVED`.
         On a **re-adopt** (``report.existing`` was not ``None``),
-        ``role``/``region`` are only overwritten when
-        :attr:`AdoptionReport.role`/:attr:`AdoptionReport.region` are
-        non-empty (i.e. the live value validated) -- otherwise the
-        existing recorded value is left untouched, since an unmapped live
-        value is "no new information," not "clear what we already know."
-        On a **first-time adopt** (``report.existing`` is ``None``),
-        ``role``/``region`` are always set explicitly to
-        :attr:`AdoptionReport.role`/:attr:`AdoptionReport.region` --
-        including the empty string when unmapped -- so an unrecognized
-        live value is recorded as genuinely unknown rather than silently
-        picking up :class:`~meshprovision.db.nodes.NodeRecord`'s
-        template-oriented ``"CLIENT"``/``"EU_868"`` class defaults as if
-        they had been observed.
+        ``hw_model``/``firmware_version``/``role``/``region`` are only
+        overwritten when the corresponding :class:`AdoptionReport`
+        attribute is non-empty -- otherwise the existing recorded value
+        is left untouched, since an empty value here means "this source
+        did not report one" (a ``mesh adopt --from-backup`` profile alone
+        carries neither ``hw_model`` nor ``firmware_version`` at all;
+        an unmapped live ``role``/``region`` behaves the same way), not
+        "clear what we already know." On a **first-time adopt**
+        (``report.existing`` is ``None``), all four are always set
+        explicitly to the report's value -- including the empty string
+        when unreported/unmapped -- so a first-time gap is recorded as
+        genuinely unknown rather than silently picking up
+        :class:`~meshprovision.db.nodes.NodeRecord`'s template-oriented
+        ``"CLIENT"``/``"EU_868"`` class defaults as if they had been
+        observed.
         ``ble_pin`` is only overwritten when
-        :attr:`AdoptionReport.ble_pin` is not ``None``.
+        :attr:`AdoptionReport.ble_pin` is not ``None``; likewise
+        ``gps_lat``/``gps_lon``/``gps_alt`` are only overwritten when the
+        corresponding :attr:`AdoptionReport.gps_lat`/:attr:`gps_lon`/
+        :attr:`gps_alt` is not ``None`` (set only by a backup adopt whose
+        profile carried a fixed position -- see :attr:`AdoptionReport.gps_lat`).
     """
     base = (
         report.existing if report.existing is not None else NodeRecord(node_id=report.node_id.hex)
@@ -567,17 +597,31 @@ def adopted_record(
     changes: dict[str, object] = {
         "short_name": report.short_name,
         "long_name": report.long_name,
-        "hw_model": report.hw_model,
-        "firmware_version": report.firmware_version,
         "authorized_admin_keys": tuple(admin_key_refs),
         "unregistered_admin_keys": tuple(unregistered_encoded),
         "management": ManagementMode.OBSERVED,
     }
+    # hw_model/firmware_version follow the same "empty is no new information,
+    # not evidence of absence" rule role/region already had below -- a
+    # backup-only adopt (mesh adopt --from-backup with no paired node-db
+    # export) reports both as "" (a .cfg carries neither at all), and
+    # without this guard a re-adopt from such a backup would blank out
+    # values a live adopt had previously recorded.
+    if report.hw_model or report.existing is None:
+        changes["hw_model"] = report.hw_model
+    if report.firmware_version or report.existing is None:
+        changes["firmware_version"] = report.firmware_version
     if report.role or report.existing is None:
         changes["role"] = report.role
     if report.region or report.existing is None:
         changes["region"] = report.region
     if report.ble_pin is not None:
         changes["ble_pin"] = report.ble_pin
+    if report.gps_lat is not None:
+        changes["gps_lat"] = report.gps_lat
+    if report.gps_lon is not None:
+        changes["gps_lon"] = report.gps_lon
+    if report.gps_alt is not None:
+        changes["gps_alt"] = report.gps_alt
 
     return base.with_updates(**changes).touched(now=now)

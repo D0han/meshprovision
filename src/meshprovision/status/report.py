@@ -13,13 +13,20 @@ test.** Nothing in this module may reference
 ``NodeRepository.delete``, ``KeyRepository.upsert``, ``db.atomic_writer``,
 or anything in
 ``meshprovision.provisioning.apply`` or ``meshprovision.provisioning.
-repair``. An e2e test asserts the ODS file's mtime is unchanged across a
-full ``mesh status`` run, and a unit test
+repair``. An e2e test asserts the **live** ODS file's mtime is unchanged
+across a full ``mesh status`` run, and a unit test
 (``tests/unit/test_readonly_status_boundary.py``) walks this module's AST
 for those operations -- both are expected to keep passing as this module
 changes.
 :func:`load_records` additionally asserts, defensively, that merely
 loading the database never marks the in-memory session dirty.
+
+None of this is contradicted by :func:`~meshprovision.db.ods
+.load_database` best-effort refreshing the known-good safety copy under
+``data/backups/`` on every successful load, including this module's own
+-- that is a side-channel copy elsewhere on disk, never a write to
+``OdsDatabase``'s in-memory state or the live database file this
+module's own guarantee is about.
 """
 
 from __future__ import annotations
