@@ -294,7 +294,8 @@ stays identifiable instead of rendering `-`.
 standard `TZ` environment variable overrides it, same as any other
 timezone-aware program); `--json` stays UTC (`Z`-suffixed) throughout, so
 scripted consumers get byte-identical output regardless of the host's
-timezone or DST.
+timezone or DST. Since every row is in that same one zone, it's named once
+in the column header (`Timestamp (CEST)`) rather than repeated per row.
 
 The summary caption also states how stale the report is, per source, since
 a status run can be served entirely from the HTTP cache: `data as of

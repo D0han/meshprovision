@@ -45,6 +45,7 @@ OFFSET_TIMESTAMP_Z = "2026-08-25T03:14:10Z"
 # OFFSET_TIMESTAMP normalizes to 2026-08-25T03:14:10Z; Europe/Warsaw is
 # UTC+2 in August (CEST), so the localized form is 05:14:10.
 OFFSET_TIMESTAMP_WARSAW = "2026-08-25 05:14:10 CEST"
+OFFSET_TIMESTAMP_WARSAW_NO_ZONE = "2026-08-25 05:14:10"
 
 
 @pytest.fixture
@@ -510,6 +511,24 @@ def test_format_local_keeps_the_full_form_on_a_different_local_date(local_tz: No
     assert timefmt.format_local(OFFSET_TIMESTAMP, reference=reference) == OFFSET_TIMESTAMP_WARSAW
 
 
+def test_format_local_include_zone_false_omits_the_zone_abbreviation(local_tz: None) -> None:
+    assert (
+        timefmt.format_local(OFFSET_TIMESTAMP, include_zone=False)
+        == OFFSET_TIMESTAMP_WARSAW_NO_ZONE
+    )
+
+
+def test_format_local_include_zone_false_still_shortens_on_the_same_local_date(
+    local_tz: None,
+) -> None:
+    """The same-day short form never carries a zone either way -- include_zone changes nothing."""
+    reference = datetime(2026, 8, 25, 3, 0, 0, tzinfo=UTC)  # same local date as OFFSET_TIMESTAMP
+    assert (
+        timefmt.format_local(OFFSET_TIMESTAMP, reference=reference, include_zone=False)
+        == "05:14:10"
+    )
+
+
 def test_local_tz_abbreviation(local_tz: None) -> None:
     assert timefmt.local_tz_abbreviation(OFFSET_TIMESTAMP) == "CEST"
 
@@ -649,6 +668,24 @@ def test_status_report_summary_mentions_data_as_of(local_tz: None) -> None:
     assert f"loranet {timefmt.format_local(NOW - timedelta(minutes=4), reference=NOW)}" in summary
     assert f"lorastats {timefmt.format_local(NOW, reference=NOW)}" in summary
     assert summary.endswith(timefmt.local_tz_abbreviation(NOW))
+
+
+def test_status_report_summary_data_as_of_states_the_zone_only_once(local_tz: None) -> None:
+    """Regression test: a cross-day entry must not repeat the zone abbreviation.
+
+    format_local()'s own full-date form includes a zone by default; the
+    summary clause already states the zone once at the end, so a naive
+    caller would double it up for any source whose data predates today.
+    """
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        data_as_of={SOURCE_LORANET: NOW - timedelta(days=1)},
+    )
+    summary = report.summary()
+    assert summary.count("CEST") == 1
+    assert summary.endswith("CEST")
 
 
 # ---------------------------------------------------------------------------
@@ -851,22 +888,32 @@ def test_build_table_caption_mentions_field_coercions() -> None:
     assert "5 field(s) could not be coerced" in str(table.caption)
 
 
-def test_timestamp_cell_renders_local_time(local_tz: None) -> None:
-    assert render._timestamp_cell(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_WARSAW
+def test_timestamp_cell_renders_local_time_without_the_zone(local_tz: None) -> None:
+    assert render._timestamp_cell(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_WARSAW_NO_ZONE
     assert render._timestamp_cell(None) == "-"
 
 
-def test_build_table_timestamp_column_renders_local_time(local_tz: None) -> None:
+def test_build_table_timestamp_column_renders_local_time_without_the_zone(local_tz: None) -> None:
     obs = _obs(SOURCE_LORANET, last_seen=OFFSET_TIMESTAMP)
     report = build_report(
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
     )
     table = render.build_table(report)
     timestamp_column = table.columns[6]
-    assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_WARSAW]
+    assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_WARSAW_NO_ZONE]
 
 
-def test_build_table_returns_expected_columns() -> None:
+def test_build_table_timestamp_header_names_the_local_zone_once(local_tz: None) -> None:
+    """Regression test: the zone is stated once in the header, not repeated per row."""
+    obs = _obs(SOURCE_LORANET, last_seen=OFFSET_TIMESTAMP)
+    report = build_report(
+        records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
+    )
+    table = render.build_table(report)
+    assert str(table.columns[6].header) == "Timestamp (CEST)"
+
+
+def test_build_table_returns_expected_columns(local_tz: None) -> None:
     obs = _obs(SOURCE_LORANET, last_seen=NOW)
     report = build_report(
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
@@ -880,7 +927,7 @@ def test_build_table_returns_expected_columns() -> None:
         "Mgmt",
         "Status",
         "Last seen",
-        "Timestamp",
+        "Timestamp (CEST)",
         "Batt",
         "Volt",
         "ChUtil",

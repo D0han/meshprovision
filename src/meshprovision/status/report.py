@@ -316,7 +316,8 @@ class StatusReport:
         text = f"{len(self.nodes)} node(s): {breakdown}"
         if self.data_as_of:
             parts = ", ".join(
-                f"{source} {format_local(timestamp, reference=self.generated_at)}"
+                f"{source} "
+                f"{format_local(timestamp, reference=self.generated_at, include_zone=False)}"
                 for source, timestamp in self.data_as_of.items()
             )
             text += f"; data as of {parts} {local_tz_abbreviation(self.generated_at)}"

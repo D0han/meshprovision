@@ -128,15 +128,17 @@ def _timestamp_cell(value: datetime | None) -> str:
         value: The timestamp, or ``None``.
 
     Returns:
-        For example ``"2026-08-25 05:14:10 CEST"``, or :data:`_DASH` when
-        ``value`` is ``None``. Always the full date/time/zone form (no
-        same-day shortening): unlike the summary caption's ``data as of``
+        For example ``"2026-08-25 05:14:10"``, or :data:`_DASH` when
+        ``value`` is ``None``. Always the full date/time form (no
+        same-day shortening: unlike the summary caption's ``data as of``
         clause, table rows have no single shared reference date to
-        collapse against.
+        collapse against) and never the zone abbreviation -- every row
+        is in the same local zone, so :func:`build_table` states it once
+        in the column header instead of repeating it per row.
     """
     if value is None:
         return _DASH
-    return timefmt.format_local(value)
+    return timefmt.format_local(value, include_zone=False)
 
 
 def _sources_cell(sources: tuple[str, ...]) -> str:
@@ -165,6 +167,11 @@ def build_table(report: StatusReport) -> Table:
     renders a header-only table with a single ``"No nodes in the
     database"`` caption instead.
 
+    The ``Timestamp`` column header names the local timezone once (for
+    example ``"Timestamp (CEST)"``, from ``report.generated_at``) rather
+    than repeating it on every row -- every timestamp this table renders
+    shares that one local zone (see :func:`_timestamp_cell`).
+
     Args:
         report: The report to render.
 
@@ -178,7 +185,7 @@ def build_table(report: StatusReport) -> Table:
     table.add_column("Mgmt")
     table.add_column("Status")
     table.add_column("Last seen")
-    table.add_column("Timestamp")
+    table.add_column(f"Timestamp ({timefmt.local_tz_abbreviation(report.generated_at)})")
     table.add_column("Batt", justify="right")
     table.add_column("Volt", justify="right")
     table.add_column("ChUtil", justify="right")

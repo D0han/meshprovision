@@ -24,7 +24,7 @@ from typing import Final
 
 __all__ = ["format_local", "isoformat_z", "local_tz_abbreviation"]
 
-_LOCAL_DATETIME_FORMAT: Final[str] = "%Y-%m-%d %H:%M:%S %Z"
+_LOCAL_DATETIME_FORMAT: Final[str] = "%Y-%m-%d %H:%M:%S"
 _LOCAL_TIME_ONLY_FORMAT: Final[str] = "%H:%M:%S"
 
 
@@ -43,7 +43,9 @@ def isoformat_z(value: datetime | None) -> str | None:
     return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def format_local(value: datetime, *, reference: datetime | None = None) -> str:
+def format_local(
+    value: datetime, *, reference: datetime | None = None, include_zone: bool = True
+) -> str:
     """Render a timezone-aware datetime in the machine's local timezone.
 
     Args:
@@ -51,10 +53,20 @@ def format_local(value: datetime, *, reference: datetime | None = None) -> str:
         reference: When given, and ``value`` falls on the same local
             calendar date as ``reference`` (both converted to local time
             first), only the time-of-day is rendered (``"14:32:10"``)
-            instead of the full ``"2026-09-19 14:32:10 CEST"`` form. Lets
-            a caller with one shared reference instant (for example a
+            instead of the full ``"2026-09-19 14:32:10"`` form. Lets a
+            caller with one shared reference instant (for example a
             report's ``generated_at``) keep a per-source breakdown short
-            without repeating today's date for every entry.
+            without repeating today's date for every entry. Never
+            appends the zone abbreviation regardless of ``include_zone``
+            -- a bare time-of-day next to its already-dated siblings
+            reads as "the same day," so restating the zone on it too
+            would be noise.
+        include_zone: Whether to append the local zone's abbreviation
+            (:func:`local_tz_abbreviation`) to the full ``"YYYY-MM-DD
+            HH:MM:SS"`` form. Callers that state the zone once
+            elsewhere -- a table column header, a summary clause's
+            trailing zone -- pass ``False`` so every individual value
+            doesn't repeat it.
 
     Returns:
         The localized, human-readable rendering.
@@ -64,7 +76,10 @@ def format_local(value: datetime, *, reference: datetime | None = None) -> str:
         local_reference = reference.astimezone()
         if local_value.date() == local_reference.date():
             return local_value.strftime(_LOCAL_TIME_ONLY_FORMAT)
-    return local_value.strftime(_LOCAL_DATETIME_FORMAT)
+    rendered = local_value.strftime(_LOCAL_DATETIME_FORMAT)
+    if include_zone:
+        rendered += " " + local_tz_abbreviation(value)
+    return rendered
 
 
 def local_tz_abbreviation(value: datetime) -> str:
