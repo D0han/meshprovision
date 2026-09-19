@@ -216,6 +216,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the security model, firmware 2.8 compatibility notes, deliberate spec
   deviations, and Linux Mint troubleshooting -- moved into topic pages under
   `docs/`.
+- `mesh status`'s console table (`Timestamp` column) and summary caption now
+  render in the machine's local timezone instead of UTC (the standard `TZ`
+  environment variable overrides it); `--json` is unchanged -- still UTC,
+  `Z`-suffixed, byte-identical across timezones and DST. The summary
+  caption also gained a `data as of <source> <time>` clause per queried
+  source, stating when that source's data was actually last fetched from
+  the network (the original fetch time on a cache hit, never "now"), so a
+  report served entirely from the HTTP cache doesn't read as freshly
+  fetched; `--json` carries the same information, in UTC, as a new
+  `data_as_of` object alongside `cache`.
 
 ### Fixed
 

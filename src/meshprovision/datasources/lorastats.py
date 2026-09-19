@@ -157,8 +157,10 @@ class LorastatsSource(BaseHTTPDataSource):
 
         Issues one per-node request per id (the whole point of the
         server-side ``?node=`` filter -- see the module docstring), never
-        a region bulk dump. Resets :attr:`last_fetch_skipped` and sums
-        each :meth:`fetch_node` call's contribution into it.
+        a region bulk dump. Resets :attr:`last_fetch_skipped`,
+        :attr:`last_fetch_field_coercions`, and :attr:`last_fetch_data_as_of`,
+        and folds each :meth:`fetch_node` call's contribution into them
+        (the oldest fetch time across every id, for the latter).
 
         Args:
             ids: The node ids to look up.
@@ -171,14 +173,23 @@ class LorastatsSource(BaseHTTPDataSource):
         result: dict[NodeId, NodeObservation] = {}
         skipped = 0
         field_coercions = 0
+        data_as_of: datetime | None = None
         for node_id in ids:
             observation = self.fetch_node(node_id, force_refresh=force_refresh)
             skipped += self._last_fetch_skipped
             field_coercions += self._last_fetch_field_coercions
+            # fetch_node() calls _begin_fetch() itself, so
+            # self.last_fetch_data_as_of here reflects only *this* id's
+            # request(s) -- aggregate the oldest across the loop the same
+            # way skipped/field_coercions are already summed above.
+            node_data_as_of = self.last_fetch_data_as_of
+            if node_data_as_of is not None and (data_as_of is None or node_data_as_of < data_as_of):
+                data_as_of = node_data_as_of
             if observation is not None:
                 result[node_id] = observation
         self._last_fetch_skipped = skipped
         self._last_fetch_field_coercions = field_coercions
+        self._last_fetch_data_as_of = data_as_of.timestamp() if data_as_of is not None else None
         return result
 
     def fetch_node(
@@ -207,7 +218,11 @@ class LorastatsSource(BaseHTTPDataSource):
             candidate records across every queried region that could not
             even be inspected for a match (see :func:`_match_record`) --
             never counting a record that simply belonged to a different
-            node, only one this call could not parse at all.
+            node, only one this call could not parse at all. Resets and
+            sets :attr:`last_fetch_data_as_of` to the oldest fetch time
+            across every request this call made (via :meth:`_begin_fetch`
+            and :meth:`~meshprovision.datasources.base.BaseHTTPDataSource
+            .get_json`).
 
         Raises:
             meshprovision.errors.NodeIdError: If ``node_id`` cannot be
@@ -218,6 +233,7 @@ class LorastatsSource(BaseHTTPDataSource):
                 body does not parse as a JSON array.
             meshprovision.errors.HttpError: If a request itself fails.
         """
+        self._begin_fetch()
         nid = NodeId.parse(node_id)
         candidates = validate_regions((region,)) if region is not None else self._regions
         skipped = 0

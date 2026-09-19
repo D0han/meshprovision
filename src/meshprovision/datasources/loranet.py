@@ -81,6 +81,7 @@ class LoranetSource(BaseHTTPDataSource):
         super().__init__(client, source_name=SOURCE_LORANET)
         self._url = url
         self._index: Mapping[str, Any] | None = None
+        self._index_fetched_at: float | None = None
 
     @property
     def url(self) -> str:
@@ -109,10 +110,18 @@ class LoranetSource(BaseHTTPDataSource):
             meshprovision.errors.HttpError: If the request itself fails.
         """
         if self._index is not None and not force_refresh:
+            # The in-memory memo means get_json() -- and so
+            # last_fetch_data_as_of -- is never touched on this path;
+            # re-apply the fetch time captured when the memo was built so
+            # a caller (via fetch_all/fetch_nodes) still learns when this
+            # data actually came off the wire, not "no HTTP request was
+            # made" (None).
+            self._last_fetch_data_as_of = self._index_fetched_at
             return self._index
         payload = self.get_json(self._url, force_refresh=force_refresh)
         index = require_json_object(payload, url=self._url, source=self.name)
         self._index = index
+        self._index_fetched_at = self._last_fetch_data_as_of
         return index
 
     def invalidate(self) -> None:
@@ -123,6 +132,7 @@ class LoranetSource(BaseHTTPDataSource):
         depending on TTL) HTTP response.
         """
         self._index = None
+        self._index_fetched_at = None
 
     def fetch_all(self, *, force_refresh: bool | None = None) -> dict[NodeId, NodeObservation]:
         """Parse every entry in the dump into a normalized observation.
@@ -130,6 +140,9 @@ class LoranetSource(BaseHTTPDataSource):
         A single malformed key or entry is logged and skipped rather than
         failing the whole 13k-entry batch; :attr:`last_fetch_skipped` is
         set to how many were skipped by this call.
+        :attr:`last_fetch_data_as_of` is set to when the dump itself was
+        fetched (see :meth:`raw_index`), whether that was a fresh
+        request or the in-process memo.
 
         Args:
             force_refresh: Forwarded to :meth:`raw_index`.
@@ -138,6 +151,7 @@ class LoranetSource(BaseHTTPDataSource):
             A mapping from every successfully parsed node id to its
             observation.
         """
+        self._begin_fetch()
         index = self.raw_index(force_refresh=force_refresh)
         observed_at = datetime.now(tz=UTC)
         result: dict[NodeId, NodeObservation] = {}
@@ -175,6 +189,9 @@ class LoranetSource(BaseHTTPDataSource):
         anything that isn't a JSON object -- ``None`` included).
         :attr:`last_fetch_skipped` is set to the number of *requested*
         ids whose entry was present but failed to parse.
+        :attr:`last_fetch_data_as_of` is set to when the dump itself was
+        fetched (see :meth:`raw_index`), whether that was a fresh
+        request or the in-process memo.
 
         Args:
             ids: The node ids to look up.
@@ -184,6 +201,7 @@ class LoranetSource(BaseHTTPDataSource):
             A mapping from every requested id that was found (and parsed
             successfully) to its observation.
         """
+        self._begin_fetch()
         index = self.raw_index(force_refresh=force_refresh)
         observed_at = datetime.now(tz=UTC)
         result: dict[NodeId, NodeObservation] = {}

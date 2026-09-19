@@ -222,7 +222,11 @@ class _RecordingClient:
     def get(self, url: str, **kwargs: object) -> object:
         self.calls.append({"url": url, **kwargs})
         payload = self.payload
-        return type("_Response", (), {"json": staticmethod(lambda: payload)})()
+        return type(
+            "_Response",
+            (),
+            {"json": staticmethod(lambda: payload), "fetched_at": 1_700_000_000.0},
+        )()
 
 
 def test_get_json_threads_ttl_params_and_source_through_to_the_client() -> None:
@@ -453,6 +457,79 @@ def test_lorastats_fetch_nodes_last_fetch_skipped_sums_across_ids_and_resets(
 
 
 @respx.mock
+def test_lorastats_fetch_node_is_none_before_any_fetch_but_set_after_a_miss(
+    tmp_path: Path,
+) -> None:
+    """A request that found no match still counts as data having been fetched."""
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(200, json=[]))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid")
+    assert source.last_fetch_data_as_of is None
+
+    assert source.fetch_node("deadbe01") is None
+    assert source.last_fetch_data_as_of is not None
+
+
+@respx.mock
+def test_lorastats_fetch_nodes_last_fetch_data_as_of_is_the_oldest_across_ids(
+    tmp_path: Path,
+) -> None:
+    """Regression test: last_fetch_data_as_of is the OLDEST fetch across every id.
+
+    A worst-case staleness bound for the whole ``fetch_nodes`` call, not
+    the newest (which would understate how stale the call's least-recent
+    contribution actually is).
+    """
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(
+        side_effect=[
+            httpx.Response(200, json=[{"NodeId": "deadbe01", "ShortName": "a"}]),
+            httpx.Response(200, json=[{"NodeId": "deadbe02", "ShortName": "b"}]),
+        ]
+    )
+    clock_values = iter([1_700_000_000.0, 1_700_000_050.0])
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache",
+        user_agent="mp/1 (+t@example.invalid)",
+        clock=lambda: next(clock_values),
+    )
+    source = LorastatsSource(client, contact="t@example.invalid")
+
+    result = source.fetch_nodes([NodeId.from_hex("deadbe01"), NodeId.from_hex("deadbe02")])
+
+    assert set(result) == {NodeId.from_hex("deadbe01"), NodeId.from_hex("deadbe02")}
+    assert source.last_fetch_data_as_of == datetime.fromtimestamp(1_700_000_000.0, tz=UTC)
+
+
+@respx.mock
+def test_lorastats_fetch_nodes_last_fetch_data_as_of_resets_between_calls(tmp_path: Path) -> None:
+    """Regression test: the value reflects only the *last* fetch_nodes call."""
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(200, json=[{"NodeId": "deadbe01", "ShortName": "a"}]))
+    clock_values = iter([1_700_000_000.0, 1_700_001_000.0])
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache",
+        user_agent="mp/1 (+t@example.invalid)",
+        # Bypass the cache read on every call so both fetches genuinely
+        # hit the network (same URL+params would otherwise be a cache
+        # hit the second time, never advancing the clock).
+        force_refresh=True,
+        clock=lambda: next(clock_values),
+    )
+    source = LorastatsSource(client, contact="t@example.invalid")
+
+    source.fetch_nodes([NodeId.from_hex("deadbe01")])
+    assert source.last_fetch_data_as_of == datetime.fromtimestamp(1_700_000_000.0, tz=UTC)
+
+    source.fetch_nodes([NodeId.from_hex("deadbe01")])
+    assert source.last_fetch_data_as_of == datetime.fromtimestamp(1_700_001_000.0, tz=UTC)
+
+
+@respx.mock
 def test_lorastats_fetch_nodes_never_files_an_observation_under_a_foreign_id(
     tmp_path: Path,
 ) -> None:
@@ -665,6 +742,82 @@ def test_loranet_invalidate_drops_memo(tmp_path: Path) -> None:
     source.invalidate()
     source.raw_index(force_refresh=True)
     assert route.call_count == 2
+
+
+@respx.mock
+def test_loranet_last_fetch_data_as_of_is_none_before_any_fetch(tmp_path: Path) -> None:
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+    assert source.last_fetch_data_as_of is None
+
+
+@respx.mock
+def test_loranet_fetch_all_sets_last_fetch_data_as_of_to_the_network_fetch_time(
+    tmp_path: Path,
+) -> None:
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    epoch = 1_700_000_000.0
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", clock=lambda: epoch
+    )
+    source = LoranetSource(client)
+
+    source.fetch_all()
+
+    assert source.last_fetch_data_as_of == datetime.fromtimestamp(epoch, tz=UTC)
+
+
+@respx.mock
+def test_loranet_raw_index_memo_preserves_the_original_fetch_time(tmp_path: Path) -> None:
+    """Regression test: the in-memory memo must not report the *current* clock as data_as_of.
+
+    A second, memoized ``fetch_nodes`` call issues no HTTP request at
+    all -- if ``last_fetch_data_as_of`` were left tracking "now" instead
+    of the fetch that actually produced the memoized data, an operator
+    would be told the data is fresher than it really is.
+    """
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    clock_state = {"now": 1_700_000_000.0}
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache",
+        user_agent="mp/1 (+t@example.invalid)",
+        ttl=10000,
+        clock=lambda: clock_state["now"],
+    )
+    source = LoranetSource(client)
+
+    source.fetch_all()
+    first = source.last_fetch_data_as_of
+    assert first == datetime.fromtimestamp(1_700_000_000.0, tz=UTC)
+
+    clock_state["now"] = 1_700_000_600.0  # 10 minutes later, well within the TTL
+    source.fetch_nodes([NodeId.from_hex("deadbe01")])  # the in-memory memo path; no HTTP call
+    assert source.last_fetch_data_as_of == first
+
+
+@respx.mock
+def test_loranet_invalidate_then_force_refresh_advances_last_fetch_data_as_of(
+    tmp_path: Path,
+) -> None:
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    clock_state = {"now": 1_700_000_000.0}
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache",
+        user_agent="mp/1 (+t@example.invalid)",
+        ttl=10000,
+        clock=lambda: clock_state["now"],
+    )
+    source = LoranetSource(client)
+
+    source.fetch_all()
+    first = source.last_fetch_data_as_of
+
+    clock_state["now"] = 1_700_000_900.0
+    source.invalidate()
+    source.fetch_all(force_refresh=True)
+
+    assert source.last_fetch_data_as_of == datetime.fromtimestamp(1_700_000_900.0, tz=UTC)
+    assert source.last_fetch_data_as_of != first
 
 
 @respx.mock

@@ -25,6 +25,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
+from meshprovision.status import timefmt
 from meshprovision.status.merge import Availability
 from meshprovision.status.report import StatusReport
 
@@ -121,18 +122,21 @@ def _percent_cell(value: float | None) -> str:
 
 
 def _timestamp_cell(value: datetime | None) -> str:
-    """Render an optional timestamp cell as ISO-8601 with a ``Z`` suffix.
+    """Render an optional timestamp cell in the machine's local timezone.
 
     Args:
         value: The timestamp, or ``None``.
 
     Returns:
-        For example ``"2026-08-25T03:14:10Z"``, or :data:`_DASH` when
-        ``value`` is ``None``.
+        For example ``"2026-08-25 05:14:10 CEST"``, or :data:`_DASH` when
+        ``value`` is ``None``. Always the full date/time/zone form (no
+        same-day shortening): unlike the summary caption's ``data as of``
+        clause, table rows have no single shared reference date to
+        collapse against.
     """
     if value is None:
         return _DASH
-    return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return timefmt.format_local(value)
 
 
 def _sources_cell(sources: tuple[str, ...]) -> str:
@@ -259,11 +263,17 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
                 "thresholds": {"stale_after_seconds": 7200, "offline_after_seconds": 86400},
                 "counts": {"online": 3, "stale": 1, "offline": 0, "unknown": 2},
                 "cache": {"hits": 2, "misses": 1, "network_requests": 1},
+                "data_as_of": {"loranet": "2026-08-25T02:58:03Z"},
                 "failures": [{"source": "lorastats", "message": "...", "hint": None}],
                 "skipped_entries": {"loranet": 12},
                 "field_coercions": {"loranet": 5},
                 "nodes": [...],
             }
+
+        ``data_as_of`` stays UTC/``Z``-suffixed like every other
+        timestamp here, so this document stays byte-identical across
+        timezones and DST -- only the ``rich`` table (:func:`build_table`)
+        localizes.
     """
     counts = report.counts
     generated_at = report.generated_at.astimezone(UTC).isoformat(timespec="seconds")
@@ -278,6 +288,10 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
             "hits": report.cache_hits,
             "misses": report.cache_misses,
             "network_requests": report.network_requests,
+        },
+        "data_as_of": {
+            source: timefmt.isoformat_z(timestamp)
+            for source, timestamp in report.data_as_of.items()
         },
         "skipped_entries": dict(report.skipped_entries),
         "field_coercions": dict(report.field_coercions),

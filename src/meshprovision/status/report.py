@@ -56,8 +56,10 @@ from meshprovision.status.merge import (
     Thresholds,
     merge_all,
 )
+from meshprovision.status.timefmt import format_local, local_tz_abbreviation
 
 __all__ = [
+    "CollectedObservations",
     "SourceFailure",
     "StatusOptions",
     "StatusReport",
@@ -87,6 +89,36 @@ class SourceFailure:
     source: str
     message: str
     hint: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CollectedObservations:
+    """The result of one :func:`collect_observations` call.
+
+    Attributes:
+        observations: Per-source observation maps, keyed by source name
+            (a source that failed entirely is simply absent).
+        failures: Every source that failed during collection, in the
+            order they were queried.
+        skipped_entries: Per-source count of entries a *successful*
+            source fetched but could not parse, omitting any source with
+            a count of zero.
+        field_coercions: Per-source count of individual fields a
+            *successful* source could not coerce, omitting any source
+            with a count of zero.
+        data_as_of: Per-source timestamp of when the data behind this
+            run was actually fetched from the network -- for a cache
+            hit, the *original* fetch time, not "now"; the oldest such
+            timestamp when a source's fetch spanned more than one HTTP
+            request. Omits a source that made no HTTP request at all
+            (it failed before issuing one, or was not queried).
+    """
+
+    observations: dict[str, dict[NodeId, NodeObservation]]
+    failures: tuple[SourceFailure, ...]
+    skipped_entries: dict[str, int]
+    field_coercions: dict[str, int]
+    data_as_of: dict[str, datetime]
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,6 +183,13 @@ class StatusReport:
             without this, a source silently zeroing out one field
             fleet-wide (an upstream schema rename, for example) is
             invisible.
+        data_as_of: Per-source timestamp of when that source's data was
+            actually fetched from the network -- for a cache hit, the
+            *original* fetch time, not "now" -- keyed by source name.
+            Omits a source that made no HTTP request (it failed before
+            issuing one, or was not queried). Surfaced in
+            :meth:`summary` so an operator can tell how stale the report
+            is without cross-referencing the HTTP cache.
         cache_hits: Cache hits accumulated by the underlying HTTP client
             during this run.
         cache_misses: Cache misses accumulated by the underlying HTTP
@@ -165,6 +204,7 @@ class StatusReport:
     failures: tuple[SourceFailure, ...] = ()
     skipped_entries: Mapping[str, int] = field(default_factory=dict)
     field_coercions: Mapping[str, int] = field(default_factory=dict)
+    data_as_of: Mapping[str, datetime] = field(default_factory=dict)
     cache_hits: int = 0
     cache_misses: int = 0
     network_requests: int = 0
@@ -265,12 +305,21 @@ class StatusReport:
 
         Returns:
             For example ``"5 node(s): 3 online, 1 stale, 0 offline, 1
-            unknown; 1 source failure(s); 12 unparsable entrie(s) from
-            loranet"``.
+            unknown; data as of loranet 14:28:03, lorastats 14:32:10
+            CEST; 1 source failure(s); 12 unparsable entrie(s) from
+            loranet"``. The ``data as of`` clause is omitted entirely
+            when :attr:`data_as_of` is empty (every source failed before
+            issuing a request, or none were queried).
         """
         counts = self.counts
         breakdown = ", ".join(f"{counts[avail]} {avail.value}" for avail in _ALL_AVAILABILITIES)
         text = f"{len(self.nodes)} node(s): {breakdown}"
+        if self.data_as_of:
+            parts = ", ".join(
+                f"{source} {format_local(timestamp, reference=self.generated_at)}"
+                for source, timestamp in self.data_as_of.items()
+            )
+            text += f"; data as of {parts} {local_tz_abbreviation(self.generated_at)}"
         if self.failures:
             text += f"; {len(self.failures)} source failure(s)"
         if self.skipped_entries:
@@ -357,12 +406,7 @@ def load_node_ids(db_path: Path) -> tuple[NodeId, ...]:
 
 def collect_observations(
     sources: Sequence[DataSource], ids: Sequence[NodeId], *, force_refresh: bool = False
-) -> tuple[
-    dict[str, dict[NodeId, NodeObservation]],
-    tuple[SourceFailure, ...],
-    dict[str, int],
-    dict[str, int],
-]:
+) -> CollectedObservations:
     """Query every source for the given node ids, tolerating a failing source.
 
     A source that raises :class:`~meshprovision.errors.DataSourceError`
@@ -384,6 +428,14 @@ def collect_observations(
     schema change, for example) looks identical to those nodes simply
     being offline.
 
+    Also collects each successful source's
+    :attr:`~meshprovision.datasources.base.DataSource.last_fetch_data_as_of`
+    into :attr:`CollectedObservations.data_as_of` -- when the data behind
+    that source's contribution was actually pulled off the network (the
+    original fetch time on a cache hit, not "now"), so a report can state
+    how stale its data really is instead of implying every run reflects
+    the current instant.
+
     Args:
         sources: The data sources to query, in the order they were
             configured.
@@ -391,21 +443,14 @@ def collect_observations(
         force_refresh: Forwarded to each source's ``fetch_nodes`` call.
 
     Returns:
-        An ``(observations_by_source, failures, skipped_by_source,
-        field_coercions_by_source)`` 4-tuple: the first maps each
-        source's name to its ``{node_id: observation}`` result (sources
-        that failed entirely are simply absent); the second lists every
-        source that failed, in the order they were queried; the third
-        maps each *successful* source's name to how many entries it
-        could not parse, omitting any source with a count of zero; the
-        fourth maps each *successful* source's name to how many
-        individual fields (within otherwise-parsed entries) it could
-        not coerce, omitting any source with a count of zero.
+        The collected observations, failures, and per-source diagnostic
+        counts. See :class:`CollectedObservations`.
     """
     observations: dict[str, dict[NodeId, NodeObservation]] = {}
     failures: list[SourceFailure] = []
     skipped: dict[str, int] = {}
     field_coercions: dict[str, int] = {}
+    data_as_of: dict[str, datetime] = {}
     for source in sources:
         try:
             fetched = source.fetch_nodes(ids, force_refresh=force_refresh)
@@ -418,7 +463,15 @@ def collect_observations(
             skipped[source.name] = source.last_fetch_skipped
         if source.last_fetch_field_coercions:
             field_coercions[source.name] = source.last_fetch_field_coercions
-    return observations, tuple(failures), skipped, field_coercions
+        if source.last_fetch_data_as_of is not None:
+            data_as_of[source.name] = source.last_fetch_data_as_of
+    return CollectedObservations(
+        observations=observations,
+        failures=tuple(failures),
+        skipped_entries=skipped,
+        field_coercions=field_coercions,
+        data_as_of=data_as_of,
+    )
 
 
 def build_report(
@@ -544,15 +597,13 @@ def run_status(
                 LorastatsSource(active_client, contact=lorastats_contact, regions=options.regions)
             )
 
-        observations, failures, skipped, field_coercions = collect_observations(
-            sources, ids, force_refresh=options.force_refresh
-        )
+        collected = collect_observations(sources, ids, force_refresh=options.force_refresh)
         stats = active_client.stats
         report = build_report(
             records=records,
-            observations_by_source=observations,
+            observations_by_source=collected.observations,
             node_ids=ids,
-            failures=failures,
+            failures=collected.failures,
             now=resolved_now,
             options=options,
         )
@@ -561,8 +612,9 @@ def run_status(
             nodes=report.nodes,
             thresholds=report.thresholds,
             failures=report.failures,
-            skipped_entries=skipped,
-            field_coercions=field_coercions,
+            skipped_entries=collected.skipped_entries,
+            field_coercions=collected.field_coercions,
+            data_as_of=collected.data_as_of,
             cache_hits=stats.hits,
             cache_misses=stats.misses,
             network_requests=stats.network_requests,

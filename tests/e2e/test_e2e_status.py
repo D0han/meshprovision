@@ -89,12 +89,19 @@ def test_json_run_reports_an_online_node(
         "thresholds",
         "counts",
         "cache",
+        "data_as_of",
         "failures",
         "nodes",
     }
     (node_doc,) = document["nodes"]
     assert node_doc["availability"] == "online"
     assert set(node_doc["sources"]) == {"loranet", "lorastats"}
+
+    # data_as_of stays UTC/Z-suffixed like every other JSON timestamp --
+    # only the rich table localizes (see the table-run test below).
+    assert set(document["data_as_of"]) == {"loranet", "lorastats"}
+    assert document["data_as_of"]["loranet"].endswith("Z")
+    assert document["data_as_of"]["lorastats"].endswith("Z")
 
     _scan_document(document)
 
@@ -116,6 +123,9 @@ def test_table_run_shows_short_name_and_online_label(
     assert result.exit_code == 0
     assert "MTa1" in result.stdout
     assert "online" in result.stdout
+    # The summary caption states how stale the data is, per source, in
+    # local time (unlike --json's data_as_of, which stays UTC/Z).
+    assert "data as of" in result.stdout
     assert result.stderr == ""
 
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
@@ -11,7 +13,7 @@ from meshprovision.datasources.models import NodeObservation
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import DataSourceError, HttpError, MissingContactError
 from meshprovision.nodeid import NodeId
-from meshprovision.status import render
+from meshprovision.status import render, timefmt
 from meshprovision.status.merge import (
     SOURCE_PRIORITY,
     Availability,
@@ -40,6 +42,27 @@ NOW = datetime(2026, 8, 25, 12, 0, 0, tzinfo=UTC)
 # instead of being masked by the test host's own timezone.
 OFFSET_TIMESTAMP = datetime(2026, 8, 25, 8, 14, 10, tzinfo=timezone(timedelta(hours=5)))
 OFFSET_TIMESTAMP_Z = "2026-08-25T03:14:10Z"
+# OFFSET_TIMESTAMP normalizes to 2026-08-25T03:14:10Z; Europe/Warsaw is
+# UTC+2 in August (CEST), so the localized form is 05:14:10.
+OFFSET_TIMESTAMP_WARSAW = "2026-08-25 05:14:10 CEST"
+
+
+@pytest.fixture
+def local_tz(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Pin the process's local timezone to Europe/Warsaw for a deterministic assertion.
+
+    Local-time rendering (:mod:`meshprovision.status.timefmt`) reads the
+    machine's zone via ``datetime.astimezone()`` with no argument, which
+    in turn follows the standard ``TZ`` environment variable -- pinning
+    it here (and calling ``time.tzset()`` to make glibc notice) is what
+    makes the rendered string deterministic across test hosts.
+    """
+    monkeypatch.setenv("TZ", "Europe/Warsaw")
+    time.tzset()
+    try:
+        yield
+    finally:
+        time.tzset()
 
 
 def _obs(source: str, **kwargs) -> NodeObservation:  # noqa: ANN003
@@ -469,6 +492,29 @@ def test_to_json_dict_last_seen_is_utc_normalized() -> None:
 
 
 # ---------------------------------------------------------------------------
+# timefmt.
+# ---------------------------------------------------------------------------
+
+
+def test_format_local_renders_the_full_form_by_default(local_tz: None) -> None:
+    assert timefmt.format_local(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_WARSAW
+
+
+def test_format_local_shortens_to_time_only_on_the_same_local_date(local_tz: None) -> None:
+    reference = datetime(2026, 8, 25, 3, 0, 0, tzinfo=UTC)  # same local date as OFFSET_TIMESTAMP
+    assert timefmt.format_local(OFFSET_TIMESTAMP, reference=reference) == "05:14:10"
+
+
+def test_format_local_keeps_the_full_form_on_a_different_local_date(local_tz: None) -> None:
+    reference = datetime(2026, 8, 26, 3, 0, 0, tzinfo=UTC)  # a different local date
+    assert timefmt.format_local(OFFSET_TIMESTAMP, reference=reference) == OFFSET_TIMESTAMP_WARSAW
+
+
+def test_local_tz_abbreviation(local_tz: None) -> None:
+    assert timefmt.local_tz_abbreviation(OFFSET_TIMESTAMP) == "CEST"
+
+
+# ---------------------------------------------------------------------------
 # StatusReport.
 # ---------------------------------------------------------------------------
 
@@ -583,6 +629,28 @@ def test_status_report_summary_mentions_field_coercions() -> None:
     assert "2 from lorastats" in summary
 
 
+def test_status_report_summary_omits_data_as_of_clause_when_empty() -> None:
+    report = build_report(records={}, observations_by_source={}, node_ids=[], now=NOW)
+    assert "data as of" not in report.summary()
+
+
+def test_status_report_summary_mentions_data_as_of(local_tz: None) -> None:
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        data_as_of={SOURCE_LORANET: NOW - timedelta(minutes=4), SOURCE_LORASTATS: NOW},
+    )
+    summary = report.summary()
+    assert "data as of" in summary
+    # NOW is same local calendar date as itself -- both entries render as
+    # a bare time-of-day, not the full date form, and the zone
+    # abbreviation is appended once at the end of the clause.
+    assert f"loranet {timefmt.format_local(NOW - timedelta(minutes=4), reference=NOW)}" in summary
+    assert f"lorastats {timefmt.format_local(NOW, reference=NOW)}" in summary
+    assert summary.endswith(timefmt.local_tz_abbreviation(NOW))
+
+
 # ---------------------------------------------------------------------------
 # collect_observations.
 # ---------------------------------------------------------------------------
@@ -600,10 +668,15 @@ class _FailingSource:
         raise HttpError("boom", url="https://x.invalid")
 
 
+_OK_SOURCE_DATA_AS_OF = NOW - timedelta(minutes=1)
+_PARTIALLY_SKIPPING_SOURCE_DATA_AS_OF = NOW - timedelta(minutes=6)
+
+
 class _OkSource:
     name = "lorastats"
     last_fetch_skipped = 0
     last_fetch_field_coercions = 0
+    last_fetch_data_as_of = _OK_SOURCE_DATA_AS_OF
 
     def fetch_nodes(
         self,
@@ -630,6 +703,7 @@ class _PartiallySkippingSource:
     name = "loranet"
     last_fetch_skipped = 7
     last_fetch_field_coercions = 0
+    last_fetch_data_as_of = _PARTIALLY_SKIPPING_SOURCE_DATA_AS_OF
 
     def fetch_nodes(
         self,
@@ -641,27 +715,28 @@ class _PartiallySkippingSource:
 
 
 def test_collect_observations_tolerates_one_failure() -> None:
-    observations, failures, skipped, field_coercions = collect_observations(
-        [_FailingSource(), _OkSource()], [NID]
-    )
-    assert "loranet" not in observations
-    assert "lorastats" in observations
-    assert len(failures) == 1
-    assert failures[0].source == "loranet"
-    assert skipped == {}
-    assert field_coercions == {}
+    collected = collect_observations([_FailingSource(), _OkSource()], [NID])
+    assert "loranet" not in collected.observations
+    assert "lorastats" in collected.observations
+    assert len(collected.failures) == 1
+    assert collected.failures[0].source == "loranet"
+    assert collected.skipped_entries == {}
+    assert collected.field_coercions == {}
+    assert collected.data_as_of == {"lorastats": _OK_SOURCE_DATA_AS_OF}
 
 
 def test_collect_observations_reports_skipped_entries_for_a_successful_source() -> None:
     """A source that succeeds but skipped entries must be visible, not silently absent."""
-    observations, failures, skipped, field_coercions = collect_observations(
-        [_PartiallySkippingSource(), _OkSource()], [NID]
-    )
-    assert failures == ()
-    assert "loranet" in observations
-    assert skipped == {"loranet": 7}
-    assert "lorastats" not in skipped
-    assert field_coercions == {}
+    collected = collect_observations([_PartiallySkippingSource(), _OkSource()], [NID])
+    assert collected.failures == ()
+    assert "loranet" in collected.observations
+    assert collected.skipped_entries == {"loranet": 7}
+    assert "lorastats" not in collected.skipped_entries
+    assert collected.field_coercions == {}
+    assert collected.data_as_of == {
+        "loranet": _PARTIALLY_SKIPPING_SOURCE_DATA_AS_OF,
+        "lorastats": _OK_SOURCE_DATA_AS_OF,
+    }
 
 
 def test_collect_observations_does_not_catch_missing_contact_error() -> None:
@@ -702,12 +777,24 @@ def test_report_to_json_dict_shape() -> None:
         "thresholds",
         "counts",
         "cache",
+        "data_as_of",
         "failures",
         "skipped_entries",
         "field_coercions",
         "nodes",
     }
     assert payload["generated_at"] == "2026-08-25T12:00:00Z"
+
+
+def test_report_to_json_dict_data_as_of_stays_utc() -> None:
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        data_as_of={SOURCE_LORANET: OFFSET_TIMESTAMP},
+    )
+    payload = render.report_to_json_dict(report)
+    assert payload["data_as_of"] == {SOURCE_LORANET: OFFSET_TIMESTAMP_Z}
 
 
 def test_report_to_json_dict_includes_skipped_entries() -> None:
@@ -764,19 +851,19 @@ def test_build_table_caption_mentions_field_coercions() -> None:
     assert "5 field(s) could not be coerced" in str(table.caption)
 
 
-def test_timestamp_cell_normalizes_a_non_utc_offset() -> None:
-    assert render._timestamp_cell(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_Z
+def test_timestamp_cell_renders_local_time(local_tz: None) -> None:
+    assert render._timestamp_cell(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_WARSAW
     assert render._timestamp_cell(None) == "-"
 
 
-def test_build_table_timestamp_column_renders_utc() -> None:
+def test_build_table_timestamp_column_renders_local_time(local_tz: None) -> None:
     obs = _obs(SOURCE_LORANET, last_seen=OFFSET_TIMESTAMP)
     report = build_report(
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
     )
     table = render.build_table(report)
     timestamp_column = table.columns[6]
-    assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_Z]
+    assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_WARSAW]
 
 
 def test_build_table_returns_expected_columns() -> None:

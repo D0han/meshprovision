@@ -289,6 +289,20 @@ Short/Long prefer the most recently observed name; a node no source has seen
 this run still shows the name already on file in the `Nodes` sheet, so it
 stays identifiable instead of rendering `-`.
 
+**Timestamps.** The table's `Timestamp` column and the summary caption's
+`data as of` clause (below) render in the machine's local timezone (the
+standard `TZ` environment variable overrides it, same as any other
+timezone-aware program); `--json` stays UTC (`Z`-suffixed) throughout, so
+scripted consumers get byte-identical output regardless of the host's
+timezone or DST.
+
+The summary caption also states how stale the report is, per source, since
+a status run can be served entirely from the HTTP cache: `data as of
+loranet 14:28:03, lorastats 14:32:10 CEST` is when that source's data was
+actually last fetched from the network — not "now" — so a cache hit never
+masquerades as fresh data. `--json` carries the same information, in UTC,
+under `data_as_of`.
+
 `--watch` respects the cache TTL (default poll interval = the cache TTL,
 floored at 5 s) and prints a per-poll cache hit/miss/request line to
 stderr.

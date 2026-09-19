@@ -18,6 +18,7 @@ per-node array).
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from meshprovision.errors import InvalidResponseError
@@ -97,6 +98,27 @@ class DataSource(Protocol):
         """
         ...
 
+    @property
+    def last_fetch_data_as_of(self) -> datetime | None:
+        """Return when the most recent ``fetch_nodes`` call's data was fetched.
+
+        This is when the underlying HTTP response(s) were actually
+        pulled from the network -- not "now": a cache hit inside the TTL
+        window reports the *original* fetch time, so an operator reading
+        a status report can tell how stale the data behind it really is.
+        When one ``fetch_nodes`` call was backed by more than one HTTP
+        request (lorastats.pl's one-request-per-node pattern, for
+        example), this is the **oldest** of them -- a worst-case
+        staleness bound for the whole call, not the newest. ``None``
+        when the most recent call made no HTTP request at all (an empty
+        ``ids``, or every candidate failing before any request was
+        issued).
+
+        Resets at the start of each ``fetch_nodes`` call, same "last
+        fetch only" convention as :attr:`last_fetch_skipped`.
+        """
+        ...
+
     def fetch_nodes(
         self, ids: Collection[NodeId], *, force_refresh: bool | None = None
     ) -> dict[NodeId, NodeObservation]:
@@ -145,6 +167,7 @@ class BaseHTTPDataSource:
         self._source_name = source_name
         self._last_fetch_skipped = 0
         self._last_fetch_field_coercions = 0
+        self._last_fetch_data_as_of: float | None = None
 
     @property
     def name(self) -> str:
@@ -181,6 +204,21 @@ class BaseHTTPDataSource:
         return self._last_fetch_field_coercions
 
     @property
+    def last_fetch_data_as_of(self) -> datetime | None:
+        """When the most recent ``fetch_nodes`` call's data was fetched.
+
+        Returns:
+            See :attr:`DataSource.last_fetch_data_as_of`. Derived from
+            :meth:`get_json`'s bookkeeping (the oldest
+            :attr:`~meshprovision.cache.http.CachedResponse.fetched_at`
+            seen since the last :meth:`_begin_fetch` call), converted to
+            a timezone-aware UTC datetime.
+        """
+        if self._last_fetch_data_as_of is None:
+            return None
+        return datetime.fromtimestamp(self._last_fetch_data_as_of, tz=UTC)
+
+    @property
     def client(self) -> CachedHTTPClient:
         """The cache-backed HTTP client this source issues requests through.
 
@@ -188,6 +226,22 @@ class BaseHTTPDataSource:
             The injected :class:`~meshprovision.cache.http.CachedHTTPClient`.
         """
         return self._client
+
+    def _begin_fetch(self) -> None:
+        """Reset the per-fetch data-as-of tracker.
+
+        Call this once at the start of every concrete ``fetch_nodes``/
+        ``fetch_all`` implementation -- the one obvious reset point for
+        :attr:`last_fetch_data_as_of`, mirroring how each such call
+        starts its own local ``skipped``/coercion counters from zero.
+        Without it, a source whose own ``fetch_nodes`` issues more than
+        one HTTP request per call (looping over ids or regions) would
+        keep comparing against a stale epoch left over from a *previous*
+        call, since :meth:`get_json` only ever narrows
+        :attr:`last_fetch_data_as_of` towards the oldest response it has
+        seen and never on its own forgets one.
+        """
+        self._last_fetch_data_as_of = None
 
     def get_json(
         self,
@@ -204,7 +258,12 @@ class BaseHTTPDataSource:
         does not imply the body is JSON (lorastats.pl's soft-404 case),
         so the JSON parse itself -- via
         :meth:`~meshprovision.cache.http.CachedResponse.json` -- is the
-        only thing this method trusts.
+        only thing this method trusts. Also narrows
+        :attr:`last_fetch_data_as_of` towards this response's
+        :attr:`~meshprovision.cache.http.CachedResponse.fetched_at` --
+        the actual network fetch time, even on a cache hit -- if it is
+        older than what has already been seen since the last
+        :meth:`_begin_fetch` call.
 
         Args:
             url: The request URL.
@@ -230,6 +289,8 @@ class BaseHTTPDataSource:
             force_refresh=force_refresh,
             source=self._source_name,
         )
+        if self._last_fetch_data_as_of is None or response.fetched_at < self._last_fetch_data_as_of:
+            self._last_fetch_data_as_of = response.fetched_at
         return response.json()
 
 

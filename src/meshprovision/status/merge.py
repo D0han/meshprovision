@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Final, TypeVar
 
@@ -26,6 +26,7 @@ from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.models import NodeObservation
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.nodeid import NodeId
+from meshprovision.status.timefmt import isoformat_z as _isoformat_z
 
 __all__ = [
     "DEFAULT_OFFLINE_AFTER",
@@ -282,21 +283,6 @@ class MergedNode:
             "in_database": self.in_database,
             "database": database,
         }
-
-
-def _isoformat_z(value: datetime | None) -> str | None:
-    """Render a timezone-aware datetime as ISO-8601 with a ``Z`` suffix.
-
-    Args:
-        value: The datetime to render, or ``None``.
-
-    Returns:
-        For example ``"2026-08-25T03:14:10Z"``, or ``None`` when ``value``
-        is ``None``.
-    """
-    if value is None:
-        return None
-    return value.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def humanize_age(age: timedelta | None) -> str:
