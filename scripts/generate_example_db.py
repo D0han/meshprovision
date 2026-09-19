@@ -63,7 +63,7 @@ from meshprovision.crypto.keys import decode_key, encode_key  # noqa: E402
 from meshprovision.db import ods  # noqa: E402
 from meshprovision.db.keys import KeyRecord  # noqa: E402
 from meshprovision.db.nodes import NodeRecord  # noqa: E402
-from meshprovision.db.schema import FirmwareType, KeyType  # noqa: E402
+from meshprovision.db.schema import FirmwareType, KeyType, ManagementMode  # noqa: E402
 from meshprovision.errors import MeshprovisionError  # noqa: E402
 
 __all__ = ["EXAMPLE_DB_PATH", "EXAMPLE_TIMESTAMP", "build_records", "generate", "main"]
@@ -139,6 +139,7 @@ def build_records() -> tuple[tuple[NodeRecord, ...], tuple[KeyRecord, ...]]:
             role="CLIENT",
             region="EU_868",
             ble_pin=SecretStr("014725"),
+            management=ManagementMode.TEMPLATE,
         ),
         NodeRecord(
             node_id="deadbe02",
@@ -156,6 +157,7 @@ def build_records() -> tuple[tuple[NodeRecord, ...], tuple[KeyRecord, ...]]:
             # Leading zeros are the point of this row: ble_pin is a text
             # column so "000042" round-trips as six characters, not 42.
             ble_pin=SecretStr("000042"),
+            management=ManagementMode.TEMPLATE,
         ),
         NodeRecord(
             node_id="deadbe03",
@@ -169,6 +171,7 @@ def build_records() -> tuple[tuple[NodeRecord, ...], tuple[KeyRecord, ...]]:
             notes=("EXAMPLE ROW - a node deliberately provisioned with zero admin keys."),
             role="ROUTER",
             region="EU_868",
+            management=ManagementMode.TEMPLATE,
         ),
     )
 

@@ -29,7 +29,7 @@ LibreOffice, not a CSV dump.
 | `region` | ENUM (dropdown `mp_region`) | LoRa region, from the installed `Config.LoRaConfig.RegionCode` protobuf enum |
 | `channel_psk_ref` | DERIVED, formula `=[.A{row}]&"_psk"` | Reference to this node's channel PSK row in the `Keys` sheet |
 | `ble_pin` | PIN, SECRET | 6-digit `bluetooth.fixed_pin`, stored as text so leading zeros survive; never logged or displayed |
-| `management` | ENUM (dropdown `mp_management`) | `template` (the default; `mesh provision` enforces the template on this node) or `observed` (`mesh adopt` recorded this node's live state as-is; `mesh provision` refuses to touch it until `--enroll`). Empty reads back as `template`, so every pre-existing row keeps its current behavior |
+| `management` | ENUM (dropdown `mp_management`) | `template` (`mesh provision` enforces the template on this node) or `observed` (`mesh adopt` recorded this node's live state as-is, or a human typed the row in by hand; `mesh provision` refuses to touch it until `--enroll`). Empty reads back as `observed` — meshprovision itself never writes a blank cell here, so a blank one always means a hand-added row |
 | `unregistered_admin_keys` | BASE64_KEY_LIST (`;`-separated), SECRET | Legacy/hand-edit-only column: raw base64-encoded admin public keys (32 bytes each) observed live on this node's `security.adminKey` that couldn't be resolved to any `Keys` sheet ref. `mesh adopt` no longer writes into this column — every admin key it observes now gets a real `Keys` sheet row instead (see [`observed-*` rows](#observed--rows) below) — and drains it on any node it re-adopts. A value here is only ever a leftover from a database written before that change, and not yet re-adopted; `mesh db verify` and `mesh adopt` still check it for the CVE-2025-52464 cross-device duplicate signature it used to be the sole record of. Marked SECRET to match `key_value`'s treatment, even though an admin key is itself a public, not secret, value |
 | `archived_at` | TIMESTAMP | UTC timestamp this node was archived (soft-deleted) via `mesh db forget`, or empty if active. Excludes the node from `mesh status` and refuses `mesh provision`/`mesh admin bootstrap`/`mesh adopt`, but every other cell on the row is preserved |
 
@@ -99,8 +99,19 @@ otherwise reported by fingerprint only, never its raw material;
 - **Dropdowns** (`table:content-validation`) on every fixed-value column.
   LibreOffice treats validation as advisory, so the loader re-validates
   every value anyway and reports the offending sheet/row/column.
+- **Rows are always sorted.** The `Nodes` sheet is ordered by `long_name`
+  (falling back to `short_name` when empty), case-insensitively and in
+  natural/human order — `MT2` before `MT11`, not the reverse — tie-broken
+  by `node_id`. Archived nodes sort inline with everything else, not to
+  the bottom. The `Keys` sheet sorts the same way on its own `key_ref`.
+  This applies on every load and every save, so both sheets always come
+  back in this order regardless of how rows were inserted.
 
 ## Hand-editing tips
+
+- Row order is not preserved. Reordering rows by hand is harmless but
+  pointless — the next `mesh` command that loads or saves the file puts
+  both sheets back into their sorted order (see above).
 
 - Format `node_id` as Text (Format > Cells > Text) before typing. This is
   why the project uses `odfpy` directly and not `pandas`: a hex node id

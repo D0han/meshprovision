@@ -755,7 +755,7 @@ def test_db_list_json_reports_every_node(
             "hw_model": "RAK4631",
             "firmware_type": "vanilla",
             "firmware_version": "",
-            "management": "template",
+            "management": "observed",
             "region": "EU_868",
             "role": "CLIENT",
             "authorized_admin_keys": ["ADMIN1_pub"],

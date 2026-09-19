@@ -130,7 +130,9 @@ class StatusReport:
 
     Attributes:
         generated_at: When this report was assembled. Timezone-aware.
-        nodes: Every reported node's merged view, in database row order.
+        nodes: Every reported node's merged view, in the database's
+            canonical row order (sorted by ``long_name``, see
+            :mod:`meshprovision.db.sorting`).
         thresholds: The age boundaries used to classify availability.
         failures: Data sources that failed during collection, if any.
         skipped_entries: Per-source count of entries a *successful*
@@ -300,8 +302,9 @@ def load_records(db_path: Path) -> dict[NodeId, NodeRecord]:
 
     Returns:
         A mapping from each node's id to its record, in the database's
-        own row order (a plain ``dict``'s insertion order, never
-        re-sorted).
+        canonical row order (a plain ``dict``'s insertion order,
+        following :mod:`meshprovision.db.sorting`'s sort by
+        ``long_name`` -- this function never re-sorts it itself).
 
     Raises:
         meshprovision.errors.SchemaError: If the file cannot be read or
@@ -329,13 +332,14 @@ def load_records(db_path: Path) -> dict[NodeId, NodeRecord]:
 
 
 def load_node_ids(db_path: Path) -> tuple[NodeId, ...]:
-    """Return every node id in the database, in the database's own row order.
+    """Return every node id in the database, in its canonical row order.
 
     Args:
         db_path: Path to the ``.ods`` database file.
 
     Returns:
-        Every node id currently in the ``Nodes`` sheet, in row order.
+        Every node id currently in the ``Nodes`` sheet, sorted by
+        ``long_name`` (see :mod:`meshprovision.db.sorting`).
 
     Raises:
         meshprovision.errors.SchemaError: If the file cannot be read or
@@ -439,7 +443,8 @@ def build_report(
             source name.
         node_ids: The node ids to include in the report, in the desired
             output order (:func:`load_node_ids` returns the database's
-            own row order; this function never re-sorts it).
+            canonical, ``long_name``-sorted row order; this function
+            never re-sorts it).
         failures: Data sources that failed during collection.
         now: The current time. Must be timezone-aware.
         options: The thresholds to classify availability against

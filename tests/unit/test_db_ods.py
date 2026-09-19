@@ -277,7 +277,10 @@ def test_stale_cached_formula_keys_key_ref(tmp_path: Path, keypair) -> None:
     assert len(loaded.warnings) == 1
     assert loaded.warnings[0].sheet == "Keys"
     assert loaded.warnings[0].column == "key_ref"
-    assert loaded.keys[0]["key_ref"] == pub.key_ref
+    # Keys rows are sorted by key_ref (see meshprovision.db.sorting), so
+    # look up by value rather than assuming a position.
+    key_refs = {row["key_ref"] for row in loaded.keys}
+    assert pub.key_ref in key_refs
 
 
 def test_stale_cached_formula_main_chipset(tmp_path: Path, keypair) -> None:
@@ -360,7 +363,10 @@ def test_blank_trailing_row_with_coerced_cell_produces_no_warnings(tmp_path: Pat
         backup=False,
     )
 
-    edit_ods_cell(path, "Nodes", "notes", 3, "", value_type="float")
+    # Rows are always sorted (see meshprovision.db.sorting): blank_row's
+    # empty long_name/short_name sorts before node's "Meshtastic MT00", so
+    # it lands on physical row 2, not row 3.
+    edit_ods_cell(path, "Nodes", "notes", 2, "", value_type="float")
 
     loaded = ods.load_database(path)
     assert loaded.warnings == ()
@@ -932,6 +938,11 @@ def test_read_raw_stops_after_max_blank_rows_across_separate_row_elements(
     ``table:table-row`` element with an implicit repeat of 1, so
     ``MAX_BLANK_ROWS + 1`` of them individually exercises the
     consecutive-blank *accumulation* path instead.
+
+    Rows are always sorted on write (see meshprovision.db.sorting) by
+    name, and a blank row's empty name always sorts first -- so unlike
+    before, only a *trailing* real row (never a leading one) can end up
+    after a run of blanks on disk.
     """
     node, pub, priv = _sample_records(keypair)
     blank_row = {col.name: "" for col in schema.SHEET_SPECS["Nodes"].columns}
@@ -939,17 +950,16 @@ def test_read_raw_stops_after_max_blank_rows_across_separate_row_elements(
     path = tmp_path / "db.ods"
     ods.write_database(
         path,
-        nodes=[node.to_row(), *([blank_row] * (ods.MAX_BLANK_ROWS + 1)), trailing_node.to_row()],
+        nodes=[*([blank_row] * (ods.MAX_BLANK_ROWS + 1)), trailing_node.to_row()],
         keys=[pub.to_row(), priv.to_row()],
         backup=False,
     )
 
     raw = ods.read_raw(path)
 
-    # The real row that started the run, plus exactly MAX_BLANK_ROWS blanks
-    # before exhaustion kicks in -- the trailing real row after the run of
-    # blanks must never be reached.
-    assert len(raw.sheets["Nodes"].rows) == 1 + ods.MAX_BLANK_ROWS
+    # Exactly MAX_BLANK_ROWS blanks before exhaustion kicks in -- the
+    # trailing real row after the run of blanks must never be reached.
+    assert len(raw.sheets["Nodes"].rows) == ods.MAX_BLANK_ROWS
     node_id_idx = schema.NODES_SHEET_SPEC.column_index("node_id")
     seen_node_ids = {row[node_id_idx].text for row in raw.sheets["Nodes"].rows}
     assert "cafe0002" not in seen_node_ids

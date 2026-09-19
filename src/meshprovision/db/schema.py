@@ -598,7 +598,10 @@ NODES_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
                 "Whether mesh provision enforces the template on this node "
                 '("template") or only records what mesh adopt observed on the '
                 'device ("observed") -- an observed node is left alone by mesh '
-                "provision until it is explicitly enrolled with --enroll."
+                "provision until it is explicitly enrolled with --enroll. "
+                "Leave this blank for a row you add by hand: it reads back as "
+                '"observed", since meshprovision itself never writes a blank '
+                "cell here."
             ),
             kind=ColumnKind.ENUM,
             allowed=tuple(ManagementMode),

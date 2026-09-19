@@ -105,8 +105,10 @@ re-reads, because of firmware issue #7449 (a restored private key could
 be discarded on reboot, with the device regenerating fresh keys).
 
 A node whose `Nodes` sheet row has `management=observed` (recorded by
-`mesh adopt`, below) is refused with exit code 5 unless `--enroll` is
-passed — checked before any admin-key resolution runs, and before
+`mesh adopt`, below — or simply a row you typed in by hand, since a blank
+`management` cell reads back as `observed`) is refused with exit code 5
+unless `--enroll` is passed — checked before any admin-key resolution
+runs, and before
 `--dry-run`'s early return, so an unenrolled node never even reaches a
 plan preview it didn't ask for. `mesh admin bootstrap` inherits the same
 gate, since it drives this same pipeline. `--enroll` graduates the row to

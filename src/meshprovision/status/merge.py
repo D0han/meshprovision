@@ -658,9 +658,10 @@ def merge_all(
     """Merge every node's observations across every source.
 
     Iterates ``node_ids`` in the caller's own order and never re-sorts
-    it -- :mod:`meshprovision.status.report` supplies the database's own
-    row order, so an operator's hand-ordering of the spreadsheet survives
-    into the rendered report.
+    it -- :mod:`meshprovision.status.report` supplies the database's
+    canonical row order (sorted by ``long_name``, see
+    :mod:`meshprovision.db.sorting`), so that order carries through
+    unchanged into the rendered report.
 
     Args:
         observations_by_source: Per-source observation maps, keyed by

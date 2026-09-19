@@ -182,6 +182,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The `Nodes`/`Keys` sheets are now always sorted -- on load, on every
+  in-memory mutation, and on write -- instead of preserving insertion/
+  hand-editing order. `Nodes` sorts by `long_name` (falling back to
+  `short_name` when empty), case-insensitively and in natural/human order
+  (`MT2` before `MT11`, not the reverse), tie-broken by `node_id`;
+  archived nodes sort inline, not to the bottom. `Keys` sorts the same
+  way on its own `key_ref`. This retires the previous "row order is
+  never re-sorted, so hand-ordering survives a round trip" guarantee:
+  `mesh db list`, `mesh status`, and the `.ods` file itself now always
+  agree on one predictable order. See
+  [`meshprovision.db.sorting`](src/meshprovision/db/sorting.py).
+- `Nodes.management` now defaults to `observed`, not `template`, when a
+  row's cell is blank. `NodeRecord.to_row()` always writes an explicit
+  value, so a blank cell can only come from a row added by hand -- which
+  is exactly what `observed` means: `mesh provision` leaves it alone
+  until it's explicitly enrolled with `--enroll`, rather than silently
+  enforcing the template on a device the operator only meant to record.
 - Default logging verbosity dropped from `INFO` to `WARNING`, so a plain
   `mesh status` (and every other command) no longer prints per-request
   "fetching ..." lines to stderr. The `-v`/`--verbose` ladder shifted down

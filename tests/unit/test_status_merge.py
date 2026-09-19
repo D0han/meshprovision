@@ -206,7 +206,7 @@ def test_merged_node_to_json_dict_never_contains_secrets() -> None:
         "long_name": "",
         "role": "CLIENT",
         "region": "EU_868",
-        "management": "template",
+        "management": "observed",
     }
 
 

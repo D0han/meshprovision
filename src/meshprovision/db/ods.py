@@ -31,6 +31,13 @@ Two independent load-order requirements of the ODF format matter here:
   bare name without a suffix, so writing is done via
   ``doc.write(fileobj)`` inside :func:`meshprovision.db.atomic_writer.atomic_write`,
   never via ``.save()``.
+
+**Rows are always sorted**, via :func:`meshprovision.db.sorting.sorted_rows`
+-- on load (:func:`load_database`), after every in-memory mutation
+(:meth:`OdsDatabase.replace`), and on write (:func:`build_document`). This
+means row order is no longer a hand-editable property of the file: a
+sheet's rows always come back in the same canonical order regardless of
+insertion history or how a human last arranged them.
 """
 
 from __future__ import annotations
@@ -56,7 +63,7 @@ from odf import text as odf_text
 from odf.element import Node
 from odf.opendocument import OpenDocumentSpreadsheet
 
-from meshprovision.db import header_diff, locking, schema
+from meshprovision.db import header_diff, locking, schema, sorting
 from meshprovision.db.atomic_writer import DEFAULT_RETENTION, atomic_write, refresh_known_good
 from meshprovision.errors import DbIntegrityError, DuplicateNodeError, SchemaError
 
@@ -704,7 +711,9 @@ def load_database(path: Path) -> LoadedDatabase:
         path: Path to the ``.ods`` file.
 
     Returns:
-        The fully validated database.
+        The fully validated database, with both sheets' rows sorted into
+        their canonical order (see :mod:`meshprovision.db.sorting`)
+        regardless of the file's own row order.
 
     Raises:
         SchemaError: If the file cannot be read, is missing the
@@ -733,6 +742,12 @@ def load_database(path: Path) -> LoadedDatabase:
     warnings: list[IntegrityWarning] = []
     nodes = _load_sheet_rows(raw.sheets[schema.NODES_SHEET], schema.NODES_SHEET_SPEC, warnings)
     keys = _load_sheet_rows(raw.sheets[schema.KEYS_SHEET], schema.KEYS_SHEET_SPEC, warnings)
+
+    # Sorted after warnings are collected (they cite the original ods_row
+    # numbers) but before the uniqueness checks below, which don't care
+    # about order -- see meshprovision.db.sorting.
+    nodes = sorting.sorted_rows(schema.NODES_SHEET, nodes)
+    keys = sorting.sorted_rows(schema.KEYS_SHEET, keys)
 
     _check_unique_node_ids(nodes)
     _check_unique_key_refs(keys)
@@ -988,8 +1003,10 @@ def build_document(
     """Build a complete, in-memory ODS document from row data.
 
     Args:
-        nodes: The ``Nodes`` sheet's rows, in write order.
-        keys: The ``Keys`` sheet's rows, in write order.
+        nodes: The ``Nodes`` sheet's rows -- written out sorted into
+            their canonical order (see :mod:`meshprovision.db.sorting`)
+            regardless of the order passed in.
+        keys: The ``Keys`` sheet's rows -- likewise sorted.
 
     Returns:
         The built document, ready to be serialized via ``doc.write(fileobj)``.
@@ -1000,8 +1017,8 @@ def build_document(
     _add_content_validations(doc)  # Must precede every <table:table> below.
 
     row_data: Mapping[str, Sequence[Mapping[str, str]]] = {
-        schema.NODES_SHEET: nodes,
-        schema.KEYS_SHEET: keys,
+        schema.NODES_SHEET: sorting.sorted_rows(schema.NODES_SHEET, nodes),
+        schema.KEYS_SHEET: sorting.sorted_rows(schema.KEYS_SHEET, keys),
     }
     for sheet_name in schema.SHEET_NAMES:
         sheet_spec = schema.SHEET_SPECS[sheet_name]
@@ -1024,8 +1041,10 @@ def write_database(
 
     Args:
         path: Path to write the ``.ods`` file to.
-        nodes: The ``Nodes`` sheet's rows, in write order.
-        keys: The ``Keys`` sheet's rows, in write order.
+        nodes: The ``Nodes`` sheet's rows -- written sorted into their
+            canonical order (see :mod:`meshprovision.db.sorting`)
+            regardless of the order passed in.
+        keys: The ``Keys`` sheet's rows -- likewise sorted.
         backup: Whether to back up the current file at ``path`` before
             replacing it.
         backup_dir: Directory to store the backup under, when ``backup``
@@ -1221,6 +1240,12 @@ class OdsDatabase:
     def replace(self, sheet: str, rows: Sequence[Mapping[str, str]]) -> None:
         """Replace one sheet's in-memory rows. Does not touch disk.
 
+        The stored rows are sorted into their canonical order (see
+        :mod:`meshprovision.db.sorting`) regardless of the order passed
+        in, so a subsequent :meth:`rows` call -- and thus ``mesh db
+        list``/``mesh status`` -- reflects the new order immediately,
+        within the same session, without waiting for a save/reload.
+
         Args:
             sheet: The sheet name (``"Nodes"`` or ``"Keys"``).
             rows: The new full set of rows for ``sheet``.
@@ -1231,7 +1256,7 @@ class OdsDatabase:
         self.load()
         if sheet not in schema.SHEET_SPECS:
             raise SchemaError(f"Unknown sheet: {sheet!r}", sheet=sheet)
-        self._rows[sheet] = tuple(dict(row) for row in rows)
+        self._rows[sheet] = sorting.sorted_rows(sheet, tuple(dict(row) for row in rows))
         self._is_dirty = True
 
     def dirty(self) -> bool:

@@ -58,13 +58,18 @@ def test_node_record_round_trip_full(keypair, keypair_factory) -> None:
     assert NodeRecord.from_row(record.to_row()) == record
 
 
-def test_from_row_missing_management_defaults_to_template() -> None:
-    row = NodeRecord(node_id="deadbe01").to_row()
+def test_from_row_missing_management_defaults_to_observed() -> None:
+    """A blank management cell reads back as OBSERVED, never TEMPLATE.
+
+    to_row() always writes an explicit value, so a blank cell can only
+    come from a hand-added row.
+    """
+    row = NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE).to_row()
     del row["management"]
-    assert NodeRecord.from_row(row).management is ManagementMode.TEMPLATE
+    assert NodeRecord.from_row(row).management is ManagementMode.OBSERVED
 
     row["management"] = ""
-    assert NodeRecord.from_row(row).management is ManagementMode.TEMPLATE
+    assert NodeRecord.from_row(row).management is ManagementMode.OBSERVED
 
 
 def test_from_row_empty_role_region_stays_empty_for_an_observed_row() -> None:
@@ -91,7 +96,7 @@ def test_from_row_empty_role_region_defaults_for_a_template_row() -> None:
     build_plan always resolves a real value, so an empty cell here is
     anomalous, unlike the OBSERVED case above.
     """
-    row = NodeRecord(node_id="deadbe01").to_row()
+    row = NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE).to_row()
     row["role"] = ""
     row["region"] = ""
 

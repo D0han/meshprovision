@@ -325,6 +325,7 @@ def test_drift_repair_renames_back_and_updates_role(
         hw_model="RAK4631",
         role="ROUTER",
         region="EU_868",
+        management=ManagementMode.TEMPLATE,
     )
     pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp)
     seed_db(nodes=[node_record], keys=[pub_record, priv_record])
@@ -452,6 +453,7 @@ def test_repair_with_no_admin_nodes_template_preserves_existing_admin_keys(
         role="ROUTER",
         region="EU_868",
         authorized_admin_keys=("ADMIN1_pub",),
+        management=ManagementMode.TEMPLATE,
     )
     pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp)
     admin_pub_record, admin_priv_record = KeyRecord.for_keypair("ADMIN1", admin_kp)
@@ -497,6 +499,7 @@ def test_revoked_live_admin_key_is_dropped_from_the_record(
         role="ROUTER",
         region="EU_868",
         authorized_admin_keys=("ADMIN1_pub", "ADMIN2_pub"),
+        management=ManagementMode.TEMPLATE,
     )
     pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp)
     admin2_pub, admin2_priv = KeyRecord.for_keypair("ADMIN2", admin2_kp)

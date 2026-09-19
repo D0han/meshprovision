@@ -132,7 +132,10 @@ class NodeRecord(BaseModel):
             ``None`` if not yet provisioned. Stored as text so leading
             zeros survive; never logged or displayed.
         management: Whether mesh provision enforces the template on this
-            node, or only observed it (see mesh adopt).
+            node, or only observed it (see mesh adopt). Defaults to
+            ``OBSERVED``: a blank cell means a human typed the row in by
+            hand, so mesh provision should leave it alone -- see
+            :meth:`from_row`.
         unregistered_admin_keys: Raw admin public keys (canonical base64,
             :class:`pydantic.SecretStr`-wrapped) mesh adopt observed
             live on this node's ``security.adminKey`` that are not
@@ -170,7 +173,7 @@ class NodeRecord(BaseModel):
     role: str = DEFAULT_ROLE
     region: str = DEFAULT_REGION
     ble_pin: SecretStr | None = None
-    management: ManagementMode = ManagementMode.TEMPLATE
+    management: ManagementMode = ManagementMode.OBSERVED
     unregistered_admin_keys: tuple[SecretStr, ...] = ()
     archived_at: datetime | None = None
 
@@ -442,14 +445,19 @@ class NodeRecord(BaseModel):
         last_updated_raw = row.get("last_updated_ts", "")
         archived_raw = row.get("archived_at", "")
         ble_pin_raw = row.get("ble_pin", "")
-        management = ManagementMode(row.get("management") or ManagementMode.TEMPLATE.value)
+        # NodeRecord.to_row() always writes an explicit management value, so
+        # a blank cell here can only mean a human typed the row in by hand
+        # -- nothing meshprovision itself has ever written omits it. That is
+        # exactly what OBSERVED means: a node whose live config mesh
+        # provision has not enforced and must not touch until --enroll.
+        management = ManagementMode(row.get("management") or ManagementMode.OBSERVED.value)
         # An empty role/region cell is anomalous for a TEMPLATE row (build_plan
         # always resolves a real value from the template) and defaults to the
         # template's own factory defaults as a safety net. For an OBSERVED row
-        # (mesh adopt) an empty cell is a deliberate, meaningful "unrecognized
-        # live value, never guessed" -- defaulting it here would silently
-        # re-fabricate the exact state adopted_record() takes care not to
-        # write in the first place, every time the row is reloaded.
+        # (mesh adopt, or a hand-added row with no management cell at all) an
+        # empty cell is a deliberate, meaningful "unrecognized live value,
+        # never guessed" -- defaulting it here would silently re-fabricate
+        # state the row never actually had, every time it is reloaded.
         role_default = DEFAULT_ROLE if management is ManagementMode.TEMPLATE else ""
         region_default = DEFAULT_REGION if management is ManagementMode.TEMPLATE else ""
         return cls(
@@ -589,9 +597,12 @@ class NodeRepository:
     def all(self) -> tuple[NodeRecord, ...]:
         """Return every node currently in the database.
 
-        Rows are returned in the ``Nodes`` sheet's own order (insertion
-        order, never re-sorted), so an operator's hand-ordering of the
-        spreadsheet survives a round trip.
+        Rows are returned in the ``Nodes`` sheet's canonical order --
+        sorted by ``long_name`` (falling back to ``short_name``), natural
+        and case-insensitive, tie-broken by ``node_id`` -- via
+        :mod:`meshprovision.db.sorting`. This function does not sort
+        itself; :class:`~meshprovision.db.ods.OdsDatabase` already
+        guarantees the order on every load and mutation.
 
         Returns:
             Every row of the ``Nodes`` sheet, parsed fresh.
