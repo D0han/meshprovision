@@ -157,6 +157,38 @@ def test_decode_channel_url_returns_none_without_fragment() -> None:
     assert backup.decode_channel_url("https://meshtastic.org/e/") is None
 
 
+def test_parse_profile_cfg_undecodable_channel_url_warns() -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 5.
+
+    A present-but-undecodable channel_url must not silently degrade to
+    "no channel" -- indistinguishable from a node that genuinely has
+    none configured -- with zero warning.
+    """
+    raw = _make_cfg_bytes(channel_url="https://meshtastic.org/e/#not!!valid$$base64")
+    profile = backup.parse_profile_cfg(raw, source="p.cfg")
+
+    assert profile.channel is None
+    assert len(profile.warnings) == 1
+    assert "could not be decoded" in profile.warnings[0]
+
+
+def test_parse_profile_cfg_missing_channel_url_is_silent() -> None:
+    """No channel_url at all is genuinely nothing to warn about."""
+    raw = _make_cfg_bytes()
+    profile = backup.parse_profile_cfg(raw, source="p.cfg")
+
+    assert profile.channel is None
+    assert profile.warnings == ()
+
+
+def test_merge_backups_surfaces_the_undecodable_channel_url_warning() -> None:
+    raw = _make_cfg_bytes(channel_url="https://meshtastic.org/e/#not!!valid$$base64")
+    profile = backup.parse_profile_cfg(raw, source="p.cfg")
+    bundle = backup.merge_backups(profile=profile)
+
+    assert any("could not be decoded" in w for w in bundle.warnings)
+
+
 def test_decode_channel_url_repr_never_exposes_psk_bytes() -> None:
     info = backup.decode_channel_url("https://meshtastic.org/e/#CgMSAQE")
     assert info is not None
@@ -204,6 +236,16 @@ def test_parse_profile_yaml_strips_base64_prefix() -> None:
     parsed = backup.parse_profile_yaml(_YAML_TEXT, source="test.yaml")
     expected_pub = base64.b64decode("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
     assert parsed.public_key == expected_pub
+
+
+def test_parse_profile_yaml_undecodable_channel_url_warns() -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 5."""
+    text = "owner: MT02\nchannel_url: https://meshtastic.org/e/#not!!valid$$base64\n"
+    parsed = backup.parse_profile_yaml(text, source="test.yaml")
+
+    assert parsed.channel is None
+    assert len(parsed.warnings) == 1
+    assert "could not be decoded" in parsed.warnings[0]
 
 
 def test_parse_profile_yaml_rejects_non_mapping() -> None:

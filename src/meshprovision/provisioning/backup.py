@@ -179,6 +179,10 @@ class ProfileBackup:
         local_config: The raw ``LocalConfig`` protobuf message. Internal.
         module_config: The raw ``LocalModuleConfig`` protobuf message.
             Internal.
+        warnings: Non-fatal findings about the file itself -- for
+            example, a non-empty ``channel_url`` that failed to decode
+            (distinct from a genuinely absent one, which warns about
+            nothing: see :func:`decode_channel_url`).
     """
 
     source: str
@@ -190,6 +194,7 @@ class ProfileBackup:
     fixed_position: FixedPosition | None
     local_config: Any = field(repr=False)
     module_config: Any = field(repr=False)
+    warnings: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
         """Return a repr that never exposes raw key bytes.
@@ -406,7 +411,8 @@ def merge_backups(
     if profile is None and nodedb is None:
         raise BackupParseError("At least one backup file is required.")
 
-    warnings: list[str] = list(nodedb.warnings) if nodedb is not None else []
+    warnings: list[str] = list(profile.warnings) if profile is not None else []
+    warnings.extend(nodedb.warnings if nodedb is not None else ())
     entry = nodedb.own_entry() if nodedb is not None else None
     if nodedb is not None and entry is None:
         warnings.append(
@@ -575,6 +581,12 @@ def _profile_backup_from_message(
     public_key = bytes(sec.public_key) or None
     private_key = bytes(sec.private_key) or None
     channel = decode_channel_url(profile.channel_url) if profile.channel_url else None
+    warnings: tuple[str, ...] = ()
+    if profile.channel_url and channel is None:
+        warnings = (
+            f"{source}: channel_url was present but could not be decoded; no channel PSK "
+            "will be recorded.",
+        )
 
     fixed_position: FixedPosition | None = None
     if profile.HasField("fixed_position"):
@@ -595,6 +607,7 @@ def _profile_backup_from_message(
         fixed_position=fixed_position,
         local_config=profile.config,
         module_config=profile.module_config,
+        warnings=warnings,
     )
 
 
@@ -690,6 +703,12 @@ def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
         _apply_yaml_section(module_section, module_config, source=source, name="module_config")
 
     channel = decode_channel_url(channel_url) if channel_url else None
+    warnings: tuple[str, ...] = ()
+    if channel_url and channel is None:
+        warnings = (
+            f"{source}: channel_url was present but could not be decoded; no channel PSK "
+            "will be recorded.",
+        )
 
     fixed_position: FixedPosition | None = None
     location = doc.get("location")
@@ -716,6 +735,7 @@ def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
         fixed_position=fixed_position,
         local_config=local_config,
         module_config=module_config,
+        warnings=warnings,
     )
 
 
