@@ -1455,6 +1455,39 @@ def test_from_backup_paired_nodedb_resolves_via_my_node_num(
     assert node.firmware_version == "2.6.11"
 
 
+def test_from_backup_nodedb_only_does_not_fabricate_region(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 1.
+
+    A node-db-only adopt (no paired .cfg/.yaml) builds its LiveConfig
+    from a bare protobuf LocalConfig with no data behind it -- persisting
+    "region" from that would silently record the firmware default
+    ("UNSET") as though it were a genuine observation and, on a re-adopt,
+    would have overwritten a previously-recorded correct region.
+    role is a genuine NodeDbEntry field, and its recognized value
+    ("CLIENT" here) IS a real observation, so it is correctly preserved.
+    """
+    nodedb = _write_nodedb_json(
+        tmp_path / "nodedb.json",
+        num=0xA0CB5CC4,
+        node_id="!a0cb5cc4",
+        long_name="Meshtastic MT01",
+        short_name="MT01",
+    )
+
+    result = invoke(runner, ["adopt", "--from-backup", str(nodedb), "--no-lookup", "--yes"], env)
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = [NodeRecord.from_row(row) for row in loaded.nodes]
+    assert len(nodes) == 1
+    node = nodes[0]
+    assert node.hw_model == "TBEAM"
+    assert node.role == "CLIENT"
+    assert node.region == ""
+
+
 def test_from_backup_conflicting_node_id_refuses_without_force(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:

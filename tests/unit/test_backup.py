@@ -401,6 +401,15 @@ def test_live_config_from_backup_profile_only() -> None:
 
 
 def test_live_config_from_backup_nodedb_only_fills_hw_model_and_firmware() -> None:
+    """A node-db-only bundle fills hw_model/firmware_version/public_key/role.
+
+    It fills those from `entry` when genuinely reported, but must NOT
+    fabricate region or any other config-section value from the bare
+    protobuf default it builds internally -- there is no .cfg/.yaml
+    behind it, and NodeDbEntry has no region field at all, so a region
+    reading here can never be anything but a fabricated protobuf
+    zero-value.
+    """
     nodedb = backup.parse_nodedb_json(json.dumps(_nodedb_payload()).encode(), source="n.json")
     bundle = backup.merge_backups(nodedb=nodedb)
     node_id = NodeId.from_int(2697256389)
@@ -409,8 +418,54 @@ def test_live_config_from_backup_nodedb_only_fills_hw_model_and_firmware() -> No
 
     assert live.hw_model == "TBEAM"
     assert live.firmware_version == "2.6.11"
-    assert live.value("device", "role") == "CLIENT"
+    assert live.value("device", "role") == "CLIENT"  # genuinely reported by entry.role
+    assert live.value("lora", "region") is None  # NodeDbEntry has no region field at all
+    assert live.role_raw is None
+    assert live.module_sections == {}
     assert live.security.public_key == bytes(range(32))
+
+
+def test_live_config_from_backup_nodedb_only_role_absent_from_entry_is_not_fabricated() -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 1.
+
+    A node-db-only bundle whose entry has no ``role`` key at all must not
+    report the protobuf's own default ("CLIENT") as though it were a real
+    observation. Before this fix, `live.value("device", "role")` always
+    read back "CLIENT" for a node-db-only bundle regardless of what (if
+    anything) the entry actually reported.
+    """
+    payload = _nodedb_payload()
+    del payload["nodes"][0]["role"]  # type: ignore[index]
+    nodedb = backup.parse_nodedb_json(json.dumps(payload).encode(), source="n.json")
+    bundle = backup.merge_backups(nodedb=nodedb)
+    node_id = NodeId.from_int(2697256389)
+
+    live = backup.live_config_from_backup(bundle, node_id=node_id)
+
+    assert live.value("device", "role") is None
+    assert live.role_raw is None
+    assert live.sections == {}
+
+
+def test_live_config_from_backup_nodedb_only_unrecognized_role_is_flagged_not_defaulted() -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 2.
+
+    An entry.role this build's role_table doesn't recognize must not
+    silently fall back to the protobuf default ("CLIENT") -- it must
+    surface via role_raw (mirroring hw_model_raw) so
+    build_adoption_report can warn instead of guessing.
+    """
+    payload = _nodedb_payload()
+    payload["nodes"][0]["role"] = "FUTURE_ROLE_9"  # type: ignore[index]
+    nodedb = backup.parse_nodedb_json(json.dumps(payload).encode(), source="n.json")
+    bundle = backup.merge_backups(nodedb=nodedb)
+    node_id = NodeId.from_int(2697256389)
+
+    live = backup.live_config_from_backup(bundle, node_id=node_id)
+
+    assert live.value("device", "role") is None
+    assert live.role_raw == "FUTURE_ROLE_9"
+    assert live.sections == {}
 
 
 def test_live_config_from_backup_does_not_mutate_the_profile() -> None:

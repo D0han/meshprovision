@@ -456,17 +456,28 @@ def build_adoption_report(
                 "without a region value rather than guessing."
             )
 
-    live_role = live.value("device", "role")
     role = ""
-    if live_role:
-        role_name = str(live_role)
-        if role_name in enums.role_table().name_to_value:
-            role = role_name
-        else:
-            warnings.append(
-                f"live role {role_name!r} is not a recognized device role; recorded "
-                "without a role value rather than guessing."
-            )
+    if live.role_raw is not None:
+        # Only ever set by a --from-backup node-db export whose role string
+        # this build's role_table doesn't recognize -- the protobuf field
+        # itself was deliberately left at its default (there is no numeric
+        # value to assign), so live.value("device", "role") would otherwise
+        # read back as the recognized-but-wrong default name.
+        warnings.append(
+            f"live role {live.role_raw!r} is not a recognized device role; recorded "
+            "without a role value rather than guessing."
+        )
+    else:
+        live_role = live.value("device", "role")
+        if live_role:
+            role_name = str(live_role)
+            if role_name in enums.role_table().name_to_value:
+                role = role_name
+            else:
+                warnings.append(
+                    f"live role {role_name!r} is not a recognized device role; recorded "
+                    "without a role value rather than guessing."
+                )
 
     return AdoptionReport(
         node_id=live.node_id,

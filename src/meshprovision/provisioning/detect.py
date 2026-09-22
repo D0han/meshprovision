@@ -279,6 +279,17 @@ class LiveConfig:
             is a call for :func:`~meshprovision.provisioning.adopt.
             build_adoption_report` to warn about, mirroring how it
             already handles an unmappable live ``region``/``role``.
+        role_raw: The device-reported ``role`` value, before enum lookup,
+            for a source that cannot represent "unrecognized" any other
+            way -- only ever set by
+            :func:`~meshprovision.provisioning.backup.live_config_from_backup`
+            for a node-db-export ``role`` string this build's
+            :func:`~meshprovision.enums.role_table` does not recognize
+            (a live device's *own* unmappable role instead falls out of
+            ``sections``'s ``str(raw_number)`` fallback, since a real
+            protobuf enum number can always be represented; a JSON
+            string that matches no known member cannot). ``None`` in
+            every other case, including a normal live-device read.
         firmware_version: Firmware version string as reported by the
             device.
         security: The live ``config.security`` section.
@@ -301,6 +312,7 @@ class LiveConfig:
     long_name: str = ""
     hw_model: str = ""
     hw_model_raw: str | None = None
+    role_raw: str | None = None
     firmware_version: str = ""
     security: LiveSecurity = field(default_factory=LiveSecurity)
     sections: Mapping[str, Mapping[str, object]] = field(
@@ -519,6 +531,7 @@ def live_config_from_protobufs(
     long_name: str = "",
     hw_model: str = "",
     hw_model_raw: str | None = None,
+    role_raw: str | None = None,
     firmware_version: str = "",
 ) -> LiveConfig:
     """Build a :class:`LiveConfig` from already-read protobuf config messages.
@@ -534,6 +547,8 @@ def live_config_from_protobufs(
         hw_model_raw: The raw value ``hw_model`` was resolved from, or
             ``None`` if the device reported nothing. See
             :attr:`LiveConfig.hw_model_raw`.
+        role_raw: See :attr:`LiveConfig.role_raw`. ``None`` for a normal
+            live-device read.
         firmware_version: Firmware version string.
 
     Returns:
@@ -572,6 +587,7 @@ def live_config_from_protobufs(
         long_name=long_name,
         hw_model=hw_model,
         hw_model_raw=hw_model_raw,
+        role_raw=role_raw,
         firmware_version=firmware_version,
         security=security,
         sections=MappingProxyType(sections),

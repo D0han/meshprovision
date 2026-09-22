@@ -48,7 +48,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -891,18 +891,30 @@ def live_config_from_backup(bundle: BackupBundle, *, node_id: NodeId) -> detect.
         module_config = localonly_pb2.LocalModuleConfig()
 
     entry = bundle.nodedb_entry
+    role_raw: str | None = None
+    role_recognized: str | None = None
     if entry is not None and entry.public_key and not bytes(local_config.security.public_key):
         local_config.security.public_key = entry.public_key
     if entry is not None and entry.role:
         role_value = enums.role_table().try_value(entry.role)
         if role_value is not None:
             local_config.device.role = role_value
+            role_recognized = entry.role
+        else:
+            # Cannot assign an unrecognized string onto the protobuf enum
+            # field at all (there is no numeric value to give it), so it
+            # stays at its own default -- which is itself a *recognized*
+            # name ("CLIENT"). Passed through separately so
+            # build_adoption_report can tell "genuinely CLIENT" from
+            # "unmappable, papered over by the protobuf default" instead
+            # of silently recording the wrong role as observed.
+            role_raw = entry.role
 
     hw_model_raw = entry.hw_model if entry is not None else None
     hw_model = (enums.hw_model_table().try_name(hw_model_raw) or "") if hw_model_raw else ""
     firmware_version = (entry.firmware_version if entry is not None else "") or ""
 
-    return detect.live_config_from_protobufs(
+    result = detect.live_config_from_protobufs(
         local_config,
         module_config,
         node_id=node_id,
@@ -910,8 +922,29 @@ def live_config_from_backup(bundle: BackupBundle, *, node_id: NodeId) -> detect.
         long_name=bundle.long_name,
         hw_model=hw_model,
         hw_model_raw=hw_model_raw,
+        role_raw=role_raw,
         firmware_version=firmware_version,
     )
+    if bundle.profile is None:
+        # No .cfg/.yaml was supplied, so local_config/module_config above
+        # are bare protobuf messages with no data behind them at all --
+        # every "sections"/"module_sections" scalar detect.py just read
+        # off them is a protobuf zero-value (role=CLIENT, region=UNSET,
+        # ...), indistinguishable downstream from a genuine observation.
+        # A node-db-only export (the easiest backup for an operator to
+        # produce) carries no config section whatsoever; strip the
+        # fabricated section data here rather than let it masquerade as
+        # observed truth. hw_model/firmware_version/security are
+        # unaffected -- they come from `entry`, not these sections, and
+        # remain real when `entry` itself is real. A recognized role IS
+        # real too (NodeDbEntry.role is the one section-shaped field this
+        # source can genuinely report -- NodeDbEntry has no region field
+        # at all) so it alone survives the strip.
+        kept_sections: dict[str, Mapping[str, object]] = (
+            {"device": {"role": role_recognized}} if role_recognized is not None else {}
+        )
+        result = replace(result, sections=kept_sections, module_sections={}, module_enabled={})
+    return result
 
 
 def suggest_node_ids_by_name(

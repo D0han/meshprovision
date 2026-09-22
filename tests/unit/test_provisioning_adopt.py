@@ -253,6 +253,29 @@ def test_build_adoption_report_hw_model_not_reported_is_silent(make_live, templa
     assert report.warnings == ()
 
 
+def test_build_adoption_report_role_raw_unrecognized_warns_and_stays_empty(
+    make_live, template
+) -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 2.
+
+    role_raw is only ever set by a --from-backup node-db export whose
+    role string this build's role_table doesn't recognize (the protobuf
+    field itself was left at its default, since there is no numeric
+    value to assign it) -- build_adoption_report must warn and record an
+    empty role, mirroring hw_model_raw's convention, rather than trust
+    whatever live.value("device", "role") happens to read back.
+    """
+    live = make_live(template, section_overrides={"device": {"role": "CLIENT"}})
+    live = dataclasses.replace(live, role_raw="FUTURE_ROLE_9")
+
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    assert report.role == ""
+    assert any("FUTURE_ROLE_9" in w for w in report.warnings)
+
+
 def test_build_adoption_report_firmware_vulnerable(make_live, template) -> None:
     live = make_live(template, firmware_version="2.6.0")
 
