@@ -303,6 +303,26 @@ def test_parse_nodedb_json_finds_own_entry() -> None:
     assert entry.node_id == NodeId.from_int(2697256389)
 
 
+def test_parse_nodedb_json_wrong_length_public_key_warns_and_is_absent() -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 7.
+
+    A truncated/corrupt publicKey field decodes as valid base64 to the
+    wrong byte length -- silently accepting it produced a misleading
+    "these backups appear to be for different nodes" conflict diagnosis
+    downstream, for what is actually one corrupt field.
+    """
+    payload = _nodedb_payload()
+    payload["nodes"][0]["publicKey"] = base64.b64encode(bytes(range(16))).decode()
+    parsed = backup.parse_nodedb_json(json.dumps(payload).encode(), source="nodedb.json")
+
+    entry = parsed.own_entry()
+    assert entry is not None
+    assert entry.public_key is None
+    assert len(parsed.warnings) == 1
+    assert "16 byte(s)" in parsed.warnings[0]
+    assert "treating it as absent" in parsed.warnings[0]
+
+
 def test_parse_nodedb_json_own_entry_none_when_my_node_num_absent() -> None:
     payload = _nodedb_payload()
     del payload["myNodeNum"]

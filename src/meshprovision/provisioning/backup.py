@@ -59,6 +59,7 @@ from google.protobuf.message import DecodeError
 from meshtastic.protobuf import apponly_pb2, clientonly_pb2, localonly_pb2
 
 from meshprovision import enums
+from meshprovision.crypto.keys import X25519_KEY_SIZE
 from meshprovision.crypto.redact import SecretBytes, fingerprint
 from meshprovision.errors import BackupParseError
 from meshprovision.nodeid import NodeId
@@ -839,9 +840,25 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
         raw_public_key = item.get("publicKey")
         if isinstance(raw_public_key, str) and raw_public_key:
             try:
-                public_key = base64.b64decode(raw_public_key, validate=True)
+                decoded_public_key = base64.b64decode(raw_public_key, validate=True)
             except (binascii.Error, ValueError):
-                public_key = None
+                decoded_public_key = None
+            if decoded_public_key is not None and len(decoded_public_key) == X25519_KEY_SIZE:
+                public_key = decoded_public_key
+            elif decoded_public_key is not None:
+                # Valid base64, wrong length -- a truncated or corrupt
+                # field. Treating this as present-but-wrong-length would
+                # otherwise raise a misleading "these backups appear to
+                # be for different nodes" conflict against a paired
+                # profile's genuinely correct key, and would silently be
+                # dropped downstream anyway (LiveSecurity.has_public_key
+                # rejects anything not exactly 32 bytes). Surface it
+                # instead of guessing.
+                warnings.append(
+                    f"{source}: node {num_int:08x}'s publicKey decoded to "
+                    f"{len(decoded_public_key)} byte(s), not the expected "
+                    f"{X25519_KEY_SIZE}; treating it as absent."
+                )
 
         metadata = item.get("metadata")
         firmware_version = (
