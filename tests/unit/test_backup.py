@@ -384,6 +384,32 @@ def test_merge_backups_conflicting_long_name_raises() -> None:
         backup.merge_backups(profile=profile, nodedb=nodedb)
 
 
+def test_merge_backups_name_conflict_with_matching_keys_warns_instead_of_raising() -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 6.
+
+    Two backups are snapshots taken at different times -- a long_name
+    disagreement when both carry the *same* public key is far more
+    likely a rename between exports than genuinely different nodes, and
+    must not hard-refuse the operator's own file history.
+    """
+    kp_material = bytes(range(32))
+    profile = backup.parse_profile_cfg(
+        _make_cfg_bytes(long_name="New Name", short_name="MT02", public_key=kp_material),
+        source="fresh.cfg",
+    )
+    payload = _nodedb_payload()
+    payload["nodes"][0]["longName"] = "Old Name"
+    payload["nodes"][0]["publicKey"] = base64.b64encode(kp_material).decode()
+    nodedb = backup.parse_nodedb_json(json.dumps(payload).encode(), source="stale.json")
+
+    bundle = backup.merge_backups(profile=profile, nodedb=nodedb)
+
+    assert any("looks like a rename" in w for w in bundle.warnings)
+    # The profile's own name still wins, per BackupBundle.long_name's
+    # documented precedence.
+    assert bundle.long_name == "New Name"
+
+
 def test_merge_backups_conflicting_public_key_raises() -> None:
     profile = backup.parse_profile_cfg(
         _make_cfg_bytes(

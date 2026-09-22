@@ -423,20 +423,51 @@ def merge_backups(
 
     nodedb_source = nodedb.source if nodedb is not None else ""
     if profile is not None and entry is not None:
+        # A matching public key is a cryptographic binding to the same
+        # node -- strictly stronger evidence than either name. The two
+        # backups are commonly snapshots taken at different times (a
+        # .cfg exported months ago, a node-db export taken today), so
+        # the single most likely cause of a name disagreement between
+        # them, once the keys agree, is that the operator renamed the
+        # node in between -- not that they describe different nodes.
+        # Downgrade to a warning in that case rather than hard-refusing
+        # the operator's own file history; keep the hard refusal when
+        # identity is not otherwise corroborated.
+        keys_corroborate_identity = (
+            profile.public_key is not None
+            and entry.public_key is not None
+            and profile.public_key == entry.public_key
+        )
         if profile.long_name and entry.long_name and profile.long_name != entry.long_name:
-            raise BackupParseError(
-                f"Conflicting long_name between backups: {profile.source} says "
-                f"{profile.long_name!r}, {nodedb_source} says {entry.long_name!r}. These "
-                "backups may not be for the same node.",
-                source=nodedb_source,
-            )
+            if keys_corroborate_identity:
+                warnings.append(
+                    f"{profile.source} says long_name {profile.long_name!r}, {nodedb_source} "
+                    f"says {entry.long_name!r} -- both carry the same public key, so this "
+                    "looks like a rename between exports rather than different nodes; using "
+                    f"{profile.source}'s name (the profile always takes precedence)."
+                )
+            else:
+                raise BackupParseError(
+                    f"Conflicting long_name between backups: {profile.source} says "
+                    f"{profile.long_name!r}, {nodedb_source} says {entry.long_name!r}. These "
+                    "backups may not be for the same node.",
+                    source=nodedb_source,
+                )
         if profile.short_name and entry.short_name and profile.short_name != entry.short_name:
-            raise BackupParseError(
-                f"Conflicting short_name between backups: {profile.source} says "
-                f"{profile.short_name!r}, {nodedb_source} says {entry.short_name!r}. These "
-                "backups may not be for the same node.",
-                source=nodedb_source,
-            )
+            if keys_corroborate_identity:
+                warnings.append(
+                    f"{profile.source} says short_name {profile.short_name!r}, {nodedb_source} "
+                    f"says {entry.short_name!r} -- both carry the same public key, so this "
+                    "looks like a rename between exports rather than different nodes; using "
+                    f"{profile.source}'s name (the profile always takes precedence)."
+                )
+            else:
+                raise BackupParseError(
+                    f"Conflicting short_name between backups: {profile.source} says "
+                    f"{profile.short_name!r}, {nodedb_source} says {entry.short_name!r}. These "
+                    "backups may not be for the same node.",
+                    source=nodedb_source,
+                )
         if (
             profile.public_key is not None
             and entry.public_key is not None
