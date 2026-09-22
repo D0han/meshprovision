@@ -56,7 +56,7 @@ from meshprovision.status.merge import (
     Thresholds,
     merge_all,
 )
-from meshprovision.status.timefmt import format_local, local_tz_abbreviation
+from meshprovision.status.timefmt import format_local
 
 __all__ = [
     "CollectedObservations",
@@ -305,22 +305,29 @@ class StatusReport:
 
         Returns:
             For example ``"5 node(s): 3 online, 1 stale, 0 offline, 1
-            unknown; data as of loranet 14:28:03, lorastats 14:32:10
-            CEST; 1 source failure(s); 12 unparsable entrie(s) from
-            loranet"``. The ``data as of`` clause is omitted entirely
-            when :attr:`data_as_of` is empty (every source failed before
-            issuing a request, or none were queried).
+            unknown; data as of loranet 14:28:03 CEST, lorastats
+            14:32:10 CEST; 1 source failure(s); 12 unparsable entrie(s)
+            from loranet"``. The ``data as of`` clause is omitted
+            entirely when :attr:`data_as_of` is empty (every source
+            failed before issuing a request, or none were queried).
         """
         counts = self.counts
         breakdown = ", ".join(f"{counts[avail]} {avail.value}" for avail in _ALL_AVAILABILITIES)
         text = f"{len(self.nodes)} node(s): {breakdown}"
         if self.data_as_of:
+            # Each entry states its own zone (never a single trailing
+            # abbreviation derived from generated_at): a cached entry's
+            # fetched_at can predate the most recent DST transition,
+            # making a shared header-style zone wrong for it -- the same
+            # class of bug status/render.py's Timestamp column had (see
+            # Round 35's status-reporting review, Finding 1, whose fix
+            # this mirrors for Finding 2).
             parts = ", ".join(
                 f"{source} "
-                f"{format_local(timestamp, reference=self.generated_at, include_zone=False)}"
+                f"{format_local(timestamp, reference=self.generated_at, include_zone=True)}"
                 for source, timestamp in self.data_as_of.items()
             )
-            text += f"; data as of {parts} {local_tz_abbreviation(self.generated_at)}"
+            text += f"; data as of {parts}"
         if self.failures:
             text += f"; {len(self.failures)} source failure(s)"
         if self.skipped_entries:

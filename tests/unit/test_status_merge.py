@@ -662,30 +662,37 @@ def test_status_report_summary_mentions_data_as_of(local_tz: None) -> None:
     )
     summary = report.summary()
     assert "data as of" in summary
-    # NOW is same local calendar date as itself -- both entries render as
-    # a bare time-of-day, not the full date form, and the zone
-    # abbreviation is appended once at the end of the clause.
+    # NOW is the same local calendar date as itself -- format_local's own
+    # same-day shortcut renders both as a bare time-of-day with no zone
+    # (correct here: two instants minutes apart on the same day cannot
+    # differ in DST regime except across the fall-back transition itself,
+    # not exercised by this case).
     assert f"loranet {timefmt.format_local(NOW - timedelta(minutes=4), reference=NOW)}" in summary
     assert f"lorastats {timefmt.format_local(NOW, reference=NOW)}" in summary
-    assert summary.endswith(timefmt.local_tz_abbreviation(NOW))
 
 
-def test_status_report_summary_data_as_of_states_the_zone_only_once(local_tz: None) -> None:
-    """Regression test: a cross-day entry must not repeat the zone abbreviation.
+def test_status_report_summary_data_as_of_states_each_entrys_own_zone(local_tz: None) -> None:
+    """Regression test for Round 35's status-reporting review, Finding 2.
 
-    format_local()'s own full-date form includes a zone by default; the
-    summary clause already states the zone once at the end, so a naive
-    caller would double it up for any source whose data predates today.
+    Each data_as_of entry must state its own zone, not a single shared
+    abbreviation derived from generated_at -- a cached entry's fetched_at
+    can predate the most recent DST transition, making a header-style
+    shared zone wrong for it. Reproduces the review's exact scenario:
+    Europe/Warsaw, generated_at after the 2026-10-25 fall-back transition
+    (CET), one data_as_of entry from before it (CEST). The old code
+    stated "... CET" for this entry -- the wrong zone for the instant it
+    actually names.
     """
+    generated_at = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
+    stale_entry = datetime(2026, 10, 18, 12, 0, tzinfo=UTC)
     report = StatusReport(
-        generated_at=NOW,
+        generated_at=generated_at,
         nodes=(),
         thresholds=Thresholds(),
-        data_as_of={SOURCE_LORANET: NOW - timedelta(days=1)},
+        data_as_of={SOURCE_LORANET: stale_entry},
     )
     summary = report.summary()
-    assert summary.count("CEST") == 1
-    assert summary.endswith("CEST")
+    assert "data as of loranet 2026-10-18 14:00:00 CEST" in summary
 
 
 # ---------------------------------------------------------------------------
