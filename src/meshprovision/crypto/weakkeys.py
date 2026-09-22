@@ -727,11 +727,23 @@ def _structural_findings(
         # with an otherwise-normal weight stays warning: distinct.
         low_or_high_weight = weight < LOW_HAMMING_MIN or weight > LOW_HAMMING_MAX
         severity = WeakKeySeverity.CRITICAL if low_or_high_weight else WeakKeySeverity.WARNING
+        # The reason string names the actual trigger: a near-all-ones key
+        # (abnormally *high* weight) was previously reported as having
+        # "low" entropy, an inaccuracy that reached the operator verbatim
+        # (audit_node_key's node_key_reason, mesh provision --json,
+        # db/verify.py's DbProblem.message). See Round 35's weakkey-drift
+        # review, Finding 4.
+        if weight < LOW_HAMMING_MIN:
+            weight_description = "abnormally low Hamming weight"
+        elif weight > LOW_HAMMING_MAX:
+            weight_description = "abnormally high Hamming weight"
+        else:
+            weight_description = "abnormally few distinct byte values"
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.LOW_ENTROPY,
                 severity=severity,
-                reason=f"{material} key has abnormally low entropy",
+                reason=f"{material} key has {weight_description}",
                 detail=f"hamming_weight={weight}, distinct_bytes={len(set(raw))}",
                 fingerprint=fp,
                 node_id=node_id,

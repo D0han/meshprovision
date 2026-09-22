@@ -397,6 +397,34 @@ def test_low_entropy_severity_symmetric_across_both_hamming_bounds() -> None:
     assert _low_entropy_finding(low_distinct).severity == "warning"
 
 
+def test_low_entropy_reason_names_the_actual_trigger() -> None:
+    """Regression test for Round 35's weakkey-drift review, Finding 4.
+
+    The LOW_ENTROPY finding's reason string used to always say "low
+    entropy," including for an abnormally *high* Hamming weight (a
+    near-all-ones key) -- an inaccuracy that reaches the operator
+    verbatim (audit_node_key's node_key_reason, mesh provision --json,
+    db/verify.py's DbProblem.message).
+    """
+    below_min_weight = bytearray(32)
+    weight = 0
+    idx = 0
+    while weight < LOW_HAMMING_MIN - 1:
+        below_min_weight[idx % 32] |= 1 << (idx // 32 % 8)
+        weight += 1
+        idx += 1
+    assert "abnormally low Hamming weight" in _low_entropy_finding(bytes(below_min_weight)).reason
+
+    above_max_target = LOW_HAMMING_MAX + 8
+    above_max_weight = bytes([0xFF] * (above_max_target // 8)) + bytes(32 - above_max_target // 8)
+    reason = _low_entropy_finding(above_max_weight).reason
+    assert "abnormally high Hamming weight" in reason
+    assert "low" not in reason
+
+    low_distinct = bytes([1, 2, 3, 4]) * 8
+    assert "abnormally few distinct byte values" in _low_entropy_finding(low_distinct).reason
+
+
 def test_low_entropy_severity_at_exact_hamming_boundary_is_still_warning() -> None:
     """A weight exactly at LOW_HAMMING_MIN/MAX is not itself abnormal.
 
