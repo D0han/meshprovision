@@ -407,6 +407,12 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
 
     Returns:
         The sheet's header and data rows.
+
+    Raises:
+        DbIntegrityError: If a run of more than :data:`MAX_BLANK_ROWS`
+            consecutive blank rows is hit with non-blank rows still
+            following it below -- see :data:`MAX_BLANK_ROWS`'s own
+            docstring for why this can never be silently truncated.
     """
     row_elems = table_elem.getElementsByType(odf_table.TableRow)
     if not row_elems:
@@ -416,7 +422,7 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
 
     data_rows: list[tuple[CellValue, ...]] = []
     consecutive_blank = 0
-    for row_elem in row_elems[1:]:
+    for index, row_elem in enumerate(row_elems[1:], start=1):
         cells = _read_row_cells(row_elem)
         is_blank = all(not cell.text.strip() for cell in cells)
         repeat = _int_attr(row_elem, "numberrowsrepeated", default=1)
@@ -437,6 +443,33 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
                 consecutive_blank = 0
             data_rows.append(cells)
         if exhausted:
+            # A blank-row gap this long is exactly what an ordinary Calc
+            # edit (delete a block of rows' contents, or insert rows to
+            # make room) produces -- LibreOffice writes it as a single
+            # <table:table-row table:number-rows-repeated="N"> element,
+            # and real data can genuinely still follow it below. A gap
+            # with nothing real below it (a trailing block of deleted
+            # rows, which this project's own sorted writes always push to
+            # the front, but a hand-edit could still leave trailing) is
+            # harmless to stop at, same as before -- so only refuse when
+            # something non-blank is actually waiting past the gap.
+            if any(
+                not all(not cell.text.strip() for cell in _read_row_cells(remaining))
+                for remaining in row_elems[index + 1 :]
+            ):
+                ods_row = len(data_rows) + 2  # +1 header, +1 for 1-indexing
+                raise DbIntegrityError(
+                    f"{name} sheet has a run of more than {MAX_BLANK_ROWS} consecutive "
+                    f"blank rows starting at row {ods_row}, with real data still below "
+                    "it; stopped reading there rather than risk silently dropping it.",
+                    sheet=name,
+                    cell=f"{name}.A{ods_row}",
+                    hint=(
+                        "Open the file in LibreOffice Calc and delete the blank row "
+                        "block (Select rows -> Delete Rows, not just Delete Contents), "
+                        "then re-run mesh db verify."
+                    ),
+                )
             break
 
     return SheetData(name=name, header=header, rows=tuple(data_rows))

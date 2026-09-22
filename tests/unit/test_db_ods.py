@@ -927,7 +927,7 @@ def test_ods_database_lock_is_idempotent(tmp_path: Path) -> None:
     db.unlock()
 
 
-def test_read_raw_stops_after_max_blank_rows_across_separate_row_elements(
+def test_read_raw_refuses_a_run_of_more_than_max_blank_rows_with_real_data_below(
     tmp_path: Path, keypair
 ) -> None:
     """MAX_BLANK_ROWS must accumulate across many separate blank rows, not just one giant one.
@@ -939,10 +939,12 @@ def test_read_raw_stops_after_max_blank_rows_across_separate_row_elements(
     ``MAX_BLANK_ROWS + 1`` of them individually exercises the
     consecutive-blank *accumulation* path instead.
 
-    Rows are always sorted on write (see meshprovision.db.sorting) by
-    name, and a blank row's empty name always sorts first -- so unlike
-    before, only a *trailing* real row (never a leading one) can end up
-    after a run of blanks on disk.
+    Regression test for Round 35's db-sheets review, Finding 1: this
+    exact shape (a long blank-row gap that ordinary Calc editing
+    produces, with real data still below it) used to be silently
+    truncated -- every row past the gap dropped with no warning, no
+    error, and the next save erasing them for good. It must now refuse
+    outright rather than guess.
     """
     node, pub, priv = _sample_records(keypair)
     blank_row = {col.name: "" for col in schema.SHEET_SPECS["Nodes"].columns}
@@ -955,14 +957,50 @@ def test_read_raw_stops_after_max_blank_rows_across_separate_row_elements(
         backup=False,
     )
 
+    with pytest.raises(DbIntegrityError, match="Nodes sheet has a run of more than"):
+        ods.read_raw(path)
+
+
+def test_read_raw_tolerates_a_trailing_blank_run_with_nothing_real_below_it(
+    tmp_path: Path, keypair
+) -> None:
+    """A long blank-row run with no real data past it must not raise.
+
+    Same shape as the regression test above, but with no trailing real
+    row -- e.g. an operator hand-deleted a trailing block of rows'
+    *contents* without deleting the rows themselves. Nothing is at risk
+    of being silently dropped here, so this must keep loading exactly as
+    it did before Round 35's fix, not start refusing a harmless file.
+
+    write_database always sorts rows on write (see
+    meshprovision.db.sorting), and a blank row's empty name always sorts
+    first -- so this exact on-disk shape (real data, *then* a trailing
+    blank run) cannot be produced by write_database itself; it is
+    appended directly via odfpy to simulate a hand-edited file.
+    """
+    from odf import opendocument
+    from odf import table as odf_table
+
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    doc = opendocument.load(str(path))
+    nodes_table = next(
+        t
+        for t in doc.spreadsheet.getElementsByType(odf_table.Table)
+        if t.getAttribute("name") == "Nodes"
+    )
+    nodes_table.addElement(odf_table.TableRow(numberrowsrepeated=ods.MAX_BLANK_ROWS + 1))
+    with path.open("wb") as fh:
+        doc.write(fh)
+
     raw = ods.read_raw(path)
 
-    # Exactly MAX_BLANK_ROWS blanks before exhaustion kicks in -- the
-    # trailing real row after the run of blanks must never be reached.
-    assert len(raw.sheets["Nodes"].rows) == ods.MAX_BLANK_ROWS
     node_id_idx = schema.NODES_SHEET_SPEC.column_index("node_id")
-    seen_node_ids = {row[node_id_idx].text for row in raw.sheets["Nodes"].rows}
-    assert "cafe0002" not in seen_node_ids
+    assert raw.sheets["Nodes"].rows[0][node_id_idx].text == node.node_id
 
 
 def test_module_level_verify_returns_the_same_warnings_as_load(tmp_path: Path, keypair) -> None:
