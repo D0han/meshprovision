@@ -479,13 +479,61 @@ def test_libreoffice_multi_paragraph_cell_reads_back_with_newline(tmp_path: Path
     assert loaded.nodes[0]["notes"] == "line one\nline two"
 
 
-def test_string_value_fast_path_still_preferred_over_own_text(tmp_path: Path, keypair) -> None:
-    """A cell's cached ``office:string-value`` still wins when present.
+def test_string_value_fast_path_still_preferred_for_non_text_columns(
+    tmp_path: Path, keypair
+) -> None:
+    """A non-``TEXT``-kind cell's cached ``office:string-value`` still wins.
 
     Guards against a regression that makes every cell take the slower
-    (and, for a formula cell, wrong -- it would read the formula's
-    *cached result*, not its source text) paragraph-extraction path
-    unconditionally.
+    paragraph-extraction path unconditionally -- which would be wrong
+    for a formula-bearing column (it would read the formula's *cached
+    result*, not its source text). ``role`` (``ColumnKind.ENUM``, no
+    formula) stands in for "any non-``TEXT`` column" here; a genuine
+    formula column (``key_ref``) can't be used for this because
+    ``_apply_recompute`` unconditionally overwrites it regardless of
+    which of the two representations ``_row_values`` picked, so it
+    wouldn't actually exercise this preference either way.
+    """
+    from odf import opendocument
+    from odf import table as odf_table
+    from odf import text as odf_text
+
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    doc = opendocument.load(str(path))
+    nodes_table = next(
+        t
+        for t in doc.spreadsheet.getElementsByType(odf_table.Table)
+        if t.getAttribute("name") == "Nodes"
+    )
+    role_index = schema.NODES_SHEET_SPEC.column_index("role")
+    data_row = nodes_table.getElementsByType(odf_table.TableRow)[1]
+    cell = data_row.getElementsByType(odf_table.TableCell)[role_index]
+    cell.setAttribute("stringvalue", "CLIENT")
+    for child in list(cell.childNodes):
+        cell.removeChild(child)
+    cell.addElement(odf_text.P(text="ROUTER"))
+    with path.open("wb") as fh:
+        doc.write(fh)
+
+    loaded = ods.load_database(path)
+    assert loaded.nodes[0]["role"] == "CLIENT"
+
+
+def test_text_column_prefers_paragraph_text_over_cached_string_value(
+    tmp_path: Path, keypair
+) -> None:
+    """Regression test for Round 35's db-sheets review, Finding 2.
+
+    A ``TEXT``-kind column (never formula-bearing) must prefer the
+    cell's own paragraph text over the cached ``office:string-value``:
+    the latter silently loses a literal tab character to XML
+    attribute-value normalization (turned into a space on the next
+    parse), which the paragraph's own ``text:tab`` run does not suffer.
     """
     from odf import opendocument
     from odf import table as odf_table
@@ -506,15 +554,33 @@ def test_string_value_fast_path_still_preferred_over_own_text(tmp_path: Path, ke
     notes_index = schema.NODES_SHEET_SPEC.column_index("notes")
     data_row = nodes_table.getElementsByType(odf_table.TableRow)[1]
     cell = data_row.getElementsByType(odf_table.TableCell)[notes_index]
-    cell.setAttribute("stringvalue", "cached value")
+    cell.setAttribute("stringvalue", "line1\twith tab")
     for child in list(cell.childNodes):
         cell.removeChild(child)
-    cell.addElement(odf_text.P(text="on-screen text disagrees"))
+    cell.addElement(odf_text.P(text="line1\twith tab"))
     with path.open("wb") as fh:
         doc.write(fh)
 
+    # Sanity: confirm re-parsing the file with odfpy's own XML parser is
+    # what loses the tab from the cached attribute (XML 1.0's mandatory
+    # attribute-value normalization converts a literal, unescaped tab in
+    # an attribute value to a space at parse time -- the raw file on disk
+    # still holds the real tab byte; it is the next read that corrupts
+    # it), confirming this is a real, parser-level hazard and not an
+    # artifact of how the test constructed the file.
+    reparsed = opendocument.load(str(path))
+    reparsed_table = next(
+        t
+        for t in reparsed.spreadsheet.getElementsByType(odf_table.Table)
+        if t.getAttribute("name") == "Nodes"
+    )
+    reparsed_cell = reparsed_table.getElementsByType(odf_table.TableRow)[1].getElementsByType(
+        odf_table.TableCell
+    )[notes_index]
+    assert reparsed_cell.getAttribute("stringvalue") == "line1 with tab"  # normalized, corrupted
+
     loaded = ods.load_database(path)
-    assert loaded.nodes[0]["notes"] == "cached value"
+    assert loaded.nodes[0]["notes"] == "line1\twith tab"
 
 
 # ---------------------------------------------------------------------------

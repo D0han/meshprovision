@@ -160,11 +160,25 @@ class CellValue:
         formula: The cell's ``table:formula`` attribute, when present.
         value_type: The cell's ``table:value-type`` attribute, when
             present (for example ``"string"``, ``"float"``, ``"date"``).
+        paragraph_text: The cell's own extracted paragraph text (see
+            :func:`_cell_own_text`), always populated regardless of
+            :attr:`value_type` -- unlike :attr:`text`, this is exactly
+            what a human sees on screen for the cell, and is what a
+            ``ColumnKind.TEXT`` column's caller (:func:`_row_values`)
+            prefers instead of the ``office:string-value``-cached
+            :attr:`text`: XML attribute-value normalization silently
+            turns a literal tab in ``office:string-value`` into a space
+            on the next parse, a corruption the paragraph's own
+            ``text:tab`` run does not suffer. Not preferred generically
+            for every column, because a formula-bearing column (for
+            example ``key_ref``) must keep reading its cached *result*
+            text, never a stale on-screen paragraph.
     """
 
     text: str
     formula: str | None = None
     value_type: str | None = None
+    paragraph_text: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,12 +374,9 @@ def _extract_cell(cell_elem: Any) -> CellValue:
     value_type: str | None = cell_elem.getAttribute("valuetype")
     formula: str | None = cell_elem.getAttribute("formula")
     string_value: str | None = cell_elem.getAttribute("stringvalue")
-    text: str
-    if value_type == "string" and string_value is not None:
-        text = string_value
-    else:
-        text = _cell_own_text(cell_elem)
-    return CellValue(text=text, formula=formula, value_type=value_type)
+    own_text = _cell_own_text(cell_elem)
+    text = string_value if value_type == "string" and string_value is not None else own_text
+    return CellValue(text=text, formula=formula, value_type=value_type, paragraph_text=own_text)
 
 
 def _read_row_cells(row_elem: Any) -> tuple[CellValue, ...]:
@@ -608,7 +619,18 @@ def _row_values(
                     kind=IntegrityWarningKind.COERCED_CELL,
                 )
             )
-        values[col.name] = cell.text
+        if col.kind is schema.ColumnKind.TEXT:
+            # office:string-value survives XML attribute-value
+            # normalization for a newline (odfpy escapes it as a
+            # character reference) but not a literal tab, which gets
+            # silently collapsed to a space on the next parse -- the
+            # cell's own <text:p> paragraph does not suffer this, and a
+            # plain TEXT column never carries a formula, so there is no
+            # cached-result-vs-stale-paragraph concern here the way
+            # there is for a formula-bearing column like key_ref.
+            values[col.name] = cell.paragraph_text
+        else:
+            values[col.name] = cell.text
     return values, coercions
 
 
