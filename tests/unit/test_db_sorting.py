@@ -207,6 +207,22 @@ def test_sorted_rows_orders_keys_by_key_ref_naturally() -> None:
     assert [r["key_ref"] for r in result] == ["node1_pub", "node2_pub", "node11_pub"]
 
 
+def test_natural_key_does_not_crash_on_a_digit_run_past_cpython_limit() -> None:
+    """Regression test for Round 35's db-sheets review, Finding 4.
+
+    A hand-edited cell can hold an arbitrarily long digit run (TEXT
+    columns have no length bound enforced in schema.py); natural_key's
+    bare int(part) used to raise a ValueError once that run exceeded
+    CPython's own int()-string-conversion limit (4300 digits by
+    default), escaping load_database as a raw traceback instead of the
+    project's typed hand-edit error contract. Ordering semantics for an
+    absurd value don't matter; not crashing does.
+    """
+    huge_digit_run = "N" + "9" * 4400
+    key = natural_key(huge_digit_run)  # must not raise
+    assert key[1][0] == 1  # the digit-run chunk is still recognized as numeric
+
+
 def test_sorted_rows_returns_unknown_sheet_unchanged() -> None:
     # Arrange
     rows = [{"foo": "b"}, {"foo": "a"}]

@@ -23,6 +23,18 @@ __all__ = ["natural_key", "sorted_rows"]
 
 _NUMBER_RUN: Final[re.Pattern[str]] = re.compile(r"(\d+)")
 
+_MAX_DIGIT_RUN_DIGITS: Final[int] = 100
+"""Cap on how many leading digits of one run ``natural_key`` converts.
+
+Far more than any real ``short_name``/``long_name`` index needs (both
+columns have a documented ~25-byte limit), but well under CPython's
+``int()`` string-conversion limit (4300 digits by default) -- a
+hand-edited cell can hold an arbitrarily long digit run (``TEXT``
+columns have no length bound enforced in ``schema.py``), and ordering
+semantics for an absurd value do not matter; not raising a bare
+``ValueError`` out of the natural-sort path does.
+"""
+
 _NaturalKey = tuple[tuple[int, str, int], ...]
 
 
@@ -41,14 +53,18 @@ def natural_key(value: str) -> _NaturalKey:
         one per alternating text/digit run of ``value.casefold()``, with
         every element the same shape so triples compare directly
         regardless of which chunks are numeric. A pure text chunk is
-        ``(0, chunk, 0)``; a digit run is ``(1, "", int(chunk))``.
+        ``(0, chunk, 0)``; a digit run is ``(1, "", int(chunk))`` --
+        a run longer than :data:`_MAX_DIGIT_RUN_DIGITS` is truncated
+        before conversion, since CPython's ``int()`` refuses a
+        string past its own (much larger) digit-count limit.
     """
     parts = _NUMBER_RUN.split(value.casefold())
     # re.split with one capture group returns text/digit/text/digit/...,
     # starting and ending with a (possibly empty) text chunk -- odd
     # indices are always the captured digit runs.
     return tuple(
-        (1, "", int(part)) if index % 2 == 1 else (0, part, 0) for index, part in enumerate(parts)
+        (1, "", int(part[:_MAX_DIGIT_RUN_DIGITS])) if index % 2 == 1 else (0, part, 0)
+        for index, part in enumerate(parts)
     )
 
 
