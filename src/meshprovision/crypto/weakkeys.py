@@ -1010,6 +1010,25 @@ def audit_node(
             way to tell a genuine cross-fleet duplicate apart from the
             node's own entry if it happens to already be present in
             this mapping.
+
+            **This self-exclusion is by exact ``key_ref`` only, not by
+            alias.** If the audited key is legitimately filed under a
+            *second* ref too (``mesh admin bootstrap --ref LABEL``
+            deliberately does this; so does a deliberate ``mesh admin
+            import --force`` alias), that second entry is NOT excluded
+            and produces a false CRITICAL "vendor key-cloning failure
+            mode" finding. No shipped caller passes both ``public`` and
+            a ``known_public_keys`` that could contain such an alias
+            today (``pipeline.resolve_admin_keys`` deliberately calls
+            :func:`audit_public_key` instead, and
+            :func:`~meshprovision.provisioning.pipeline.audit_node_key`
+            never passes this parameter) -- but a future caller that
+            does must either pre-filter aliases of ``key_ref`` out of
+            ``known_public_keys`` first, or use
+            :func:`find_duplicate_public_keys` plus
+            :mod:`meshprovision.db.verify`'s owner-based
+            alias-vs-clone classification (the canonical-hex round-trip
+            check on the owner ref) instead of this parameter.
         known_bad: An explicit blocklist. When ``None``, loaded once via
             :func:`load_known_bad_keys`.
         check_clamping: Passed through to the private-key audit path.
