@@ -86,6 +86,14 @@ def _build_options(
             ordered (``stale_after < offline_after``).
         NodeIdError: If any value in ``nodes`` cannot be parsed as a node
             id.
+
+    A duplicate or equivalently-spelled id (``--node deadbe01 --node
+    '!deadbe01'``) is de-duplicated here, preserving first-seen order --
+    without this, the same node would be reported twice and double-
+    counted in :attr:`~meshprovision.status.report.StatusReport.counts`.
+    Done here rather than in :func:`~meshprovision.status.merge.merge_all`,
+    whose "one node per entry, never re-sorts" contract other callers
+    rely on and is worth keeping literal.
     """
     stale_hours = (
         stale_after if stale_after is not None else DEFAULT_STALE_AFTER.total_seconds() / 3600
@@ -100,7 +108,7 @@ def _build_options(
             str(exc), hint="--stale-after must be strictly less than --offline-after."
         ) from exc
 
-    node_ids = tuple(NodeId.parse(value) for value in nodes)
+    node_ids = tuple(dict.fromkeys(NodeId.parse(value) for value in nodes))
 
     return StatusOptions(
         thresholds=thresholds,

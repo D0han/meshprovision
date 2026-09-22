@@ -485,6 +485,33 @@ def test_node_filter_restricts_the_report(
     assert document["nodes"][0]["node_id"] == "deadbe01"
 
 
+def test_duplicate_node_spellings_are_reported_once(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """Regression test for Round 35's status-reporting review, Finding 4.
+
+    NodeId accepts several spellings of the same id, so
+    `--node deadbe01 --node '!deadbe01'` used to report the one real
+    node twice and double-count it in the availability breakdown.
+    """
+    from meshprovision.db.nodes import NodeRecord
+
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="AAAA", region="EU_868")])
+    recent = int(time.time()) - 60
+
+    with mock_sources(nodes={"deadbe01": {"shortName": "AAAA", "seenBy": {"gw1": recent}}}):
+        result = invoke(
+            runner, ["status", "--json", "--node", "deadbe01", "--node", "!deadbe01"], env
+        )
+
+    assert result.exit_code == 0
+    document = json.loads(result.stdout)
+    assert [n["node_id"] for n in document["nodes"]] == ["deadbe01"]
+
+
 def test_archived_node_is_excluded_by_default_but_shown_if_explicitly_requested(
     runner: CliRunner,
     env: dict[str, str],
