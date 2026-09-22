@@ -345,7 +345,17 @@ def _verify_name(live: detect.LiveConfig, desired: str | None, *, field: str) ->
     actual = live.short_name if field == "short_name" else live.long_name
     if actual == desired:
         return WriteResult("owner", WriteStatus.CONFIRMED, "confirmed", field=field)
-    if desired.startswith(actual) and len(actual.encode("utf-8")) < len(desired.encode("utf-8")):
+    # actual must be non-empty: an empty read-back is not truncation, it's
+    # the post-reboot NodeDB user entry not having repopulated yet (the
+    # same condition _verify_key_material already treats as "unavailable"
+    # for the sibling getPublicKey() read -- both come from iface.getMyUser()).
+    # Without this guard, desired.startswith("") is trivially True and an
+    # unreadable name was misreported CONFIRMED, silently blanking it.
+    if (
+        actual
+        and desired.startswith(actual)
+        and len(actual.encode("utf-8")) < len(desired.encode("utf-8"))
+    ):
         return WriteResult(
             "owner",
             WriteStatus.CONFIRMED,

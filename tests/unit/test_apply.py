@@ -536,6 +536,39 @@ def test_verify_plan_name_truncated_confirmed(make_live) -> None:
     assert "truncated" in short_result.message
 
 
+def test_verify_plan_empty_name_readback_is_unconfirmed_not_truncated(make_live) -> None:
+    """An empty read-back is not truncation -- it's an unavailable NodeDB read.
+
+    getMyUser() (the source of both short_name/long_name) can legitimately
+    return None right after a reboot, before the NodeDB entry repopulates --
+    the same condition _verify_key_material already treats as unavailable
+    for the sibling getPublicKey() read. Before this guard,
+    "".startswith("") was trivially satisfied and this was misreported
+    CONFIRMED, silently persisting a blank name over a good one. See
+    Round 35's plan-apply review.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="MT00",
+    )
+    plan = build_plan(inputs)
+    live_after = make_live(
+        template,
+        short_name="",
+        long_name=plan.name_change.desired_long_name,
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    short_result = next(r for r in results if r.field == "short_name")
+    assert short_result.status == WriteStatus.UNCONFIRMED
+    assert "truncated" not in short_result.message
+
+
 def test_verify_plan_key_confirmed_needs_both_agree(make_live) -> None:
     template = _template()
     live = make_live(template, security=make_security(empty=True))
