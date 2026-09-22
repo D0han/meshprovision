@@ -167,9 +167,14 @@ def build_table(report: StatusReport) -> Table:
     :meth:`~meshprovision.status.report.StatusReport.summary`, plus --
     when the report has any source failures -- one dim red line per
     failure, plus -- when any source skipped an unparsable entry -- one
-    dim yellow line per affected source. A database with zero nodes
-    renders a header-only table with a single ``"No nodes in the
-    database"`` caption instead.
+    dim yellow line per affected source. A database with zero *reported*
+    nodes still gets this same caption (never discarded: a degraded,
+    empty run is exactly when an operator most needs the failure/skip
+    lines, since the table itself offers no other clue) with an
+    empty-state line prepended -- ``"No nodes in the database"`` when it
+    is genuinely empty, or ``"No active nodes (N archived)"`` when every
+    record in it is archived (see :attr:`~meshprovision.status.report.
+    StatusReport.archived_count`).
 
     Each ``Timestamp`` cell carries its own local zone abbreviation (see
     :func:`_timestamp_cell`) -- a bare ``"Timestamp"`` column header, not
@@ -197,10 +202,6 @@ def build_table(report: StatusReport) -> Table:
     table.add_column("AirTx", justify="right")
     table.add_column("Nbrs", justify="right")
     table.add_column("Sources")
-
-    if not report.nodes:
-        table.caption = "No nodes in the database"
-        return table
 
     for node in report.nodes:
         table.add_row(
@@ -230,6 +231,13 @@ def build_table(report: StatusReport) -> Table:
     for source, count in report.field_coercions.items():
         caption.append("\n")
         caption.append(f"{source}: {count} field(s) could not be coerced", style="dim yellow")
+    if not report.nodes:
+        empty_state = (
+            f"No active nodes ({report.archived_count} archived)"
+            if report.archived_count
+            else "No nodes in the database"
+        )
+        caption = Text(empty_state) + Text("\n") + caption
     table.caption = caption
     return table
 

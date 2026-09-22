@@ -530,6 +530,38 @@ def test_archived_node_is_excluded_by_default_but_shown_if_explicitly_requested(
     assert [n["node_id"] for n in explicit_document["nodes"]] == ["deadbe02"]
 
 
+def test_all_archived_database_table_names_the_archived_count(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """Regression test for Round 35's status-reporting review, Finding 3.
+
+    A database holding only archived nodes is not empty, but
+    run_status's default report excludes them -- the table's empty-state
+    message must say so ("No active nodes (N archived)"), not the false
+    "No nodes in the database".
+    """
+    from datetime import UTC, datetime
+
+    from meshprovision.db.nodes import NodeRecord
+
+    archived = NodeRecord(
+        node_id="deadbe01",
+        short_name="AAAA",
+        region="EU_868",
+        archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    seed_db(nodes=[archived])
+
+    with mock_sources(nodes={}):
+        result = invoke(runner, ["status"], env)
+
+    assert result.exit_code == 0
+    assert "No active nodes (1 archived)" in result.stdout
+
+
 def test_threshold_ordering_is_validated(runner: CliRunner, env: dict[str, str]) -> None:
     result = invoke(runner, ["status", "--stale-after", "30", "--offline-after", "10"], env)
     assert result.exit_code == 2

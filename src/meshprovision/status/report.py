@@ -196,6 +196,12 @@ class StatusReport:
             client during this run.
         network_requests: Actual network requests made by the underlying
             HTTP client during this run (including retries).
+        archived_count: How many records in the database are archived
+            (via ``mesh db forget``) -- independent of whether any of
+            them are among :attr:`nodes`. Lets a zero-node report
+            distinguish "the database is genuinely empty" from "every
+            node in it is archived," which :func:`~meshprovision.status.
+            render.build_table` needs for an honest empty-state message.
     """
 
     generated_at: datetime
@@ -208,6 +214,7 @@ class StatusReport:
     cache_hits: int = 0
     cache_misses: int = 0
     network_requests: int = 0
+    archived_count: int = 0
 
     @property
     def counts(self) -> Mapping[Availability, int]:
@@ -596,6 +603,7 @@ def run_status(
         ids = options.node_ids or tuple(
             node_id for node_id, record in records.items() if not record.is_archived
         )
+        archived_count = sum(1 for record in records.values() if record.is_archived)
 
         sources: list[DataSource] = []
         if SOURCE_LORANET in options.sources:
@@ -626,6 +634,7 @@ def run_status(
             cache_hits=stats.hits,
             cache_misses=stats.misses,
             network_requests=stats.network_requests,
+            archived_count=archived_count,
         )
     finally:
         if owned_client:

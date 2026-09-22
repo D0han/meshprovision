@@ -879,6 +879,41 @@ def test_build_table_caption_mentions_skipped_entries() -> None:
     assert "12 entrie(s) could not be parsed" in str(table.caption)
 
 
+def test_build_table_empty_database_still_shows_a_source_failure(local_tz: None) -> None:
+    """Regression test for Round 35's status-reporting review, Finding 3.
+
+    build_table's zero-row early return used to replace the entire
+    caption with the bare "No nodes in the database" line, discarding
+    the summary/failure/skip/coercion lines the non-empty path always
+    gets -- so a degraded, empty run explained nothing on stdout. The
+    empty-state line must now be prepended, not substituted.
+    """
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        failures=(SourceFailure(source="loranet", message="boom"),),
+    )
+    table = render.build_table(report)
+    assert table.caption is not None
+    caption = str(table.caption)
+    assert caption.startswith("No nodes in the database")
+    assert "loranet: boom" in caption
+
+
+def test_build_table_all_archived_database_names_the_archived_count(local_tz: None) -> None:
+    """Regression test for Round 35's status-reporting review, Finding 3.
+
+    "No nodes in the database" is false when the database holds only
+    archived nodes -- run_status excludes them from the default report,
+    but the database is not empty.
+    """
+    report = StatusReport(generated_at=NOW, nodes=(), thresholds=Thresholds(), archived_count=3)
+    table = render.build_table(report)
+    assert table.caption is not None
+    assert str(table.caption).startswith("No active nodes (3 archived)")
+
+
 def test_build_table_caption_mentions_field_coercions() -> None:
     obs = _obs(SOURCE_LORANET, last_seen=NOW)
     base_report = build_report(
