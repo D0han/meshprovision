@@ -1554,6 +1554,73 @@ def test_from_backup_conflicting_node_id_force_uses_precedence(
     assert nodes[0].node_id == "deadbeef"
 
 
+def test_from_backup_force_does_not_mis_file_a_different_nodes_data_or_key(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 3.
+
+    A node-db export describes whichever node the phone was connected to
+    when it was taken. Forcing a *different* --node-id through a
+    myNodeNum conflict must not carry that export's names/hw_model/
+    public key onto the forced id -- most importantly not its public
+    key, since a mis-filed <forced_id>_pub row would silently redirect
+    every future backup adopt of the key's real owner (resolve_node_id's
+    own public-key tier reads exactly that row).
+    """
+    other_node_kp = keypair_factory()
+    nodedb = _write_nodedb_json(
+        tmp_path / "nodedb.json",
+        num=0xAAAA1111,
+        node_id="!aaaa1111",
+        long_name="Node A",
+        short_name="NodA",
+        public_key=other_node_kp.public,
+    )
+
+    result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(nodedb),
+            "--node-id",
+            "!bbbb2222",
+            "--no-lookup",
+            "--force",
+            "--yes",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert "describes a different node" in result.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = {row["node_id"]: NodeRecord.from_row(row) for row in loaded.nodes}
+    assert set(nodes) == {"bbbb2222"}
+    assert nodes["bbbb2222"].long_name != "Node A"
+    assert nodes["bbbb2222"].hw_model == ""
+    key_material = {row["key_ref"]: row["key_value"] for row in loaded.keys}
+    assert "bbbb2222_pub" not in key_material
+
+    # The real owner of that key must still resolve to its own id, not the
+    # id it was mistakenly forced onto above.
+    second_nodedb = _write_nodedb_json(
+        tmp_path / "nodedb2.json",
+        num=0xAAAA1111,
+        node_id="!aaaa1111",
+        long_name="Node A",
+        short_name="NodA",
+        public_key=other_node_kp.public,
+    )
+    second_result = invoke(
+        runner, ["adopt", "--from-backup", str(second_nodedb), "--no-lookup", "--yes"], env
+    )
+    assert second_result.exit_code == 0
+    reloaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    reloaded_nodes = {row["node_id"] for row in reloaded.nodes}
+    assert reloaded_nodes == {"bbbb2222", "aaaa1111"}
+
+
 def test_from_backup_records_channel_psk(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:

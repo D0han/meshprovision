@@ -563,6 +563,34 @@ def _load_backup_bundle(
     node_id = resolve_node_id(
         ctx, bundle, node_id_opt=node_id_opt, db_keys=db_keys, no_lookup=no_lookup, force=force
     )
+    if (
+        bundle.nodedb_entry is not None
+        and bundle.nodedb_entry.node_id is not None
+        and bundle.nodedb_entry.node_id != node_id
+    ):
+        # --force resolved a node id that disagrees with the paired node-db
+        # export's own myNodeNum -- that export's entry (names, hw_model,
+        # firmware_version, and critically its public key) describes
+        # whichever node the phone was connected to when the export was
+        # taken, which is by definition NOT node_id. Using it anyway would
+        # write another node's identity -- including its public key -- onto
+        # this one, and that mis-filed <node_id>_pub row would then
+        # silently redirect every future backup adopt of the real key
+        # owner (resolve_node_id's own public-key tier reads exactly that
+        # row). Drop the mismatched entry; only a paired profile's own
+        # data (never subject to this conflict, since a .cfg/.yaml has no
+        # self-reported id at all) still applies.
+        mismatched_id = bundle.nodedb_entry.node_id.display
+        bundle = dataclasses.replace(
+            bundle,
+            nodedb_entry=None,
+            warnings=(
+                *bundle.warnings,
+                f"the paired node-db export's entry (myNodeNum {mismatched_id}) describes a "
+                f"different node than the resolved id {node_id.display}; its names/hw_model/"
+                "firmware_version/public_key are NOT used for this adopt.",
+            ),
+        )
     return bundle, node_id
 
 
