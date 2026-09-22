@@ -744,6 +744,34 @@ def test_refresh_known_good_updates_when_target_changed(tmp_path: Path) -> None:
     assert info.path.read_bytes() == b"v2-longer-content"
 
 
+def test_refresh_known_good_detects_a_same_tick_content_change(tmp_path: Path) -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 8.
+
+    The fast-path used to compare whole-second mtime alone, treating
+    mtime equality as content equality -- which silently retains a stale
+    copy on a coarse-mtime filesystem (exFAT ~10ms, FAT32 2s) or after an
+    external tool rewrites target while preserving its mtime (cp -p,
+    rsync -t). Forcing an identical mtime across two different-content
+    writes simulates exactly that; the known-good copy must still be
+    refreshed because the size differs.
+    """
+    target = tmp_path / "nodes_db.ods"
+    backup_dir = tmp_path / "backups"
+
+    target.write_bytes(b"GOOD CONTENT")
+    atomic_writer.refresh_known_good(target, backup_dir=backup_dir)
+    same_mtime = target.stat().st_mtime
+
+    target.write_bytes(b"CORRUPT/CHANGED CONTENT, DIFFERENT SIZE")
+    os.utime(target, (same_mtime, same_mtime))
+    assert target.stat().st_mtime == same_mtime  # sanity: mtime genuinely unchanged
+
+    info = atomic_writer.refresh_known_good(target, backup_dir=backup_dir)
+
+    assert info is not None
+    assert info.path.read_bytes() == b"CORRUPT/CHANGED CONTENT, DIFFERENT SIZE"
+
+
 def test_refresh_known_good_skips_the_copy_when_target_unchanged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

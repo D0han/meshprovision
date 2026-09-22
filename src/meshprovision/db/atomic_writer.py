@@ -418,10 +418,16 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
     A no-op, cheap ``stat()``-only call when the known-good copy already
     matches ``target``'s current content: ``shutil.copy2`` (used here,
     same as :func:`create_backup`) preserves the source's mtime onto the
-    copy, so a known-good copy whose mtime equals ``target``'s current
-    mtime is already current -- this is what keeps a polling loop (for
-    example ``mesh status --watch``) from rewriting an unchanged copy on
-    every single load.
+    copy, so a known-good copy whose ``(mtime_ns, size)`` equals
+    ``target``'s current ``(mtime_ns, size)`` is already current -- this
+    is what keeps a polling loop (for example ``mesh status --watch``)
+    from rewriting an unchanged copy on every single load. Comparing
+    nanosecond mtime plus size, not just whole-second mtime alone,
+    avoids treating two different writes as identical on a coarse-mtime
+    filesystem (exFAT ~10ms, FAT32 2s) or after an external tool
+    rewrites ``target`` while preserving its mtime (``cp -p``,
+    ``rsync -t``) -- either of which could otherwise leave the known-good
+    copy silently stale.
 
     Args:
         target: The file to refresh a known-good copy of.
@@ -439,9 +445,12 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
     destination = resolved_dir / known_good_name(target)
     tmp_destination: Path | None = None
     try:
-        target_mtime = target.stat().st_mtime
-        if destination.is_file() and destination.stat().st_mtime == target_mtime:
-            return known_good_info(target, backup_dir=backup_dir)
+        target_stat = target.stat()
+        target_identity = (target_stat.st_mtime_ns, target_stat.st_size)
+        if destination.is_file():
+            dest_stat = destination.stat()
+            if (dest_stat.st_mtime_ns, dest_stat.st_size) == target_identity:
+                return known_good_info(target, backup_dir=backup_dir)
 
         resolved_dir.mkdir(parents=True, exist_ok=True)
         try:
