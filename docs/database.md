@@ -122,10 +122,14 @@ otherwise reported by fingerprint only, never its raw material;
 - `mesh db backup` before a risky edit; every save also writes a
   timestamped backup into `data/backups/` with a retention limit.
 - Opening the database in LibreOffice Calc, resizing columns, and saving
-  is safe — including adding your own comments to a cell. Every header
-  cell carries its column's description as a built-in Calc comment
-  (visible on hover); that comment is documentation only and is ignored
-  when the file is read back, along with any comment you add yourself.
+  is safe — including adding your own comments to a cell, which will not
+  corrupt that cell's value. Every header cell carries its column's
+  description as a built-in Calc comment (visible on hover); that
+  comment is documentation only. A comment you add to a cell is ignored
+  *and not preserved*: the next `mesh` command that saves the file
+  rebuilds every cell from scratch, silently dropping it. Write anything
+  you want to keep into the `notes` column instead — that value round-trips
+  normally, like any other cell.
 
 ### Recovering from a bad hand-edit
 
