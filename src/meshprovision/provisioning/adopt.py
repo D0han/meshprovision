@@ -504,28 +504,40 @@ def adopted_record(
     correctly drops that ref too, rather than keeping stale last-known
     state the way a template-managed row does.
 
-    Every live admin key ends up with a real ``Keys`` sheet ref: a key
-    already registered resolves via ``preferred_ref``, and one that is
-    not yet registered resolves via ``observed_refs`` -- built by the
-    caller (``cli/adopt.py``) calling
+    Every live admin key ends up with a real ``Keys`` sheet ref, resolved
+    via ``observed_refs`` in preference to the key's own ``preferred_ref``
+    -- built by the caller (``cli/adopt.py``) calling
     :func:`~meshprovision.provisioning.key_registry.register_observed_key`
-    for each such key *before* this function runs, since minting a
-    ``Keys`` row is a repository-aware operation this pure module cannot
-    perform itself. ``unregistered_admin_keys`` is therefore only ever
-    populated by a key ``observed_refs`` has no entry for -- material that
+    for *every* live admin key *after* this run's own-keypair registration
+    and ``adopt_canonical_ref`` reconciliation, since minting or
+    re-resolving a ``Keys`` row is a repository-aware operation this pure
+    module cannot perform itself. This is deliberately not "``preferred_ref``
+    first": ``preferred_ref`` is classified from a snapshot taken *before*
+    the write phase runs, and can point at an ``observed-*`` ref that
+    ``adopt_canonical_ref`` has since deleted -- e.g. when a node reports
+    its own public key on its own ``security.adminKey`` and some other
+    node was adopted first under a synthetic ref for that same key.
+    ``key.preferred_ref`` remains the fallback for a caller that passes a
+    partial (or, by default, empty) ``observed_refs`` map, so a direct
+    caller that has not registered every live key still gets today's
+    best-known ref rather than losing information. ``unregistered_admin_keys``
+    is therefore only ever populated by a key ``observed_refs`` has no
+    entry for *and* which also has no ``preferred_ref`` -- material that
     failed to mint a ref at all (not exactly 32 bytes; unreachable from a
     device reporting well-formed data, but ``detect.py`` applies no length
-    check). Passing an empty ``observed_refs`` (the default) reproduces
-    the field's old role as the sole record of an unregistered key.
+    check).
 
     Args:
         report: The adoption report to persist.
         now: Timestamp for the touch. Supplied by the caller -- this
             module never reads the clock itself.
         observed_refs: ``{material: key_ref}`` for every live admin key
-            the caller has already registered under a synthetic
-            ``observed-*`` ref (or found already registered under one
-            from an earlier adopt). Defaults to empty.
+            the caller has already resolved -- registered under a
+            synthetic ``observed-*`` ref, found already registered under
+            one from an earlier adopt, or (now) resolved to a real ref
+            such as this node's own ``<node_id>_pub``. Defaults to empty,
+            in which case every key falls back to its own
+            ``preferred_ref``.
 
     Returns:
         A new :class:`~meshprovision.db.nodes.NodeRecord`, built from
@@ -568,7 +580,7 @@ def adopted_record(
     seen_refs: set[str] = set()
     admin_key_refs: list[str] = []
     for key in report.admin_keys:
-        ref = key.preferred_ref or observed_refs.get(key.material)
+        ref = observed_refs.get(key.material) or key.preferred_ref
         if ref is not None and ref not in seen_refs:
             seen_refs.add(ref)
             admin_key_refs.append(ref)

@@ -180,6 +180,58 @@ def test_adopting_the_true_owner_renames_a_stale_observed_ref(
     assert "deadbe01_pub" in key_refs
 
 
+def test_adopting_a_self_admining_node_does_not_persist_the_ref_it_just_deleted(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Regression test for Round 35's adopt-flow Finding 1.
+
+    A node whose own public key is *also* listed on its own
+    security.admin_key (the standard single-admin-node fleet layout) must
+    not end up with authorized_admin_keys pointing at the observed-* ref
+    that this same adopt's own_keypair-registration + adopt_canonical_ref
+    reconciliation just deleted. Reproduces the exact scenario from the
+    prior test above, but with the device also self-admining -- which is
+    the one combination report.admin_keys' pre-write classification can't
+    see past.
+    """
+    kp = keypair_factory()
+    observed_ref = observed_key_ref(kp.public)
+    seed_db(
+        nodes=[NodeRecord(node_id="aaaa0001", authorized_admin_keys=(observed_ref,))],
+        keys=[
+            KeyRecord.from_material(
+                observed_ref.removesuffix("_pub"), KeyType.ADMIN_PUBLIC, kp.public
+            )
+        ],
+    )
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+    iface.localNode.localConfig.security.admin_key.append(kp.public)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes_by_id = {row["node_id"]: NodeRecord.from_row(row) for row in loaded.nodes}
+    assert nodes_by_id["aaaa0001"].authorized_admin_keys == ("deadbe01_pub",)
+    # The node being adopted must resolve its own admin key to its own
+    # real ref, not the observed-* ref that was just deleted out from
+    # under it.
+    assert nodes_by_id["deadbe01"].authorized_admin_keys == ("deadbe01_pub",)
+    key_refs = {row["key_ref"] for row in loaded.keys}
+    assert observed_ref not in key_refs
+    assert "deadbe01_pub" in key_refs
+
+    verify_result = invoke(runner, ["db", "verify"], env)
+    assert verify_result.exit_code == 0
+
+
 def test_refuses_a_template_managed_node_without_force(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
 ) -> None:

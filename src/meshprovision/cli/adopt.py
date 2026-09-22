@@ -790,17 +790,25 @@ def adopt(
                 )
             )
 
-        # Every admin key the device reports that resolved to no Keys
-        # sheet ref gets one now, minted content-addressed from its own
-        # material (see meshprovision.provisioning.observed_keys) -- a
-        # malformed-length key (detect.py applies no length check) is
-        # simply skipped, same degrade-not-crash treatment as everywhere
-        # else in this module; adopted_record() below then falls back to
-        # recording it on unregistered_admin_keys, exactly as before.
+        # Resolve every live admin key's ref *now*, after the own-keypair
+        # registration and adopt_canonical_ref reconciliation above --
+        # never from report.admin_keys' own key.preferred_ref, which was
+        # classified before either of those ran and can be stale: when
+        # the device also lists its own key on security.adminKey,
+        # adopt_canonical_ref may have just deleted the observed-* ref
+        # that classification pointed at (its real owner turned out to be
+        # this node). register_observed_key() is idempotent and cheap for
+        # an already-registered key (it resolves and returns the existing
+        # ref via pipeline.match_admin_key_refs without writing anything),
+        # so calling it unconditionally for every live key -- not only
+        # ones report.admin_keys thought were unregistered -- is what
+        # keeps this resolution current. A malformed-length key (detect.py
+        # applies no length check) is simply skipped, same degrade-not-
+        # crash treatment as everywhere else in this module;
+        # adopted_record() below then falls back to recording it on
+        # unregistered_admin_keys, exactly as before.
         observed_refs: dict[bytes, str] = {}
         for key in report.admin_keys:
-            if key.preferred_ref is not None:
-                continue
             try:
                 observed_refs[key.material] = register_observed_key(
                     db.nodes, db.keys, key.material, created_ts=now
