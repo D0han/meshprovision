@@ -1046,7 +1046,16 @@ def audit_node(
 
     findings = list(result.findings)
 
-    if firmware_version is not None and firmware_version.strip():
+    if firmware_version is not None:
+        # A blank/whitespace-only string takes the same "could not be
+        # evaluated" path as an unparseable one below -- parse_firmware_
+        # version("") already returns None, so this used to be the only
+        # thing standing between the two; short-circuiting it here meant
+        # a device reporting an empty firmware string produced zero
+        # findings at all, indistinguishable from firmware_version=None
+        # (genuinely not reported), when it is equally a "CVE status
+        # unknown, not confirmed safe" case. See Round 35's weakkey-drift
+        # review, Finding 3.
         parsed = parse_firmware_version(firmware_version)
         if parsed is None:
             findings.append(

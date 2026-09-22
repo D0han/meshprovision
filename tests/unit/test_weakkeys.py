@@ -206,11 +206,29 @@ def test_audit_node_unknown_firmware_is_warning(keypair_factory) -> None:
     assert matches[0].severity == "warning"
 
 
-@pytest.mark.parametrize("version", ["", None])
-def test_audit_node_blank_firmware_no_finding(keypair_factory, version) -> None:
+def test_audit_node_no_firmware_reported_no_finding(keypair_factory) -> None:
+    """firmware_version=None means genuinely not reported -- nothing to warn about."""
     kp = keypair_factory()
-    result = audit_node(public=kp.public, firmware_version=version)
+    result = audit_node(public=kp.public, firmware_version=None)
     assert not any(f.check == WeakKeyCheck.FIRMWARE_WINDOW for f in result.findings)
+
+
+def test_audit_node_blank_firmware_warns_same_as_unparseable(keypair_factory) -> None:
+    """Regression test for Round 35's weakkey-drift review, Finding 3.
+
+    A blank/whitespace-only firmware_version must take the same "could
+    not be evaluated" path as a genuinely unparseable one -- it used to
+    be silently indistinguishable from firmware_version=None (not
+    reported at all), when it is equally a "CVE status unknown, not
+    confirmed safe" case.
+    """
+    kp = keypair_factory()
+    for version in ("", "   "):
+        result = audit_node(public=kp.public, firmware_version=version)
+        matches = [f for f in result.findings if f.check == WeakKeyCheck.FIRMWARE_WINDOW]
+        assert len(matches) == 1, version
+        assert matches[0].severity == "warning"
+        assert "could not be parsed" in matches[0].reason
 
 
 def test_parse_firmware_version_and_is_vulnerable() -> None:

@@ -257,6 +257,17 @@ def audit_node_key(live: detect.LiveConfig, *, known_bad: frozenset[bytes]) -> t
         )
     except KeyMaterialError as exc:
         return True, f"malformed key material: {exc.reason}"
+    if result.findings:
+        # Mirrors resolve_admin_keys' logging exactly (same log/level
+        # choice, same one-line-per-key shape) -- without this, a
+        # warning-severity finding about the node's own keypair (a
+        # structurally weak key that fell short of CRITICAL, or a
+        # firmware version this build couldn't parse) was silently
+        # discarded: only the first CRITICAL finding's reason ever left
+        # this function, and cli/provision.py has no other access to the
+        # result. See Round 35's weakkey-drift review, Finding 3.
+        log = _logger.error if result.compromised else _logger.warning
+        log("node key %s_pub: %s", live.node_id.hex, result.summary())
     reason = next(
         (finding.reason for finding in result.findings if finding.severity == "critical"), ""
     )

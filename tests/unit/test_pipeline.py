@@ -252,6 +252,31 @@ def test_audit_node_key_accepts_a_clean_device_keypair(keypair: KeyPair) -> None
     assert audit_node_key(live, known_bad=frozenset()) == (False, "")
 
 
+def test_audit_node_key_logs_a_warning_severity_finding(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression test for Round 35's weakkey-drift review, Finding 3.
+
+    audit_node_key reduced a full AuditResult to (compromised, first
+    critical reason), silently discarding every warning-severity finding
+    -- unlike every sibling audit path (resolve_admin_keys,
+    adopt.build_adoption_report, db/verify.py), which all surface them.
+    A structurally weak-but-not-critical key (low entropy) must now log,
+    the same way resolve_admin_keys already does for the identical
+    finding on an *admin* key.
+    """
+    live = _live_with_security(detect.LiveSecurity(public_key=_LOW_ENTROPY_PUBLIC))
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        compromised, reason = audit_node_key(live, known_bad=frozenset())
+
+    assert compromised is False
+    assert reason == ""
+    records = [r for r in caplog.records if r.getMessage().startswith("node key ")]
+    assert [record.levelno for record in records] == [logging.WARNING]
+    assert "deadbe01_pub" in records[0].getMessage()
+
+
 _MAP = {"A_pub": b"a" * 32, "B_pub": b"b" * 32}
 
 
