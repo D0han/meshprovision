@@ -107,6 +107,75 @@ def test_dry_run_registers_no_keys_either(
     assert db_fingerprint(db_path) == before
 
 
+def test_dry_run_self_admin_key_states_its_own_ref_not_an_observed_one(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """Regression test for Round 35's adopt-flow Finding 2.
+
+    A device that lists its own public key on its own security.adminKey
+    (the standard single-admin-node fleet layout) resolves that key to
+    its own f"{node_id}_pub" ref on a real run -- the preview must say
+    so, not claim (as the pre-write classification alone would) that a
+    synthetic observed-* ref will be minted and offer an
+    `mesh admin import` command for a key that is never actually filed
+    that way.
+    """
+    kp = keypair_factory()
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+    iface.localNode.localConfig.security.admin_key.append(kp.public)
+
+    result = invoke(
+        runner, ["adopt", "--port", "/dev/ttyFAKE0", "--dry-run", "--show-admin-keys"], env
+    )
+
+    assert result.exit_code == 0
+    assert "deadbe01_pub" in result.stderr
+    assert "is this node's own public key" in result.stderr
+    assert "will be filed under" not in result.stderr
+    assert "mesh admin import" not in result.stderr
+
+
+def test_dry_run_warns_when_adopt_would_overwrite_existing_key_material(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Regression test for Round 35's adopt-flow Finding 3.
+
+    A re-keyed, re-flashed, or spoofed device silently overwrote the
+    Keys sheet's existing (and for _priv, otherwise unrecoverable)
+    material, with no preview surface an operator could have caught it
+    on -- --dry-run's output was byte-identical whether or not this
+    adopt would replace different key material underneath an existing
+    node. It must now say so, and say so before any write happens.
+    """
+    old_kp = keypair_factory()
+    new_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01")],
+        keys=[
+            *KeyRecord.for_keypair("deadbe01", old_kp),
+        ],
+    )
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = new_kp.public
+    iface.localNode.localConfig.security.private_key = new_kp.private.reveal()
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--dry-run"], env)
+
+    assert result.exit_code == 0
+    assert db_fingerprint(db_path) == before
+    assert "deadbe01_pub already holds different key material" in result.stderr
+    assert "deadbe01_priv already holds different key material" in result.stderr
+
+
 def test_adopt_registers_the_nodes_own_public_and_private_key(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, keypair_factory: Callable[[], KeyPair]
 ) -> None:

@@ -47,7 +47,7 @@ from meshprovision.cli.provision import (
     transport_options,
 )
 from meshprovision.crypto import keys as crypto_keys
-from meshprovision.crypto import weakkeys
+from meshprovision.crypto import redact, weakkeys
 from meshprovision.datasources.loranet import LoranetSource
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyType, ManagementMode
@@ -194,35 +194,122 @@ def _duplicate_admin_key_warnings(
     return tuple(warnings)
 
 
+def _key_overwrite_warnings(
+    db_keys: KeyRepository,
+    *,
+    node_id_hex: str,
+    node_public: bytes | None,
+    node_private: bytes | None,
+    channel: backup_mod.ChannelInfo | None,
+) -> tuple[str, ...]:
+    """Warn when this adopt would replace existing ``Keys`` sheet material.
+
+    ``adopt()``'s write phase always upserts ``<node_id>_pub``/``_priv``
+    (whichever the device reports) and, with ``--from-backup``, a
+    ``<node_id>_psk`` -- a wholesale replace with no comparison against
+    what is already stored. That is silent data loss for a re-keyed,
+    re-flashed, or spoofed device (the old ``_priv`` row is the only copy
+    of that private key that exists anywhere once the device has moved
+    on) or for a ``--from-backup`` channel PSK. Computed from already-open
+    repositories, before any write, so it runs -- and is visible -- on
+    ``--dry-run`` too, the one place an operator could still act on it.
+
+    Args:
+        db_keys: The open :class:`~meshprovision.db.keys.KeyRepository`.
+        node_id_hex: The adopted device's own ``node_id`` (hex).
+        node_public: The device's live public key, or ``None``.
+        node_private: The device's live private key, or ``None`` (never
+            logged; only ever reduced to a fingerprint below).
+        channel: The backup's decoded channel, or ``None``.
+
+    Returns:
+        One warning string per ref whose existing material differs from
+        what this adopt would write. Silent (as today) when a ref has no
+        existing row, or when the existing and new material agree.
+    """
+    checks: tuple[tuple[str, bytes | None], ...] = (
+        (f"{node_id_hex}_pub", node_public),
+        (f"{node_id_hex}_priv", node_private),
+    )
+    if channel is not None:
+        checks = (*checks, (f"{node_id_hex}_psk", channel.psk))
+    warnings: list[str] = []
+    for ref, new_material in checks:
+        if new_material is None:
+            continue
+        existing = db_keys.find(ref)
+        if existing is None:
+            continue
+        try:
+            old_material = existing.material()
+        except KeyMaterialError:
+            continue
+        if old_material != new_material:
+            warnings.append(
+                f"{ref} already holds different key material "
+                f"({redact.fingerprint(old_material)}); this adopt will overwrite it "
+                f"with {redact.fingerprint(new_material)}."
+            )
+    return tuple(warnings)
+
+
 def _render_admin_key_lines(
-    report: adopt_mod.AdoptionReport, *, show_admin_keys: bool
+    report: adopt_mod.AdoptionReport,
+    *,
+    show_admin_keys: bool,
+    node_id_hex: str,
+    own_public_key: bytes | None,
 ) -> tuple[str, ...]:
     """Render the human-mode lines describing admin keys about to be auto-registered.
 
-    Unless ``--dry-run``, ``adopt()``'s write phase files every one of
-    these keys under a synthetic ``observed-*`` ref (see
-    :mod:`meshprovision.provisioning.observed_keys`) so it always resolves
-    to a real ``Keys`` sheet row -- these lines describe that, and give
-    the operator the ``mesh admin import`` command that renames the
-    synthetic ref to a real one once the key's true owner is known.
+    Unless ``--dry-run``, ``adopt()``'s write phase files every
+    *unregistered* one of these keys under a synthetic ``observed-*`` ref
+    (see :mod:`meshprovision.provisioning.observed_keys`) so it always
+    resolves to a real ``Keys`` sheet row -- these lines describe that,
+    and give the operator the ``mesh admin import`` command that renames
+    the synthetic ref to a real one once the key's true owner is known.
+
+    A live admin key equal to ``own_public_key`` is excluded from that:
+    it is this node's own key (the standard single-admin-node fleet
+    layout), and this same adopt's own-keypair registration always files
+    it as ``f"{node_id_hex}_pub"`` -- never a synthetic ref -- regardless
+    of whether ``report.admin_keys``' pre-write classification found it
+    already registered. Stating the synthetic-ref outcome for it would be
+    wrong even when its ``key.refs`` happens to be empty at report-build
+    time. See Round 35's adopt-flow review, Finding 2.
 
     Args:
         report: The adoption report to render.
         show_admin_keys: Whether ``--show-admin-keys`` was passed.
+        node_id_hex: The adopted device's own ``node_id`` (hex).
+        own_public_key: The device's own live public key, or ``None``.
 
     Returns:
-        One line per unregistered key when ``show_admin_keys`` is set
-        (or, for a key whose material is not exactly 32 bytes --
-        reachable from a device reporting malformed data, ``detect.py``
-        applies no length check -- a ``#``-prefixed line noting it can't
-        be rendered or registered at all, rather than a crash or a
-        silently wrong encoding; the report's own warnings already flag
-        the malformed key separately); otherwise a single count hint
-        line, or nothing when every key is already registered.
+        A self-admin line for a live key equal to ``own_public_key``, if
+        any; then one line per remaining unregistered key when
+        ``show_admin_keys`` is set (or, for a key whose material is not
+        exactly 32 bytes -- reachable from a device reporting malformed
+        data, ``detect.py`` applies no length check -- a ``#``-prefixed
+        line noting it can't be rendered or registered at all, rather
+        than a crash or a silently wrong encoding; the report's own
+        warnings already flag the malformed key separately); otherwise a
+        single count hint line for the remainder, or nothing when there
+        is no self-admin key and every other key is already registered.
     """
-    unregistered = [key for key in report.admin_keys if not key.refs]
+    self_admin_lines: list[str] = []
+    unregistered: list[adopt_mod.LiveAdminKey] = []
+    for key in report.admin_keys:
+        if own_public_key is not None and key.material == own_public_key:
+            self_admin_lines.append(
+                f"admin key {key.fingerprint} is this node's own public key; it will be "
+                f"registered as {node_id_hex + '_pub'!r}, not a synthetic observed-* ref."
+            )
+            continue
+        if not key.refs:
+            unregistered.append(key)
+
     if not unregistered:
-        return ()
+        return tuple(self_admin_lines)
     if show_admin_keys:
         lines: list[str] = []
         for key in unregistered:
@@ -239,8 +326,9 @@ def _render_admin_key_lines(
                 f"admin key {key.fingerprint} will be filed under {observed_ref!r}; "
                 f"rename it once its owner is known: mesh admin import <REF>={encoded}"
             )
-        return tuple(lines)
+        return (*self_admin_lines, *lines)
     return (
+        *self_admin_lines,
         f"{len(unregistered)} admin key(s) will be filed under a synthetic observed-* ref "
         "in the Keys sheet; re-run with --show-admin-keys for import commands to rename them.",
     )
@@ -711,6 +799,14 @@ def adopt(
         duplicate_admin_key_warnings = _duplicate_admin_key_warnings(
             db.nodes, live_node_id=live.node_id.hex, admin_keys=report.admin_keys
         )
+        own_private_secret = live.security.private_key if live.security.has_private_key else None
+        overwrite_warnings = _key_overwrite_warnings(
+            db.keys,
+            node_id_hex=live.node_id.hex,
+            node_public=live.security.public_key if live.security.has_public_key else None,
+            node_private=own_private_secret.reveal() if own_private_secret is not None else None,
+            channel=channel,
+        )
 
         if json_output:
             payload = report.to_json_dict(show_key_material=show_admin_keys)
@@ -718,6 +814,7 @@ def adopt(
                 *report.warnings,
                 *duplicate_warnings,
                 *duplicate_admin_key_warnings,
+                *overwrite_warnings,
             ]
             echo_json(payload)
         else:
@@ -727,7 +824,14 @@ def adopt(
                 ctx.warn(warning)
             for warning in duplicate_admin_key_warnings:
                 ctx.warn(warning)
-            for line in _render_admin_key_lines(report, show_admin_keys=show_admin_keys):
+            for warning in overwrite_warnings:
+                ctx.warn(warning)
+            for line in _render_admin_key_lines(
+                report,
+                show_admin_keys=show_admin_keys,
+                node_id_hex=live.node_id.hex,
+                own_public_key=(live.security.public_key if live.security.has_public_key else None),
+            ):
                 ctx.info(line)
 
         if dry_run:
