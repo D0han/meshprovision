@@ -888,29 +888,67 @@ def test_build_table_caption_mentions_field_coercions() -> None:
     assert "5 field(s) could not be coerced" in str(table.caption)
 
 
-def test_timestamp_cell_renders_local_time_without_the_zone(local_tz: None) -> None:
-    assert render._timestamp_cell(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_WARSAW_NO_ZONE
+def test_timestamp_cell_renders_local_time_with_its_own_zone(local_tz: None) -> None:
+    """Regression test for Round 35's status-reporting review, Finding 1.
+
+    Each cell must carry its own zone abbreviation rather than relying
+    on a table-wide header claim: a bare local-time string with no zone
+    or offset can't be disambiguated against a shared header that is
+    wrong for this row (a DST boundary between this instant and the
+    report's generated_at) or, worse, collapses two genuinely different
+    instants an hour apart (the repeated DST-fallback hour) into an
+    identical-looking string.
+    """
+    assert render._timestamp_cell(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_WARSAW
     assert render._timestamp_cell(None) == "-"
 
 
-def test_build_table_timestamp_column_renders_local_time_without_the_zone(local_tz: None) -> None:
+def test_build_table_timestamp_column_renders_local_time_with_its_own_zone(
+    local_tz: None,
+) -> None:
     obs = _obs(SOURCE_LORANET, last_seen=OFFSET_TIMESTAMP)
     report = build_report(
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
     )
     table = render.build_table(report)
     timestamp_column = table.columns[6]
-    assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_WARSAW_NO_ZONE]
+    assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_WARSAW]
 
 
-def test_build_table_timestamp_header_names_the_local_zone_once(local_tz: None) -> None:
-    """Regression test: the zone is stated once in the header, not repeated per row."""
+def test_build_table_timestamp_header_is_bare(local_tz: None) -> None:
+    """Regression test: the header no longer claims a single table-wide zone.
+
+    Round 35's status-reporting review, Finding 1: `54ac8c1`'s "state it
+    once in the header" was false for any row whose instant fell on the
+    other side of a DST transition from `report.generated_at`.
+    """
     obs = _obs(SOURCE_LORANET, last_seen=OFFSET_TIMESTAMP)
     report = build_report(
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
     )
     table = render.build_table(report)
-    assert str(table.columns[6].header) == "Timestamp (CEST)"
+    assert str(table.columns[6].header) == "Timestamp"
+
+
+def test_timestamp_cell_disambiguates_the_repeated_dst_fallback_hour(local_tz: None) -> None:
+    """Regression test for Round 35's status-reporting review, Finding 1(b).
+
+    Europe/Warsaw's 2026 fall-back transition is 2026-10-25 01:00 UTC
+    (03:00 CEST -> 02:00 CET). Two instants an hour apart, straddling
+    that transition, both render the same wall-clock "02:30:00" --
+    without a per-row zone, they were byte-identical despite being
+    genuinely different instants an hour apart (the adjacent "Last seen"
+    column would correctly say they differ).
+    """
+    before_transition = datetime(2026, 10, 25, 0, 30, tzinfo=UTC)  # 02:30 CEST
+    after_transition = datetime(2026, 10, 25, 1, 30, tzinfo=UTC)  # 02:30 CET
+
+    rendered_before = render._timestamp_cell(before_transition)
+    rendered_after = render._timestamp_cell(after_transition)
+
+    assert rendered_before != rendered_after
+    assert rendered_before.endswith("CEST")
+    assert rendered_after.endswith("CET") and not rendered_after.endswith("CEST")
 
 
 def test_build_table_returns_expected_columns(local_tz: None) -> None:
@@ -927,7 +965,7 @@ def test_build_table_returns_expected_columns(local_tz: None) -> None:
         "Mgmt",
         "Status",
         "Last seen",
-        "Timestamp (CEST)",
+        "Timestamp",
         "Batt",
         "Volt",
         "ChUtil",

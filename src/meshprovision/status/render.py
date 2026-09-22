@@ -128,17 +128,21 @@ def _timestamp_cell(value: datetime | None) -> str:
         value: The timestamp, or ``None``.
 
     Returns:
-        For example ``"2026-08-25 05:14:10"``, or :data:`_DASH` when
-        ``value`` is ``None``. Always the full date/time form (no
+        For example ``"2026-08-25 05:14:10 CEST"``, or :data:`_DASH`
+        when ``value`` is ``None``. Always the full date/time form (no
         same-day shortening: unlike the summary caption's ``data as of``
         clause, table rows have no single shared reference date to
-        collapse against) and never the zone abbreviation -- every row
-        is in the same local zone, so :func:`build_table` states it once
-        in the column header instead of repeating it per row.
+        collapse against) and always includes its own zone abbreviation
+        -- a shared "the table's timezone" header would be false for any
+        row whose instant falls on the other side of a DST transition
+        from ``report.generated_at``, and would collapse two instants an
+        hour apart during a repeated (DST-fallback) hour into an
+        identical-looking string. See Round 35's status-reporting
+        review, Finding 1.
     """
     if value is None:
         return _DASH
-    return timefmt.format_local(value, include_zone=False)
+    return timefmt.format_local(value, include_zone=True)
 
 
 def _sources_cell(sources: tuple[str, ...]) -> str:
@@ -167,10 +171,11 @@ def build_table(report: StatusReport) -> Table:
     renders a header-only table with a single ``"No nodes in the
     database"`` caption instead.
 
-    The ``Timestamp`` column header names the local timezone once (for
-    example ``"Timestamp (CEST)"``, from ``report.generated_at``) rather
-    than repeating it on every row -- every timestamp this table renders
-    shares that one local zone (see :func:`_timestamp_cell`).
+    Each ``Timestamp`` cell carries its own local zone abbreviation (see
+    :func:`_timestamp_cell`) -- a bare ``"Timestamp"`` column header, not
+    a zone stated once for the whole table, since a long-offline node's
+    row can genuinely be in a different zone (DST) from the report's own
+    ``generated_at`` instant.
 
     Args:
         report: The report to render.
@@ -185,7 +190,7 @@ def build_table(report: StatusReport) -> Table:
     table.add_column("Mgmt")
     table.add_column("Status")
     table.add_column("Last seen")
-    table.add_column(f"Timestamp ({timefmt.local_tz_abbreviation(report.generated_at)})")
+    table.add_column("Timestamp")
     table.add_column("Batt", justify="right")
     table.add_column("Volt", justify="right")
     table.add_column("ChUtil", justify="right")
