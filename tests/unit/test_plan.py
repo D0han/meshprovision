@@ -1134,6 +1134,15 @@ def test_db_public_key_differs_adopts_device_key(
     assert plan.key_plan.adopt_device_key is True
     assert any(w.code == "device_key_differs_from_db" for w in plan.warnings)
     assert any("#7449" in w.message for w in plan.warnings)
+    # adopt_device_key alone must not pull in a "security" section: nothing
+    # in write_section acts on it, so including one would be a zero-field
+    # writeConfig("security") for no reason -- exactly the write firmware
+    # issue #7449 (cited in this same warning) says can silently discard
+    # the key this plan exists to preserve. See Round 35's plan-apply
+    # review, Finding 3.
+    assert not any(section.section == "security" for section in plan.sections)
+    assert plan.key_plan.is_empty is False  # the run still has work to do
+    assert plan.is_empty is False
 
 
 # ---------------------------------------------------------------------------

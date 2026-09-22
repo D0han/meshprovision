@@ -554,7 +554,16 @@ def _plan_security_section(
                 )
             )
 
-    if not changes and key_plan.is_empty:
+    # adopt_device_key alone must NOT pull in the security section: it's a
+    # database-side decision (record the device's own reported key instead
+    # of overwriting it) that write_section has no branch for, so an
+    # adopt-only plan would otherwise issue a zero-field writeConfig(
+    # "security") for nothing -- exactly the write firmware issue #7449
+    # says can silently discard the key this plan exists to preserve.
+    # KeyPlan.is_empty deliberately still counts adopt_device_key (the run
+    # still has work to do), so it can't be used as this section's gate.
+    needs_device_write = key_plan.regenerate or key_plan.change_admin_keys
+    if not changes and not needs_device_write:
         return None
     return SectionChange(
         section="security",
