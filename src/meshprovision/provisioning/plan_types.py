@@ -65,8 +65,12 @@ def values_equal(current: object, desired: object) -> bool:
         either side requires the other side to also be a ``bool`` (this
         guards against ``True == 1``); a ``float`` on either side (with
         both sides otherwise numeric) uses ``math.isclose`` with
-        ``rel_tol=1e-9``/``abs_tol=1e-9``; everything else uses plain
-        ``==``.
+        ``rel_tol=1e-6``/``abs_tol=1e-9``; everything else uses plain
+        ``==``. ``rel_tol`` is set to float32 precision (with a wide
+        margin), not float64: every template float field maps to a
+        protobuf ``TYPE_FLOAT`` (32-bit) wire field, so a device's
+        read-back is only ever float32-accurate (~1.19e-7 relative error)
+        even when the template's own value is an exact Python float.
     """
     current_is_bool = isinstance(current, bool)
     desired_is_bool = isinstance(desired, bool)
@@ -75,7 +79,7 @@ def values_equal(current: object, desired: object) -> bool:
             return False
         return current == desired
     if isinstance(current, int | float) and isinstance(desired, int | float):
-        return math.isclose(float(current), float(desired), rel_tol=1e-9, abs_tol=1e-9)
+        return math.isclose(float(current), float(desired), rel_tol=1e-6, abs_tol=1e-9)
     return current == desired
 
 

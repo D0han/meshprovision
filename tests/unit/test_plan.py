@@ -1275,6 +1275,29 @@ def test_values_equal_string_never_coerced_to_float() -> None:
     assert values_equal(1.5, "1.5") is False
 
 
+def test_values_equal_tolerates_protobuf_float32_quantization() -> None:
+    """A value round-tripped through a real protobuf ``TYPE_FLOAT`` field.
+
+    ``power.adc_multiplier_override``/``lora.frequency_offset`` are 32-bit
+    protobuf floats, so a device can only ever report float32 precision --
+    4.9 comes back as 4.900000095367432. The old rel_tol=1e-9 rejected
+    this as a mismatch, which meant the write always verified UNCONFIRMED
+    and the database was never updated. See Round 35's plan-apply review.
+    """
+    from meshtastic.protobuf import config_pb2
+
+    from meshprovision.provisioning.plan import values_equal
+
+    power = config_pb2.Config.PowerConfig()
+    power.adc_multiplier_override = 4.9
+    quantized = power.adc_multiplier_override
+    assert quantized != 4.9  # sanity: the quantization is real, not a no-op
+
+    assert values_equal(quantized, 4.9) is True
+    # A genuine mismatch at the same magnitude must still be rejected.
+    assert values_equal(quantized, 5.1) is False
+
+
 # ---------------------------------------------------------------------------
 # Determinism.
 # ---------------------------------------------------------------------------
