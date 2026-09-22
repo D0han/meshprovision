@@ -427,6 +427,88 @@ def test_diff_record_aliased_admin_key_is_not_drift(make_live, keypair_factory) 
         assert not any(d.kind is repair.DriftKind.ADMIN_KEYS for d in drifts), public_keys
 
 
+def test_diff_record_non_preferred_alias_ref_is_not_drift(make_live, keypair_factory) -> None:
+    """Regression test for Round 35's weakkey-drift review, Finding 1.
+
+    A key legitimately filed under two refs must not drift just because
+    the *recorded* ref happens to lose _preferred_ref's preference
+    ordering to the *other* alias -- record.authorized_admin_keys is
+    written from whichever ref the template names, with no relationship
+    to that ordering. test_diff_record_aliased_admin_key_is_not_drift
+    (above) only ever records the preferred ref (ADMIN1_pub); this
+    records the non-preferred one (deadbe01_pub, node-id-shaped) while
+    the same key is also registered under a human-labeled ref that
+    _preferred_ref would rank first.
+    """
+    from meshprovision.config.template import load_template_text
+    from tests.unit.conftest import make_security
+
+    template = load_template_text("version: 1\n")
+    kp = keypair_factory()
+    live = make_live(template, security=make_security(admin_keys=(kp.public,)))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("deadbe01_pub",))
+    public_keys = {"deadbe01_pub": kp.public, "ADMIN1_pub": kp.public}
+
+    drifts = repair.diff_record(live, record, public_keys=public_keys)
+
+    assert not any(d.kind is repair.DriftKind.ADMIN_KEYS for d in drifts)
+
+
+def test_diff_record_genuinely_different_admin_key_is_still_drift(
+    make_live, keypair_factory
+) -> None:
+    """The material-based comparison must not become blind to a real difference."""
+    from meshprovision.config.template import load_template_text
+    from tests.unit.conftest import make_security
+
+    template = load_template_text("version: 1\n")
+    live_kp = keypair_factory()
+    recorded_kp = keypair_factory()
+    live = make_live(template, security=make_security(admin_keys=(live_kp.public,)))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",))
+    public_keys = {"deadbe01_pub": live_kp.public, "ADMIN1_pub": recorded_kp.public}
+
+    drifts = repair.diff_record(live, record, public_keys=public_keys)
+
+    assert any(d.kind is repair.DriftKind.ADMIN_KEYS for d in drifts)
+
+
+def test_diff_record_dangling_admin_key_ref_is_still_drift(make_live, keypair_factory) -> None:
+    """An unresolvable recorded ref must never be silently dropped from comparison."""
+    from meshprovision.config.template import load_template_text
+    from tests.unit.conftest import make_security
+
+    template = load_template_text("version: 1\n")
+    live = make_live(template, security=make_security(empty=True))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("GHOST_pub",))
+
+    drifts = repair.diff_record(live, record, public_keys={})
+
+    assert any(d.kind is repair.DriftKind.ADMIN_KEYS for d in drifts)
+
+
+def test_diff_record_unmappable_hw_model_is_not_drift(make_live) -> None:
+    """Regression test for Round 35's weakkey-drift review, Finding 2.
+
+    live.hw_model == "" paired with hw_model_raw is not an observation --
+    the device reported a model this build's enum table doesn't
+    recognize -- and must not be compared against a real recorded value.
+    """
+    import dataclasses
+
+    from meshprovision.config.template import load_template_text
+    from tests.unit.conftest import make_security
+
+    template = load_template_text("version: 1\n")
+    live = make_live(template, security=make_security(empty=True), hw_model="RAK4631")
+    live = dataclasses.replace(live, hw_model="", hw_model_raw="FUTURE_BOARD_9000")
+    record = NodeRecord(node_id="deadbe01", hw_model="RAK4631")
+
+    drifts = repair.diff_record(live, record, public_keys={})
+
+    assert not any(d.kind is repair.DriftKind.HARDWARE for d in drifts)
+
+
 def test_drift_describe() -> None:
     drift = repair.Drift(
         kind=repair.DriftKind.RADIO, field="role", recorded="CLIENT", observed="ROUTER"

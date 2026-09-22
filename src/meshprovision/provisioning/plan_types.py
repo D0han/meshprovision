@@ -396,6 +396,13 @@ class ChangePlan:
         ble_pin_set: Whether a Bluetooth PIN change is part of this plan.
         hw_model: The live hardware model, carried through for
             :meth:`to_record`.
+        hw_model_raw: The device-reported hw_model value ``hw_model`` was
+            resolved from, before enum lookup -- ``None`` only when the
+            device reported nothing at all (see
+            :attr:`~meshprovision.provisioning.detect.LiveConfig.hw_model_raw`).
+            Lets :meth:`to_record` distinguish "no hardware model" from
+            "reported one this build doesn't recognize," so it never
+            erases an already-recorded value with the latter's ``""``.
         firmware_version: The live firmware version, carried through for
             :meth:`to_record`.
         role: The template's intended ``device.role``, carried through
@@ -416,6 +423,7 @@ class ChangePlan:
     warnings: tuple[PlanWarning, ...] = ()
     ble_pin_set: bool = False
     hw_model: str = ""
+    hw_model_raw: str | None = None
     firmware_version: str = ""
     role: str = ""
     region: str = ""
@@ -643,7 +651,17 @@ class ChangePlan:
                 if confirmed_long_name is not None
                 else self.name_change.desired_long_name
             ),
-            "hw_model": self.hw_model,
+            # A blank hw_model paired with a non-None hw_model_raw means the
+            # device reported a model this build's enum table doesn't
+            # recognize -- "cannot evaluate," not "no hardware model" (see
+            # provisioning.repair.diff_record's matching guard). Keep
+            # whatever was already recorded rather than erase it with that
+            # empty sentinel.
+            "hw_model": (
+                base.hw_model
+                if self.hw_model_raw is not None and not self.hw_model
+                else self.hw_model
+            ),
             "firmware_version": self.firmware_version,
             "role": self.role,
             "region": self.region,

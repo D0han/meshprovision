@@ -693,6 +693,7 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         warnings=tuple(warnings),
         ble_pin_set=bluetooth_section is not None,
         hw_model=live.hw_model,
+        hw_model_raw=live.hw_model_raw,
         firmware_version=live.firmware_version,
         role=template.device.role,
         region=template.lora.region,

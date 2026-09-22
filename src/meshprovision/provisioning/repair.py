@@ -103,6 +103,30 @@ def _preferred_ref(material: bytes, public_keys: Mapping[str, bytes]) -> str:
     return refs[0] if refs else f"<unknown:{redact.fingerprint(material)}>"
 
 
+def _recorded_material(ref: str, public_keys: Mapping[str, bytes]) -> bytes | str:
+    """Resolve one recorded ``authorized_admin_keys`` ref to its raw material.
+
+    Returns a distinguishable string sentinel (never a valid ``bytes``
+    value) for a ref that does not resolve at all, so it can never be
+    mistaken for a coincidental material match against a live key --
+    genuinely dangling refs still register as drift.
+
+    Args:
+        ref: One entry of ``record.authorized_admin_keys``.
+        public_keys: ``{key_ref: raw public key}``.
+
+    Returns:
+        The raw material, or ``f"<unresolved:{ref}>"``.
+    """
+    material = public_keys.get(ref)
+    return material if material is not None else f"<unresolved:{ref}>"
+
+
+def _material_sort_key(value: bytes | str) -> bytes:
+    """Sort key that orders ``bytes``/``str`` values without a type-mix comparison error."""
+    return value if isinstance(value, bytes) else value.encode()
+
+
 def diff_record(
     live: detect.LiveConfig,
     record: NodeRecord,
@@ -144,9 +168,17 @@ def diff_record(
     if long_drift is not None:
         drifts.append(long_drift)
 
-    hw_drift = _drift_if_differs(DriftKind.HARDWARE, "hw_model", record.hw_model, live.hw_model)
-    if hw_drift is not None:
-        drifts.append(hw_drift)
+    # A blank live.hw_model paired with a non-None hw_model_raw means the
+    # device reported a model this build's enum table doesn't recognize --
+    # detect.read_live_config's own "cannot evaluate" sentinel, not a
+    # genuine observation of "no hardware model." Comparing it against a
+    # real recorded value would report phantom drift, and the caller
+    # (plan.py's to_record) must not let it erase what is already
+    # recorded either -- see that module for the matching guard.
+    if not (live.hw_model_raw is not None and not live.hw_model):
+        hw_drift = _drift_if_differs(DriftKind.HARDWARE, "hw_model", record.hw_model, live.hw_model)
+        if hw_drift is not None:
+            drifts.append(hw_drift)
 
     firmware_drift = _drift_if_differs(
         DriftKind.FIRMWARE, "firmware_version", record.firmware_version, live.firmware_version
@@ -164,9 +196,25 @@ def diff_record(
     if region_drift is not None:
         drifts.append(region_drift)
 
-    live_admin_refs = tuple(sorted(_preferred_ref(key, known) for key in live.security.admin_keys))
-    recorded_admin_refs = tuple(sorted(record.authorized_admin_keys))
-    if recorded_admin_refs and live_admin_refs != recorded_admin_refs:
+    # Compare material, not rendered refs: record.authorized_admin_keys is
+    # written from whichever ref the template names (plan_admin_keys.py),
+    # with no relationship to _preferred_ref's preference ordering, so a
+    # key legitimately filed under more than one ref (mesh admin bootstrap
+    # --ref LABEL) drifted forever whenever the template happened to name
+    # the non-preferred alias. _preferred_ref is still used to *render*
+    # the display strings below -- only the equality check changed.
+    live_material = tuple(sorted(live.security.admin_keys))
+    recorded_material = tuple(
+        sorted(
+            (_recorded_material(ref, known) for ref in record.authorized_admin_keys),
+            key=_material_sort_key,
+        )
+    )
+    if record.authorized_admin_keys and recorded_material != live_material:
+        live_admin_refs = tuple(
+            sorted(_preferred_ref(key, known) for key in live.security.admin_keys)
+        )
+        recorded_admin_refs = tuple(sorted(record.authorized_admin_keys))
         drifts.append(
             Drift(
                 kind=DriftKind.ADMIN_KEYS,

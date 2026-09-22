@@ -248,6 +248,31 @@ def test_admin_keys_valid_counts(make_live, template, make_admin_key, n: int) ->
         assert record.authorized_admin_keys == tuple(f"{r}_pub" for r in refs)
 
 
+def test_to_record_keeps_recorded_hw_model_when_live_reports_unmapped(make_live, template) -> None:
+    """Regression test for Round 35's weakkey-drift review, Finding 2.
+
+    live.hw_model == "" paired with hw_model_raw means the device
+    reported a model this build's enum table doesn't recognize -- not
+    "no hardware model" -- so to_record must not erase an already-
+    recorded value with it.
+    """
+    live = make_live(
+        template, security=make_security(empty=True), hw_model="", hw_model_raw="FUTURE_BOARD_9000"
+    )
+    record = NodeRecord(
+        node_id="deadbe01",
+        short_name=live.short_name,
+        long_name=live.long_name,
+        hw_model="RAK4631",
+    )
+    inputs = PlanInputs(
+        live=live, template=template, db_entry=record, state=detect.NodeState.PROVISIONED
+    )
+    plan = build_plan(inputs)
+
+    assert plan.to_record().hw_model == "RAK4631"
+
+
 def test_admin_nodes_empty_never_strips_live_keys(make_live, template, keypair_factory) -> None:
     kp1, kp2 = keypair_factory(), keypair_factory()
     live = make_live(template, security=make_security(admin_keys=(kp1.public, kp2.public)))
