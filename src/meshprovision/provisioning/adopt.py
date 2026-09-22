@@ -251,6 +251,22 @@ class AdoptionReport:
             leaves this ``None``.
         gps_lon: Companion to :attr:`gps_lat`.
         gps_alt: Companion to :attr:`gps_lat`, in meters.
+        own_public_key_captured: Whether the device reports its own
+            public key, so adopting will write a ``<node_id>_pub`` row.
+            Same presence-only convention as :attr:`ble_pin` -- never the
+            key material itself, which is already public information
+            anyway, just whether the write will happen.
+        own_private_key_captured: Whether the device reports its own
+            private key, so adopting will write a ``<node_id>_priv`` row.
+            A live device normally never exposes this (only a
+            ``--from-backup`` ``.cfg``/``.yaml`` does), so this is
+            ordinarily ``False`` for a device adopt.
+        channel_name_to_record: The channel name a
+            ``--from-backup``-decoded 32-byte AES256 PSK will be recorded
+            under (a ``<node_id>_psk`` row), or ``None`` when no channel
+            PSK will be recorded this adopt. Only ever set by the CLI
+            layer, which alone knows the decoded channel -- never PSK
+            bytes, which are never rendered anywhere in this report.
         source: Where this report's data came from: ``"device"`` for a
             live connection (the default), or a label naming the backup
             file(s) for ``mesh adopt --from-backup``. Rendered by
@@ -276,6 +292,9 @@ class AdoptionReport:
     gps_lat: float | None = None
     gps_lon: float | None = None
     gps_alt: int | None = None
+    own_public_key_captured: bool = False
+    own_private_key_captured: bool = False
+    channel_name_to_record: str | None = None
     source: str = "device"
 
     def describe(self) -> tuple[str, ...]:
@@ -316,6 +335,16 @@ class AdoptionReport:
             lines.append("a fixed BLE PIN was captured and will be preserved on enrollment")
         else:
             lines.append("no fixed BLE PIN captured; enrolling this node will set a new one")
+
+        if self.own_public_key_captured:
+            lines.append(f"own public key will be recorded as {self.node_id.hex}_pub")
+        if self.own_private_key_captured:
+            lines.append(f"own private key will be recorded as {self.node_id.hex}_priv")
+        if self.channel_name_to_record is not None:
+            lines.append(
+                f"channel {self.channel_name_to_record!r} PSK will be recorded as "
+                f"{self.node_id.hex}_psk"
+            )
 
         lines.extend(self.warnings)
 
@@ -365,6 +394,9 @@ class AdoptionReport:
             "firmware_vulnerable": self.firmware_vulnerable,
             "is_managed": self.is_managed,
             "ble_pin_captured": self.ble_pin is not None,
+            "own_public_key_captured": self.own_public_key_captured,
+            "own_private_key_captured": self.own_private_key_captured,
+            "channel_name_to_record": self.channel_name_to_record,
             "warnings": list(self.warnings),
             "source": self.source,
         }
@@ -494,6 +526,8 @@ def build_adoption_report(
         is_managed=live.security.is_managed,
         ble_pin=capture_ble_pin(live),
         warnings=tuple(warnings),
+        own_public_key_captured=live.security.has_public_key,
+        own_private_key_captured=live.security.has_private_key,
     )
 
 

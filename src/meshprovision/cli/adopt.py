@@ -815,6 +815,7 @@ def adopt(
                 gps_lat=fixed_position.latitude if fixed_position is not None else None,
                 gps_lon=fixed_position.longitude if fixed_position is not None else None,
                 gps_alt=fixed_position.altitude if fixed_position is not None else None,
+                channel_name_to_record=channel.name if channel is not None else None,
                 warnings=(*report.warnings, *extra_warnings),
             )
 

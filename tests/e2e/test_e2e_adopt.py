@@ -1332,6 +1332,64 @@ def test_from_backup_dry_run_writes_nothing(
     assert db_fingerprint(db_path) == before
 
 
+def test_from_backup_dry_run_describes_every_key_row_a_real_run_would_write(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """Regression test for Round 35's backup-adoption review, Finding 4.
+
+    --dry-run's help text promises to "print the report without writing
+    to the database" -- but the preview mentioned none of the up to
+    three Keys-sheet rows (<id>_pub, <id>_priv, <id>_psk) a real
+    --from-backup run writes, including the node's own private key. It
+    must now say what will be recorded, in both human and --json output,
+    before any write happens.
+    """
+    kp = keypair_factory()
+    psk = bytes(range(32))
+    channel_set = apponly_pb2.ChannelSet()
+    channel_set.settings.add(psk=psk, name="Primary")
+    frag = base64.urlsafe_b64encode(channel_set.SerializeToString()).decode().rstrip("=")
+    cfg = _write_profile_cfg(
+        tmp_path / "profile.cfg",
+        channel_url=f"https://meshtastic.org/e/#{frag}",
+        public_key=kp.public,
+        private_key=kp.private.reveal(),
+    )
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--dry-run"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert db_fingerprint(db_path) == before
+    assert "own public key will be recorded as a0cb5cc4_pub" in result.stderr
+    assert "own private key will be recorded as a0cb5cc4_priv" in result.stderr
+    assert "channel 'Primary' PSK will be recorded as a0cb5cc4_psk" in result.stderr
+
+    json_result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(cfg),
+            "--node-id",
+            "!a0cb5cc4",
+            "--no-lookup",
+            "--dry-run",
+            "--json",
+        ],
+        env,
+    )
+    payload = json.loads(json_result.stdout)
+    assert payload["own_public_key_captured"] is True
+    assert payload["own_private_key_captured"] is True
+    assert payload["channel_name_to_record"] == "Primary"
+
+
 def test_from_backup_conflicts_with_a_transport_flag(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:
