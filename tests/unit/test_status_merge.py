@@ -930,46 +930,47 @@ def test_build_table_caption_mentions_field_coercions() -> None:
     assert "5 field(s) could not be coerced" in str(table.caption)
 
 
-def test_timestamp_cell_renders_local_time_with_its_own_zone(local_tz: None) -> None:
-    """Regression test for Round 35's status-reporting review, Finding 1.
-
-    Each cell must carry its own zone abbreviation rather than relying
-    on a table-wide header claim: a bare local-time string with no zone
-    or offset can't be disambiguated against a shared header that is
-    wrong for this row (a DST boundary between this instant and the
-    report's generated_at) or, worse, collapses two genuinely different
-    instants an hour apart (the repeated DST-fallback hour) into an
-    identical-looking string.
-    """
-    assert render._timestamp_cell(OFFSET_TIMESTAMP) == OFFSET_TIMESTAMP_WARSAW
-    assert render._timestamp_cell(None) == "-"
+def test_timestamp_cell_bare_when_it_matches_the_reference_zone(local_tz: None) -> None:
+    """A row sharing the header's (reference's) zone stays bare -- the header already states it."""
+    assert (
+        render._timestamp_cell(OFFSET_TIMESTAMP, reference=NOW) == OFFSET_TIMESTAMP_WARSAW_NO_ZONE
+    )
+    assert render._timestamp_cell(None, reference=NOW) == "-"
 
 
-def test_build_table_timestamp_column_renders_local_time_with_its_own_zone(
+def test_timestamp_cell_states_its_own_zone_when_it_differs_from_the_reference(
     local_tz: None,
 ) -> None:
+    """Regression test for Round 35's status-reporting review, Finding 1.
+
+    A row whose own zone differs from the header's -- a long-offline
+    node whose last_seen predates the most recent DST transition -- must
+    state its own zone explicitly rather than silently inherit a header
+    claim that is wrong for it.
+    """
+    generated_after_fallback = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)  # CET
+    assert render._timestamp_cell(OFFSET_TIMESTAMP, reference=generated_after_fallback) == (
+        OFFSET_TIMESTAMP_WARSAW  # OFFSET_TIMESTAMP is August -> CEST, differs from CET
+    )
+
+
+def test_build_table_timestamp_column_bare_when_row_matches_header_zone(local_tz: None) -> None:
     obs = _obs(SOURCE_LORANET, last_seen=OFFSET_TIMESTAMP)
     report = build_report(
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
     )
     table = render.build_table(report)
     timestamp_column = table.columns[6]
-    assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_WARSAW]
+    assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_WARSAW_NO_ZONE]
 
 
-def test_build_table_timestamp_header_is_bare(local_tz: None) -> None:
-    """Regression test: the header no longer claims a single table-wide zone.
-
-    Round 35's status-reporting review, Finding 1: `54ac8c1`'s "state it
-    once in the header" was false for any row whose instant fell on the
-    other side of a DST transition from `report.generated_at`.
-    """
+def test_build_table_timestamp_header_names_the_local_zone(local_tz: None) -> None:
     obs = _obs(SOURCE_LORANET, last_seen=OFFSET_TIMESTAMP)
     report = build_report(
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
     )
     table = render.build_table(report)
-    assert str(table.columns[6].header) == "Timestamp"
+    assert str(table.columns[6].header) == "Timestamp (CEST)"
 
 
 def test_timestamp_cell_disambiguates_the_repeated_dst_fallback_hour(local_tz: None) -> None:
@@ -977,20 +978,21 @@ def test_timestamp_cell_disambiguates_the_repeated_dst_fallback_hour(local_tz: N
 
     Europe/Warsaw's 2026 fall-back transition is 2026-10-25 01:00 UTC
     (03:00 CEST -> 02:00 CET). Two instants an hour apart, straddling
-    that transition, both render the same wall-clock "02:30:00" --
-    without a per-row zone, they were byte-identical despite being
-    genuinely different instants an hour apart (the adjacent "Last seen"
-    column would correctly say they differ).
+    that transition, both render the same wall-clock "02:30:00" -- they
+    must still be told apart: whichever one differs from the header's
+    (the report's generated_at) zone states its own explicitly, while
+    the one that matches stays bare (implicitly the header's zone).
     """
     before_transition = datetime(2026, 10, 25, 0, 30, tzinfo=UTC)  # 02:30 CEST
     after_transition = datetime(2026, 10, 25, 1, 30, tzinfo=UTC)  # 02:30 CET
+    generated_at = after_transition  # report generated right after the fall-back, CET
 
-    rendered_before = render._timestamp_cell(before_transition)
-    rendered_after = render._timestamp_cell(after_transition)
+    rendered_before = render._timestamp_cell(before_transition, reference=generated_at)
+    rendered_after = render._timestamp_cell(after_transition, reference=generated_at)
 
     assert rendered_before != rendered_after
     assert rendered_before.endswith("CEST")
-    assert rendered_after.endswith("CET") and not rendered_after.endswith("CEST")
+    assert rendered_after == "2026-10-25 02:30:00"  # matches the header's CET, stays bare
 
 
 def test_build_table_returns_expected_columns(local_tz: None) -> None:
@@ -1007,7 +1009,7 @@ def test_build_table_returns_expected_columns(local_tz: None) -> None:
         "Mgmt",
         "Status",
         "Last seen",
-        "Timestamp",
+        "Timestamp (CEST)",
         "Batt",
         "Volt",
         "ChUtil",

@@ -121,28 +121,37 @@ def _percent_cell(value: float | None) -> str:
     return _DASH if value is None else f"{value:.1f}%"
 
 
-def _timestamp_cell(value: datetime | None) -> str:
+def _timestamp_cell(value: datetime | None, *, reference: datetime) -> str:
     """Render an optional timestamp cell in the machine's local timezone.
 
     Args:
         value: The timestamp, or ``None``.
+        reference: The instant the column header's own zone abbreviation
+            was taken from (``report.generated_at``) -- compared against
+            ``value``'s own zone to decide whether this cell needs to
+            state its zone explicitly.
 
     Returns:
-        For example ``"2026-08-25 05:14:10 CEST"``, or :data:`_DASH`
-        when ``value`` is ``None``. Always the full date/time form (no
-        same-day shortening: unlike the summary caption's ``data as of``
-        clause, table rows have no single shared reference date to
-        collapse against) and always includes its own zone abbreviation
-        -- a shared "the table's timezone" header would be false for any
-        row whose instant falls on the other side of a DST transition
-        from ``report.generated_at``, and would collapse two instants an
-        hour apart during a repeated (DST-fallback) hour into an
-        identical-looking string. See Round 35's status-reporting
-        review, Finding 1.
+        For example ``"2026-08-25 05:14:10"`` when ``value`` shares
+        ``reference``'s local zone (the header already states it), or
+        ``"2026-08-25 05:14:10 CET"`` when it doesn't (a long-offline
+        node whose ``last_seen`` falls on the other side of a DST
+        transition from ``reference``) -- a shared header-only zone
+        would otherwise be silently false for that row, and would
+        collapse two instants an hour apart during a repeated
+        (DST-fallback) hour into an identical-looking string, since
+        exactly one side of that transition still matches the header
+        and states nothing further. :data:`_DASH` when ``value`` is
+        ``None``. Always the full date/time form (no same-day
+        shortening: unlike the summary caption's ``data as of`` clause,
+        table rows have no single shared reference date to collapse
+        against). See Round 35's status-reporting review, Finding 1,
+        and the follow-up discussion that led to this hybrid form.
     """
     if value is None:
         return _DASH
-    return timefmt.format_local(value, include_zone=True)
+    differs = timefmt.local_tz_abbreviation(value) != timefmt.local_tz_abbreviation(reference)
+    return timefmt.format_local(value, include_zone=differs)
 
 
 def _sources_cell(sources: tuple[str, ...]) -> str:
@@ -176,11 +185,13 @@ def build_table(report: StatusReport) -> Table:
     record in it is archived (see :attr:`~meshprovision.status.report.
     StatusReport.archived_count`).
 
-    Each ``Timestamp`` cell carries its own local zone abbreviation (see
-    :func:`_timestamp_cell`) -- a bare ``"Timestamp"`` column header, not
-    a zone stated once for the whole table, since a long-offline node's
-    row can genuinely be in a different zone (DST) from the report's own
-    ``generated_at`` instant.
+    The ``Timestamp`` column header names the local zone at
+    ``report.generated_at`` (for example ``"Timestamp (CEST)"``); a row
+    only repeats that zone explicitly when its own instant genuinely
+    falls on the other side of a DST transition from ``generated_at``
+    (see :func:`_timestamp_cell`) -- the common case stays uncluttered,
+    while a long-offline node's row is never silently mislabeled by a
+    header that no longer applies to it.
 
     Args:
         report: The report to render.
@@ -195,7 +206,7 @@ def build_table(report: StatusReport) -> Table:
     table.add_column("Mgmt")
     table.add_column("Status")
     table.add_column("Last seen")
-    table.add_column("Timestamp")
+    table.add_column(f"Timestamp ({timefmt.local_tz_abbreviation(report.generated_at)})")
     table.add_column("Batt", justify="right")
     table.add_column("Volt", justify="right")
     table.add_column("ChUtil", justify="right")
@@ -211,7 +222,7 @@ def build_table(report: StatusReport) -> Table:
             _text_cell(node.management),
             AVAILABILITY_LABELS[node.availability],
             node.age_text,
-            _timestamp_cell(node.last_seen),
+            _timestamp_cell(node.last_seen, reference=report.generated_at),
             _battery_cell(node.battery_level),
             _voltage_cell(node.voltage),
             _percent_cell(node.channel_utilization),
