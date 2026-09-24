@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+from collections.abc import Callable
+from typing import Final
 
 import pytest
 from meshtastic.protobuf import localonly_pb2
@@ -225,11 +227,14 @@ class _FakeLocalNode:
             self._iface.user["longName"] = long_name
 
 
+_DEFAULT_NODE_NUM: Final = 0xDEADBE01
+
+
 class _FakeIfaceForApply:
-    def __init__(self) -> None:
+    def __init__(self, node_num: int = _DEFAULT_NODE_NUM) -> None:
         from types import SimpleNamespace
 
-        self.myInfo = SimpleNamespace(my_node_num=0xDEADBE01)
+        self.myInfo = SimpleNamespace(my_node_num=node_num)
         self.metadata = SimpleNamespace(hw_model="RAK4631", firmware_version="2.7.11")
         self.user: dict[str, str] = {"shortName": "MT00", "longName": "Meshtastic MT00"}
         self.localNode = _FakeLocalNode(self)
@@ -240,6 +245,12 @@ class _FakeIfaceForApply:
     def getPublicKey(self) -> str | None:  # noqa: N802 -- real MeshInterface method name
         raw = bytes(self.localNode.localConfig.security.public_key)
         return base64.b64encode(raw).decode("ascii") if raw else None
+
+
+def test_fake_iface_node_num_is_what_detect_reads() -> None:
+    """Guards against ``node_num=`` silently not reaching ``detect``."""
+    live = detect.read_live_config(_FakeIfaceForApply(node_num=0xCAFE0002))  # type: ignore[arg-type]
+    assert live.node_id.hex == "cafe0002"
 
 
 # ---------------------------------------------------------------------------
@@ -1048,15 +1059,20 @@ def test_apply_plan_owner_write_failure_reports_failed_not_a_crash(make_live) ->
 
 
 class _FakeSessionTracksRefresh:
-    """A session whose refresh() swaps in a second, distinct fake interface.
+    """A session whose refresh() swaps in whatever ``on_refresh`` returns.
 
     Lets a test tell apart "wrote to the pre-reboot interface" from "wrote
-    to the post-reboot, refreshed interface".
+    to the post-reboot, refreshed interface" -- or serve a whole sequence
+    of distinct interfaces across several refreshes.
     """
 
-    def __init__(self, first: _FakeIfaceForApply, refreshed: _FakeIfaceForApply) -> None:
+    def __init__(
+        self,
+        first: _FakeIfaceForApply,
+        on_refresh: Callable[[int, _FakeIfaceForApply], _FakeIfaceForApply],
+    ) -> None:
         self._iface: _FakeIfaceForApply = first
-        self._refreshed = refreshed
+        self._on_refresh = on_refresh
         self.refresh_calls = 0
 
     @property
@@ -1068,8 +1084,23 @@ class _FakeSessionTracksRefresh:
 
     def refresh(self) -> _FakeIfaceForApply:
         self.refresh_calls += 1
-        self._iface = self._refreshed
+        self._iface = self._on_refresh(self.refresh_calls, self._iface)
         return self._iface
+
+
+def _serve(
+    *ifaces: _FakeIfaceForApply,
+) -> Callable[[int, _FakeIfaceForApply], _FakeIfaceForApply]:
+    """Build an ``on_refresh`` callback that serves ``ifaces`` in order.
+
+    Refresh *n* (1-based) returns ``ifaces[n - 1]``; once ``ifaces`` is
+    exhausted, every later refresh keeps returning the last one.
+    """
+
+    def _on_refresh(n: int, _current: _FakeIfaceForApply) -> _FakeIfaceForApply:
+        return ifaces[min(n, len(ifaces)) - 1]
+
+    return _on_refresh
 
 
 class _FakeSessionRefreshFailsAfterFirstCall:
@@ -1120,7 +1151,7 @@ def test_apply_plan_reconnects_mid_loop_after_a_reboot_before_writing_later_sect
 
     first_iface = _FakeIfaceForApply()
     refreshed_iface = _FakeIfaceForApply()
-    session = _FakeSessionTracksRefresh(first_iface, refreshed_iface)
+    session = _FakeSessionTracksRefresh(first_iface, _serve(refreshed_iface))
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
     # One mid-loop refresh (after "lora" reboots, before "device"), plus the
@@ -1421,8 +1452,8 @@ class _FakeLocalNodeTruncatesLongName(_FakeLocalNode):
 class _FakeIfaceTruncatesLongName(_FakeIfaceForApply):
     """An interface whose firmware truncates every long_name write to 20 bytes."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, node_num: int = _DEFAULT_NODE_NUM) -> None:
+        super().__init__(node_num)
         self.localNode = _FakeLocalNodeTruncatesLongName(self)
 
 
@@ -1436,8 +1467,8 @@ class _FakeLocalNodeRaisesOnSetOwner(_FakeLocalNode):
 class _FakeIfaceRaisesOnSetOwner(_FakeIfaceForApply):
     """An interface whose owner (name) write always raises."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, node_num: int = _DEFAULT_NODE_NUM) -> None:
+        super().__init__(node_num)
         self.localNode = _FakeLocalNodeRaisesOnSetOwner(self)
 
 

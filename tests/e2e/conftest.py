@@ -267,14 +267,20 @@ class DeviceBus:
         timeouts: Every patched ``connect()`` call's backend's
             ``timeout`` attribute, in call order -- lets a test prove
             ``--timeout`` actually reached the backend construction.
+        served: The node hex of the device each ``connect()`` call
+            returned, or ``None`` for a refused connect, in call order.
     """
 
     current: FakeMeshInterface | None = None
     connections: list[tuple[str, str]] = field(default_factory=list)
     timeouts: list[float] = field(default_factory=list)
+    served: list[str | None] = field(default_factory=list)
+    _queue: list[FakeMeshInterface | None] = field(default_factory=list)
 
     def use(self, iface: FakeMeshInterface) -> FakeMeshInterface:
         """Set the interface the next ``connect()`` call should return.
+
+        Clears any devices queued by :meth:`then`.
 
         Args:
             iface: The fake interface to return.
@@ -283,7 +289,29 @@ class DeviceBus:
             ``iface``, unchanged, for convenient chaining.
         """
         self.current = iface
+        self._queue = []
         return iface
+
+    def then(self, *ifaces: FakeMeshInterface | None) -> None:
+        """Queue devices to serve on the connects that follow the current one.
+
+        Counts **connects**, not refreshes. A factory provision on the
+        example template connects three times: open, a mid-plan refresh
+        after the rebooting ``lora`` section, and the final verify. Tests
+        should assert :attr:`served` to make their count assumption
+        visible.
+
+        ``bus.use(a); bus.then(b)``: connect #1 returns ``a``, #2 onward
+        returns ``b``. ``bus.use(a); bus.then(a, b)``: #1 and #2 return
+        ``a``, #3 onward returns ``b``. A queued ``None`` makes every
+        connect from that point on raise :class:`ConnectionFailedError`,
+        until a later queued device is reached.
+
+        Args:
+            ifaces: Devices (or ``None``, for a refused connect) to serve
+                on subsequent connects, in order.
+        """
+        self._queue.extend(ifaces)
 
     @property
     def targets(self) -> tuple[str, ...]:
@@ -322,13 +350,17 @@ def bus(monkeypatch: pytest.MonkeyPatch) -> DeviceBus:
     def _connect(self: connection.SerialBackend) -> MeshInterface:
         device_bus.connections.append((self.transport, self.target))
         device_bus.timeouts.append(self.timeout)
-        if device_bus.current is None:
+        serving = device_bus.current
+        device_bus.served.append(serving.nid.hex if serving is not None else None)
+        if device_bus._queue:
+            device_bus.current = device_bus._queue.pop(0)
+        if serving is None:
             raise ConnectionFailedError(
                 f"no fake device configured for {self.transport} {self.target}",
                 transport=self.transport,
                 target=self.target,
             )
-        return device_bus.current  # type: ignore[return-value]
+        return serving  # type: ignore[return-value]
 
     monkeypatch.setattr(connection.SerialBackend, "connect", _connect)
     monkeypatch.setattr(connection.BLEBackend, "connect", _connect)
