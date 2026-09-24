@@ -35,6 +35,7 @@ concurrent backup's temp file from being swept out from under it.
 from __future__ import annotations
 
 import contextlib
+import errno
 import logging
 import os
 import shutil
@@ -60,6 +61,7 @@ __all__ = [
     "known_good_info",
     "known_good_name",
     "known_good_path",
+    "link_no_clobber",
     "list_backups",
     "prune_backups",
     "refresh_known_good",
@@ -102,6 +104,17 @@ _FILE_MODE: Final[int] = 0o600
 
 _STALE_TEMP_MIN_AGE_SECONDS: Final[float] = 24 * 60 * 60
 """Minimum age an orphaned temp file must reach before a sweep removes it."""
+
+_LINK_UNSUPPORTED_ERRNOS: Final[frozenset[int]] = frozenset(
+    {errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EMLINK}
+)
+"""``os.link`` errnos meaning "this filesystem has no hard links", not a real failure.
+
+Seen on FAT/exFAT and some SMB/FUSE mounts. ``EOPNOTSUPP`` and ``ENOTSUP``
+are the same value on Linux; both are named because POSIX allows either.
+Anything else (for example ``EIO``, ``ENOSPC``) is a genuine failure and
+must not fall back.
+"""
 
 
 def _sweep_stale_temps(
@@ -213,26 +226,77 @@ def backup_name(target: Path, when: datetime) -> str:
     return f"{target.stem}-{when.strftime(BACKUP_TIMESTAMP_FORMAT)}{target.suffix}"
 
 
-def _claim_backup_path(directory: Path, name: str, source: Path) -> Path:
-    """Hard-link a finished backup copy into the first free name, atomically.
+def link_no_clobber(source: Path, destination: Path) -> None:
+    """Give ``source``'s content the name ``destination``, without clobbering.
 
-    ``os.link`` fails with :class:`FileExistsError` rather than
-    clobbering, which is what makes this safe against a concurrent
+    Tries ``os.link`` first: it fails with :class:`FileExistsError`
+    rather than overwriting, which is what makes the caller's
+    claim-a-free-name loop safe against a concurrent writer racing for
+    the same name. On a filesystem with no hard-link support (FAT/exFAT,
+    some SMB/FUSE mounts), ``os.link`` instead fails with one of
+    :data:`_LINK_UNSUPPORTED_ERRNOS`; this function then falls back to
+    claiming ``destination`` with an ``O_CREAT | O_EXCL`` placeholder --
+    which is exactly as collision-safe as ``os.link``'s own
+    :class:`FileExistsError`, since it is the same atomic claim-a-name
+    primitive -- and then ``os.replace``-ing ``source`` onto it. Either
+    way, ``source`` is consumed: on the link path it is unlinked after
+    the link succeeds; on the fallback path it is moved.
+
+    A SIGKILL between the fallback's placeholder claim and its
+    ``os.replace`` leaves a 0-byte file under ``destination``'s name.
+    That is the same residual :func:`_sweep_stale_temps` already accepts
+    for the link path's own unlink step, and it only arises on a
+    filesystem with no hard links to begin with.
+
+    Args:
+        source: The file to give ``destination``'s name. Consumed on
+            success.
+        destination: The name to claim. Never overwritten if it already
+            exists.
+
+    Raises:
+        FileExistsError: If ``destination`` already exists.
+        OSError: If linking (and, on a link-less filesystem, the
+            fallback claim or replace) fails for any other reason.
+    """
+    try:
+        os.link(source, destination)
+    except OSError as exc:
+        # FileExistsError (EEXIST) is an OSError subclass and is never in
+        # _LINK_UNSUPPORTED_ERRNOS, so it always re-raises here too.
+        if exc.errno not in _LINK_UNSUPPORTED_ERRNOS:
+            raise
+        os.close(os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, _FILE_MODE))
+        try:
+            source.replace(destination)
+        except OSError:
+            with contextlib.suppress(OSError):
+                destination.unlink()
+            raise
+        return
+    source.unlink()
+
+
+def _claim_backup_path(directory: Path, name: str, source: Path) -> Path:
+    """Link a finished backup copy into the first free name, atomically.
+
+    :func:`link_no_clobber` fails with :class:`FileExistsError` rather
+    than clobbering, which is what makes this safe against a concurrent
     ``mesh db backup``: an ``exists()`` check followed by
     ``os.replace`` would let two processes agree on one name and
-    silently lose one of the two copies. The link is made only after
+    silently lose one of the two copies. The claim is made only after
     ``source`` is a complete, correctly-moded copy, so a partial backup
     can never appear under a final name.
 
-    A SIGKILL between the ``os.link`` and the ``source.unlink`` leaves
-    ``source`` behind as an orphaned temp under both names; a later
-    :func:`_sweep_stale_temps` run reclaims it once it ages past the
-    staleness guard.
+    A SIGKILL between :func:`link_no_clobber`'s internal claim and its
+    consuming of ``source`` leaves ``source`` behind as an orphaned temp
+    under both names; a later :func:`_sweep_stale_temps` run reclaims it
+    once it ages past the staleness guard.
 
     Args:
         directory: The backup directory.
         name: The proposed backup file name, from :func:`backup_name`.
-        source: The completed temp copy to link into place. Unlinked on
+        source: The completed temp copy to link into place. Consumed on
             success, leaving exactly one name for the new inode.
 
     Returns:
@@ -250,12 +314,11 @@ def _claim_backup_path(directory: Path, name: str, source: Path) -> Path:
     counter = 0
     while True:
         try:
-            os.link(source, candidate)
+            link_no_clobber(source, candidate)
         except FileExistsError:
             counter += 1
             candidate = directory / f"{stem}-{counter}{suffix}"
             continue
-        source.unlink()
         return candidate
 
 

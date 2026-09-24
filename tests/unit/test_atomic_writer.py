@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from meshprovision.db.atomic_writer import (
     atomic_write,
     backup_name,
     create_backup,
+    link_no_clobber,
     list_backups,
     prune_backups,
     restore_backup,
@@ -878,6 +880,197 @@ def test_atomic_write_cleans_up_temp_when_backup_step_raises(
     assert target.read_bytes() == b"v0"
     stray = [p for p in tmp_path.iterdir() if p.name.startswith(f".{target.name}.tmp")]
     assert stray == []
+
+
+def test_link_no_clobber_falls_back_when_hardlinks_are_unsupported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"payload")
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(atomic_writer.os, "link", unsupported_link)
+
+    link_no_clobber(source, destination)
+
+    assert destination.read_bytes() == b"payload"
+    assert not source.exists()
+
+
+@pytest.mark.parametrize(
+    "unsupported_errno", [errno.EPERM, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS, errno.EMLINK]
+)
+def test_link_no_clobber_falls_back_for_every_unsupported_errno(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unsupported_errno: int
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"payload")
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(unsupported_errno, "unsupported")
+
+    monkeypatch.setattr(atomic_writer.os, "link", unsupported_link)
+
+    link_no_clobber(source, destination)
+
+    assert destination.read_bytes() == b"payload"
+    assert not source.exists()
+
+
+def test_link_no_clobber_reraises_unrelated_oserror(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"payload")
+
+    def failing_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EIO, "I/O error")
+
+    monkeypatch.setattr(atomic_writer.os, "link", failing_link)
+
+    with pytest.raises(OSError, match="I/O error"):
+        link_no_clobber(source, destination)
+
+    assert source.exists()
+    assert not destination.exists()
+
+
+def test_link_no_clobber_does_not_clobber_existing_destination_under_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"new")
+    destination.write_bytes(b"existing")
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(atomic_writer.os, "link", unsupported_link)
+
+    with pytest.raises(FileExistsError):
+        link_no_clobber(source, destination)
+
+    assert destination.read_bytes() == b"existing"
+    assert source.read_bytes() == b"new"
+
+
+def test_link_no_clobber_cleans_up_placeholder_when_replace_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    destination = tmp_path / "destination"
+    source.write_bytes(b"payload")
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    def failing_replace(self: Path, *args: object, **kwargs: object) -> None:
+        raise OSError(errno.EIO, "I/O error")
+
+    monkeypatch.setattr(atomic_writer.os, "link", unsupported_link)
+    monkeypatch.setattr(Path, "replace", failing_replace)
+
+    with pytest.raises(OSError, match="I/O error"):
+        link_no_clobber(source, destination)
+
+    assert not destination.exists()
+    assert source.exists()
+
+
+def test_claim_backup_path_falls_back_and_still_claims_first_free_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = tmp_path / "backups"
+    directory.mkdir()
+    (directory / "data-20260825T031410.123456Z.txt").write_bytes(b"existing")
+    source = directory / ".tmp-copy"
+    source.write_bytes(b"new")
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(atomic_writer.os, "link", unsupported_link)
+
+    claimed = _claim_backup_path(directory, "data-20260825T031410.123456Z.txt", source)
+
+    assert claimed.name == "data-20260825T031410.123456Z-1.txt"
+    assert (directory / "data-20260825T031410.123456Z.txt").read_bytes() == b"existing"
+    assert claimed.read_bytes() == b"new"
+    assert not source.exists()
+
+
+def test_write_bytes_atomic_succeeds_when_filesystem_has_no_hard_link_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+    backup_dir = tmp_path / "backups"
+    write_bytes_atomic(target, b"v1", backup=False, backup_dir=backup_dir)
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(atomic_writer.os, "link", unsupported_link)
+
+    write_bytes_atomic(target, b"v2", backup=True, backup_dir=backup_dir)
+
+    assert target.read_bytes() == b"v2"
+    backups = list_backups(target, backup_dir=backup_dir)
+    assert len(backups) == 1
+    assert backups[0].path.read_bytes() == b"v1"
+    assert backups[0].path.stat().st_mode & 0o777 == 0o600
+
+    for directory in (tmp_path, backup_dir):
+        stray = [p for p in directory.iterdir() if p.name.startswith(".") and "tmp" in p.name]
+        assert stray == []
+
+
+def test_backup_racing_an_identical_name_does_not_overwrite_without_hard_links(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two concurrent claims of the same candidate name still can't both win.
+
+    Same race as ``test_backup_racing_an_identical_name_does_not_overwrite``,
+    reproduced under the O_CREAT|O_EXCL fallback used when hard links are
+    unsupported, to confirm that fallback is just as collision-safe.
+    """
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    when = datetime(2026, 8, 25, 3, 14, 10, 123456, tzinfo=UTC)
+
+    def unsupported_link(*args: object, **kwargs: object) -> None:
+        raise OSError(errno.EPERM, "Operation not permitted")
+
+    monkeypatch.setattr(atomic_writer.os, "link", unsupported_link)
+
+    real_copy2 = shutil.copy2
+    inner: list[BackupInfo] = []
+
+    def copy2_then_race(src: Path, dst: Path, *args: object, **kwargs: object) -> object:
+        result = real_copy2(src, dst, *args, **kwargs)
+        if not inner:  # only the outer call races; the inner one must not recurse
+            monkeypatch.setattr(shutil, "copy2", real_copy2)
+            target.write_bytes(b"v2")
+            info = create_backup(target, backup_dir=backup_dir, now=when)
+            assert info is not None
+            inner.append(info)
+            monkeypatch.setattr(shutil, "copy2", copy2_then_race)
+        return result
+
+    monkeypatch.setattr(shutil, "copy2", copy2_then_race)
+    outer = create_backup(target, backup_dir=backup_dir, now=when)
+
+    assert outer is not None
+    assert outer.path != inner[0].path
+    assert outer.path.read_bytes() == b"v1"
+    assert inner[0].path.read_bytes() == b"v2"
+    assert len(list_backups(target, backup_dir=backup_dir)) == 2
 
 
 def test_atomic_write_cleans_up_temp_when_backup_step_raises_keyboard_interrupt(
