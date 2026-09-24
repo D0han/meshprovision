@@ -17,8 +17,11 @@ pipeline):
   operator running ``mesh admin import``/``mesh admin bootstrap`` -- it
   rewrites every node's ``authorized_admin_keys`` from the synthetic ref
   to the canonical one, deletes the now-superseded synthetic ``Keys``
-  row, and drains any legacy ``unregistered_admin_keys`` entry for the
-  same material (the direct successor of ``cli/admin.py``'s old
+  row, and moves any legacy ``unregistered_admin_keys`` entry for the
+  same material onto the canonical ref -- the raw material is dropped
+  from ``unregistered_admin_keys`` and ``canonical_ref`` is added to
+  ``authorized_admin_keys`` instead, so the authorization survives the
+  reconciliation (the direct successor of ``cli/admin.py``'s old
   module-private ``_drop_now_registered_key``, promoted here so both
   ``cli/adopt.py`` and ``cli/admin.py`` can share it instead of
   duplicating it).
@@ -183,6 +186,11 @@ def adopt_canonical_ref(
             if raw != material
         )
         unregistered_changed = len(kept_unregistered) != len(node.unregistered_admin_keys)
+
+        if unregistered_changed and canonical_ref not in seen:
+            seen.add(canonical_ref)
+            new_authorized.append(canonical_ref)
+            row_changed = True
 
         if row_changed or unregistered_changed:
             nodes.upsert(

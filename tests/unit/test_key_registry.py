@@ -212,9 +212,33 @@ def test_adopt_canonical_ref_drains_legacy_unregistered_admin_keys(
     # Act
     changed = adopt_canonical_ref(nodes, keys, material=keypair.public, canonical_owner="deadbe01")
 
-    # Assert
+    # Assert: the material moves to the canonical ref, it does not vanish
     assert changed is True
-    assert nodes.get("cafe0001").unregistered_admin_keys == ()
+    updated = nodes.get("cafe0001")
+    assert updated.unregistered_admin_keys == ()
+    assert updated.authorized_admin_keys == ("deadbe01_pub",)
+
+
+def test_adopt_canonical_ref_drain_dedupes_when_canonical_ref_already_authorized(
+    nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
+) -> None:
+    # Arrange: the node already authorizes the canonical ref *and* still
+    # carries the same material as a legacy unregistered entry.
+    node = NodeRecord(
+        node_id="cafe0001",
+        authorized_admin_keys=("deadbe01_pub",),
+        unregistered_admin_keys=(encode_key(keypair.public),),
+    )
+    nodes.upsert(node)
+
+    # Act
+    changed = adopt_canonical_ref(nodes, keys, material=keypair.public, canonical_owner="deadbe01")
+
+    # Assert: no duplicate ref
+    assert changed is True
+    updated = nodes.get("cafe0001")
+    assert updated.unregistered_admin_keys == ()
+    assert updated.authorized_admin_keys == ("deadbe01_pub",)
 
 
 def test_adopt_canonical_ref_is_a_noop_when_nothing_to_reconcile(
@@ -393,5 +417,7 @@ def test_adopt_canonical_ref_handles_both_reconciliations_across_several_nodes(
     # Assert
     assert changed is True
     assert nodes.get("aaaa0001").authorized_admin_keys == ("deadbe01_pub",)
-    assert nodes.get("bbbb0002").unregistered_admin_keys == ()
+    updated_b = nodes.get("bbbb0002")
+    assert updated_b.unregistered_admin_keys == ()
+    assert updated_b.authorized_admin_keys == ("deadbe01_pub",)
     assert keys.find(observed_ref) is None
