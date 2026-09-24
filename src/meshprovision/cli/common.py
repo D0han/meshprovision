@@ -49,6 +49,7 @@ from meshprovision.config.settings import Settings, load_settings
 from meshprovision.crypto import redact
 from meshprovision.errors import (
     AmbiguousDeviceError,
+    AtomicWriteError,
     DbError,
     ExitCode,
     MeshprovisionError,
@@ -1017,12 +1018,19 @@ class CliContext:
         with another ``mesh`` process must pass ``for_write=True`` and
         use the returned :class:`DbSession` as a context manager so the
         lock is held across the whole load-modify-save cycle and
-        released on every exit path.
+        released on every exit path. Creating a missing database is
+        itself a write, so a caller that passes ``must_exist=False``
+        gets the same lock even with ``for_write`` left false, closing
+        the same race against a concurrent ``mesh db restore`` onto the
+        not-yet-created file.
 
         Args:
             must_exist: When ``True`` (the default), a missing database
-                file is a hard error. When ``False``, a missing file is
-                created as a brand-new, empty database instead.
+                file is a hard error. When ``False``, the existence
+                check and the creation of a brand-new, empty database
+                both happen under the write lock, so a concurrent
+                writer that creates or restores the file first is
+                observed rather than clobbered.
             for_write: Whether this session intends to modify the
                 database. When ``True``, acquires the cross-process
                 write lock before the database is read at all, closing
@@ -1040,13 +1048,15 @@ class CliContext:
             DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
             DbIntegrityError: If a derived value disagrees with its
                 recomputed value on load.
-            DatabaseLockedError: If ``for_write`` is true and another
-                process holds the write lock past its timeout.
-            AtomicWriteError: If ``for_write`` is true and the sidecar
-                lock file cannot be created or acquired.
-            SettingsError: If ``for_write`` is true and
-                ``MESHPROVISION_LOCK_TIMEOUT`` is set to a malformed
-                value.
+            DatabaseLockedError: If ``for_write`` is true or
+                ``must_exist`` is false, and another process holds the
+                write lock past its timeout.
+            AtomicWriteError: If ``for_write`` is true or ``must_exist``
+                is false, and the sidecar lock file cannot be created or
+                acquired.
+            SettingsError: If ``for_write`` is true or ``must_exist`` is
+                false, and ``MESHPROVISION_LOCK_TIMEOUT`` is set to a
+                malformed value.
 
         A load failure that is specifically a :class:`~meshprovision.
         errors.DbError` (the file loaded but its *content* is bad --
@@ -1075,7 +1085,26 @@ class CliContext:
 
         path = self.settings.db_path
         db = OdsDatabase(path)
-        if for_write:
+        if for_write or not must_exist:
+            if not must_exist:
+                # The lock sidecar lives next to the resolved path (see
+                # locking.lock_path_for), which may differ from `path`
+                # itself when it is a symlink. On a first run,
+                # `create_empty`'s own `atomic_write` would otherwise be
+                # what creates this directory, but locking now happens
+                # first, so it is resolved and created the same way here.
+                try:
+                    resolved = path.resolve()
+                except (OSError, RuntimeError) as exc:
+                    raise AtomicWriteError(
+                        f"Failed to resolve {path}: {exc}", path=str(path)
+                    ) from exc
+                try:
+                    resolved.parent.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    raise AtomicWriteError(
+                        f"Failed to create directory {resolved.parent}: {exc}", path=str(path)
+                    ) from exc
             db.lock()
         try:
             if path.is_file():

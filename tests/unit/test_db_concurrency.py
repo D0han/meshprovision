@@ -113,3 +113,29 @@ def test_db_session_releases_the_lock_when_the_block_raises(empty_ods: Path) -> 
 
     with locking.exclusive_lock(empty_ods, timeout=0.1):
         pass
+
+
+def test_open_database_must_exist_false_observes_a_concurrent_restore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test for the create-without-a-lock race (Round 37 B7).
+
+    ``mesh db restore`` takes the write lock *before* it writes the missing
+    live database. An ``open_database(must_exist=False)`` call racing it
+    (``mesh init``'s path) must observe that lock -- and thus never reach
+    ``create_empty`` -- instead of checking ``is_file()`` unlocked while the
+    restore is still in flight and then clobbering whatever it just wrote.
+    """
+    db_path = tmp_path / "nodes_db.ods"
+    monkeypatch.setenv("MESHPROVISION_LOCK_TIMEOUT", "0")
+    ctx = CliContext.build(
+        settings=Settings(db_path=db_path), non_interactive=True, force_refresh=False
+    )
+
+    # No DB file exists yet -- simulates the restore having taken the lock
+    # but not yet written the file.
+    with locking.exclusive_lock(db_path, timeout=1.0), pytest.raises(DatabaseLockedError):
+        ctx.open_database(must_exist=False)
+
+    # The create-if-missing path must not have run while the lock was held.
+    assert not db_path.exists()

@@ -10,7 +10,8 @@ guard.
 
 Only writers take this lock, and today they all arrive by one path:
 :meth:`~meshprovision.cli.common.CliContext.open_database` with
-``for_write=True``. That is not an assumption this module makes -- a
+``for_write=True``, or that may create the file (``must_exist=False``).
+That is not an assumption this module makes -- a
 command that operates on raw files may call :func:`exclusive_lock`
 directly when it needs to, and ``mesh db restore`` is designed to do
 exactly that when it lands. What it must not be read to include is
