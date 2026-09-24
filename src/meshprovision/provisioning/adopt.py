@@ -1,27 +1,33 @@
-"""Pure adoption logic: an already-deployed device's live state -> a record of it.
+"""Adoption logic: an already-deployed device's live state -> a record of it.
 
-The pure half of the ``mesh adopt`` command (see
-:mod:`meshprovision.cli.adopt`), which connects to a device that is
-already configured and already in service and records its *actual* live
-state into the database -- the opposite of ``mesh provision``: no
-desired-state diff against a template (unlike
-:mod:`meshprovision.provisioning.plan`), and no device write anywhere in
-this package. :func:`build_adoption_report` turns an already-read
-:class:`~meshprovision.provisioning.detect.LiveConfig`, an optional
-existing :class:`~meshprovision.db.nodes.NodeRecord`, a ``{key_ref:
-material}`` map, and an already-loaded
+The bulk of the ``mesh adopt`` command (see :mod:`meshprovision.cli.adopt`),
+which connects to a device that is already configured and already in
+service and records its *actual* live state into the database -- the
+opposite of ``mesh provision``: no desired-state diff against a template
+(unlike :mod:`meshprovision.provisioning.plan`), and no device write
+anywhere in this package. :func:`build_adoption_report` turns an
+already-read :class:`~meshprovision.provisioning.detect.LiveConfig`, an
+optional existing :class:`~meshprovision.db.nodes.NodeRecord`, a
+``{key_ref: material}`` map, and an already-loaded
 :class:`~meshprovision.config.template.TemplateConfig` into an
 :class:`AdoptionReport` -- a full, read-only inventory of what the device
 is currently carrying, ready to display. :func:`adopted_record` turns
 that report into the :class:`~meshprovision.db.nodes.NodeRecord` to
-persist.
+persist, and :func:`persist_adoption` performs that persistence --
+upserting the device's own keypair, its channel PSK, and its observed
+admin keys, then the node row itself -- against already-open
+:class:`~meshprovision.db.keys.KeyRepository`/
+:class:`~meshprovision.db.nodes.NodeRepository` sessions.
 
 Nothing here touches a :class:`~meshprovision.cli.common.CliContext`, a
-``DbSession``, a click prompt, or a console; and nothing here reads the
-clock -- :func:`adopted_record` takes ``now`` as an explicit argument,
-exactly like :meth:`~meshprovision.db.nodes.NodeRecord.touched` already
-does, so this module stays as pure and deterministic as
-:mod:`meshprovision.provisioning.plan`.
+click prompt, or a console; and nothing here reads the clock --
+:func:`adopted_record` and :func:`persist_adoption` both take ``now`` as
+an explicit argument, exactly like
+:meth:`~meshprovision.db.nodes.NodeRecord.touched` already does. Unlike
+the rest of this module, :func:`persist_adoption` is not side-effect
+free -- it is the write phase, kept here (rather than in the CLI layer)
+so it stays unit-testable against in-memory repositories, the same
+convention as :func:`meshprovision.provisioning.apply.persist_result`.
 
 Secret hygiene: nothing here ever prints or logs raw key bytes or the raw
 BLE PIN. Admin-key identification goes through
@@ -43,17 +49,22 @@ from typing import TYPE_CHECKING
 from meshprovision import enums
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import redact, weakkeys
+from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import BLE_PIN_LENGTH, ManagementMode
+from meshprovision.db.schema import BLE_PIN_LENGTH, KeyType, ManagementMode
 from meshprovision.errors import KeyMaterialError
 from meshprovision.provisioning import detect, pipeline
+from meshprovision.provisioning.key_registry import adopt_canonical_ref, register_observed_key
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
     from datetime import datetime
 
     from meshprovision.config.template import TemplateConfig
+    from meshprovision.db.keys import KeyRepository
+    from meshprovision.db.nodes import NodeRepository
     from meshprovision.nodeid import NodeId
+    from meshprovision.provisioning.backup import ChannelInfo
 
 __all__ = [
     "AdoptionReport",
@@ -63,6 +74,7 @@ __all__ = [
     "capture_ble_pin",
     "check_name_pattern_fit",
     "classify_live_admin_keys",
+    "persist_adoption",
 ]
 
 
@@ -682,3 +694,115 @@ def adopted_record(
         changes["gps_alt"] = report.gps_alt
 
     return base.with_updates(**changes).touched(now=now)
+
+
+def persist_adoption(
+    report: AdoptionReport,
+    live: detect.LiveConfig,
+    *,
+    nodes: NodeRepository,
+    keys: KeyRepository,
+    channel: ChannelInfo | None,
+    now: datetime,
+) -> NodeRecord:
+    """Write one adoption's result into the ``Nodes``/``Keys`` sheets.
+
+    Performs, in order, exactly what ``mesh adopt`` has always persisted:
+    the device's own keypair (or public-only key), the
+    ``adopt_canonical_ref`` reconciliation, an optional decoded channel
+    PSK, every live admin key's ``observed-*``/real ref resolution, and
+    finally the :class:`~meshprovision.db.nodes.NodeRecord` itself. The
+    ordering is load-bearing and documented inline below; it must not be
+    reshuffled without re-reading why each step runs where it does.
+
+    Does not call ``ctx.confirm``/``--dry-run`` handling or echo any
+    output -- the caller (``cli/adopt.py``) is responsible for that, and
+    for deciding *whether* to call this at all. It does call
+    ``nodes.db.save()`` itself, below, matching
+    :func:`meshprovision.provisioning.apply.persist_result`'s convention.
+
+    Args:
+        report: The adoption report to persist.
+        live: The device's normalized live configuration, for its own
+            keypair material and node id.
+        nodes: The open :class:`~meshprovision.db.nodes.NodeRepository`.
+        keys: The open :class:`~meshprovision.db.keys.KeyRepository`.
+            Must share the same
+            :class:`~meshprovision.db.ods.OdsDatabase` session as
+            ``nodes`` -- this is what makes the final :meth:`save` atomic
+            across both sheets.
+        channel: The backup's decoded channel PSK to record, or ``None``.
+        now: Timestamp for every upsert and the node's ``touched`` update.
+
+    Returns:
+        The upserted :class:`~meshprovision.db.nodes.NodeRecord`.
+    """
+    node_id_hex = live.node_id.hex
+
+    # The node's own keypair, so public_key_ref/private_key_ref
+    # actually resolve (see NodeRecord.public_key_ref/private_key_ref)
+    # -- mirrors what mesh provision records via KeyRecord.for_keypair,
+    # public half always, private half only when the device exposes
+    # it. Registered *before* the observed-admin-key loop below, so a
+    # device that also lists its own key on security.adminKey
+    # resolves that entry to this real ref rather than minting a
+    # fresh observed one for it.
+    node_public = live.security.public_key
+    node_private = live.security.private_key
+    if live.security.has_public_key and node_public is not None:
+        if live.security.has_private_key and node_private is not None:
+            pair = crypto_keys.KeyPair(private=node_private, public=node_public)
+            pub_record, priv_record = KeyRecord.for_keypair(node_id_hex, pair, created_ts=now)
+            keys.upsert(pub_record)
+            keys.upsert(priv_record)
+        else:
+            keys.upsert(
+                KeyRecord.from_material(
+                    node_id_hex, KeyType.ADMIN_PUBLIC, node_public, created_ts=now
+                )
+            )
+        # Reconcile: this key may already sit on some other node's row
+        # under a synthetic observed-* ref from an earlier adopt, back
+        # before its real owner was known.
+        adopt_canonical_ref(nodes, keys, material=node_public, canonical_owner=node_id_hex)
+
+    # A --from-backup profile's channel_url, decoded to its primary
+    # channel's PSK -- only ever a 32-byte AES256 key (the CLI layer
+    # only ever passes a non-None channel for that case): a 1-byte
+    # "default" preset or 16-byte AES128 PSK cannot round-trip through
+    # this column, which was built for X25519-sized (32-byte) material.
+    if channel is not None:
+        keys.upsert(
+            KeyRecord.from_material(node_id_hex, KeyType.CHANNEL_PSK, channel.psk, created_ts=now)
+        )
+
+    # Resolve every live admin key's ref *now*, after the own-keypair
+    # registration and adopt_canonical_ref reconciliation above --
+    # never from report.admin_keys' own key.preferred_ref, which was
+    # classified before either of those ran and can be stale: when
+    # the device also lists its own key on security.adminKey,
+    # adopt_canonical_ref may have just deleted the observed-* ref
+    # that classification pointed at (its real owner turned out to be
+    # this node). register_observed_key() is idempotent and cheap for
+    # an already-registered key (it resolves and returns the existing
+    # ref via pipeline.match_admin_key_refs without writing anything),
+    # so calling it unconditionally for every live key -- not only
+    # ones report.admin_keys thought were unregistered -- is what
+    # keeps this resolution current. A malformed-length key (detect.py
+    # applies no length check) is simply skipped, same degrade-not-
+    # crash treatment as everywhere else in this module;
+    # adopted_record() below then falls back to recording it on
+    # unregistered_admin_keys, exactly as before.
+    observed_refs: dict[bytes, str] = {}
+    for key in report.admin_keys:
+        try:
+            observed_refs[key.material] = register_observed_key(
+                nodes, keys, key.material, created_ts=now
+            )
+        except KeyMaterialError:
+            continue
+
+    record = adopted_record(report, now=now, observed_refs=observed_refs)
+    nodes.upsert(record)
+    nodes.db.save()
+    return record

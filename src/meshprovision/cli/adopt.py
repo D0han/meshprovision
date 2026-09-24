@@ -49,8 +49,7 @@ from meshprovision.cli.provision import (
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.datasources.loranet import LoranetSource
-from meshprovision.db.keys import KeyRecord
-from meshprovision.db.schema import KeyType, ManagementMode
+from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import (
     AdoptionRefusedError,
     DataSourceError,
@@ -62,7 +61,6 @@ from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning import backup as backup_mod
 from meshprovision.provisioning import connection, detect, observed_keys
-from meshprovision.provisioning.key_registry import adopt_canonical_ref, register_observed_key
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
@@ -880,78 +878,9 @@ def adopt(
 
         now = datetime.now(tz=UTC)
 
-        # The node's own keypair, so public_key_ref/private_key_ref
-        # actually resolve (see NodeRecord.public_key_ref/private_key_ref)
-        # -- mirrors what mesh provision records via KeyRecord.for_keypair,
-        # public half always, private half only when the device exposes
-        # it. Registered *before* the observed-admin-key loop below, so a
-        # device that also lists its own key on security.adminKey
-        # resolves that entry to this real ref rather than minting a
-        # fresh observed one for it.
-        node_public = live.security.public_key
-        node_private = live.security.private_key
-        if live.security.has_public_key and node_public is not None:
-            if live.security.has_private_key and node_private is not None:
-                pair = crypto_keys.KeyPair(private=node_private, public=node_public)
-                pub_record, priv_record = KeyRecord.for_keypair(
-                    live.node_id.hex, pair, created_ts=now
-                )
-                db.keys.upsert(pub_record)
-                db.keys.upsert(priv_record)
-            else:
-                db.keys.upsert(
-                    KeyRecord.from_material(
-                        live.node_id.hex, KeyType.ADMIN_PUBLIC, node_public, created_ts=now
-                    )
-                )
-            # Reconcile: this key may already sit on some other node's row
-            # under a synthetic observed-* ref from an earlier adopt, back
-            # before its real owner was known.
-            adopt_canonical_ref(
-                db.nodes, db.keys, material=node_public, canonical_owner=live.node_id.hex
-            )
-
-        # A --from-backup profile's channel_url, decoded to its primary
-        # channel's PSK -- only ever a 32-byte AES256 key (see the
-        # channel/no-channel-psk handling above): a 1-byte "default"
-        # preset or 16-byte AES128 PSK cannot round-trip through this
-        # column, which was built for X25519-sized (32-byte) material.
-        if channel is not None:
-            db.keys.upsert(
-                KeyRecord.from_material(
-                    live.node_id.hex, KeyType.CHANNEL_PSK, channel.psk, created_ts=now
-                )
-            )
-
-        # Resolve every live admin key's ref *now*, after the own-keypair
-        # registration and adopt_canonical_ref reconciliation above --
-        # never from report.admin_keys' own key.preferred_ref, which was
-        # classified before either of those ran and can be stale: when
-        # the device also lists its own key on security.adminKey,
-        # adopt_canonical_ref may have just deleted the observed-* ref
-        # that classification pointed at (its real owner turned out to be
-        # this node). register_observed_key() is idempotent and cheap for
-        # an already-registered key (it resolves and returns the existing
-        # ref via pipeline.match_admin_key_refs without writing anything),
-        # so calling it unconditionally for every live key -- not only
-        # ones report.admin_keys thought were unregistered -- is what
-        # keeps this resolution current. A malformed-length key (detect.py
-        # applies no length check) is simply skipped, same degrade-not-
-        # crash treatment as everywhere else in this module;
-        # adopted_record() below then falls back to recording it on
-        # unregistered_admin_keys, exactly as before.
-        observed_refs: dict[bytes, str] = {}
-        for key in report.admin_keys:
-            try:
-                observed_refs[key.material] = register_observed_key(
-                    db.nodes, db.keys, key.material, created_ts=now
-                )
-            except KeyMaterialError:
-                continue
-
-        record = adopt_mod.adopted_record(report, now=now, observed_refs=observed_refs)
-        db.nodes.upsert(record)
-        db.db.save()
+        adopt_mod.persist_adoption(
+            report, live, nodes=db.nodes, keys=db.keys, channel=channel, now=now
+        )
 
     if not json_output:
         ctx.info(f"Recorded {live.node_id.display} as observed.")
