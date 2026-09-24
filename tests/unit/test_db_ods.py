@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import zipfile
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
@@ -12,7 +13,7 @@ import pytest
 from meshprovision.crypto.keys import encode_key
 from meshprovision.db import atomic_writer, ods, schema
 from meshprovision.db.keys import KeyRecord
-from meshprovision.db.known_good import known_good_info
+from meshprovision.db.known_good import KnownGoodProvenance, known_good_info, known_good_status
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import (
@@ -1385,3 +1386,95 @@ def test_base64_key_list_dedupes_after_canonicalization(keypair) -> None:
 def test_validate_row_fills_every_column() -> None:
     result = schema.validate_row(schema.NODES_SHEET_SPEC, 2, {"node_id": "deadbe01"})
     assert set(result) == set(schema.NODES_SHEET_SPEC.column_names())
+
+
+# ---------------------------------------------------------------------------
+# Known-good refresh is built from the validated bytes, not a later read.
+# ---------------------------------------------------------------------------
+
+
+def test_load_database_known_good_reflects_validated_bytes_not_a_later_write(
+    tmp_path: Path, keypair, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for Round 37 aspect 3 Batch 2.
+
+    ``load_database`` used to call ``refresh_known_good(path)`` *after*
+    validation succeeded, which re-opened ``path`` from disk a second
+    time. No lock is held during a read-only load, so a write landing in
+    that window -- for example a concurrent ``db restore``, which writes
+    first and validates second by design -- could publish unvalidated
+    bytes as the "known-good" safety copy. Reading the file exactly once
+    (``ods._read_db_file``) and threading those bytes through both
+    validation and the refresh closes the window. This monkeypatches the
+    last integrity check to race such a write in immediately behind it.
+    """
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+    validated_bytes = path.read_bytes()
+
+    real_check = ods._check_unique_key_refs
+
+    def racing_check(keys: Any) -> None:
+        real_check(keys)
+        racer_tmp = path.with_name(f".{path.name}.racer-tmp")
+        racer_tmp.write_bytes(b"not an ods")
+        racer_tmp.replace(path)
+
+    monkeypatch.setattr(ods, "_check_unique_key_refs", racing_check)
+
+    loaded = ods.load_database(path)
+    assert len(loaded.nodes) == 1  # read from the pre-race bytes, not the racer's
+
+    known_good = known_good_info(path)
+    assert known_good is not None
+    assert known_good.path.read_bytes() == validated_bytes
+    assert known_good.path.stat().st_mode & 0o777 == 0o600
+    assert list(known_good.path.parent.glob(".*known-good*.tmp-*")) == []
+
+    # The known-good copy is itself a valid, loadable database.
+    ods.load_database(known_good.path)
+
+    status = known_good_status(path)
+    assert status is not None
+    assert status.provenance is KnownGoodProvenance.VERIFIED
+
+
+def test_load_database_known_good_fast_path_leaves_an_unchanged_copy_untouched(
+    tmp_path: Path, keypair
+) -> None:
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+
+    ods.load_database(path)
+    first = known_good_info(path)
+    assert first is not None
+    first_ino = first.path.stat().st_ino
+
+    ods.load_database(path)
+    second = known_good_info(path)
+
+    assert second is not None
+    assert second.path.stat().st_ino == first_ino
+    assert second.path.stat().st_mtime_ns == path.stat().st_mtime_ns
+
+
+def test_load_database_unreadable_file_raises_schema_error(tmp_path: Path, keypair) -> None:
+    if os.getuid() == 0:
+        pytest.skip("root bypasses file permission checks")
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+    path.chmod(0o000)
+    try:
+        with pytest.raises(SchemaError, match="is not a readable ODF spreadsheet"):
+            ods.load_database(path)
+    finally:
+        path.chmod(0o644)

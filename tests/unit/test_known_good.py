@@ -17,6 +17,19 @@ from meshprovision.db.atomic_writer import BackupInfo, create_backup, list_backu
 pytestmark = pytest.mark.unit
 
 
+def _refresh(target: Path, *, backup_dir: Path | None = None) -> BackupInfo | None:
+    """Call ``refresh_known_good`` with content/source_stat read fresh from ``target``.
+
+    Matches how the real caller (``ods.load_database``, via
+    ``ods._read_db_file``) supplies them -- from one read of ``target``,
+    not from ``target`` alone -- for tests whose scenario is just
+    "``target`` currently holds this content".
+    """
+    return known_good.refresh_known_good(
+        target, content=target.read_bytes(), source_stat=target.stat(), backup_dir=backup_dir
+    )
+
+
 def test_known_good_name_and_path() -> None:
     target = Path("/some/dir/nodes_db.ods")
     assert known_good.known_good_name(target) == "nodes_db.known-good.ods"
@@ -30,9 +43,34 @@ def test_known_good_info_none_when_absent(tmp_path: Path) -> None:
     assert known_good.known_good_info(target, backup_dir=tmp_path / "backups") is None
 
 
-def test_refresh_known_good_none_when_target_absent(tmp_path: Path) -> None:
+def test_refresh_known_good_writes_the_given_content_not_targets_current_bytes(
+    tmp_path: Path,
+) -> None:
+    """Regression for Round 37 aspect 3 Batch 2: the copy comes from ``content``.
+
+    ``ods.load_database`` reads ``target`` once, validates those exact
+    bytes, and only then calls this function -- so the copy must be
+    built from the ``content``/``source_stat`` it is handed, never by
+    re-opening ``target``, which could have changed underneath it
+    between validation and this call (a concurrent ``db restore``, an
+    external editor's save). Simulated here by passing content that
+    differs from what is currently on disk at ``target``.
+    """
     target = tmp_path / "nodes_db.ods"
-    assert known_good.refresh_known_good(target, backup_dir=tmp_path / "backups") is None
+    target.write_bytes(b"validated content")
+    backup_dir = tmp_path / "backups"
+    stat_result = target.stat()
+
+    # Something else replaces target's on-disk bytes after the read that
+    # produced `content`/`stat_result` above -- the exact race this closes.
+    target.write_bytes(b"a different, later write")
+
+    info = known_good.refresh_known_good(
+        target, content=b"validated content", source_stat=stat_result, backup_dir=backup_dir
+    )
+
+    assert info is not None
+    assert info.path.read_bytes() == b"validated content"
 
 
 def test_refresh_known_good_creates_a_stable_named_copy(tmp_path: Path) -> None:
@@ -40,7 +78,7 @@ def test_refresh_known_good_creates_a_stable_named_copy(tmp_path: Path) -> None:
     target.write_bytes(b"v1")
     backup_dir = tmp_path / "backups"
 
-    info = known_good.refresh_known_good(target, backup_dir=backup_dir)
+    info = _refresh(target, backup_dir=backup_dir)
 
     assert info is not None
     assert info.path == backup_dir / "nodes_db.known-good.ods"
@@ -54,7 +92,7 @@ def test_refresh_known_good_never_matches_the_timestamped_backup_glob(tmp_path: 
     backup_dir = tmp_path / "backups"
 
     create_backup(target, backup_dir=backup_dir)
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
 
     timestamped = list_backups(target, backup_dir=backup_dir)
     assert len(timestamped) == 1
@@ -68,7 +106,7 @@ def test_refresh_known_good_updates_when_target_changed(tmp_path: Path) -> None:
     backup_dir = tmp_path / "backups"
 
     target.write_bytes(b"v1")
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
     first_mtime = target.stat().st_mtime
 
     target.write_bytes(b"v2-longer-content")
@@ -77,7 +115,7 @@ def test_refresh_known_good_updates_when_target_changed(tmp_path: Path) -> None:
     # which can otherwise land in the same tick on a coarse filesystem
     # clock and make this test flaky.
     os.utime(target, (first_mtime + 5, first_mtime + 5))
-    info = known_good.refresh_known_good(target, backup_dir=backup_dir)
+    info = _refresh(target, backup_dir=backup_dir)
 
     assert info is not None
     assert info.path.read_bytes() == b"v2-longer-content"
@@ -98,14 +136,14 @@ def test_refresh_known_good_detects_a_same_tick_content_change(tmp_path: Path) -
     backup_dir = tmp_path / "backups"
 
     target.write_bytes(b"GOOD CONTENT")
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
     same_mtime = target.stat().st_mtime
 
     target.write_bytes(b"CORRUPT/CHANGED CONTENT, DIFFERENT SIZE")
     os.utime(target, (same_mtime, same_mtime))
     assert target.stat().st_mtime == same_mtime  # sanity: mtime genuinely unchanged
 
-    info = known_good.refresh_known_good(target, backup_dir=backup_dir)
+    info = _refresh(target, backup_dir=backup_dir)
 
     assert info is not None
     assert info.path.read_bytes() == b"CORRUPT/CHANGED CONTENT, DIFFERENT SIZE"
@@ -117,14 +155,14 @@ def test_refresh_known_good_skips_the_copy_when_target_unchanged(
     target = tmp_path / "nodes_db.ods"
     target.write_bytes(b"v1")
     backup_dir = tmp_path / "backups"
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
 
-    def fail_copy(*args: object, **kwargs: object) -> None:
-        raise AssertionError("shutil.copy2 must not be called when target is unchanged")
+    def fail_open(*args: object, **kwargs: object) -> int:
+        raise AssertionError("the known-good copy must not be rewritten when target is unchanged")
 
-    monkeypatch.setattr(shutil, "copy2", fail_copy)
+    monkeypatch.setattr(known_good.os, "open", fail_open)
 
-    info = known_good.refresh_known_good(target, backup_dir=backup_dir)
+    info = _refresh(target, backup_dir=backup_dir)
 
     assert info is not None
     assert info.path.read_bytes() == b"v1"
@@ -142,7 +180,7 @@ def test_refresh_known_good_never_raises_when_backup_dir_is_unwritable(
 
     monkeypatch.setattr(Path, "mkdir", refuse_mkdir)
 
-    info = known_good.refresh_known_good(target, backup_dir=backup_dir)
+    info = _refresh(target, backup_dir=backup_dir)
 
     assert info is None
     assert target.read_bytes() == b"v1"  # the target itself is never touched
@@ -164,7 +202,7 @@ def test_refresh_known_good_cleans_up_its_temp_file_on_failure(
 
     monkeypatch.setattr(Path, "replace", refuse_replace)
 
-    info = known_good.refresh_known_good(target, backup_dir=backup_dir)
+    info = _refresh(target, backup_dir=backup_dir)
 
     assert info is None
     leftover_temps = list(backup_dir.glob(".*.tmp-*"))
@@ -179,7 +217,7 @@ def test_refresh_known_good_writes_a_provenance_sidecar(tmp_path: Path) -> None:
     target.write_bytes(b"v1")
     backup_dir = tmp_path / "backups"
 
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
 
     sidecar = backup_dir / "nodes_db.known-good.json"
     assert sidecar.is_file()
@@ -195,12 +233,12 @@ def test_refresh_known_good_rewrites_the_sidecar_when_content_changes(tmp_path: 
     backup_dir = tmp_path / "backups"
 
     target.write_bytes(b"v1")
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
     first_mtime = target.stat().st_mtime
 
     target.write_bytes(b"v2-longer-content")
     os.utime(target, (first_mtime + 5, first_mtime + 5))
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
 
     sidecar = backup_dir / "nodes_db.known-good.json"
     payload = json.loads(sidecar.read_bytes())
@@ -211,7 +249,7 @@ def test_known_good_status_verified_immediately_after_refresh(tmp_path: Path) ->
     target = tmp_path / "nodes_db.ods"
     target.write_bytes(b"v1")
     backup_dir = tmp_path / "backups"
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
 
     status = known_good.known_good_status(target, backup_dir=backup_dir)
 
@@ -230,7 +268,7 @@ def test_known_good_status_unrecorded_when_sidecar_is_missing(tmp_path: Path) ->
     target = tmp_path / "nodes_db.ods"
     target.write_bytes(b"v1")
     backup_dir = tmp_path / "backups"
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
     (backup_dir / "nodes_db.known-good.json").unlink()
 
     status = known_good.known_good_status(target, backup_dir=backup_dir)
@@ -244,7 +282,7 @@ def test_known_good_status_unrecorded_when_sidecar_is_malformed_json(tmp_path: P
     target = tmp_path / "nodes_db.ods"
     target.write_bytes(b"v1")
     backup_dir = tmp_path / "backups"
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
     (backup_dir / "nodes_db.known-good.json").write_bytes(b"not json{{")
 
     status = known_good.known_good_status(target, backup_dir=backup_dir)
@@ -259,7 +297,7 @@ def test_known_good_status_other_source_after_a_directory_copy(tmp_path: Path) -
     fleet_a_dir.mkdir()
     target_a = fleet_a_dir / "nodes_db.ods"
     target_a.write_bytes(b"a")
-    known_good.refresh_known_good(target_a, backup_dir=fleet_a_dir / "backups")
+    _refresh(target_a, backup_dir=fleet_a_dir / "backups")
 
     fleet_c_dir = tmp_path / "fleetC"
     shutil.copytree(fleet_a_dir, fleet_c_dir)
@@ -278,7 +316,7 @@ def test_known_good_status_content_mismatch_when_the_copy_is_tampered_with(
     target = tmp_path / "nodes_db.ods"
     target.write_bytes(b"v1")
     backup_dir = tmp_path / "backups"
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
     (backup_dir / "nodes_db.known-good.ods").write_bytes(b"tampered content, different size")
 
     status = known_good.known_good_status(target, backup_dir=backup_dir)
@@ -358,7 +396,7 @@ def test_refresh_known_good_heals_a_legacy_copy_missing_its_sidecar(tmp_path: Pa
     shutil.copy2(target, legacy_copy)
     assert not (backup_dir / "nodes_db.known-good.json").exists()
 
-    info = known_good.refresh_known_good(target, backup_dir=backup_dir)
+    info = _refresh(target, backup_dir=backup_dir)
 
     assert info is not None
     status = known_good.known_good_status(target, backup_dir=backup_dir)
@@ -375,7 +413,7 @@ def test_refresh_known_good_fast_path_requires_a_matching_sidecar_source(tmp_pat
     target = tmp_path / "nodes_db.ods"
     target.write_bytes(b"v1")
     backup_dir = tmp_path / "backups"
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
 
     # Simulate a directory copy: the sidecar still names the old source.
     sidecar = backup_dir / "nodes_db.known-good.json"
@@ -383,7 +421,7 @@ def test_refresh_known_good_fast_path_requires_a_matching_sidecar_source(tmp_pat
     stale["source"] = str(tmp_path / "elsewhere" / "nodes_db.ods")
     sidecar.write_bytes(json.dumps(stale).encode())
 
-    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    _refresh(target, backup_dir=backup_dir)
 
     status = known_good.known_good_status(target, backup_dir=backup_dir)
     assert status is not None

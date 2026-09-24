@@ -23,7 +23,6 @@ import hashlib
 import json
 import logging
 import os
-import shutil
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -323,7 +322,13 @@ def provenance_reason(status: KnownGood) -> str:
     raise ValueError(f"{status.provenance} is already verified; there is no mismatch to explain")
 
 
-def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> BackupInfo | None:
+def refresh_known_good(
+    target: Path,
+    *,
+    content: bytes,
+    source_stat: os.stat_result,
+    backup_dir: Path | None = None,
+) -> BackupInfo | None:
     """Refresh the single, stable known-good copy of a target file.
 
     Unlike every other function in this module, **this never raises**.
@@ -334,14 +339,22 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
     read-only-mounted backup directory, a permissions problem): any such
     failure is logged at ``WARNING`` and swallowed.
 
+    ``content`` and ``source_stat`` must come from the exact same read of
+    ``target`` that was validated (see :func:`meshprovision.db.ods.
+    _read_db_file`), not from a fresh open of ``target`` here. Re-opening
+    the path at this point is exactly the TOCTOU this closes: a write
+    landing between validation and this call would otherwise publish
+    unvalidated bytes as "known-good". The known-good copy is written
+    from ``content`` directly, never by copying ``target`` again.
+
     A no-op, cheap ``stat()``-only call when the known-good copy already
-    matches ``target``'s current content: ``shutil.copy2`` (used here,
-    same as :func:`meshprovision.db.atomic_writer.create_backup`)
-    preserves the source's mtime onto the copy, so a known-good copy
-    whose ``(mtime_ns, size)`` equals ``target``'s current ``(mtime_ns,
-    size)`` is already current -- this is what keeps a polling loop (for
-    example ``mesh status --watch``) from rewriting an unchanged copy on
-    every single load. Comparing nanosecond mtime plus size, not just
+    matches ``source_stat``'s content identity: this function preserves
+    the source's mtime onto the copy (``os.utime``, mirroring what
+    ``shutil.copy2`` used to provide), so a known-good copy whose
+    ``(mtime_ns, size)`` equals ``source_stat``'s ``(mtime_ns, size)`` is
+    already current -- this is what keeps a polling loop (for example
+    ``mesh status --watch``) from rewriting an unchanged copy on every
+    single load. Comparing nanosecond mtime plus size, not just
     whole-second mtime alone, avoids treating two different writes as
     identical on a coarse-mtime filesystem (exFAT ~10ms, FAT32 2s) or
     after an external tool rewrites ``target`` while preserving its mtime
@@ -358,17 +371,20 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
 
     Args:
         target: The file to refresh a known-good copy of.
+        content: The exact bytes that were read and validated from
+            ``target``. Written to the known-good copy as-is.
+        source_stat: The ``stat`` result from the same read that produced
+            ``content`` (see :func:`meshprovision.db.ods._read_db_file`,
+            which uses ``fstat`` on the read fd so this describes exactly
+            the inode ``content`` came from).
         backup_dir: Directory to store the known-good copy under.
             Defaults to :func:`meshprovision.db.atomic_writer.backup_dir_for`'s
             resolution.
 
     Returns:
         The refreshed (or already-current) copy's metadata, or ``None``
-        if ``target`` does not exist, or the refresh itself failed.
+        if the refresh itself failed.
     """
-    if not target.exists():
-        return None
-
     resolved_dir = backup_dir_for(target, backup_dir)
     destination = resolved_dir / known_good_name(target)
     sidecar_path = _sidecar_path(target, backup_dir)
@@ -378,8 +394,7 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
         current_source = str(target)
     tmp_destination: Path | None = None
     try:
-        target_stat = target.stat()
-        target_identity = (target_stat.st_mtime_ns, target_stat.st_size)
+        target_identity = (source_stat.st_mtime_ns, source_stat.st_size)
         if destination.is_file():
             dest_stat = destination.stat()
             if (dest_stat.st_mtime_ns, dest_stat.st_size) == target_identity:
@@ -394,12 +409,11 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
             _logger.debug("Failed to chmod backup directory %s", resolved_dir)
 
         tmp_destination = resolved_dir / f".{destination.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
-        shutil.copy2(target, tmp_destination)
-        try:
-            tmp_destination.chmod(_FILE_MODE)
-        except OSError:
-            _logger.debug("Failed to chmod known-good copy %s", tmp_destination)
-        digest = hashlib.sha256(tmp_destination.read_bytes()).hexdigest()
+        fd = os.open(tmp_destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, _FILE_MODE)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(content)
+        os.utime(tmp_destination, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+        digest = hashlib.sha256(content).hexdigest()
         tmp_destination.replace(destination)
         tmp_destination = None
         _write_sidecar(sidecar_path, source=current_source, sha256_hex=digest)

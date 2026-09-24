@@ -43,7 +43,9 @@ insertion history or how a human last arranged them.
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
+import os
 import time
 import xml.parsers.expat
 import zipfile
@@ -519,21 +521,53 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
     return SheetData(name=name, header=header, rows=tuple(data_rows))
 
 
-def read_raw(path: Path) -> DatabaseData:
-    """Read an ODS file's raw sheet contents, with no schema validation.
+def _read_db_file(path: Path) -> tuple[bytes, os.stat_result]:
+    """Read a database file's bytes and stat in one shot, off the same fd.
+
+    Using ``fstat`` on the fd the bytes were read from means the stat
+    describes exactly the inode whose content was read -- not whatever
+    happens to be at ``path`` a moment later, which is what closes the
+    validate-then-known-good-refresh race this exists for (see
+    :func:`load_database`).
 
     Args:
         path: Path to the ``.ods`` file.
 
     Returns:
+        The file's raw bytes and its ``fstat`` result at read time.
+
+    Raises:
+        SchemaError: If ``path`` cannot be opened or read.
+    """
+    try:
+        with path.open("rb") as fh:
+            stat_result = os.fstat(fh.fileno())
+            data = fh.read()
+    except OSError as exc:
+        raise SchemaError(f"{path} is not a readable ODF spreadsheet: {exc}") from exc
+    return data, stat_result
+
+
+def read_raw(path: Path, *, data: bytes | None = None) -> DatabaseData:
+    """Read an ODS file's raw sheet contents, with no schema validation.
+
+    Args:
+        path: Path to the ``.ods`` file. Used to name it in any error,
+            and to load from disk when ``data`` is not given.
+        data: The file's bytes, already read -- when given, parsed
+            directly instead of re-opening ``path``. Used by
+            :func:`load_database` so the bytes that are validated are
+            exactly the bytes read once via :func:`_read_db_file`.
+
+    Returns:
         The raw contents of every sheet found.
 
     Raises:
-        SchemaError: If ``path`` cannot be opened and parsed as an ODF
+        SchemaError: If ``path``/``data`` cannot be parsed as an ODF
             spreadsheet.
     """
     try:
-        doc = opendocument.load(str(path))
+        doc = opendocument.load(io.BytesIO(data) if data is not None else str(path))
     except (
         OSError,
         zipfile.BadZipFile,
@@ -814,12 +848,17 @@ def load_database(path: Path) -> LoadedDatabase:
     On success, also best-effort refreshes the file's known-good safety
     copy (see :func:`meshprovision.db.known_good.refresh_known_good`)
     -- every successful load, not just a write, since a load having
-    reached this point is itself proof the file is currently valid.
-    Never fails the load: a refresh failure (full disk, read-only
-    backup directory) is logged and swallowed, not raised.
+    reached this point is itself proof the file is currently valid. The
+    copy is written from the exact bytes read and validated here, via
+    :func:`_read_db_file`, never by re-opening ``path`` afterwards -- so
+    a write landing between validation and the refresh can never publish
+    unvalidated content as "known-good". Never fails the load: a refresh
+    failure (full disk, read-only backup directory) is logged and
+    swallowed, not raised.
     """
     started = time.monotonic()
-    raw = read_raw(path)
+    data, stat_result = _read_db_file(path)
+    raw = read_raw(path, data=data)
     for sheet_name in schema.SHEET_NAMES:
         if sheet_name not in raw.sheets:
             raise SchemaError(
@@ -848,7 +887,7 @@ def load_database(path: Path) -> LoadedDatabase:
         len(keys),
         len(warnings),
     )
-    refresh_known_good(path)
+    refresh_known_good(path, content=data, source_stat=stat_result)
     return LoadedDatabase(path=path, nodes=nodes, keys=keys, warnings=tuple(warnings))
 
 
