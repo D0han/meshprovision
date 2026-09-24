@@ -25,7 +25,7 @@ its row is never removed, only its ``archived_at`` cell is set, so
 still act on it.
 
 Beyond the timestamped backups ``backup``/``restore`` manage, a single
-known-good safety copy (see :func:`~meshprovision.db.atomic_writer
+known-good safety copy (see :func:`~meshprovision.db.known_good
 .refresh_known_good`) is refreshed by every successful database load,
 anywhere in the codebase -- not just through this module. ``mesh db
 restore --known-good`` restores it without needing its path, and it is
@@ -54,6 +54,7 @@ from meshprovision.cli.common import (
 )
 from meshprovision.crypto import weakkeys
 from meshprovision.db import atomic_writer, locking, ods, schema
+from meshprovision.db.known_good import known_good_info
 from meshprovision.db.verify import ProblemSeverity, verify_database
 from meshprovision.errors import (
     AdminKeyCapacityError,
@@ -204,7 +205,7 @@ def db_backup(
     this by adding a lock.
 
     ``--list`` also reports the known-good safety copy (see
-    :func:`~meshprovision.db.atomic_writer.refresh_known_good`), when one
+    :func:`~meshprovision.db.known_good.refresh_known_good`), when one
     exists, ahead of the timestamped backups it is not one of --
     ``mesh db restore --known-good`` restores it directly, without
     needing to name its path.
@@ -232,7 +233,7 @@ def db_backup(
         # (load_database() never sees a per-invocation --backup-dir
         # override), so it always lives under the default location
         # regardless of what this specific --backup-dir names.
-        known_good = atomic_writer.known_good_info(path)
+        known_good = known_good_info(path)
         if json_output:
             payload: dict[str, object] = {
                 "backups": [
@@ -336,7 +337,7 @@ def db_restore(
     Pass either ``BACKUP`` (a specific file, typically copied from
     ``mesh db backup --list``) or ``--known-good``, never both: the
     latter restores the safety copy every successful database load
-    refreshes (see :func:`~meshprovision.db.atomic_writer
+    refreshes (see :func:`~meshprovision.db.known_good
     .refresh_known_good`) -- exactly what a load-failure error's hint
     points at, without needing to first hunt down its path.
 
@@ -374,7 +375,7 @@ def db_restore(
         # comment in db_backup(): the known-good copy always lives at
         # the default location, independent of --backup-dir (which here
         # only controls where the *pre-restore* safety backup lands).
-        known_good = atomic_writer.known_good_info(path)
+        known_good = known_good_info(path)
         if known_good is None:
             raise AtomicWriteError(
                 f"No known-good copy exists yet under {atomic_writer.DEFAULT_BACKUP_DIR}.",

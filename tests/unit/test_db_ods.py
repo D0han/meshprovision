@@ -9,8 +9,9 @@ from pathlib import Path
 import pytest
 
 from meshprovision.crypto.keys import encode_key
-from meshprovision.db import atomic_writer, ods, schema
+from meshprovision.db import ods, schema
 from meshprovision.db.keys import KeyRecord
+from meshprovision.db.known_good import known_good_info
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import (
@@ -924,7 +925,7 @@ def test_ods_database_save_backup_true_creates_one_timestamped_backup(
     """A save also refreshes the known-good copy, so *.ods now yields two files.
 
     That second file is the single, stable known-good safety copy (see
-    ``atomic_writer.refresh_known_good``) -- distinguished here by its
+    ``known_good.refresh_known_good``) -- distinguished here by its
     name never matching the timestamped-backup glob, not by count.
     """
     monkeypatch.chdir(tmp_path)
@@ -940,7 +941,7 @@ def test_ods_database_save_backup_true_creates_one_timestamped_backup(
     timestamped = list(backups_dir.glob(f"{path.stem}-*{path.suffix}"))
     assert len(timestamped) == 1
 
-    known_good = atomic_writer.known_good_info(path)
+    known_good = known_good_info(path)
     assert known_good is not None
     assert known_good.path == backups_dir / f"{path.stem}.known-good{path.suffix}"
 

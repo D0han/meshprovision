@@ -1052,15 +1052,16 @@ class CliContext:
         errors.DbError` (the file loaded but its *content* is bad --
         unreadable ODF, a missing sheet, a header mismatch, a bad cell,
         a duplicate row) gets its ``hint`` extended with a pointer at the
-        known-good safety copy (see :func:`meshprovision.db.atomic_writer
+        known-good safety copy (see :func:`meshprovision.db.known_good
         .refresh_known_good`), when one exists, naming the exact
         ``mesh db restore --known-good`` command to run. A locking or
         atomic-write failure is left alone -- those aren't about bad
         file content, so a known-good copy isn't the relevant remedy.
         """
-        from meshprovision.db import atomic_writer, schema
         from meshprovision.db import ods as ods_module
+        from meshprovision.db import schema
         from meshprovision.db.keys import KeyRepository
+        from meshprovision.db.known_good import known_good_info
         from meshprovision.db.nodes import NodeRepository
         from meshprovision.db.ods import OdsDatabase
 
@@ -1083,7 +1084,7 @@ class CliContext:
                 ods_module.create_empty(path, backup=False)
                 db.load(force=True)
         except DbError as exc:
-            known_good = atomic_writer.known_good_info(path)
+            known_good = known_good_info(path)
             if known_good is not None:
                 remediation = (
                     f"A known-good copy from {schema.utc_timestamp(known_good.created_at)} "

@@ -357,7 +357,7 @@ def test_read_only_guarantee_across_run_modes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from meshprovision.db import atomic_writer
+    from meshprovision.db.known_good import known_good_info
     from meshprovision.db.nodes import NodeRecord
 
     node_hex = _seed_one_node(seed_db, NodeRecord)
@@ -372,7 +372,7 @@ def test_read_only_guarantee_across_run_modes(
         # The one intended exception: a successful load refreshes the
         # known-good safety copy (a side-channel file, never a write to
         # the live database itself -- see load_database()'s docstring).
-        known_good = atomic_writer.known_good_info(db_path)
+        known_good = known_good_info(db_path)
         assert known_good is not None
         first_known_good_mtime = known_good.path.stat().st_mtime
 

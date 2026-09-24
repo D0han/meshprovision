@@ -64,7 +64,8 @@ from odf.element import Node
 from odf.opendocument import OpenDocumentSpreadsheet
 
 from meshprovision.db import header_diff, locking, schema, sorting
-from meshprovision.db.atomic_writer import DEFAULT_RETENTION, atomic_write, refresh_known_good
+from meshprovision.db.atomic_writer import DEFAULT_RETENTION, atomic_write
+from meshprovision.db.known_good import refresh_known_good
 from meshprovision.errors import DbIntegrityError, DuplicateNodeError, SchemaError
 
 __all__ = [
@@ -779,7 +780,7 @@ def load_database(path: Path) -> LoadedDatabase:
         DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
 
     On success, also best-effort refreshes the file's known-good safety
-    copy (see :func:`meshprovision.db.atomic_writer.refresh_known_good`)
+    copy (see :func:`meshprovision.db.known_good.refresh_known_good`)
     -- every successful load, not just a write, since a load having
     reached this point is itself proof the file is currently valid.
     Never fails the load: a refresh failure (full disk, read-only

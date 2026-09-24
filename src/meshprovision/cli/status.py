@@ -1,8 +1,8 @@
 """``mesh status`` -- strictly read-only network health reporting.
 
 This module MUST NOT reference ``OdsDatabase``, ``NodeRepository``,
-``KeyRepository``, ``atomic_writer``, ``meshprovision.provisioning.apply``,
-``meshprovision.provisioning.repair``,
+``KeyRepository``, ``atomic_writer``, ``known_good``,
+``meshprovision.provisioning.apply``, ``meshprovision.provisioning.repair``,
 :meth:`meshprovision.cli.common.CliContext.open_database`, or any
 ``save``/``replace``/``upsert``/``delete`` name. Everything flows through
 :func:`meshprovision.status.report.run_status`, which is itself certified
@@ -12,7 +12,7 @@ guarantee so a future reader does not have to rediscover it.
 
 The one exception: a successful load also best-effort refreshes the
 known-good safety copy under ``data/backups/`` (see
-:func:`meshprovision.db.atomic_writer.refresh_known_good`, wired in at
+:func:`meshprovision.db.known_good.refresh_known_good`, wired in at
 :func:`meshprovision.db.ods.load_database`) -- a side-channel copy, never
 a write to the live database file itself, so it does not affect the
 mtime guarantee above.
