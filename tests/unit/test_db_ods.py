@@ -930,6 +930,69 @@ def test_check_header_reports_both_sheets_when_both_are_mangled(tmp_path: Path, 
     assert "Keys:" in exc_info.value.hint
 
 
+def _drop_trailing_keys_cells(path: Path) -> None:
+    """Remove the last cell from every ``Keys`` sheet row, header included.
+
+    Simulates a genuine pre-``origin``-column file: unlike
+    :func:`tests.unit.conftest.edit_ods_cell`, which only blanks a
+    cell's text, this removes the cell element entirely, so
+    ``_row_values`` falls off the end of ``cells`` for every data row --
+    exactly what an ``.ods`` written before the ``origin`` column existed
+    looks like on disk.
+
+    Args:
+        path: Path to the ``.ods`` file to edit in place.
+    """
+    from odf import opendocument
+    from odf import table as odf_table
+
+    doc = opendocument.load(str(path))
+    table_elem = next(
+        t
+        for t in doc.spreadsheet.getElementsByType(odf_table.Table)
+        if t.getAttribute("name") == "Keys"
+    )
+    for row in table_elem.getElementsByType(odf_table.TableRow):
+        cells = row.getElementsByType(odf_table.TableCell)
+        if cells:
+            row.removeChild(cells[-1])
+    with path.open("wb") as fh:
+        doc.write(fh)
+
+
+def test_legacy_keys_sheet_without_origin_column_loads_with_origin_none(
+    tmp_path: Path, keypair
+) -> None:
+    """A ``Keys`` sheet written before the ``origin`` column existed still loads.
+
+    ``origin`` is the sheet's one ``legacy_optional`` column:
+    ``_check_header`` tolerates a header missing it entirely (see
+    :func:`~meshprovision.db.ods._tolerated_headers`), and a data row
+    with no corresponding cell reads back as an empty string, which
+    :meth:`~meshprovision.db.keys.KeyRecord.from_row` parses to
+    ``origin=None`` -- "unknown," never guessed -- the same as any other
+    row whose provenance was never recorded. The first save afterwards
+    migrates the file: the writer always emits the full current header.
+    """
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+    _drop_trailing_keys_cells(path)
+
+    db = ods.OdsDatabase(path)
+    db.load()
+    keys_rows = db.rows("Keys")
+    assert len(keys_rows) == 2
+    records = [KeyRecord.from_row(row) for row in keys_rows]
+    assert all(record.origin is None for record in records)
+
+    ods.write_database(path, nodes=db.rows("Nodes"), keys=db.rows("Keys"), backup=False)
+    migrated = ods.read_raw(path)
+    assert migrated.sheets["Keys"].header[-1] == "origin"
+
+
 def test_check_headers_skips_a_sheet_missing_entirely() -> None:
     """``_check_headers`` tolerates a missing sheet rather than raising a bare ``KeyError``.
 

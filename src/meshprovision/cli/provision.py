@@ -67,6 +67,7 @@ from meshprovision.provisioning.pipeline import (
     allocate_names,
     audit_live_admin_keys,
     audit_node_key,
+    is_host_generated_key,
     resolve_admin_keys,
     resolve_removed_admin_refs,
 )
@@ -863,12 +864,16 @@ def run_provision(
         removed_admin_key_refs = ()
 
     admin_keys = resolve_admin_keys(db.keys, template, known_bad=known_bad)
-    node_key_compromised, node_key_reason = audit_node_key(live, known_bad=known_bad)
 
     db_public_key: bytes | None = None
     db_key_record = db.keys.find(f"{live.node_id.hex}_pub")
     if db_key_record is not None:
         db_public_key = db_key_record.material()
+
+    host_generated = is_host_generated_key(db.keys, live)
+    node_key_compromised, node_key_reason = audit_node_key(
+        live, known_bad=known_bad, host_generated=host_generated
+    )
 
     desired_short, desired_long = allocate_names(
         db.nodes, template, existing=record, rename=opts.rename

@@ -70,7 +70,7 @@ regeneration:
 |---|---|
 | `all_zero`, `small_order`, `repeated_byte`, `monotonic`, `low_entropy`, `unclamped` | Structural checks on the key bytes |
 | `consistency` | Recompute the public key from the private key and compare with what the device reports; a mismatch means corruption or a partial restore |
-| `firmware_window` | A node reporting firmware in `[2.5.0, 2.6.11)` is treated as **presumptively compromised** regardless of the key's contents |
+| `firmware_window` | A node reporting firmware in `[2.5.0, 2.6.11)` is treated as **presumptively compromised** regardless of the key's contents — unless the key is confirmed host-generated (see below) |
 | `duplicate` | The public key matches another key in your own `Keys` sheet; two of your nodes sharing a public key is the vendor-cloning bug; reported CRITICAL |
 | `blocklist` | The key appears in `data/known_bad_keys.txt` |
 
@@ -102,6 +102,46 @@ an honest short one.
 Your effective controls against CVE-2025-52464 are therefore the
 firmware-version window check and cross-node duplicate detection across
 your own `Keys` sheet — **not** this file.
+
+### The firmware-window check converges once meshprovision generates the key
+
+The CVE is a *device-side* RNG failure: firmware in `[2.5.0, 2.6.11)` may
+generate a weak key **itself** (on first boot, or on-device key
+regeneration). It says nothing about a key meshprovision generated on
+the host and pushed to the device — that key never went through the
+device's RNG, so the vulnerability never applied to it, whatever
+firmware the device happens to report.
+
+`Keys.origin` records how each row's material was obtained:
+`generated` (this host minted it, e.g. `mesh provision
+--force-regenerate-key` or a factory-node's first provision),
+`captured` (read back from an already-provisioned device — `mesh
+adopt`, or the firmware issue #7449 recovery path), or `imported`
+(`mesh admin import`). A blank cell means unknown provenance — a row
+written before this column existed, or one whose origin was otherwise
+never recorded.
+
+On every run, `mesh provision` checks whether the node's own recorded
+public *and* private key material both still match what the device
+reports, and whether that row's `origin` is `generated`. Only then does
+the firmware-window finding get suppressed (logged at `WARNING`
+instead) — the `origin` label alone is never enough; the private key
+material must actually still derive the recorded public key, so a hand
+edit or a stale row cannot silently disable the check. Every other
+finding (blocklist, structural weakness, `duplicate`) still applies in
+full regardless.
+
+Before this check existed, a node on CVE-window firmware had its key
+regenerated — and was rebooted — on **every single** `mesh provision`
+run, forever, even for a key meshprovision itself had just generated the
+run before. A second, unchanged run now converges: no key regeneration,
+no reboot, no database write, once the key's `generated` origin is on
+file. A **legacy** node whose key predates the `origin` column, or whose
+key was `captured`/`imported` rather than `generated`, still regenerates
+on every run while its firmware stays in the window (fail-safe: unknown
+or device-sourced provenance is never trusted) — the practical fix is to
+upgrade its firmware to `>= 2.6.11`, which takes it out of the window
+entirely.
 
 Format and extension path: base64, one key per line, `#` comments. If the
 community ever publishes a real list, merge it with no code change:

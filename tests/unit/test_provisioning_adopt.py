@@ -11,14 +11,17 @@ import pytest
 
 from meshprovision.config.template import load_template_text
 from meshprovision.crypto.keys import encode_key
-from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import ManagementMode
+from meshprovision.db.keys import KeyRepository
+from meshprovision.db.nodes import NodeRecord, NodeRepository
+from meshprovision.db.ods import OdsDatabase
+from meshprovision.db.schema import KeyOrigin, ManagementMode
 from meshprovision.provisioning.adopt import (
     adopted_record,
     build_adoption_report,
     capture_ble_pin,
     check_name_pattern_fit,
     classify_live_admin_keys,
+    persist_adoption,
 )
 from tests.unit.conftest import make_security
 
@@ -30,6 +33,18 @@ _BASE64_KEY_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9
 @pytest.fixture
 def template():
     return load_template_text("version: 1\n")
+
+
+@pytest.fixture
+def keys(empty_ods) -> KeyRepository:
+    db = OdsDatabase(empty_ods)
+    db.load()
+    return KeyRepository(db)
+
+
+@pytest.fixture
+def nodes(keys: KeyRepository) -> NodeRepository:
+    return NodeRepository(keys.db)
 
 
 # ---------------------------------------------------------------------------
@@ -898,3 +913,39 @@ def test_describe_covers_existing_registered_vulnerable_and_managed(
     assert any("CVE-2025-52464" in line for line in lines)
     assert any("admin key" in line and "authorized" in line for line in lines)
     assert not _BASE64_KEY_RE.search(text)
+
+
+# ---------------------------------------------------------------------------
+# persist_adoption
+# ---------------------------------------------------------------------------
+
+
+def test_persist_adoption_writes_own_keypair_as_captured(
+    make_live, template, keys: KeyRepository, nodes: NodeRepository, keypair
+) -> None:
+    """``mesh adopt`` never generates key material -- only reads what a device already holds.
+
+    Every keypair :func:`~meshprovision.provisioning.adopt.persist_adoption`
+    writes must therefore carry ``KeyOrigin.CAPTURED``, never
+    ``KeyOrigin.GENERATED`` -- the CVE-2025-52464 firmware-window
+    suppression (:func:`~meshprovision.provisioning.pipeline.
+    is_host_generated_key`) trusts ``GENERATED`` to mean "this host
+    minted it," and an adopted, device-generated key on CVE-window
+    firmware must still be evaluated as compromised.
+    """
+    live = make_live(template, security=make_security(keypair=keypair))
+    report = build_adoption_report(
+        live,
+        existing=None,
+        public_keys=keys.public_key_map(),
+        template=template,
+        known_bad=frozenset(),
+    )
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+
+    persist_adoption(report, live, nodes=nodes, keys=keys, channel=None, now=now)
+
+    pub = keys.get(f"{live.node_id.hex}_pub")
+    priv = keys.get(f"{live.node_id.hex}_priv")
+    assert pub.origin is KeyOrigin.CAPTURED
+    assert priv.origin is KeyOrigin.CAPTURED

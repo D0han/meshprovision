@@ -19,6 +19,7 @@ from meshprovision.provisioning.pipeline import (
     allocate_names,
     audit_live_admin_keys,
     audit_node_key,
+    is_host_generated_key,
     match_admin_key_refs,
     resolve_admin_keys,
     resolve_removed_admin_refs,
@@ -342,6 +343,185 @@ def test_audit_node_key_firmware_matrix(
             assert expected_substring in reason
         else:
             assert reason == ""
+
+
+@pytest.mark.parametrize(
+    ("firmware", "expected_compromised", "expected_level", "expected_substring"),
+    [
+        pytest.param("", False, logging.WARNING, "could not be parsed", id="blank"),
+        pytest.param("   ", False, logging.WARNING, "could not be parsed", id="whitespace-only"),
+        pytest.param("garbage", False, logging.WARNING, "could not be parsed", id="garbage"),
+        pytest.param("2.5.0", False, logging.WARNING, "CVE-2025-52464 window", id="2.5.0"),
+        pytest.param("2.6.0", False, logging.WARNING, "CVE-2025-52464 window", id="2.6.0"),
+        pytest.param("2.6.10", False, logging.WARNING, "CVE-2025-52464 window", id="2.6.10"),
+        pytest.param("2.6.11", False, None, None, id="2.6.11"),
+        pytest.param("2.7.11", False, None, None, id="2.7.11"),
+    ],
+)
+def test_audit_node_key_host_generated_suppresses_only_the_window_finding(
+    keypair: KeyPair,
+    caplog: pytest.LogCaptureFixture,
+    firmware: str,
+    expected_compromised: bool,
+    expected_level: int | None,
+    expected_substring: str | None,
+) -> None:
+    """``host_generated=True`` downgrades the CVE-window finding, nothing else.
+
+    Same firmware matrix as :func:`test_audit_node_key_firmware_matrix`,
+    but every previously-CRITICAL/ERROR in-window id now comes back
+    ``compromised=False`` with a WARNING log line instead -- the key
+    itself was minted by ``mesh provision``, so the device-RNG failure
+    mode the CVE describes never applied to it. The unparseable-firmware
+    and clean-firmware ids are unaffected: ``host_generated`` only ever
+    touches a CRITICAL ``FIRMWARE_WINDOW`` finding.
+    """
+    live = detect.LiveConfig(
+        node_id=NodeId.from_hex("deadbe01"),
+        firmware_version=firmware,
+        security=detect.LiveSecurity(public_key=keypair.public, private_key=keypair.private),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        compromised, reason = audit_node_key(live, known_bad=frozenset(), host_generated=True)
+
+    assert compromised is expected_compromised
+    assert reason == ""
+    records = [r for r in caplog.records if r.getMessage().startswith("node key ")]
+    if expected_level is None:
+        assert records == []
+    else:
+        assert [record.levelno for record in records] == [expected_level]
+        assert expected_substring is not None
+        assert expected_substring in records[0].getMessage()
+
+
+def test_audit_node_key_host_generated_still_compromised_when_blocklisted(
+    keypair: KeyPair,
+) -> None:
+    """``host_generated`` suppresses only the firmware-window finding.
+
+    A host-generated key that is *also* on the weak-key blocklist must
+    still be flagged compromised: host generation only rules out the
+    CVE's device-side RNG failure mode, it says nothing about whether the
+    key is otherwise compromised (e.g. a leaked or operator-blocklisted
+    key that happened to be generated on this host).
+    """
+    live = detect.LiveConfig(
+        node_id=NodeId.from_hex("deadbe01"),
+        firmware_version="2.6.0",
+        security=detect.LiveSecurity(public_key=keypair.public, private_key=keypair.private),
+    )
+
+    compromised, reason = audit_node_key(
+        live, known_bad=frozenset({keypair.public}), host_generated=True
+    )
+
+    assert compromised is True
+    assert "blocklist" in reason
+
+
+def _live_with_keypair(pair: KeyPair, *, node_hex: str = "deadbe01") -> detect.LiveConfig:
+    return detect.LiveConfig(
+        node_id=NodeId.from_hex(node_hex),
+        security=detect.LiveSecurity(public_key=pair.public, private_key=pair.private),
+    )
+
+
+def test_is_host_generated_key_true_for_a_matching_generated_row(
+    keys: KeyRepository, keypair: KeyPair
+) -> None:
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    keys.upsert(pub)
+    keys.upsert(priv)
+
+    assert is_host_generated_key(keys, _live_with_keypair(keypair)) is True
+
+
+def test_is_host_generated_key_false_for_legacy_blank_origin(
+    keys: KeyRepository, keypair: KeyPair
+) -> None:
+    """A row written before the ``origin`` column existed must fail safe.
+
+    An unknown provenance (``origin is None``) never counts as
+    host-generated, even when the material matches exactly -- the whole
+    point of the ``origin`` column is that "unknown" cannot be upgraded
+    to "generated" just because the bytes line up.
+    """
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    keys.upsert(pub.with_origin(None))
+    keys.upsert(priv.with_origin(None))
+
+    assert is_host_generated_key(keys, _live_with_keypair(keypair)) is False
+
+
+def test_is_host_generated_key_false_for_captured_origin(
+    keys: KeyRepository, keypair: KeyPair
+) -> None:
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
+    keys.upsert(pub)
+    keys.upsert(priv)
+
+    assert is_host_generated_key(keys, _live_with_keypair(keypair)) is False
+
+
+def test_is_host_generated_key_false_when_recorded_private_key_mismatches(
+    keys: KeyRepository, keypair: KeyPair, keypair_factory
+) -> None:
+    """The predicate verifies key material, not just the origin label.
+
+    A ``GENERATED`` row whose recorded private key does not actually
+    derive the recorded public key (a hand edit, a half-finished
+    rotation, or a stale row left behind by some other bug) must not be
+    trusted -- otherwise the origin label alone could be used to
+    permanently suppress the CVE-window check for a key it does not
+    actually describe.
+    """
+    other = keypair_factory()
+    pub, _own_priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    _other_pub, mismatched_priv = KeyRecord.for_keypair(
+        "deadbe01", other, origin=KeyOrigin.GENERATED
+    )
+    keys.upsert(pub)
+    keys.upsert(mismatched_priv)
+
+    assert is_host_generated_key(keys, _live_with_keypair(keypair)) is False
+
+
+def test_is_host_generated_key_false_when_live_public_key_differs(
+    keys: KeyRepository, keypair: KeyPair, keypair_factory
+) -> None:
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    keys.upsert(pub)
+    keys.upsert(priv)
+
+    assert is_host_generated_key(keys, _live_with_keypair(keypair_factory())) is False
+
+
+def test_is_host_generated_key_false_when_no_private_row_recorded(
+    keys: KeyRepository, keypair: KeyPair
+) -> None:
+    pub, _priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    keys.upsert(pub)
+
+    assert is_host_generated_key(keys, _live_with_keypair(keypair)) is False
+
+
+def test_is_host_generated_key_false_when_no_db_row_at_all(
+    keys: KeyRepository, keypair: KeyPair
+) -> None:
+    assert is_host_generated_key(keys, _live_with_keypair(keypair)) is False
+
+
+def test_is_host_generated_key_false_when_device_reports_no_key(
+    keys: KeyRepository, keypair: KeyPair
+) -> None:
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    keys.upsert(pub)
+    keys.upsert(priv)
+    live = detect.LiveConfig(node_id=NodeId.from_hex("deadbe01"), security=detect.LiveSecurity())
+
+    assert is_host_generated_key(keys, live) is False
 
 
 _MAP = {"A_pub": b"a" * 32, "B_pub": b"b" * 32}

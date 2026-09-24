@@ -42,6 +42,7 @@ LibreOffice, not a CSV dump.
 | `key_type` | ENUM (dropdown `mp_key_type`) | `admin_public`, `admin_private`, or `channel_psk` |
 | `key_value` | BASE64_KEY, required, SECRET | Base64 of exactly 32 raw bytes: an X25519 key for `admin_public`/`admin_private`, or an AES256 channel PSK for `channel_psk`. Never logged or displayed |
 | `created_ts` | TIMESTAMP | UTC timestamp this key was recorded |
+| `origin` | ENUM (dropdown `mp_key_origin`), legacy-optional | How this key's material came to be recorded: `generated` (this host minted it, e.g. `mesh provision --force-regenerate-key`), `captured` (read from an already-provisioned device, e.g. `mesh adopt`, or an adopted device keypair), or `imported` (registered from material already held elsewhere, e.g. `mesh admin import`). Blank on a row written before this column existed, or any other row whose provenance was never recorded — read back as unknown, never guessed. Load-bearing for the CVE-2025-52464 firmware-window check: only a node's own key with `origin=generated`, whose recorded material still matches the live device, is treated as confirmed host-generated and exempted from the window's regenerate-on-every-run behavior (see [Security](security.md#the-firmware-window-check-converges-once-meshprovision-generates-the-key)) |
 
 A `channel_psk` row is only ever written by `mesh adopt --from-backup`
 (see [`mesh adopt`](commands.md#mesh-adopt)), decoded from a `.cfg`

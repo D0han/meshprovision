@@ -266,6 +266,54 @@ def test_admin_bootstrap_ref_aliases_the_existing_on_file_key_without_regenerati
     assert KeyRecord.from_row(rows["aaaa0001_pub"]).material() == node_kp.public
 
 
+def test_admin_bootstrap_ref_on_an_adopted_key_change_records_captured_origin(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Regression test for the Round 37 consistency check's §2.1 correction 1.
+
+    ``--ref`` on a node whose device key *differs* from the recorded one
+    takes the ``adopt_device_key`` branch, not a matching no-op or a
+    regenerate. Both A1#1's and aspect 6's original alias-origin rules
+    got this branch wrong (one always labeled it GENERATED, the other
+    copied the *old* row's origin before it was overwritten) -- the
+    corrected rule computes ``node_origin`` once and passes the same
+    value to both the node's own rows and the alias, so an adopted
+    (device-generated) key is CAPTURED everywhere, never GENERATED.
+    """
+    stale = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="aaaa0001", management=ManagementMode.TEMPLATE)],
+        keys=list(KeyRecord.for_keypair("aaaa0001", stale, origin=KeyOrigin.CAPTURED)),
+    )
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+
+    iface = bus.use(FakeMeshInterface("aaaa0001"))
+    device_kp = keypair_factory()
+    iface.localNode.localConfig.security.public_key = device_kp.public
+    iface.localNode.localConfig.security.private_key = device_kp.private.reveal()
+
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert "#7449" in result.stderr
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["aaaa0001_pub"]).material() == device_kp.public
+    assert KeyRecord.from_row(rows["aaaa0001_pub"]).origin is KeyOrigin.CAPTURED
+    assert KeyRecord.from_row(rows["ADMIN1_pub"]).material() == device_kp.public
+    assert KeyRecord.from_row(rows["ADMIN1_pub"]).origin is KeyOrigin.CAPTURED
+
+
 def test_admin_bootstrap_pending_message_for_its_own_ref_names_ref_first_then_node(
     runner: CliRunner,
     env: dict[str, str],
@@ -472,6 +520,7 @@ def test_admin_import_registers_a_held_public_key(runner: CliRunner, env: dict[s
     assert "sha256:" in result.stderr
     assert not _BASE64_KEY_RE.search(result.stdout)
     assert not _BASE64_KEY_RE.search(result.stderr)
+    assert KeyRecord.from_row(rows["ADMIN9_pub"]).origin is KeyOrigin.IMPORTED
 
 
 def test_admin_import_dry_run_reports_without_registering(
