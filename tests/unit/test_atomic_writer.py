@@ -830,3 +830,74 @@ def test_refresh_known_good_cleans_up_its_temp_file_on_failure(
     assert info is None
     leftover_temps = list(backup_dir.glob(".*.tmp-*"))
     assert leftover_temps == []
+
+
+def test_prune_failure_during_create_backup_only_warns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+
+    def failing_prune(*args: object, **kwargs: object) -> tuple[Path, ...]:
+        raise AtomicWriteError("simulated prune failure", path=str(target))
+
+    monkeypatch.setattr(atomic_writer, "prune_backups", failing_prune)
+
+    with caplog.at_level("WARNING", logger="meshprovision.db.atomic_writer"):
+        write_bytes_atomic(target, b"v1", backup=True, backup_dir=backup_dir, retention=1)
+
+    assert target.read_bytes() == b"v1"
+    backups = [p for p in backup_dir.iterdir() if p.name.startswith(f"{target.stem}-")]
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == b"v0"
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("pruning old backups failed" in message for message in messages)
+    stray = [p for p in tmp_path.iterdir() if p.name.startswith(f".{target.name}.tmp")]
+    assert stray == []
+
+
+def test_atomic_write_cleans_up_temp_when_backup_step_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+
+    def failing_create_backup(*args: object, **kwargs: object) -> None:
+        raise AtomicWriteError("simulated backup failure", path=str(target))
+
+    monkeypatch.setattr(atomic_writer, "create_backup", failing_create_backup)
+
+    with (
+        pytest.raises(AtomicWriteError),
+        atomic_write(target, backup=True, backup_dir=backup_dir) as tmp,
+    ):
+        tmp.write_bytes(b"v1")
+
+    assert target.read_bytes() == b"v0"
+    stray = [p for p in tmp_path.iterdir() if p.name.startswith(f".{target.name}.tmp")]
+    assert stray == []
+
+
+def test_atomic_write_cleans_up_temp_when_backup_step_raises_keyboard_interrupt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+
+    def interrupting_create_backup(*args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(atomic_writer, "create_backup", interrupting_create_backup)
+
+    with (
+        pytest.raises(KeyboardInterrupt),
+        atomic_write(target, backup=True, backup_dir=backup_dir) as tmp,
+    ):
+        tmp.write_bytes(b"v1")
+
+    assert target.read_bytes() == b"v0"
+    stray = [p for p in tmp_path.iterdir() if p.name.startswith(f".{target.name}.tmp")]
+    assert stray == []

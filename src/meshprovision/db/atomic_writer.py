@@ -270,7 +270,10 @@ def create_backup(
 
     A no-op that returns ``None`` when ``target`` does not yet exist --
     there is nothing to back up on a first write. Prunes older backups
-    down to ``retention`` after the copy succeeds.
+    down to ``retention`` after the copy succeeds; pruning is best-effort
+    -- a failure there is logged at ``WARNING`` and never aborts an
+    otherwise-successful backup, since the new backup is already safely
+    in place by the time pruning runs.
 
     Args:
         target: The file to back up.
@@ -287,7 +290,8 @@ def create_backup(
 
     Raises:
         AtomicWriteError: If the backup directory cannot be created, or
-            the copy fails.
+            the copy fails. A failure to prune old backups afterwards is
+            logged, not raised.
     """
     if not target.exists():
         return None
@@ -337,7 +341,10 @@ def create_backup(
     # created is not guaranteed to survive a subsequent prune -- see
     # _backup_sort_key.
     size_bytes = destination.stat().st_size
-    prune_backups(target, backup_dir=resolved_dir, retention=retention)
+    try:
+        prune_backups(target, backup_dir=resolved_dir, retention=retention)
+    except AtomicWriteError as exc:
+        _logger.warning("Backup created, but pruning old backups failed: %s", exc)
 
     return BackupInfo(
         path=destination,
@@ -684,21 +691,18 @@ def atomic_write(
         ) from exc
     try:
         yield tmp_path
-    except BaseException:
-        with contextlib.suppress(OSError):
-            tmp_path.unlink()
-        raise
-    else:
         if backup:
             create_backup(target, backup_dir=backup_dir, retention=retention, now=now)
         try:
             tmp_path.replace(target)
         except OSError as exc:
-            with contextlib.suppress(OSError):
-                tmp_path.unlink()
             raise AtomicWriteError(
                 f"Failed to replace {target} with {tmp_path}: {exc}", path=str(target)
             ) from exc
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
 
 
 def write_bytes_atomic(
