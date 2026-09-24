@@ -542,10 +542,18 @@ def verify_plan(
     """
     results: list[WriteResult] = []
 
-    short_result = _verify_name(live_after, plan.name_change.desired_short_name, field="short_name")
+    short_result = _verify_name(
+        live_after,
+        plan.name_change.desired_short_name if plan.name_change.short_changed else None,
+        field="short_name",
+    )
     if short_result is not None:
         results.append(short_result)
-    long_result = _verify_name(live_after, plan.name_change.desired_long_name, field="long_name")
+    long_result = _verify_name(
+        live_after,
+        plan.name_change.desired_long_name if plan.name_change.long_changed else None,
+        field="long_name",
+    )
     if long_result is not None:
         results.append(long_result)
 

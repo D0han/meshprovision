@@ -507,24 +507,26 @@ def test_verify_plan_only_long_name_changed_does_not_affect_short_name_result(
 ) -> None:
     """Verifying two independent name fields when only one of them actually changed.
 
-    Every existing name-verify test changes both short_name and long_name
-    (a fresh FACTORY device) or neither -- forced here via
-    dataclasses.replace to pin desired_short_name back to its own current
-    value, simulating a device whose short_name already fit the pattern
-    while long_name still needed rewriting. Confirms short_name's
-    trivially-already-correct result doesn't interfere with or get
-    conflated with long_name's own, separately-computed result.
+    A device whose short_name already fit the pattern while long_name
+    still needed rewriting. An unchanged short_name is not part of the
+    plan at all (per verify_plan's short_changed/long_changed gate,
+    Round 37 aspect 1 finding #2), so it must produce no result
+    whatsoever -- not a trivially-CONFIRMED one -- and must not interfere
+    with or get conflated with long_name's own, separately-computed
+    result.
     """
     template = _template()
     live = make_live(template, security=make_security(empty=True))
-    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
-    plan = build_plan(inputs)
-    plan = dataclasses.replace(
-        plan,
-        name_change=dataclasses.replace(
-            plan.name_change, desired_short_name=plan.name_change.current_short_name
-        ),
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_long_name="Meshtastic Node One",
     )
+    plan = build_plan(inputs)
+    assert not plan.name_change.short_changed
+    assert plan.name_change.long_changed
 
     live_after = make_live(
         template,
@@ -534,10 +536,89 @@ def test_verify_plan_only_long_name_changed_does_not_affect_short_name_result(
     )
     results = verify_plan(plan, live_after, keypair=None)
 
-    short_result = next(r for r in results if r.field == "short_name")
+    assert not any(r.field == "short_name" for r in results)
     long_result = next(r for r in results if r.field == "long_name")
-    assert short_result.status == WriteStatus.CONFIRMED
     assert long_result.status == WriteStatus.CONFIRMED
+
+
+def test_verify_plan_unchanged_names_not_verified_against_blank_readback(
+    make_live,
+) -> None:
+    """An empty NameChange must never be verified, even against a blank read-back.
+
+    _verify_name's own docstring says a name that was not part of the
+    plan must return None ("nothing to verify") -- but verify_plan used
+    to pass concrete desired_short_name/desired_long_name unconditionally
+    regardless of whether the plan actually changed them. A post-reboot
+    blank getMyUser() readback (the NodeDB user entry not having
+    repopulated yet -- the same condition
+    test_verify_plan_empty_name_readback_is_unconfirmed_not_truncated
+    guards for a name the plan DID write) for a name the plan never
+    touched was misreported UNCONFIRMED, dragging the whole run into
+    UNCERTAIN and blocking the database update for every field, even
+    ones that verified fine. See Round 37 aspect 1 finding #2.
+    """
+    template = _template()
+    template2 = template.model_copy(
+        update={"device": template.device.model_copy(update={"role": "ROUTER"})}
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+    assert plan.name_change.is_empty
+
+    live_after = make_live(
+        template2,
+        short_name="",
+        long_name="",
+        section_overrides={"device": {"role": "ROUTER"}},
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+
+    assert not any(r.section == "owner" for r in results)
+    role_result = next(r for r in results if r.field == "role")
+    assert role_result.status == WriteStatus.CONFIRMED
+
+
+def test_verify_plan_only_short_name_changed_skips_blank_long_name_readback(
+    make_live,
+) -> None:
+    """A changed name must still be verified normally when the other name is untouched.
+
+    The mirror image of
+    test_verify_plan_unchanged_names_not_verified_against_blank_readback:
+    here short_name genuinely changed, so a blank readback for it is a
+    real problem and must still surface as UNCONFIRMED. long_name did
+    not change, so it must produce no result at all, even though its own
+    readback is also blank.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="AB12",
+    )
+    plan = build_plan(inputs)
+    assert plan.name_change.short_changed
+    assert not plan.name_change.long_changed
+
+    live_after = make_live(
+        template,
+        short_name="",
+        long_name="",
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+
+    name_results = [r for r in results if r.section == "owner"]
+    assert [r.field for r in name_results] == ["short_name"]
+    assert name_results[0].status == WriteStatus.UNCONFIRMED
 
 
 def test_verify_plan_name_truncated_confirmed(make_live) -> None:
@@ -575,7 +656,7 @@ def test_verify_plan_empty_name_readback_is_unconfirmed_not_truncated(make_live)
     Round 35's plan-apply review.
     """
     template = _template()
-    live = make_live(template, security=make_security(empty=True))
+    live = make_live(template, short_name="OLD1", security=make_security(empty=True))
     inputs = PlanInputs(
         live=live,
         template=template,
@@ -584,6 +665,7 @@ def test_verify_plan_empty_name_readback_is_unconfirmed_not_truncated(make_live)
         desired_short_name="MT00",
     )
     plan = build_plan(inputs)
+    assert plan.name_change.short_changed
     live_after = make_live(
         template,
         short_name="",
