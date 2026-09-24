@@ -67,6 +67,7 @@ class DbProblemKind(StrEnum):
     ADMIN_KEY_MISMATCH = "admin_key_mismatch"
     INSECURE_PERMISSIONS = "insecure_permissions"
     TEMPLATE_UNAVAILABLE = "template_unavailable"
+    UNIMPORTED_ADMIN_KEY = "unimported_admin_key"
 
 
 class ProblemSeverity(StrEnum):
@@ -241,23 +242,30 @@ def verify_database(
     keyed by its sorted member tuple, so a two-member group never
     produces two lines.
 
-    That ``Keys``-sheet pass is blind to a cloned admin key that ``mesh
-    adopt`` auto-registered under a synthetic ``observed-*`` ref (see
-    :mod:`meshprovision.provisioning.observed_keys`): because that
-    registration is content-addressed, the *same* cloned key observed on
-    several nodes resolves to one shared ``Keys`` row every one of them
-    authorizes, not several rows holding equal material -- the shape
-    :func:`_check_duplicate_keys` looks for. :func:`_check_duplicate_observed_refs`
-    covers this instead, by ref rather than by material: any
-    ``observed-*`` ref appearing in more than one node's
-    ``authorized_admin_keys`` is the same CVE-2025-52464 signature. A
-    further pass folds every node's legacy :meth:`~meshprovision.db.nodes
-    .NodeRecord.unregistered_admin_key_materials` into the comparison too
-    -- data only a database written before this feature, and not yet
-    re-adopted, still carries; a fresh adopt always resolves this
-    material to a ref instead. Without these, the exact CVE-2025-52464
-    scenario of two cloned devices *neither* of which was ever imported
-    is invisible to ``mesh db verify``.
+    ``security.admin_key`` holding the *same* admin public key on many
+    devices is the normal, intended fleet setup -- one admin key, many
+    nodes it can administer -- not the CVE-2025-52464 vendor
+    key-cloning signature, which is two *devices* sharing their own
+    node-identity keypair (exactly what :func:`_check_duplicate_keys`
+    detects, over each node's own ``<node_id>_pub`` row).
+    :func:`_check_duplicate_observed_refs` and
+    :func:`_check_unregistered_duplicate_keys` instead flag an admin key
+    that is authorized on more than one node but has never been given a
+    real ref via ``mesh admin import`` -- a ``UNIMPORTED_ADMIN_KEY``
+    :class:`~meshprovision.db.verify.ProblemSeverity.WARNING`, not a
+    CRITICAL alarm, since the shared-admin-key shape alone proves
+    nothing about device cloning. :func:`_check_duplicate_observed_refs`
+    looks at this by ref rather than by material: any ``observed-*`` ref
+    (see :mod:`meshprovision.provisioning.observed_keys`) appearing in
+    more than one node's ``authorized_admin_keys`` is content-addressed,
+    so the *same* key observed on several devices resolves to one shared
+    ``Keys`` row every one of them authorizes, not several rows holding
+    equal material -- the shape :func:`_check_duplicate_keys` looks for.
+    :func:`_check_unregistered_duplicate_keys` folds every node's legacy
+    :meth:`~meshprovision.db.nodes.NodeRecord.unregistered_admin_key_materials`
+    into the same comparison -- data only a database written before the
+    ``observed-*`` feature, and not yet re-adopted, still carries; a
+    fresh adopt always resolves this material to a ref instead.
 
     Args:
         path: Path to the database file being verified.
@@ -557,18 +565,22 @@ def _check_duplicate_observed_refs(nodes: NodeRepository) -> list[DbProblem]:
 
     Under the current scheme (see :mod:`meshprovision.provisioning.
     observed_keys`/:mod:`meshprovision.provisioning.key_registry`), the
-    same cloned admin key observed on several devices resolves to the
-    *same* content-addressed ``Keys`` sheet row every one of them
-    authorizes -- so the CVE-2025-52464 signature here is not two
-    distinct ``Keys`` rows holding equal material (:func:`_check_duplicate_keys`'s
-    job); it is one ``observed-*`` ref shared across more than one node's
-    ``authorized_admin_keys``.
+    same admin key observed on several devices resolves to the *same*
+    content-addressed ``Keys`` sheet row every one of them authorizes --
+    so this is not two distinct ``Keys`` rows holding equal material
+    (:func:`_check_duplicate_keys`'s job, and the only shape that is
+    actually the CVE-2025-52464 vendor key-cloning signature); it is one
+    ``observed-*`` ref shared across more than one node's
+    ``authorized_admin_keys``, which is exactly what ``security.
+    admin_key`` authorized on many nodes is *supposed* to look like
+    before an operator has run ``mesh admin import`` to give it a real
+    ref.
 
     Args:
         nodes: The already-open node repository.
 
     Returns:
-        One CRITICAL :class:`DbProblem` per ``observed-*`` ref authorized
+        One WARNING :class:`DbProblem` per ``observed-*`` ref authorized
         on two or more distinct nodes.
     """
     owners: dict[str, list[str]] = {}
@@ -584,12 +596,12 @@ def _check_duplicate_observed_refs(nodes: NodeRepository) -> list[DbProblem]:
         sorted_ids = tuple(sorted(node_ids))
         problems.append(
             DbProblem(
-                kind=DbProblemKind.DUPLICATE_PUBLIC_KEY,
-                severity=ProblemSeverity.CRITICAL,
+                kind=DbProblemKind.UNIMPORTED_ADMIN_KEY,
+                severity=ProblemSeverity.WARNING,
                 message=(
                     f"Admin key {ref} is authorized, under the same observed ref, on "
-                    f"{len(sorted_ids)} distinct nodes: {', '.join(sorted_ids)} -- the "
-                    "CVE-2025-52464 vendor key-cloning signature."
+                    f"{len(sorted_ids)} nodes ({', '.join(sorted_ids)}) but has not been "
+                    "imported; run `mesh admin import` to give it a real ref."
                 ),
                 sheet="Nodes",
                 ref=",".join(sorted_ids),
@@ -601,79 +613,60 @@ def _check_duplicate_observed_refs(nodes: NodeRepository) -> list[DbProblem]:
 def _check_unregistered_duplicate_keys(
     nodes: NodeRepository, keys: KeyRepository
 ) -> list[DbProblem]:
-    """Detect cross-fleet duplicates involving never-imported admin keys.
+    """Detect an unimported admin key shared by more than one node.
 
     :func:`_check_duplicate_keys` only ever compares ``Keys`` sheet rows,
-    so a cloned admin key that ``mesh adopt`` observed but nobody ran
-    ``mesh admin import`` on is invisible to it. Two exact raw-material
-    comparison tiers per node pair, mirroring :func:`meshprovision.cli.
-    adopt._duplicate_admin_key_warnings`'s own tiers (and its
-    ``elif`` precedence, so a key that is both registered on the other
-    node and unregistered on it reports the registered tier only), with
-    distinct wording per tier so an operator can tell which fired:
-
-    - One node's unregistered key against another node's *registered*
-      ``authorized_admin_keys`` material.
-    - One node's unregistered key against another node's own
-      *unregistered* keys -- the "two never-imported cloned devices"
-      case neither this module's ``Keys``-sheet pass nor a single
-      device's adopt-time audit can see.
+    so an admin key that ``mesh adopt`` observed but nobody ran ``mesh
+    admin import`` on is invisible to it. This walks every node's legacy
+    :meth:`~meshprovision.db.nodes.NodeRecord.unregistered_admin_key_materials`
+    (data only a database written before the ``observed-*`` feature, and
+    not yet re-adopted, still carries) and unions it with every node
+    that *authorizes* the same raw material under a real ``Keys`` sheet
+    ref, grouping by the key's own material rather than by node pair: an
+    admin key N nodes hold -- whether unregistered on all of them, or
+    unregistered on some and already registered under one real ref -- is
+    one fleet-wide fact ("this key needs importing"), not one finding
+    per pairwise combination of the nodes that hold it.
 
     Args:
         nodes: The already-open node repository.
         keys: The already-open key repository.
 
     Returns:
-        One CRITICAL :class:`DbProblem` per (node pair, tier, key), so a
-        symmetric unregistered-vs-unregistered match reports once, not
-        once per direction.
+        One WARNING :class:`DbProblem` per distinct key material shared
+        by two or more nodes, where at least one of those nodes has the
+        material unregistered.
     """
     public_keys = keys.public_key_map()
     records = nodes.all()
-    problems: list[DbProblem] = []
-    seen: set[tuple[str, ...]] = set()
+    unregistered_owners: dict[bytes, set[str]] = {}
+    registered_owners: dict[bytes, set[str]] = {}
     for record in records:
-        materials = record.unregistered_admin_key_materials()
-        if not materials:
+        for material in record.unregistered_admin_key_materials():
+            unregistered_owners.setdefault(material, set()).add(record.node_id)
+        for ref in record.authorized_admin_keys:
+            registered_material = public_keys.get(ref)
+            if registered_material is not None:
+                registered_owners.setdefault(registered_material, set()).add(record.node_id)
+
+    problems: list[DbProblem] = []
+    for material, unregistered_ids in unregistered_owners.items():
+        node_ids = unregistered_ids | registered_owners.get(material, set())
+        if len(node_ids) < 2:
             continue
-        for other in records:
-            if other.node_id == record.node_id:
-                continue
-            other_registered = [
-                public_keys[ref] for ref in other.authorized_admin_keys if ref in public_keys
-            ]
-            other_unregistered = other.unregistered_admin_key_materials()
-            for material in materials:
-                fingerprint = redact.fingerprint(material)
-                if any(material == candidate for candidate in other_registered):
-                    tier = "registered"
-                    message = (
-                        f"Unregistered admin key {fingerprint} observed on node "
-                        f"{record.node_id} is also a registered admin key authorized on node "
-                        f"{other.node_id} -- the CVE-2025-52464 vendor key-cloning signature."
-                    )
-                elif any(material == candidate for candidate in other_unregistered):
-                    tier = "unregistered"
-                    message = (
-                        f"Unregistered admin key {fingerprint} was observed on both node "
-                        f"{record.node_id} and node {other.node_id} and imported for neither "
-                        "-- the CVE-2025-52464 vendor key-cloning signature between two "
-                        "never-imported devices."
-                    )
-                else:
-                    continue
-                pair = tuple(sorted((record.node_id, other.node_id)))
-                marker = (*pair, tier, fingerprint)
-                if marker in seen:
-                    continue
-                seen.add(marker)
-                problems.append(
-                    DbProblem(
-                        kind=DbProblemKind.DUPLICATE_PUBLIC_KEY,
-                        severity=ProblemSeverity.CRITICAL,
-                        message=message,
-                        sheet="Nodes",
-                        ref=",".join(pair),
-                    )
-                )
+        fingerprint = redact.fingerprint(material)
+        sorted_ids = tuple(sorted(node_ids))
+        problems.append(
+            DbProblem(
+                kind=DbProblemKind.UNIMPORTED_ADMIN_KEY,
+                severity=ProblemSeverity.WARNING,
+                message=(
+                    f"Admin key {fingerprint} is authorized on {len(sorted_ids)} nodes "
+                    f"({', '.join(sorted_ids)}) but has not been imported; run `mesh admin "
+                    "import` to give it a real ref."
+                ),
+                sheet="Nodes",
+                ref=",".join(sorted_ids),
+            )
+        )
     return problems

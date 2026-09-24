@@ -315,10 +315,16 @@ def test_check_duplicate_keys_mixed_observed_and_real_alias_names_the_stale_ref(
     assert "stale" in problems[0].message
 
 
-def test_check_duplicate_observed_refs_shared_across_two_nodes_is_critical(
+def test_check_duplicate_observed_refs_shared_across_two_nodes_is_a_warning(
     nodes: NodeRepository, keypair: KeyPair
 ) -> None:
-    """The same observed-* ref authorized on two nodes is the clone signature."""
+    """The same observed-* ref authorized on two nodes is the normal shared-admin-key shape.
+
+    It is not the CVE-2025-52464 device-cloning signature -- one admin
+    key authorized on many nodes is the intended fleet setup -- so this
+    is a WARNING nudging the operator to `mesh admin import` it, not a
+    CRITICAL alarm.
+    """
     ref = observed_key_ref(keypair.public)
     nodes.upsert(NodeRecord(node_id="deadbe01", authorized_admin_keys=(ref,)))
     nodes.upsert(NodeRecord(node_id="deadbe02", authorized_admin_keys=(ref,)))
@@ -326,9 +332,11 @@ def test_check_duplicate_observed_refs_shared_across_two_nodes_is_critical(
     problems = _check_duplicate_observed_refs(nodes)
 
     assert len(problems) == 1
-    assert problems[0].kind == DbProblemKind.DUPLICATE_PUBLIC_KEY
-    assert problems[0].severity == ProblemSeverity.CRITICAL
+    assert problems[0].kind == DbProblemKind.UNIMPORTED_ADMIN_KEY
+    assert problems[0].severity == ProblemSeverity.WARNING
     assert "deadbe01, deadbe02" in problems[0].message
+    assert "CVE" not in problems[0].message
+    assert "mesh admin import" in problems[0].message
 
 
 def test_check_duplicate_observed_refs_single_node_is_clean(
@@ -420,15 +428,17 @@ def test_check_unresolved_admin_refs_accepts_a_resolvable_ref(
     assert _check_unresolved_admin_refs(nodes, keys) == []
 
 
-def test_check_unregistered_duplicate_keys_flags_two_never_imported_clones(
+def test_check_unregistered_duplicate_keys_flags_two_never_imported_shares(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
-    """Two adopted devices sharing an admin key neither of which was ever imported.
+    """Two nodes sharing an admin key neither of which was ever imported.
 
-    The exact CVE-2025-52464 scenario the Keys-sheet pass cannot see:
-    with no `mesh admin import` for either device there is no Keys sheet
-    row to compare, so only the Nodes-sheet unregistered material match
-    catches it.
+    The shape the Keys-sheet pass (:func:`_check_duplicate_keys`) cannot
+    see: with no `mesh admin import` for either node there is no Keys
+    sheet row to compare, so only the Nodes-sheet unregistered material
+    match catches it -- and, since the same admin key on many nodes is
+    the normal fleet pattern, this is a WARNING nudging the operator to
+    import it, never a CRITICAL clone alarm.
     """
     material = encode_key(keypair.public)
     nodes.upsert(NodeRecord(node_id="deadbe01", unregistered_admin_keys=(material,)))
@@ -437,17 +447,18 @@ def test_check_unregistered_duplicate_keys_flags_two_never_imported_clones(
     problems = _check_unregistered_duplicate_keys(nodes, keys)
 
     assert len(problems) == 1
-    assert problems[0].kind == DbProblemKind.DUPLICATE_PUBLIC_KEY
-    assert problems[0].severity == ProblemSeverity.CRITICAL
+    assert problems[0].kind == DbProblemKind.UNIMPORTED_ADMIN_KEY
+    assert problems[0].severity == ProblemSeverity.WARNING
     assert problems[0].sheet == "Nodes"
     assert problems[0].ref == "deadbe01,deadbe02"
-    assert "never-imported" in problems[0].message
+    assert "CVE" not in problems[0].message
+    assert "mesh admin import" in problems[0].message
 
 
-def test_check_unregistered_duplicate_keys_flags_a_clone_of_another_nodes_registered_key(
+def test_check_unregistered_duplicate_keys_flags_a_share_with_another_nodes_registered_key(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
-    """One device's never-imported key matching another device's registered key."""
+    """One node's never-imported key matching another node's registered key."""
     keys.upsert(
         KeyRecord.from_material(
             "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
@@ -461,16 +472,15 @@ def test_check_unregistered_duplicate_keys_flags_a_clone_of_another_nodes_regist
     problems = _check_unregistered_duplicate_keys(nodes, keys)
 
     assert len(problems) == 1
-    assert problems[0].kind == DbProblemKind.DUPLICATE_PUBLIC_KEY
-    assert problems[0].severity == ProblemSeverity.CRITICAL
+    assert problems[0].kind == DbProblemKind.UNIMPORTED_ADMIN_KEY
+    assert problems[0].severity == ProblemSeverity.WARNING
     assert problems[0].ref == "deadbe01,deadbe02"
-    assert "authorized on node deadbe01" in problems[0].message
 
 
 def test_check_unregistered_duplicate_keys_ignores_a_nodes_own_registered_key(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
-    """One node holding the same key both registered and unregistered is not a clone."""
+    """One node holding the same key both registered and unregistered is not a share."""
     keys.upsert(
         KeyRecord.from_material(
             "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
@@ -505,16 +515,15 @@ def test_check_unregistered_duplicate_keys_accepts_distinct_unregistered_keys(
     assert _check_unregistered_duplicate_keys(nodes, keys) == []
 
 
-def test_check_unregistered_duplicate_keys_dedupes_per_pair_across_a_three_node_cluster(
+def test_check_unregistered_duplicate_keys_collapses_a_three_node_cluster_into_one_problem(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
-    """Three devices sharing one never-imported key report all three pairs, once each.
+    """Three nodes sharing one never-imported key report one problem naming all three.
 
-    Regression guard for the ``marker = (*pair, tier, fingerprint)`` dedup
-    key: if a mutant collapsed that key to drop the pair (e.g. just
-    ``(tier, fingerprint)``), every pair beyond the first would look
-    "already seen" and only one of the three genuinely distinct clone
-    pairs would be reported.
+    Regression guard for the material -> node-set grouping: a mutant that
+    reverted to per-pair reporting would produce three problems
+    (deadbe01/02, deadbe01/03, deadbe02/03) instead of the single
+    fleet-wide fact.
     """
     material = encode_key(keypair.public)
     for node_id in ("deadbe01", "deadbe02", "deadbe03"):
@@ -522,29 +531,18 @@ def test_check_unregistered_duplicate_keys_dedupes_per_pair_across_a_three_node_
 
     problems = _check_unregistered_duplicate_keys(nodes, keys)
 
-    assert {problem.ref for problem in problems} == {
-        "deadbe01,deadbe02",
-        "deadbe01,deadbe03",
-        "deadbe02,deadbe03",
-    }
+    assert len(problems) == 1
+    assert problems[0].ref == "deadbe01,deadbe02,deadbe03"
 
 
 def test_check_unregistered_duplicate_keys_checks_every_material_on_a_multi_key_node(
     nodes: NodeRepository, keys: KeyRepository, keypair_factory: Callable[[], KeyPair]
 ) -> None:
-    """A node with two distinct unregistered keys, each cloned on a different other node.
+    """A node with two distinct unregistered keys, each shared with a different other node.
 
-    Regression guard for the per-material ``else: continue`` on the
-    non-match branch: node A holds material X (first) then Y (second);
-    node B clones X (unregistered) and node C clones Y (registered, so
-    C itself contributes no unregistered material and can't rediscover
-    the pair from the reverse direction -- that would mask the bug via
-    the same dedup collision seen in the elif test above). For
-    ``other=C``, X fails to match before Y succeeds, so a
-    ``continue``-to-``break`` regression on the non-match branch would
-    stop the loop at X and silently drop the genuine Y/C clone -- with
-    nothing to rediscover it, the pair would vanish outright rather
-    than just being deduped.
+    Regression guard for the per-material grouping: node A holds
+    material X and Y; node B shares X (unregistered) and node C shares Y
+    (registered). Both groups must be discovered independently.
     """
     keypair_y = keypair_factory()
     material_x = encode_key(keypair_factory().public)
@@ -563,31 +561,17 @@ def test_check_unregistered_duplicate_keys_checks_every_material_on_a_multi_key_
     assert {problem.ref for problem in problems} == {"deadbe0a,deadbe0b", "deadbe0a,deadbe0c"}
 
 
-def test_check_unregistered_duplicate_keys_prefers_registered_tier_when_both_match(
+def test_check_unregistered_duplicate_keys_collapses_registered_and_unregistered_tiers(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
-    """When another node's material is both registered and unregistered, the elif picks registered.
+    """A key that is both registered on one node and unregistered on it is one group.
 
-    Regression guard for the ``elif`` precedence between the two tiers:
     ``deadbe01`` here authorizes the shared key as a registered admin key
-    *and* separately lists it (e.g. from a stale prior adopt) as an
-    unregistered material, so checking from ``deadbe02``'s side must
-    resolve to the registered-tier message, not the unregistered one.
-
-    Two problems are expected, not one: this same setup also makes
-    ``deadbe01`` a valid *record* in its own right (it holds the
-    material unregistered too), so it independently discovers
-    ``deadbe02``'s copy via the unregistered/unregistered tier -- a
-    real, distinct signal, not a duplicate of the first. Collapsing
-    the ``elif`` to a second unconditional ``if`` doesn't add a third
-    problem (the single post-branch ``problems.append`` means the
-    second branch only *overwrites* ``tier``/``message`` when both
-    match); instead it silently flips ``deadbe02``'s finding from
-    registered to unregistered, whose marker then collides with the
-    other direction's already-``seen`` marker and gets deduped away
-    entirely -- dropping the total from 2 to 1 while also losing the
-    "authorized on node deadbe01" message. Both effects are asserted
-    below so the test fails loudly either way.
+    *and* separately lists it (e.g. from a stale prior adopt) as
+    unregistered material; ``deadbe02`` holds it only unregistered. Under
+    the material -> node-set grouping this is one problem naming both
+    nodes, not two separate findings from the old per-tier/per-pair
+    design.
     """
     material = encode_key(keypair.public)
     keys.upsert(
@@ -606,11 +590,11 @@ def test_check_unregistered_duplicate_keys_prefers_registered_tier_when_both_mat
 
     problems = _check_unregistered_duplicate_keys(nodes, keys)
 
-    assert len(problems) == 2
-    assert any("authorized on node deadbe01" in problem.message for problem in problems)
+    assert len(problems) == 1
+    assert problems[0].ref == "deadbe01,deadbe02"
 
 
-def test_verify_database_reports_an_unregistered_clone_pair_as_critical(
+def test_verify_database_reports_an_unregistered_share_pair_as_a_warning(
     nodes: NodeRepository, keys: KeyRepository, template, db: OdsDatabase, keypair: KeyPair
 ) -> None:
     """The unregistered cross-check is actually wired into verify_database."""
@@ -627,10 +611,11 @@ def test_verify_database_reports_an_unregistered_clone_pair_as_critical(
         known_bad=frozenset(),
     )
 
-    assert report.has_critical
-    duplicates = [p for p in report.problems if p.kind == DbProblemKind.DUPLICATE_PUBLIC_KEY]
-    assert len(duplicates) == 1
-    assert duplicates[0].sheet == "Nodes"
+    assert not report.has_critical
+    unimported = [p for p in report.problems if p.kind == DbProblemKind.UNIMPORTED_ADMIN_KEY]
+    assert len(unimported) == 1
+    assert unimported[0].sheet == "Nodes"
+    assert unimported[0].severity == ProblemSeverity.WARNING
 
 
 def test_verify_database_reports_node_count_and_key_count(

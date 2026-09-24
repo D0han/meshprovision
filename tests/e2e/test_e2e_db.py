@@ -279,16 +279,19 @@ def test_db_verify_hex_shaped_labels_sharing_a_key_are_an_alias_not_critical(
     assert "alias_public_key" in kinds
 
 
-def test_db_verify_shared_observed_ref_across_two_nodes_exits_six(
+def test_db_verify_shared_observed_ref_across_two_nodes_is_a_warning_unless_strict(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:
-    """The same mesh-adopt-minted observed-* ref on two nodes is the clone signature.
+    """The same mesh-adopt-minted observed-* ref on two nodes is the normal shared-admin-key shape.
 
     A cloned admin key neither node has had imported resolves, under the
     content-addressed observed-key scheme, to one shared Keys row rather
     than two distinct rows holding equal material -- so this is a
     different shape than ``test_db_verify_duplicate_public_key_across_
-    nodes_exits_six`` above, and must be caught separately.
+    nodes_exits_six`` above. It is not the CVE-2025-52464 device-cloning
+    signature -- one admin key authorized on many nodes is the intended
+    fleet setup -- so it is a WARNING nudging the operator to `mesh admin
+    import` it, not a CRITICAL alarm.
     """
     kp = generate_keypair()
     ref = observed_key_ref(kp.public)
@@ -300,15 +303,19 @@ def test_db_verify_shared_observed_ref_across_two_nodes_exits_six(
     )
     seed_db(nodes=[node_a, node_b], keys=[observed_pub])
 
-    result = invoke(runner, ["db", "verify", "--json"], env)
+    lenient = invoke(runner, ["db", "verify", "--json"], env)
 
-    assert result.exit_code == 6
-    document = json.loads(result.stdout)
+    assert lenient.exit_code == 0
+    document = json.loads(lenient.stdout)
     kinds = {problem["kind"] for problem in document["problems"]}
-    assert "duplicate_public_key" in kinds
-    critical = next(p for p in document["problems"] if p["kind"] == "duplicate_public_key")
-    assert "CVE-2025-52464" in critical["message"]
-    assert "deadbe01, deadbe02" in critical["message"]
+    assert "unimported_admin_key" in kinds
+    assert "duplicate_public_key" not in kinds
+    warning = next(p for p in document["problems"] if p["kind"] == "unimported_admin_key")
+    assert "CVE" not in warning["message"]
+    assert "deadbe01, deadbe02" in warning["message"]
+
+    strict = invoke(runner, ["db", "verify", "--strict"], env)
+    assert strict.exit_code == 4
 
 
 def test_db_verify_alias_public_key_is_a_warning_unless_strict(

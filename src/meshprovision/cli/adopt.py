@@ -115,19 +115,23 @@ def _duplicate_name_warnings(
     return tuple(warnings)
 
 
-def _duplicate_admin_key_warnings(
+def _shared_unimported_admin_key_notes(
     db_nodes: NodeRepository, *, live_node_id: str, admin_keys: tuple[adopt_mod.LiveAdminKey, ...]
 ) -> tuple[str, ...]:
     """Check a device's live admin keys against every *other* node's unregistered keys.
 
-    The CVE-2025-52464 vendor key-cloning scenario this exists to catch:
-    two already-deployed devices share the same admin keypair, and
-    neither has ever been imported into the ``Keys`` sheet, so
-    :func:`meshprovision.provisioning.pipeline.audit_node_key`'s own
-    cross-fleet check (which only ever sees one device) has nothing to
-    compare against. Belongs in the CLI layer, same reasoning as
-    :func:`_duplicate_name_warnings`: :func:`meshprovision.provisioning.
-    adopt.build_adoption_report` only ever sees one device's live config.
+    ``security.admin_key`` holding the *same* admin public key on many
+    nodes is the normal, intended fleet setup -- one admin key, many
+    nodes it can administer -- not the CVE-2025-52464 vendor
+    key-cloning signature, which is two *devices* sharing their own
+    node-identity keypair (a different check entirely; see
+    :func:`meshprovision.db.verify._check_duplicate_keys`). This just
+    nudges the operator to run ``mesh admin import`` for a key that has
+    apparently never been given a real ref, by finding it still sitting,
+    unregistered, on another node too. Belongs in the CLI layer, same
+    reasoning as :func:`_duplicate_name_warnings`:
+    :func:`meshprovision.provisioning.adopt.build_adoption_report` only
+    ever sees one device's live config.
 
     Deliberately does **not** also compare against every ``other`` node's
     *registered* refs -- an earlier version did, and it was a bug, not
@@ -142,13 +146,13 @@ def _duplicate_admin_key_warnings(
     device doesn't already recognize as a known ref. In practice this
     made every legitimate ``template.admin_nodes``-shared admin key (the
     standard, intended way to authorize the same key on many nodes) trip
-    a false CVE-2025-52464 alarm on nearly every adopt after the first.
-    Comparing only against ``other``'s *unregistered* keys avoids this:
-    that data source is node-scoped, not derived from the same global
-    map, so it can genuinely differ between two devices reporting the
-    same still-unimported material. The same reasoning extends to the
-    second tier below, which checks ``other.authorized_admin_keys`` for
-    the ``observed-*`` ref this key would resolve to: a key already
+    a false alarm on nearly every adopt after the first. Comparing only
+    against ``other``'s *unregistered* keys avoids this: that data
+    source is node-scoped, not derived from the same global map, so it
+    can genuinely differ between two nodes reporting the same
+    still-unimported material. The same reasoning extends to the second
+    tier below, which checks ``other.authorized_admin_keys`` for the
+    ``observed-*`` ref this key would resolve to: a key already
     registered under a real ref is never *also* left sitting under an
     ``observed-*`` one (:func:`~meshprovision.provisioning.key_registry.
     adopt_canonical_ref` guarantees that on every node whenever a real ref
@@ -167,29 +171,31 @@ def _duplicate_admin_key_warnings(
         admin_keys: The adopted device's live admin keys.
 
     Returns:
-        One warning string per duplicate found, in ``admin_keys``/other-node order.
+        One note string per live admin key found unimported on one or
+        more other nodes, naming every such node.
     """
-    warnings: list[str] = []
-    for other in db_nodes.all():
-        if other.node_id == live_node_id:
+    notes: list[str] = []
+    for key in admin_keys:
+        observed_ref = observed_keys.observed_key_ref(key.material)
+        other_node_ids: set[str] = set()
+        for other in db_nodes.all():
+            if other.node_id == live_node_id:
+                continue
+            if any(
+                key.material == material for material in other.unregistered_admin_key_materials()
+            ):
+                other_node_ids.add(other.node_id)
+            if observed_ref in other.authorized_admin_keys:
+                other_node_ids.add(other.node_id)
+        if not other_node_ids:
             continue
-        other_unregistered_material = other.unregistered_admin_key_materials()
-        other_authorized = frozenset(other.authorized_admin_keys)
-        for key in admin_keys:
-            if any(key.material == material for material in other_unregistered_material):
-                warnings.append(
-                    f"admin key {key.fingerprint} was also observed, unregistered, on node "
-                    f"{other.node_id} during a previous adopt -- the CVE-2025-52464 vendor "
-                    "key-cloning failure mode."
-                )
-            observed_ref = observed_keys.observed_key_ref(key.material)
-            if observed_ref in other_authorized:
-                warnings.append(
-                    f"admin key {key.fingerprint} is also authorized, under the same "
-                    f"observed ref {observed_ref!r}, on node {other.node_id} -- the "
-                    "CVE-2025-52464 vendor key-cloning failure mode."
-                )
-    return tuple(warnings)
+        sorted_ids = tuple(sorted(other_node_ids))
+        notes.append(
+            f"admin key {key.fingerprint} is also authorized, unimported, on "
+            f"{len(sorted_ids)} other node(s) ({', '.join(sorted_ids)}); run `mesh admin "
+            "import` to give it a real ref."
+        )
+    return tuple(notes)
 
 
 def _key_overwrite_warnings(
@@ -823,7 +829,7 @@ def adopt(
             short_name=report.short_name,
             long_name=report.long_name,
         )
-        duplicate_admin_key_warnings = _duplicate_admin_key_warnings(
+        duplicate_admin_key_warnings = _shared_unimported_admin_key_notes(
             db.nodes, live_node_id=live.node_id.hex, admin_keys=report.admin_keys
         )
         own_private_secret = live.security.private_key if live.security.has_private_key else None

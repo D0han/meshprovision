@@ -399,7 +399,14 @@ mesh db forget deadbe01
   both `<node_id>_pub` and `<LABEL>_pub`, a duplicate group is
   **critical** only when it spans two or more **distinct real nodes** —
   the CVE-2025-52464 vendor key-cloning signature. A node-plus-label
-  group is an informational alias warning.
+  group is an informational alias warning. Separately, an admin key
+  that is authorized on more than one node but has never been given a
+  real ref via `mesh admin import` (an `observed-*` ref, or legacy
+  `unregistered_admin_keys` material) is its own **warning**,
+  `unimported_admin_key` — one admin key shared across many nodes is
+  the normal fleet setup, not a clone signature, so it never raises
+  `verify`'s exit code above what `--strict` already does for a bare
+  warning.
 - `backup` writes only into the backup directory and never rewrites the
   database itself.
 - `restore` is the only `db` subcommand that rewrites the live database

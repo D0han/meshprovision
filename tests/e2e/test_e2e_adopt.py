@@ -702,7 +702,7 @@ def test_adopt_does_not_warn_when_the_live_key_is_already_a_known_registered_adm
     assert not any("CVE-2025-52464" in w for w in document["warnings"])
 
 
-def test_adopt_warns_on_a_duplicate_admin_key_already_filed_as_observed(
+def test_adopt_warns_on_a_shared_admin_key_already_filed_as_observed(
     runner: CliRunner,
     env: dict[str, str],
     bus: DeviceBus,
@@ -711,40 +711,39 @@ def test_adopt_warns_on_a_duplicate_admin_key_already_filed_as_observed(
 ) -> None:
     """The second tier: the other node's copy was already auto-registered.
 
-    Once the first cloned device has been adopted under the new
+    Once the first shared device has been adopted under the new
     auto-registration behavior, its copy no longer sits on
     ``unregistered_admin_keys`` at all -- it is ``authorized_admin_keys``
     under a synthetic ``observed-*`` ref. This is the scenario that tier
-    exists to keep catching.
+    exists to keep catching, as an informational note that the key still
+    needs `mesh admin import`, not a CVE-2025-52464 clone alarm.
     """
-    cloned_kp = keypair_factory()
-    observed_ref = observed_key_ref(cloned_kp.public)
+    shared_kp = keypair_factory()
+    observed_ref = observed_key_ref(shared_kp.public)
     seed_db(
         nodes=[NodeRecord(node_id="cafe0001", authorized_admin_keys=(observed_ref,))],
         keys=[
             KeyRecord.from_material(
                 observed_ref.removesuffix("_pub"),
                 KeyType.ADMIN_PUBLIC,
-                cloned_kp.public,
+                shared_kp.public,
                 origin=KeyOrigin.IMPORTED,
             )
         ],
     )
     bus.use(FakeMeshInterface("deadbe01")).localNode.localConfig.security.admin_key.append(
-        cloned_kp.public
+        shared_kp.public
     )
 
     result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
 
     assert result.exit_code == 0
     document = json.loads(result.stdout)
-    assert any(
-        "cafe0001" in w and "CVE-2025-52464" in w and observed_ref in w
-        for w in document["warnings"]
-    )
+    assert any("cafe0001" in w and "mesh admin import" in w for w in document["warnings"])
+    assert not any("CVE" in w for w in document["warnings"])
 
 
-def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
+def test_adopt_warns_on_a_shared_admin_key_previously_observed_unregistered(
     runner: CliRunner,
     env: dict[str, str],
     bus: DeviceBus,
@@ -753,20 +752,22 @@ def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
 ) -> None:
     """Exact-material comparison against another node's never-imported observed key.
 
-    The scenario the fix exists for: two vendor-cloned devices, neither
-    key ever registered in the Keys sheet.
+    The scenario the fix exists for: two devices report the same admin
+    key, neither ever registered in the Keys sheet -- the normal
+    shared-admin-key shape, reported as a WARNING nudging the operator to
+    import it, not a CVE-2025-52464 clone alarm.
     """
-    cloned_kp = keypair_factory()
+    shared_kp = keypair_factory()
     seed_db(
         nodes=[
             NodeRecord(
                 node_id="cafe0001",
-                unregistered_admin_keys=(encode_key(cloned_kp.public),),
+                unregistered_admin_keys=(encode_key(shared_kp.public),),
             )
         ]
     )
     iface = bus.use(FakeMeshInterface("deadbe01"))
-    iface.localNode.localConfig.security.admin_key.append(cloned_kp.public)
+    iface.localNode.localConfig.security.admin_key.append(shared_kp.public)
 
     # Human-text mode: the sibling duplicate-name warning is covered in this
     # mode elsewhere, but this loop (cli/adopt.py's `for warning in
@@ -775,24 +776,25 @@ def test_adopt_warns_on_a_duplicate_admin_key_previously_observed_unregistered(
     # have been caught by the JSON-mode assertion below.
     text_result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
     assert text_result.exit_code == 0
-    assert "CVE-2025-52464" in text_result.stderr
+    assert "mesh admin import" in text_result.stderr
     assert "cafe0001" in text_result.stderr
+    assert "CVE" not in text_result.stderr
 
     result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
     assert result.exit_code == 0
     document = json.loads(result.stdout)
-    assert any("cafe0001" in w and "CVE-2025-52464" in w for w in document["warnings"])
+    assert any("cafe0001" in w and "mesh admin import" in w for w in document["warnings"])
 
-    # The same clone must also be visible to the fleet-wide audit, not only
+    # The same share must also be visible to the fleet-wide audit, not only
     # to the one adopt run that happened to see the second device.
     verify_result = invoke(runner, ["db", "verify", "--json"], env)
     verify_doc = json.loads(verify_result.stdout)
-    assert verify_result.exit_code == int(ExitCode.CRYPTO)
-    duplicates = [p for p in verify_doc["problems"] if p["kind"] == "duplicate_public_key"]
-    assert len(duplicates) == 1
-    assert duplicates[0]["severity"] == "critical"
-    assert duplicates[0]["ref"] == "cafe0001,deadbe01"
-    assert "CVE-2025-52464" in duplicates[0]["message"]
+    assert verify_result.exit_code == int(ExitCode.OK)
+    unimported = [p for p in verify_doc["problems"] if p["kind"] == "unimported_admin_key"]
+    assert len(unimported) == 1
+    assert unimported[0]["severity"] == "warning"
+    assert unimported[0]["ref"] == "cafe0001,deadbe01"
+    assert "CVE" not in unimported[0]["message"]
 
 
 def test_duplicate_admin_key_check_examines_every_live_admin_key_not_just_the_first(
@@ -804,33 +806,33 @@ def test_duplicate_admin_key_check_examines_every_live_admin_key_not_just_the_fi
 ) -> None:
     """A device reporting more than one live admin key must have all of them checked.
 
-    Regression test: every other CVE-clone test in this module gives the
-    live device exactly one ``admin_key``, so a regression narrowing
-    ``_duplicate_admin_key_warnings``'s ``for key in admin_keys:`` loop to
-    only the device's first live key -- plausible, since real devices can
-    and do report more than one -- would go undetected. Here the clean key
-    is reported first and the cloned one second, so only a genuine full
-    scan catches it.
+    Regression test: every other shared-admin-key test in this module
+    gives the live device exactly one ``admin_key``, so a regression
+    narrowing ``_shared_unimported_admin_key_notes``'s ``for key in
+    admin_keys:`` loop to only the device's first live key -- plausible,
+    since real devices can and do report more than one -- would go
+    undetected. Here the clean key is reported first and the shared one
+    second, so only a genuine full scan catches it.
     """
     clean_kp = keypair_factory()
-    cloned_kp = keypair_factory()
+    shared_kp = keypair_factory()
     seed_db(
         nodes=[
             NodeRecord(
                 node_id="cafe0001",
-                unregistered_admin_keys=(encode_key(cloned_kp.public),),
+                unregistered_admin_keys=(encode_key(shared_kp.public),),
             )
         ]
     )
     iface = bus.use(FakeMeshInterface("deadbe01"))
     iface.localNode.localConfig.security.admin_key.append(clean_kp.public)
-    iface.localNode.localConfig.security.admin_key.append(cloned_kp.public)
+    iface.localNode.localConfig.security.admin_key.append(shared_kp.public)
 
     result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
 
     assert result.exit_code == 0
     document = json.loads(result.stdout)
-    assert any("cafe0001" in w and "CVE-2025-52464" in w for w in document["warnings"])
+    assert any("cafe0001" in w and "mesh admin import" in w for w in document["warnings"])
 
 
 def test_adopt_does_not_warn_about_two_nodes_both_reporting_an_empty_name(
@@ -897,14 +899,14 @@ def test_duplicate_admin_key_check_skips_self_without_skipping_the_nodes_after_i
     seed_db: Callable[..., Path],
     keypair_factory: Callable[[], KeyPair],
 ) -> None:
-    """The CVE-2025-52464 cross-fleet check must survive the live node's own row.
+    """The shared-admin-key cross-fleet check must survive the live node's own row.
 
     Same ordering trap as the name check: the live node's own record sits
     in the middle of the sheet, so a ``continue``-to-``break`` regression
-    in the self-skip guard would never reach the cloned key on
+    in the self-skip guard would never reach the shared key on
     ``cafe0001``.
     """
-    cloned_kp = keypair_factory()
+    shared_kp = keypair_factory()
     unrelated_kp = keypair_factory()
     seed_db(
         nodes=[
@@ -915,25 +917,25 @@ def test_duplicate_admin_key_check_skips_self_without_skipping_the_nodes_after_i
             NodeRecord(
                 node_id="deadbe01",
                 management=ManagementMode.OBSERVED,
-                unregistered_admin_keys=(encode_key(cloned_kp.public),),
+                unregistered_admin_keys=(encode_key(shared_kp.public),),
             ),
             NodeRecord(
                 node_id="cafe0001",
-                unregistered_admin_keys=(encode_key(cloned_kp.public),),
+                unregistered_admin_keys=(encode_key(shared_kp.public),),
             ),
         ]
     )
     iface = bus.use(FakeMeshInterface("deadbe01"))
-    iface.localNode.localConfig.security.admin_key.append(cloned_kp.public)
+    iface.localNode.localConfig.security.admin_key.append(shared_kp.public)
 
     result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
 
     assert result.exit_code == 0
     warnings = json.loads(result.stdout)["warnings"]
-    clone_warnings = [w for w in warnings if "CVE-2025-52464" in w]
-    assert len(clone_warnings) == 1
-    assert "cafe0001" in clone_warnings[0]
-    assert not any("deadbe01" in w for w in clone_warnings)
+    share_warnings = [w for w in warnings if "mesh admin import" in w]
+    assert len(share_warnings) == 1
+    assert "cafe0001" in share_warnings[0]
+    assert not any("deadbe01" in w for w in share_warnings)
 
 
 def test_adopt_does_not_warn_about_its_own_previously_persisted_fingerprint(
@@ -1040,9 +1042,9 @@ _FLEET_SPECS: tuple[_FleetSpec, ...] = (
     _FleetSpec("10000004", "MT04", "Meshtastic MT04", "2.4.0", None, True),
     _FleetSpec("10000005", "GW05", "Garage Gateway", "2.5.0", "b", False),
     # Every unregistered admin key in this fleet is distinct on purpose:
-    # a key shared by two nodes and imported for neither is the
-    # CVE-2025-52464 clone signature `mesh db verify` now reports as
-    # critical, which this test asserts the fleet is free of.
+    # a key shared by two nodes and imported for neither would trip the
+    # `unimported_admin_key` WARNING `mesh db verify` now reports, which
+    # this test asserts the fleet is free of.
     _FleetSpec("10000006", "MT06", "Meshtastic MT06", "2.6.10", "d", True),
     _FleetSpec("20000abc", "HM", "", "2.6.11", None, False),
     _FleetSpec("20000def", "MT08", "Meshtastic MT08", "2.7.5", "a", True),
