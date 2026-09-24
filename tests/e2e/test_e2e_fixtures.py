@@ -6,6 +6,16 @@ behaves as designed. Several later batches (S1, C37-1, C37-2, A3 4b, E3,
 ...) depend on this hook; if it silently didn't advance ``current`` or
 didn't record ``served``, their "the impostor received no writes" and
 "the reconnect sees a different device" assertions would be meaningless.
+
+Also proves the staged-vs-persisted split between
+:class:`~tests.e2e.conftest.FakeConnection` (the host's staged, per-
+connection view) and :class:`~tests.e2e.conftest.FakeMeshInterface` (the
+device's own persisted state): a host-side mutation that never reaches
+``writeConfig`` must stay invisible to the next connection, a persisted
+write must be visible to it, a simulated device-side failure must be
+logged but not persisted, a write through a closed connection must raise,
+and firmware issue #7449's key-drop must only ever clear the device's
+persisted copy, never a connection's own staged one.
 """
 
 from __future__ import annotations
@@ -52,3 +62,61 @@ def test_device_bus_then_with_a_queued_none_raises_and_records_none(bus: DeviceB
         backend.connect()
 
     assert bus.served == ["aaaa0001", None]
+
+
+def test_fake_connection_staged_change_without_writeconfig_is_invisible_to_next() -> None:
+    device = FakeMeshInterface("deadbe01")
+    connection = device.connect()
+
+    connection.localNode.localConfig.lora.hop_limit = 7
+
+    assert device.localNode.localConfig.lora.hop_limit == 0
+    next_connection = device.connect()
+    assert next_connection.localNode.localConfig.lora.hop_limit == 0
+
+
+def test_fake_connection_writeconfig_persists_and_is_visible_to_the_next_connection() -> None:
+    device = FakeMeshInterface("deadbe01")
+    connection = device.connect()
+
+    connection.localNode.localConfig.lora.hop_limit = 7
+    connection.localNode.writeConfig("lora")
+
+    assert device.localNode.localConfig.lora.hop_limit == 7
+    next_connection = device.connect()
+    assert next_connection.localNode.localConfig.lora.hop_limit == 7
+
+
+def test_fake_connection_fail_sections_logs_the_attempt_but_does_not_persist() -> None:
+    device = FakeMeshInterface("deadbe01", fail_sections=frozenset({"lora"}))
+    connection = device.connect()
+    connection.localNode.localConfig.lora.hop_limit = 7
+
+    with pytest.raises(RuntimeError):
+        connection.localNode.writeConfig("lora")
+
+    assert device.localNode.written_sections == ["lora"]
+    assert device.localNode.localConfig.lora.hop_limit == 0
+
+
+def test_fake_connection_writeconfig_after_close_raises_oserror() -> None:
+    device = FakeMeshInterface("deadbe01")
+    connection = device.connect()
+    connection.close()
+
+    with pytest.raises(OSError):
+        connection.localNode.writeConfig("lora")
+
+
+def test_fake_connection_drop_security_keys_clears_persisted_not_staged() -> None:
+    device = FakeMeshInterface("deadbe01", drop_security_keys=True)
+    connection = device.connect()
+    connection.localNode.localConfig.security.public_key = b"\x01" * 32
+    connection.localNode.localConfig.security.private_key = b"\x02" * 32
+
+    connection.localNode.writeConfig("security")
+
+    assert device.localNode.localConfig.security.public_key == b""
+    assert device.localNode.localConfig.security.private_key == b""
+    assert connection.localNode.localConfig.security.public_key == b"\x01" * 32
+    assert connection.getPublicKey() is not None

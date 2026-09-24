@@ -5,12 +5,13 @@ from __future__ import annotations
 import base64
 import dataclasses
 from collections.abc import Callable
-from typing import Final
+from typing import Final, Self
 
 import pytest
 from meshtastic.protobuf import localonly_pb2
 
 from meshprovision.config.template import TemplateConfig, load_template_text
+from meshprovision.crypto import redact
 from meshprovision.crypto.keys import KeyPair, encode_key, generate_keypair
 from meshprovision.db.keys import KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
@@ -245,6 +246,20 @@ class _FakeIfaceForApply:
     def getPublicKey(self) -> str | None:  # noqa: N802 -- real MeshInterface method name
         raw = bytes(self.localNode.localConfig.security.public_key)
         return base64.b64encode(raw).decode("ascii") if raw else None
+
+    def reopened(self, *, node_num: int | None = None) -> Self:
+        """Model a fresh connection to the same device (a plain reconnect).
+
+        Pass ``node_num`` only to model a device that reports a different
+        node number after the reconnect (E3 3b); the returned interface
+        otherwise carries over this one's current config/user state, the
+        same way a real reconnect re-reads what the device actually has.
+        """
+        fresh = type(self)(node_num=self.myInfo.my_node_num if node_num is None else node_num)
+        fresh.localNode.localConfig.CopyFrom(self.localNode.localConfig)
+        fresh.localNode.moduleConfig.CopyFrom(self.localNode.moduleConfig)
+        fresh.user = dict(self.user)
+        return fresh
 
 
 def test_fake_iface_node_num_is_what_detect_reads() -> None:
@@ -1103,6 +1118,17 @@ def _serve(
     return _on_refresh
 
 
+def _reopen_same_device(_n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+    """An ``on_refresh`` callback modelling a plain reconnect to the same device.
+
+    Unlike :func:`_serve`, each call reopens from whatever interface is
+    *current* -- so a write made through the previous refresh's interface
+    is carried over, the same way a real reconnect re-reads the device's
+    actual (persisted) state rather than a blank one.
+    """
+    return cur.reopened()
+
+
 class _FakeSessionRefreshFailsAfterFirstCall:
     """A session whose refresh() raises on its first call -- the mid-loop reboot case."""
 
@@ -1129,11 +1155,18 @@ def test_apply_plan_reconnects_mid_loop_after_a_reboot_before_writing_later_sect
     (e.g. device) is written against the same never-refreshed interface,
     it's written into (or later read back from) a stale, possibly-dead
     handle instead of a genuinely fresh connection.
+
+    The plan keeps the real security ``SectionChange`` build_plan()
+    produced (rather than dropping it, as an earlier version of this test
+    did): ``plan.key_plan.regenerate`` is already ``True`` for a FACTORY
+    node, and a plan that regenerates without ever writing "security" is
+    internally inconsistent -- no real plan does that.
     """
     template = _template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
     kp = generate_keypair()
 
     rebooting_lora_change = SectionChange(
@@ -1147,21 +1180,86 @@ def test_apply_plan_reconnects_mid_loop_after_a_reboot_before_writing_later_sect
         kind=detect.SectionKind.CONFIG,
         changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
     )
-    plan = dataclasses.replace(plan, sections=(rebooting_lora_change, later_device_change))
+    plan = dataclasses.replace(
+        plan, sections=(rebooting_lora_change, later_device_change, security_section)
+    )
+
+    reconnects: list[_FakeIfaceForApply] = []
+
+    def _reopen_and_record(n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+        fresh = _reopen_same_device(n, cur)
+        reconnects.append(fresh)
+        return fresh
 
     first_iface = _FakeIfaceForApply()
-    refreshed_iface = _FakeIfaceForApply()
-    session = _FakeSessionTracksRefresh(first_iface, _serve(refreshed_iface))
+    session = _FakeSessionTracksRefresh(first_iface, _reopen_and_record)
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
     # One mid-loop refresh (after "lora" reboots, before "device"), plus the
     # unconditional final-verify refresh at the end of apply_plan.
     assert session.refresh_calls == 2
+    mid_loop_iface, final_iface = reconnects
     assert "lora" in first_iface.localNode.written_sections
     assert "device" not in first_iface.localNode.written_sections
-    assert "device" in refreshed_iface.localNode.written_sections
-    role_result = next(r for r in outcome.results if r.field == "role")
-    assert role_result.status == WriteStatus.CONFIRMED
+    assert "device" in mid_loop_iface.localNode.written_sections
+    assert "security" in mid_loop_iface.localNode.written_sections
+    # The final verify reconnect is itself a fresh reopen -- it never
+    # writes anything, only re-reads what was already persisted.
+    assert final_iface.localNode.written_sections == []
+
+    assert outcome.ok is True, outcome.describe()
+    assert outcome.may_update_database is True
+    for result in outcome.results:
+        assert result.status == WriteStatus.CONFIRMED, result
+
+    assert outcome.record is not None
+    assert outcome.record.node_id == plan.node_id.hex
+    assert outcome.public_key_fingerprint == redact.fingerprint(kp.public)
+
+
+def test_apply_plan_mid_loop_reconnect_to_a_device_that_lost_the_pre_reboot_write_is_uncertain(
+    make_live,
+) -> None:
+    """A reboot that drops the pre-reboot write must read back UNCONFIRMED, not a false CONFIRMED.
+
+    Companion to the "successful" mid-loop reconnect test above: this
+    models a genuine data loss across the reboot (the reopened device is
+    missing the "lora" section it was written just before reconnecting),
+    which the fake must be able to express now that "persisted" is a
+    real, distinct state from "what the host staged".
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    kp = generate_keypair()
+
+    rebooting_lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="hop_limit", current=3, desired=5),),
+        reboots_device=True,
+    )
+    later_device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    plan = dataclasses.replace(
+        plan, sections=(rebooting_lora_change, later_device_change, security_section)
+    )
+
+    first_iface = _FakeIfaceForApply()
+    lost_iface = first_iface.reopened()
+    lost_iface.localNode.localConfig.ClearField("lora")
+    session = _FakeSessionTracksRefresh(first_iface, _serve(lost_iface))
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    hop_limit_result = next(r for r in outcome.results if r.field == "hop_limit")
+    assert hop_limit_result.status == WriteStatus.UNCONFIRMED
+    assert outcome.ok is False
+    assert outcome.may_update_database is False
 
 
 def test_apply_plan_reports_uncertain_when_mid_loop_reconnect_fails(make_live) -> None:
