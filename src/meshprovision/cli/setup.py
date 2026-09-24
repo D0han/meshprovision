@@ -22,19 +22,25 @@ The three first-run artifacts, and how each is created:
   module does not need to import the database layer at all.
 
 Every write here refuses to overwrite an existing file: :func:`write_new_file`
-uses ``os.O_EXCL`` so the guarantee comes from the kernel, not a
-check-then-write race.
+writes to a sibling temp file first and publishes it at the final name via
+:func:`meshprovision.db.atomic_writer.link_no_clobber`, whose ``os.link``/
+``O_EXCL`` claim is what the no-clobber guarantee comes from -- not a
+check-then-write race, and not a partial file left at the final name if the
+write itself fails or is interrupted.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
 
 from meshprovision.config.settings import find_env_file
+from meshprovision.db import atomic_writer
 from meshprovision.errors import ConfigError, SettingsError
 
 if TYPE_CHECKING:
@@ -319,8 +325,14 @@ def render_env_text(example_text: str, *, contact: str) -> str:
 def write_new_file(path: Path, text: str, *, mode: int = 0o644) -> None:
     """Write ``text`` to ``path``, refusing to overwrite an existing file.
 
-    Uses ``os.O_EXCL`` so the no-clobber guarantee comes from the
-    kernel rather than a separate ``.exists()`` check racing the write.
+    Writes to a sibling temp file in ``path``'s own directory first, then
+    publishes it at ``path`` via
+    :func:`meshprovision.db.atomic_writer.link_no_clobber` -- whose
+    ``os.link``/``O_EXCL`` claim is what the no-clobber guarantee comes
+    from, not a separate ``.exists()`` check racing the write. This also
+    means a write that fails partway through, or is interrupted, never
+    leaves a partial file at ``path`` itself: only an orphaned temp file
+    can result, and ``path`` stays either absent or exactly as it was.
     Creates any missing parent directories first.
 
     Args:
@@ -333,17 +345,27 @@ def write_new_file(path: Path, text: str, *, mode: int = 0o644) -> None:
             any other OS-level reason.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
     try:
-        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
-    except FileExistsError as exc:
-        raise ConfigError(f"Refusing to overwrite an existing file: {path}") from exc
+        fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
     except OSError as exc:
-        raise ConfigError(f"Could not create {path}: {exc}") from exc
+        raise ConfigError(f"Could not create {tmp_path}: {exc}") from exc
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
+        atomic_writer.link_no_clobber(tmp_path, path)
+    except FileExistsError as exc:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise ConfigError(f"Refusing to overwrite an existing file: {path}") from exc
     except OSError as exc:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
         raise ConfigError(f"Could not write {path}: {exc}") from exc
+    except BaseException:
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
 
 
 def create_env_file(path: Path, *, contact: str) -> None:

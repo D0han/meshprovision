@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import stat
 from pathlib import Path
@@ -24,6 +25,7 @@ from meshprovision.cli.setup import (
     write_new_file,
 )
 from meshprovision.config.settings import Settings
+from meshprovision.db import atomic_writer
 from meshprovision.errors import ConfigError, SettingsError
 
 pytestmark = pytest.mark.unit
@@ -260,6 +262,78 @@ class TestWriteNewFile:
         monkeypatch.setattr(os, "fdopen", lambda *_a, **_k: _BoomFile())
         with pytest.raises(ConfigError, match="Could not write"):
             write_new_file(tmp_path / "out.txt", "hello")
+
+    def test_a_write_failure_partway_through_leaves_no_partial_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A kill/ENOSPC mid-write must never leave a partial file at the
+        # final name -- only an orphaned temp can result, and a retry must
+        # then succeed cleanly rather than reporting "already exists".
+        target = tmp_path / "out.txt"
+        text = "hello world, this text is long enough to split in half"
+        real_fdopen = os.fdopen
+
+        class _PartialWriteFile:
+            def __init__(self, fd: int) -> None:
+                self._handle = real_fdopen(fd, "w", encoding="utf-8")
+
+            def write(self, chunk: str) -> int:
+                self._handle.write(chunk[: len(chunk) // 2])
+                self._handle.flush()
+                raise OSError(errno.ENOSPC, "no space left on device (simulated)")
+
+            def __enter__(self) -> _PartialWriteFile:
+                return self
+
+            def __exit__(self, *_exc_info: object) -> None:
+                self._handle.close()
+
+        monkeypatch.setattr(os, "fdopen", lambda fd, *_a, **_k: _PartialWriteFile(fd))
+
+        with pytest.raises(ConfigError, match="Could not write"):
+            write_new_file(target, text)
+
+        assert not target.exists()
+        assert list(tmp_path.iterdir()) == []
+
+        monkeypatch.undo()
+        write_new_file(target, text)
+        assert target.read_text(encoding="utf-8") == text
+
+    def test_a_keyboard_interrupt_during_write_leaves_no_file_or_temp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        target = tmp_path / "out.txt"
+
+        class _BoomFile:
+            def write(self, _text: str) -> int:
+                raise KeyboardInterrupt
+
+            def __enter__(self) -> _BoomFile:
+                return self
+
+            def __exit__(self, *_exc_info: object) -> None:
+                return None
+
+        monkeypatch.setattr(os, "fdopen", lambda *_a, **_k: _BoomFile())
+
+        with pytest.raises(KeyboardInterrupt):
+            write_new_file(target, "hello")
+
+        assert not target.exists()
+        assert list(tmp_path.iterdir()) == []
+
+    def test_creation_still_works_when_the_filesystem_has_no_hard_links(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def _unsupported_link(*_a: object, **_k: object) -> None:
+            raise OSError(errno.EPERM, "operation not permitted (simulated)")
+
+        monkeypatch.setattr(atomic_writer.os, "link", _unsupported_link)
+
+        target = tmp_path / "out.txt"
+        write_new_file(target, "hello")
+        assert target.read_text(encoding="utf-8") == "hello"
 
 
 class TestCreateEnvFile:
