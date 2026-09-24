@@ -571,6 +571,163 @@ def render_plan(
             ctx.info(line.text)
 
 
+def _select_keypair(
+    change_plan: plan_mod.ChangePlan, live: detect.LiveConfig
+) -> crypto_keys.KeyPair | None:
+    """Choose the keypair (if any) to apply for the node's key plan.
+
+    Args:
+        change_plan: The plan being applied.
+        live: The device's live-read configuration, consulted when the
+            plan adopts the device's own already-existing keypair.
+
+    Returns:
+        A freshly generated keypair for ``regenerate``, the device's own
+        keypair for ``adopt_device_key``, or ``None`` when the key plan
+        changes nothing.
+
+    Raises:
+        PlanConflictError: If the plan wants to adopt the device's key but
+            the device reported no key material.
+    """
+    if change_plan.key_plan.regenerate:
+        keypair: crypto_keys.KeyPair | None = crypto_keys.generate_keypair()
+    elif change_plan.key_plan.adopt_device_key:
+        # _plan_node_keypair only sets adopt_device_key once it has confirmed
+        # both are present -- this guards the type, not a real code path.
+        live_public = live.security.public_key
+        live_private = live.security.private_key
+        if live_public is None or live_private is None:  # pragma: no cover
+            raise PlanConflictError(
+                "Plan wants to adopt the device's key but the device reported none",
+                field="security.public_key",
+            )
+        keypair = crypto_keys.KeyPair(private=live_private, public=live_public)
+    else:
+        keypair = None
+    return keypair
+
+
+def _register_admin_alias(
+    ctx: CliContext,
+    db: DbSession,
+    *,
+    admin_ref: str,
+    node_id: NodeId,
+    keypair: crypto_keys.KeyPair | None,
+) -> None:
+    """Additionally file a node's keys under an admin alias reference.
+
+    Used by ``mesh admin bootstrap --ref <alias>``: whatever material was
+    just written for the node itself (or, when the key plan changed
+    nothing, whatever material the database already holds for it) is
+    copied under ``admin_ref`` too, and any stale ``observed-*`` row
+    holding the same material is collapsed onto it.
+
+    Args:
+        ctx: The shared CLI context.
+        db: The already-open database session.
+        admin_ref: The alias reference to file the keys under.
+        node_id: The node whose keys are being aliased.
+        keypair: The keypair just applied to the device, or ``None`` when
+            the key plan changed nothing (the database's existing rows
+            are used instead).
+    """
+    now = datetime.now(tz=UTC)
+    public_material: bytes | None
+    private_material: SecretBytes | None
+    if keypair is not None:
+        public_material = keypair.public
+        private_material = keypair.private
+    else:
+        material = db.keys.keypair_for(node_id.hex)
+        public_material = material.public
+        private_material = material.private
+
+    if public_material is None:
+        ctx.warn(f"No public key material available to register alias {admin_ref!r}; skipping.")
+    else:
+        db.keys.upsert(
+            KeyRecord.from_material(
+                admin_ref, KeyType.ADMIN_PUBLIC, public_material, created_ts=now
+            )
+        )
+        if private_material is not None:
+            db.keys.upsert(
+                KeyRecord.from_material(
+                    admin_ref, KeyType.ADMIN_PRIVATE, private_material, created_ts=now
+                )
+            )
+        # This alias's material may already sit on some other node's
+        # row under a synthetic observed-* ref an earlier mesh adopt
+        # minted before this alias existed -- collapse it now, same
+        # as mesh admin import does.
+        adopt_canonical_ref(db.nodes, db.keys, material=public_material, canonical_owner=admin_ref)
+
+
+def _apply_and_persist(
+    ctx: CliContext,
+    db: DbSession,
+    session: apply.DeviceSession,
+    *,
+    change_plan: plan_mod.ChangePlan,
+    keypair: crypto_keys.KeyPair | None,
+    opts: ProvisionOptions,
+) -> tuple[apply.ApplyOutcome, bool]:
+    """Apply a change plan to the device and persist the result to the database.
+
+    Args:
+        ctx: The shared CLI context.
+        db: The already-open database session.
+        session: The already-open device session.
+        change_plan: The plan to apply.
+        keypair: The keypair selected by :func:`_select_keypair`.
+        opts: The operator's provisioning flags.
+
+    Returns:
+        The apply outcome, and whether the database was updated.
+    """
+    outcome = apply.apply_plan(change_plan, session, keypair=keypair, dry_run=False)
+    for line in outcome.describe():
+        ctx.info(line)
+    if outcome.public_key_fingerprint is not None:
+        ctx.info(f"Device public key: {outcome.public_key_fingerprint}")
+
+    if (
+        opts.admin_ref is not None
+        and opts.admin_ref != change_plan.node_id.hex
+        and outcome.may_update_database
+    ):
+        _register_admin_alias(
+            ctx,
+            db,
+            admin_ref=opts.admin_ref,
+            node_id=change_plan.node_id,
+            keypair=keypair,
+        )
+
+    persisted = apply.persist_result(
+        outcome,
+        nodes=db.nodes,
+        keys=db.keys,
+        keypair=keypair,
+        admin_key_refs=change_plan.key_plan.desired_admin_key_refs,
+        now=datetime.now(tz=UTC),
+    )
+    if persisted:
+        ctx.success(f"Database updated: {db.path}")
+    else:
+        ctx.error("Node is in an UNCERTAIN state; the database was NOT updated.")
+        for failure in outcome.failures():
+            label = f"{failure.section}.{failure.field}" if failure.field else failure.section
+            line = f"{label}: {failure.status.value}"
+            if failure.message:
+                line = f"{line} -- {failure.message}"
+            ctx.error(line)
+
+    return outcome, persisted
+
+
 def run_provision(
     ctx: CliContext,
     session: apply.DeviceSession,
@@ -707,87 +864,11 @@ def run_provision(
         if not ctx.confirm(question, default=False):
             raise click.Abort()
 
-    if change_plan.key_plan.regenerate:
-        keypair: crypto_keys.KeyPair | None = crypto_keys.generate_keypair()
-    elif change_plan.key_plan.adopt_device_key:
-        # _plan_node_keypair only sets adopt_device_key once it has confirmed
-        # both are present -- this guards the type, not a real code path.
-        live_public = live.security.public_key
-        live_private = live.security.private_key
-        if live_public is None or live_private is None:  # pragma: no cover
-            raise PlanConflictError(
-                "Plan wants to adopt the device's key but the device reported none",
-                field="security.public_key",
-            )
-        keypair = crypto_keys.KeyPair(private=live_private, public=live_public)
-    else:
-        keypair = None
+    keypair = _select_keypair(change_plan, live)
 
-    outcome = apply.apply_plan(change_plan, session, keypair=keypair, dry_run=False)
-    for line in outcome.describe():
-        ctx.info(line)
-    if outcome.public_key_fingerprint is not None:
-        ctx.info(f"Device public key: {outcome.public_key_fingerprint}")
-
-    if (
-        opts.admin_ref is not None
-        and opts.admin_ref != change_plan.node_id.hex
-        and outcome.may_update_database
-    ):
-        now = datetime.now(tz=UTC)
-        public_material: bytes | None
-        private_material: SecretBytes | None
-        if keypair is not None:
-            public_material = keypair.public
-            private_material = keypair.private
-        else:
-            pub_record = db.keys.find(f"{change_plan.node_id.hex}_pub")
-            priv_record = db.keys.find(f"{change_plan.node_id.hex}_priv")
-            public_material = pub_record.material() if pub_record is not None else None
-            private_material = priv_record.secret() if priv_record is not None else None
-
-        if public_material is None:
-            ctx.warn(
-                f"No public key material available to register alias {opts.admin_ref!r}; skipping."
-            )
-        else:
-            db.keys.upsert(
-                KeyRecord.from_material(
-                    opts.admin_ref, KeyType.ADMIN_PUBLIC, public_material, created_ts=now
-                )
-            )
-            if private_material is not None:
-                db.keys.upsert(
-                    KeyRecord.from_material(
-                        opts.admin_ref, KeyType.ADMIN_PRIVATE, private_material, created_ts=now
-                    )
-                )
-            # This alias's material may already sit on some other node's
-            # row under a synthetic observed-* ref an earlier mesh adopt
-            # minted before this alias existed -- collapse it now, same
-            # as mesh admin import does.
-            adopt_canonical_ref(
-                db.nodes, db.keys, material=public_material, canonical_owner=opts.admin_ref
-            )
-
-    persisted = apply.persist_result(
-        outcome,
-        nodes=db.nodes,
-        keys=db.keys,
-        keypair=keypair,
-        admin_key_refs=change_plan.key_plan.desired_admin_key_refs,
-        now=datetime.now(tz=UTC),
+    outcome, persisted = _apply_and_persist(
+        ctx, db, session, change_plan=change_plan, keypair=keypair, opts=opts
     )
-    if persisted:
-        ctx.success(f"Database updated: {db.path}")
-    else:
-        ctx.error("Node is in an UNCERTAIN state; the database was NOT updated.")
-        for failure in outcome.failures():
-            label = f"{failure.section}.{failure.field}" if failure.field else failure.section
-            line = f"{label}: {failure.status.value}"
-            if failure.message:
-                line = f"{line} -- {failure.message}"
-            ctx.error(line)
 
     return ProvisionResult(
         node_id=change_plan.node_id,
