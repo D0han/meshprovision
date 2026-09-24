@@ -771,6 +771,95 @@ def test_duplicate_node_id_raises(tmp_path: Path, keypair) -> None:
         ods.load_database(path)
 
 
+def _set_row_repeat(path: Path, sheet: str, ods_row: int, repeat: int) -> None:
+    """Hand-set ``table:number-rows-repeated`` on one physical row element.
+
+    Simulates the layout LibreOffice writes for consecutive *identical*
+    rows (for example a copy-pasted Nodes row): a single
+    ``table:table-row`` element covering ``repeat`` logical rows, rather
+    than ``repeat`` separate elements.
+
+    Args:
+        path: Path to the ``.ods`` file to edit in place.
+        sheet: The sheet name.
+        ods_row: 1-based *physical* row-element index, header counted as
+            row 1 -- unaffected by any other row's repeat count, since
+            this indexes ``getElementsByType(TableRow)`` directly.
+        repeat: The ``table:number-rows-repeated`` count to set.
+    """
+    from odf import opendocument
+    from odf import table as odf_table
+
+    doc = opendocument.load(str(path))
+    table_elem = next(
+        t
+        for t in doc.spreadsheet.getElementsByType(odf_table.Table)
+        if t.getAttribute("name") == sheet
+    )
+    row_elems = table_elem.getElementsByType(odf_table.TableRow)
+    row_elems[ods_row - 1].setAttribute("numberrowsrepeated", str(repeat))
+    with path.open("wb") as fh:
+        doc.write(fh)
+
+
+def test_repeated_non_blank_row_triggers_duplicate_node_id_error(tmp_path: Path, keypair) -> None:
+    """A single Nodes row element with ``numberrowsrepeated=2`` must expand to two rows.
+
+    Regression test for Round 37 aspect 1 finding #4: `_read_sheet` used
+    to force ``count = 1`` for any non-blank row regardless of its
+    ``table:number-rows-repeated`` attribute, so a row LibreOffice wrote
+    once but marked as covering two identical logical rows (the layout
+    Calc produces for a copy-pasted row) silently collapsed to a single
+    row on load -- the duplicate ``node_id`` never reached
+    `_check_unique_node_ids`.
+
+    CARE consequence (per the Round 37 consistency check): a file that
+    loaded cleanly before this fix, because it happened to contain an
+    identical duplicate row encoded this way, now fails to load with a
+    `DuplicateNodeError`. That is the correct outcome -- consistent with
+    how a non-identical duplicate row already behaves -- but is a
+    behavior change worth calling out, and is called out in this
+    fix's commit message.
+    """
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+    _set_row_repeat(path, "Nodes", ods_row=2, repeat=2)
+
+    with pytest.raises(DuplicateNodeError):
+        ods.load_database(path)
+
+
+def test_repeated_non_blank_row_keeps_later_row_numbers_accurate(tmp_path: Path, keypair) -> None:
+    """A repeated non-blank row must not misnumber a later row's validation error.
+
+    Regression test for Round 37 aspect 1 finding #4: `_load_sheet_rows`
+    increments its ``ods_row`` counter once per entry in
+    ``SheetData.rows``, so under the old bug (repeated non-blank rows
+    always collapsed to one entry) every row after a repeated row was
+    reported ``repeat - 1`` rows too early. With row A's element marked
+    ``numberrowsrepeated=3`` and row B invalid, the correct ODS row
+    for B's error is ``first_data_row + 3`` (A occupies rows 2-4, B is
+    row 5); the pre-fix behavior cited ``first_data_row + 1`` (row 3)
+    instead.
+    """
+    from tests.unit.conftest import edit_ods_cell
+
+    node_a = NodeRecord(node_id="deadbe01", short_name="AAAA")
+    node_b = NodeRecord(node_id="deadbe02", short_name="BBBB")
+    path = tmp_path / "db.ods"
+    ods.write_database(path, nodes=[node_a.to_row(), node_b.to_row()], keys=[], backup=False)
+
+    edit_ods_cell(path, "Nodes", "role", 3, "NOT_A_ROLE")
+    _set_row_repeat(path, "Nodes", ods_row=2, repeat=3)
+
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.row == 5
+
+
 def test_duplicate_key_ref_raises(tmp_path: Path, keypair) -> None:
     pub, _priv = KeyRecord.for_keypair("deadbe01", keypair)
     path = tmp_path / "db.ods"

@@ -490,7 +490,7 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
             # LibreOffice's giant trailing filler row: treat as end-of-data.
             break
 
-        count = min(repeat, MAX_ROW_REPEAT) if is_blank else 1
+        count = min(repeat, MAX_ROW_REPEAT)
         exhausted = False
         for _ in range(count):
             if is_blank:
