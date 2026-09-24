@@ -5,6 +5,7 @@ from __future__ import annotations
 import zipfile
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -994,65 +995,73 @@ def test_ods_database_lock_is_idempotent(tmp_path: Path) -> None:
     db.unlock()
 
 
-def test_read_raw_refuses_a_run_of_more_than_max_blank_rows_with_real_data_below(
-    tmp_path: Path, keypair
-) -> None:
-    """MAX_BLANK_ROWS must accumulate across many separate blank rows, not just one giant one.
+def _blank_run_row_elements(encoding: str) -> list[Any]:
+    """Build the odfpy ``table:table-row`` element(s) for one blank-run encoding.
 
-    Distinct from MAX_ROW_REPEAT (a single row element with a huge
-    ``numberrowsrepeated`` count, LibreOffice's trailing filler row):
-    each row written via ``write_database`` is its own separate
-    ``table:table-row`` element with an implicit repeat of 1, so
-    ``MAX_BLANK_ROWS + 1`` of them individually exercises the
-    consecutive-blank *accumulation* path instead.
+    Args:
+        encoding: One of the layouts a real Calc edit (or a hand-crafted
+            file) can use to encode a run of blank rows -- either many
+            separate row elements, or one element with a
+            ``table:number-rows-repeated`` count.
 
-    Regression test for Round 35's db-sheets review, Finding 1: this
-    exact shape (a long blank-row gap that ordinary Calc editing
-    produces, with real data still below it) used to be silently
-    truncated -- every row past the gap dropped with no warning, no
-    error, and the next save erasing them for good. It must now refuse
-    outright rather than guess.
+    Returns:
+        The row element(s) to splice into the sheet.
     """
-    node, pub, priv = _sample_records(keypair)
-    blank_row = {col.name: "" for col in schema.SHEET_SPECS["Nodes"].columns}
-    trailing_node = node.with_updates(node_id="cafe0002")
-    path = tmp_path / "db.ods"
-    ods.write_database(
-        path,
-        nodes=[*([blank_row] * (ods.MAX_BLANK_ROWS + 1)), trailing_node.to_row()],
-        keys=[pub.to_row(), priv.to_row()],
-        backup=False,
-    )
+    from odf import table as odf_table
 
-    with pytest.raises(DbIntegrityError, match="Nodes sheet has a run of more than"):
-        ods.read_raw(path)
+    if encoding == "separate_65":
+        return [odf_table.TableRow() for _ in range(ods.MAX_BLANK_ROWS + 1)]
+    if encoding == "separate_64":
+        return [odf_table.TableRow() for _ in range(ods.MAX_BLANK_ROWS)]
+    if encoding == "single_64":
+        return [odf_table.TableRow(numberrowsrepeated=ods.MAX_BLANK_ROWS)]
+    if encoding == "single_65":
+        return [odf_table.TableRow(numberrowsrepeated=ods.MAX_BLANK_ROWS + 1)]
+    if encoding == "single_1024":
+        return [odf_table.TableRow(numberrowsrepeated=ods.MAX_ROW_REPEAT)]
+    if encoding == "single_2000":
+        return [odf_table.TableRow(numberrowsrepeated=2000)]
+    if encoding == "single_1048000":
+        return [odf_table.TableRow(numberrowsrepeated=1048000)]
+    raise ValueError(f"unknown blank-run encoding: {encoding!r}")
 
 
-def test_read_raw_tolerates_a_trailing_blank_run_with_nothing_real_below_it(
-    tmp_path: Path, keypair
+def _write_nodes_with_blank_run(
+    path: Path,
+    *,
+    node: NodeRecord,
+    trailing_node: NodeRecord | None,
+    pub: KeyRecord,
+    priv: KeyRecord,
+    encoding: str,
 ) -> None:
-    """A long blank-row run with no real data past it must not raise.
+    """Write a ``Nodes`` sheet shaped: one real row, a blank run, an optional real row below.
 
-    Same shape as the regression test above, but with no trailing real
-    row -- e.g. an operator hand-deleted a trailing block of rows'
-    *contents* without deleting the rows themselves. Nothing is at risk
-    of being silently dropped here, so this must keep loading exactly as
-    it did before Round 35's fix, not start refusing a harmless file.
+    ``write_database`` always sorts rows on write (see
+    ``meshprovision.db.sorting``), so this places ``node``'s row and, if
+    given, ``trailing_node``'s row via the normal writer first --
+    ``trailing_node``'s ``node_id`` sorts after ``node``'s, so the write
+    order matches the on-disk order -- then splices the blank run
+    directly via odfpy between them (or after ``node``'s row, when there
+    is no trailing row), the same technique real hand-editing or a
+    LibreOffice save can produce.
 
-    write_database always sorts rows on write (see
-    meshprovision.db.sorting), and a blank row's empty name always sorts
-    first -- so this exact on-disk shape (real data, *then* a trailing
-    blank run) cannot be produced by write_database itself; it is
-    appended directly via odfpy to simulate a hand-edited file.
+    Args:
+        path: Path to write the ``.ods`` file to.
+        node: The row that stays above the blank run.
+        trailing_node: The row that stays below the blank run, or
+            ``None`` for no real data below it.
+        pub: The node's public :class:`KeyRecord`.
+        priv: The node's private :class:`KeyRecord`.
+        encoding: See :func:`_blank_run_row_elements`.
     """
     from odf import opendocument
     from odf import table as odf_table
 
-    node, pub, priv = _sample_records(keypair)
-    path = tmp_path / "db.ods"
-    ods.write_database(
-        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
-    )
+    nodes = [node.to_row()]
+    if trailing_node is not None:
+        nodes.append(trailing_node.to_row())
+    ods.write_database(path, nodes=nodes, keys=[pub.to_row(), priv.to_row()], backup=False)
 
     doc = opendocument.load(str(path))
     nodes_table = next(
@@ -1060,14 +1069,86 @@ def test_read_raw_tolerates_a_trailing_blank_run_with_nothing_real_below_it(
         for t in doc.spreadsheet.getElementsByType(odf_table.Table)
         if t.getAttribute("name") == "Nodes"
     )
-    nodes_table.addElement(odf_table.TableRow(numberrowsrepeated=ods.MAX_BLANK_ROWS + 1))
+    row_elems = nodes_table.getElementsByType(odf_table.TableRow)
+    insert_before = row_elems[2] if trailing_node is not None else None
+    for blank_row in _blank_run_row_elements(encoding):
+        if insert_before is not None:
+            nodes_table.insertBefore(blank_row, insert_before)
+        else:
+            nodes_table.addElement(blank_row)
     with path.open("wb") as fh:
         doc.write(fh)
+
+
+@pytest.mark.parametrize("data_below", [True, False])
+@pytest.mark.parametrize(
+    "encoding", ["separate_65", "single_65", "single_1024", "single_2000", "single_1048000"]
+)
+def test_read_raw_blank_run_layouts(
+    tmp_path: Path, keypair, encoding: str, data_below: bool
+) -> None:
+    """A blank-row run longer than MAX_BLANK_ROWS must never silently drop real data below it.
+
+    Regression test for Round 37 aspect 1 finding #3: a blank run
+    encoded as a *single* ``table:table-row`` element whose
+    ``table:number-rows-repeated`` exceeds :data:`ods.MAX_ROW_REPEAT`
+    (the giant-trailing-filler heuristic) used to ``break`` out of
+    ``_read_sheet`` immediately, without ever checking whether real data
+    still followed -- unlike the accumulation path
+    (``consecutive_blank > MAX_BLANK_ROWS``), which always ran that
+    check. Any ordinary Calc edit that leaves such a gap (typing or
+    pasting far below the existing data) silently truncated everything
+    below it on load, and the next save then permanently deleted those
+    rows, private keys included.
+
+    This matrix covers every layout Calc can produce for a blank-row
+    gap -- many separate row elements, and a single repeated element at
+    a range of counts spanning both sides of ``MAX_ROW_REPEAT`` up to
+    LibreOffice's own real trailing-filler count -- crossed with whether
+    real data follows the gap. Replaces the narrower Round 35 regression
+    tests for the accumulation path, which this matrix's
+    ``separate_65``/``single_65`` ids subsume.
+    """
+    node, pub, priv = _sample_records(keypair)
+    trailing_node = node.with_updates(node_id="ffff0002") if data_below else None
+    path = tmp_path / "db.ods"
+    _write_nodes_with_blank_run(
+        path, node=node, trailing_node=trailing_node, pub=pub, priv=priv, encoding=encoding
+    )
+
+    if data_below:
+        with pytest.raises(DbIntegrityError, match="Nodes sheet has a run of more than"):
+            ods.read_raw(path)
+        return
+
+    raw = ods.read_raw(path)
+    node_id_idx = schema.NODES_SHEET_SPEC.column_index("node_id")
+    assert raw.sheets["Nodes"].rows[0][node_id_idx].text == node.node_id
+
+
+@pytest.mark.parametrize("encoding", ["separate_64", "single_64"])
+def test_read_raw_blank_run_at_exactly_max_blank_rows_reads_cleanly(
+    tmp_path: Path, keypair, encoding: str
+) -> None:
+    """A blank run of exactly MAX_BLANK_ROWS, with data below, must not raise.
+
+    Boundary control for the matrix above: the accumulation guard is
+    ``consecutive_blank > MAX_BLANK_ROWS``, so a run of exactly
+    ``MAX_BLANK_ROWS`` rows must stay tolerated (threshold is ``>``, not
+    ``>=``) and both real rows must still be read.
+    """
+    node, pub, priv = _sample_records(keypair)
+    trailing_node = node.with_updates(node_id="ffff0002")
+    path = tmp_path / "db.ods"
+    _write_nodes_with_blank_run(
+        path, node=node, trailing_node=trailing_node, pub=pub, priv=priv, encoding=encoding
+    )
 
     raw = ods.read_raw(path)
 
     node_id_idx = schema.NODES_SHEET_SPEC.column_index("node_id")
     assert raw.sheets["Nodes"].rows[0][node_id_idx].text == node.node_id
+    assert raw.sheets["Nodes"].rows[-1][node_id_idx].text == trailing_node.node_id
 
 
 def test_module_level_verify_returns_the_same_warnings_as_load(tmp_path: Path, keypair) -> None:

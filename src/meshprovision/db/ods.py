@@ -410,6 +410,48 @@ def _read_row_cells(row_elem: Any) -> tuple[CellValue, ...]:
     return tuple(cells)
 
 
+def _has_data_below(row_elems: Sequence[Any], index: int) -> bool:
+    """Whether any row after ``row_elems[index]`` holds a non-blank cell.
+
+    Args:
+        row_elems: The sheet's raw ``table:table-row`` elements.
+        index: Index, within ``row_elems``, of the row just processed --
+            the rows checked start at ``index + 1``.
+
+    Returns:
+        ``True`` if any remaining row has at least one non-blank cell.
+    """
+    return any(
+        not all(not cell.text.strip() for cell in _read_row_cells(remaining))
+        for remaining in row_elems[index + 1 :]
+    )
+
+
+def _gap_error(name: str, ods_row: int) -> DbIntegrityError:
+    """Build the "blank-row gap with real data still below it" error.
+
+    Args:
+        name: The sheet's name.
+        ods_row: The 1-based ODS row number where the blank-row gap
+            starts.
+
+    Returns:
+        The constructed :class:`DbIntegrityError`, not yet raised.
+    """
+    return DbIntegrityError(
+        f"{name} sheet has a run of more than {MAX_BLANK_ROWS} consecutive "
+        f"blank rows starting at row {ods_row}, with real data still below "
+        "it; stopped reading there rather than risk silently dropping it.",
+        sheet=name,
+        cell=f"{name}.A{ods_row}",
+        hint=(
+            "Open the file in LibreOffice Calc and delete the blank row "
+            "block (Select rows -> Delete Rows, not just Delete Contents), "
+            "then re-run mesh db verify."
+        ),
+    )
+
+
 def _read_sheet(name: str, table_elem: Any) -> SheetData:
     """Read one ``table:table`` element into a :class:`SheetData`.
 
@@ -423,7 +465,10 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
     Raises:
         DbIntegrityError: If a run of more than :data:`MAX_BLANK_ROWS`
             consecutive blank rows is hit with non-blank rows still
-            following it below -- see :data:`MAX_BLANK_ROWS`'s own
+            following it below -- whether that run is encoded as many
+            separate blank row elements or as one element with a large
+            ``table:number-rows-repeated`` count (including one above
+            :data:`MAX_ROW_REPEAT`) -- see :data:`MAX_BLANK_ROWS`'s own
             docstring for why this can never be silently truncated.
     """
     row_elems = table_elem.getElementsByType(odf_table.TableRow)
@@ -440,6 +485,8 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
         repeat = _int_attr(row_elem, "numberrowsrepeated", default=1)
 
         if is_blank and repeat > MAX_ROW_REPEAT:
+            if _has_data_below(row_elems, index):
+                raise _gap_error(name, len(data_rows) + 2)
             # LibreOffice's giant trailing filler row: treat as end-of-data.
             break
 
@@ -465,23 +512,8 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
             # the front, but a hand-edit could still leave trailing) is
             # harmless to stop at, same as before -- so only refuse when
             # something non-blank is actually waiting past the gap.
-            if any(
-                not all(not cell.text.strip() for cell in _read_row_cells(remaining))
-                for remaining in row_elems[index + 1 :]
-            ):
-                ods_row = len(data_rows) + 2  # +1 header, +1 for 1-indexing
-                raise DbIntegrityError(
-                    f"{name} sheet has a run of more than {MAX_BLANK_ROWS} consecutive "
-                    f"blank rows starting at row {ods_row}, with real data still below "
-                    "it; stopped reading there rather than risk silently dropping it.",
-                    sheet=name,
-                    cell=f"{name}.A{ods_row}",
-                    hint=(
-                        "Open the file in LibreOffice Calc and delete the blank row "
-                        "block (Select rows -> Delete Rows, not just Delete Contents), "
-                        "then re-run mesh db verify."
-                    ),
-                )
+            if _has_data_below(row_elems, index):
+                raise _gap_error(name, len(data_rows) + 2)  # +1 header, +1 for 1-indexing
             break
 
     return SheetData(name=name, header=header, rows=tuple(data_rows))
