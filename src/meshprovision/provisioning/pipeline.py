@@ -252,7 +252,7 @@ def audit_node_key(live: detect.LiveConfig, *, known_bad: frozenset[bytes]) -> t
             private=security.private_key,
             node_id=live.node_id.display,
             key_ref=f"{live.node_id.hex}_pub",
-            firmware_version=live.firmware_version or None,
+            firmware_version=live.firmware_version,
             known_bad=known_bad,
         )
     except KeyMaterialError as exc:

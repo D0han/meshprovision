@@ -277,6 +277,65 @@ def test_audit_node_key_logs_a_warning_severity_finding(
     assert "deadbe01_pub" in records[0].getMessage()
 
 
+@pytest.mark.parametrize(
+    ("firmware", "expected_compromised", "expected_level", "expected_substring"),
+    [
+        pytest.param("", False, logging.WARNING, "could not be parsed", id="blank"),
+        pytest.param("   ", False, logging.WARNING, "could not be parsed", id="whitespace-only"),
+        pytest.param("garbage", False, logging.WARNING, "could not be parsed", id="garbage"),
+        pytest.param("2.5.0", True, logging.ERROR, "CVE-2025-52464 window", id="2.5.0"),
+        pytest.param("2.6.0", True, logging.ERROR, "CVE-2025-52464 window", id="2.6.0"),
+        pytest.param("2.6.10", True, logging.ERROR, "CVE-2025-52464 window", id="2.6.10"),
+        pytest.param("2.6.11", False, None, None, id="2.6.11"),
+        pytest.param("2.7.11", False, None, None, id="2.7.11"),
+    ],
+)
+def test_audit_node_key_firmware_matrix(
+    keypair: KeyPair,
+    caplog: pytest.LogCaptureFixture,
+    firmware: str,
+    expected_compromised: bool,
+    expected_level: int | None,
+    expected_substring: str | None,
+) -> None:
+    """Regression test for Finding #8: a blank firmware string must not be silently dropped.
+
+    ``audit_node_key`` used to call ``weakkeys.audit_node`` with
+    ``firmware_version=live.firmware_version or None``, collapsing a
+    genuinely blank firmware string (``detect.read_live_config``'s value
+    when the device reports no firmware metadata) into ``None``.
+    ``weakkeys.audit_node`` treats the two differently: ``""`` is
+    unparseable and produces a WARNING finding, while ``None`` skips the
+    firmware check entirely. ``mesh adopt`` never did this collapsing and
+    already warned correctly; ``mesh provision`` silently did not. This
+    matrix exercises the parser boundary the fix restores, plus the
+    unaffected CVE-2025-52464 window and clean-firmware cases on either
+    side of it.
+    """
+    live = detect.LiveConfig(
+        node_id=NodeId.from_hex("deadbe01"),
+        firmware_version=firmware,
+        security=detect.LiveSecurity(public_key=keypair.public, private_key=keypair.private),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
+        compromised, reason = audit_node_key(live, known_bad=frozenset())
+
+    assert compromised is expected_compromised
+    records = [r for r in caplog.records if r.getMessage().startswith("node key ")]
+    if expected_level is None:
+        assert records == []
+        assert reason == ""
+    else:
+        assert [record.levelno for record in records] == [expected_level]
+        assert expected_substring is not None
+        assert expected_substring in records[0].getMessage()
+        if expected_level == logging.ERROR:
+            assert expected_substring in reason
+        else:
+            assert reason == ""
+
+
 _MAP = {"A_pub": b"a" * 32, "B_pub": b"b" * 32}
 
 
