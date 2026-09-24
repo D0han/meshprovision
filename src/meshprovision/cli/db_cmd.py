@@ -353,12 +353,16 @@ def db_restore(
     Unlike ``mesh db backup``, this rewrites the live database directly,
     so it holds the cross-process write lock for the whole operation --
     excluding a concurrent ``mesh provision``/``mesh admin`` run the same
-    way those commands exclude each other. The current database is
-    itself backed up first (by :func:`~meshprovision.db.atomic_writer
-    .restore_backup`), so a restore is always reversible via
-    ``mesh db backup --list``. After restoring, the result is loaded back
-    to confirm it is actually a valid database -- a bad ``backup`` file
-    is caught here, not on the next unrelated ``mesh`` command.
+    way those commands exclude each other. ``BACKUP``'s bytes are
+    validated (see :func:`~meshprovision.db.ods.parse_database`) *before*
+    anything is written, so a bad ``backup`` file (wrong format, fails
+    schema validation) is refused with the live database left completely
+    untouched, rather than replacing it with something broken. Once that
+    check passes, the current database is itself backed up first (by
+    :func:`~meshprovision.db.atomic_writer.restore_backup`), so the
+    restore is always reversible via ``mesh db backup --list``. After
+    restoring, the result is loaded back once more, to confirm it is
+    actually a valid database on disk too.
 
     Pass either ``BACKUP`` (a specific file, typically copied from
     ``mesh db backup --list``) or ``--known-good``, never both: the
@@ -397,9 +401,11 @@ def db_restore(
             restore write fails, ``--known-good`` was given but no
             known-good copy exists yet, or its provenance is not
             verified.
-        SchemaError: If the restored file does not load as a valid
-            database. The pre-restore backup is still available via
-            ``mesh db backup --list``.
+        SchemaError: If ``BACKUP``'s content fails validation -- nothing
+            is written, and the live database is untouched -- or, in the
+            unlikely case that passes but the file on disk still does
+            not load afterwards, that the pre-restore backup is still
+            available via ``mesh db backup --list``.
     """
     ctx = ctx.with_assume_yes(yes)
     path = ctx.settings.db_path
@@ -439,8 +445,26 @@ def db_restore(
     if not ctx.confirm(question, default=False):
         raise click.Abort()
 
+    list_hint = (
+        f"mesh db backup --list --backup-dir {backup_dir}"
+        if backup_dir is not None
+        else "mesh db backup --list"
+    )
+
     with locking.exclusive_lock(path):
-        atomic_writer.restore_backup(resolved_backup, path, backup_dir=resolved_backup_dir)
+        try:
+            atomic_writer.restore_backup(
+                resolved_backup,
+                path,
+                backup_dir=resolved_backup_dir,
+                validate=lambda data: ods.parse_database(data, source=resolved_backup),
+            )
+        except MeshprovisionError as exc:
+            raise SchemaError(
+                f"{resolved_backup} is not a valid database; nothing was restored: "
+                f"{exc.user_message}",
+                hint=f"{path} was not touched. Pick a different backup: `{list_hint}`.",
+            ) from exc
         try:
             ods.load_database(path)
         except MeshprovisionError as exc:
@@ -448,8 +472,8 @@ def db_restore(
                 f"Restored {resolved_backup} but it does not load as a valid database: "
                 f"{exc.user_message}",
                 hint=(
-                    "The previous database was backed up before the restore; "
-                    "run `mesh db backup --list` to find it and restore again."
+                    f"The previous database was backed up to {resolved_backup_dir} before the "
+                    f"restore; run `{list_hint}` to find it and restore again."
                 ),
             ) from exc
 

@@ -253,6 +253,40 @@ def test_restore_backup_missing_file_raises(tmp_path: Path) -> None:
         restore_backup(tmp_path / "nope.bak", target, backup_dir=tmp_path / "backups")
 
 
+def test_restore_backup_validate_failure_writes_nothing(tmp_path: Path) -> None:
+    """A validate callback that raises must stop the restore before any write."""
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    write_bytes_atomic(target, b"v1", backup=False, backup_dir=backup_dir)
+    bad_backup = tmp_path / "bad.bak"
+    bad_backup.write_bytes(b"garbage")
+
+    def raising_validate(data: bytes) -> None:
+        assert data == b"garbage"
+        raise ValueError("not a valid database")
+
+    with pytest.raises(ValueError, match="not a valid database"):
+        restore_backup(bad_backup, target, backup_dir=backup_dir, validate=raising_validate)
+
+    assert target.read_bytes() == b"v1"
+    assert list_backups(target, backup_dir=backup_dir) == ()
+
+
+def test_restore_backup_validate_success_still_restores(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    write_bytes_atomic(target, b"v1", backup=False, backup_dir=backup_dir)
+    info = create_backup(target, backup_dir=backup_dir)
+    assert info is not None
+    write_bytes_atomic(target, b"v2", backup=False, backup_dir=backup_dir)
+
+    seen: list[bytes] = []
+    restore_backup(info.path, target, backup_dir=backup_dir, validate=seen.append)
+
+    assert seen == [b"v1"]
+    assert target.read_bytes() == b"v1"
+
+
 def test_backup_directory_cannot_be_created_raises(tmp_path: Path) -> None:
     target = tmp_path / "data.txt"
     target.write_bytes(b"v1")

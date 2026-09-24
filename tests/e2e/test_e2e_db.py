@@ -577,10 +577,12 @@ def test_db_restore_refuses_without_confirmation_when_non_interactive(
 def test_db_restore_of_an_unparsable_backup_reports_a_clear_error(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:
-    """A corrupt/non-ODS backup file must fail loudly, not leave a mysteriously-broken database."""
+    """A corrupt/non-ODS backup file must be refused before the live database is touched."""
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
     backup_dir = tmp_path / "backups"
     backup_dir.mkdir()
     seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    before = db_path.read_bytes()
     bad_backup = tmp_path / "not-an-ods-file.ods"
     bad_backup.write_text("not a zip file")
 
@@ -589,8 +591,14 @@ def test_db_restore_of_an_unparsable_backup_reports_a_clear_error(
     )
 
     assert result.exit_code == 4
-    assert "does not load as a valid database" in result.stderr
-    assert "mesh db backup --list" in result.stderr
+    assert "nothing was restored" in result.stderr
+    assert "mesh db backup --list --backup-dir" in result.stderr
+    assert str(backup_dir) in result.stderr
+    # Validation happens before any write: the live database is byte-identical
+    # to what it was before the failed restore, and no pre-restore safety
+    # backup of it was ever created.
+    assert db_path.read_bytes() == before
+    assert list(backup_dir.glob("*.ods")) == []
 
 
 def test_db_restore_missing_backup_file_is_a_usage_error(

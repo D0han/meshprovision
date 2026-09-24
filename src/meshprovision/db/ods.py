@@ -87,6 +87,7 @@ __all__ = [
     "build_document",
     "create_empty",
     "load_database",
+    "parse_database",
     "read_raw",
     "verify",
     "write_database",
@@ -834,6 +835,69 @@ def _check_unique_key_refs(keys: Sequence[Mapping[str, str]]) -> None:
         seen.add(key_ref)
 
 
+def parse_database(data: bytes, *, source: Path) -> LoadedDatabase:
+    """Validate and recompute an ODS database's full contents, from bytes already in hand.
+
+    The side-effect-free half of :func:`load_database`: no file I/O, and
+    no known-good refresh. This is what lets a restore validate a backup
+    file's bytes *before* they are written anywhere -- calling
+    :func:`load_database` directly on a backup path would be wrong for
+    that use, since it would refresh the known-good copy for the
+    backup's own path rather than the live database's.
+
+    Args:
+        data: The full contents of an ``.ods`` file.
+        source: Path to name in any error message. Not read -- ``data``
+            is used as-is, regardless of what currently sits at this
+            path, or whether anything does.
+
+    Returns:
+        The fully validated database, with both sheets' rows sorted into
+        their canonical order (see :mod:`meshprovision.db.sorting`)
+        regardless of the data's own row order. Its ``path`` is
+        ``source``.
+
+    Raises:
+        SchemaError: If ``data`` is not valid ODF content, is missing
+            the ``Nodes`` or ``Keys`` sheet, or either sheet's header
+            does not match its schema.
+        DbValidationError: If any cell fails validation.
+        DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
+        DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
+    """
+    started = time.monotonic()
+    raw = read_raw(source, data=data)
+    for sheet_name in schema.SHEET_NAMES:
+        if sheet_name not in raw.sheets:
+            raise SchemaError(
+                f"{source} is missing the required {sheet_name!r} sheet", sheet=sheet_name
+            )
+    _check_headers(raw)
+
+    warnings: list[IntegrityWarning] = []
+    nodes = _load_sheet_rows(raw.sheets[schema.NODES_SHEET], schema.NODES_SHEET_SPEC, warnings)
+    keys = _load_sheet_rows(raw.sheets[schema.KEYS_SHEET], schema.KEYS_SHEET_SPEC, warnings)
+
+    # Sorted after warnings are collected (they cite the original ods_row
+    # numbers) but before the uniqueness checks below, which don't care
+    # about order -- see meshprovision.db.sorting.
+    nodes = sorting.sorted_rows(schema.NODES_SHEET, nodes)
+    keys = sorting.sorted_rows(schema.KEYS_SHEET, keys)
+
+    _check_unique_node_ids(nodes)
+    _check_unique_key_refs(keys)
+
+    _logger.debug(
+        "Parsed %s in %.2fs: %d node(s), %d key(s), %d warning(s).",
+        source,
+        time.monotonic() - started,
+        len(nodes),
+        len(keys),
+        len(warnings),
+    )
+    return LoadedDatabase(path=source, nodes=nodes, keys=keys, warnings=tuple(warnings))
+
+
 def load_database(path: Path) -> LoadedDatabase:
     """Read, validate, and recompute an ODS database's full contents.
 
@@ -865,39 +929,10 @@ def load_database(path: Path) -> LoadedDatabase:
     failure (full disk, read-only backup directory) is logged and
     swallowed, not raised.
     """
-    started = time.monotonic()
     data, stat_result = _read_db_file(path)
-    raw = read_raw(path, data=data)
-    for sheet_name in schema.SHEET_NAMES:
-        if sheet_name not in raw.sheets:
-            raise SchemaError(
-                f"{path} is missing the required {sheet_name!r} sheet", sheet=sheet_name
-            )
-    _check_headers(raw)
-
-    warnings: list[IntegrityWarning] = []
-    nodes = _load_sheet_rows(raw.sheets[schema.NODES_SHEET], schema.NODES_SHEET_SPEC, warnings)
-    keys = _load_sheet_rows(raw.sheets[schema.KEYS_SHEET], schema.KEYS_SHEET_SPEC, warnings)
-
-    # Sorted after warnings are collected (they cite the original ods_row
-    # numbers) but before the uniqueness checks below, which don't care
-    # about order -- see meshprovision.db.sorting.
-    nodes = sorting.sorted_rows(schema.NODES_SHEET, nodes)
-    keys = sorting.sorted_rows(schema.KEYS_SHEET, keys)
-
-    _check_unique_node_ids(nodes)
-    _check_unique_key_refs(keys)
-
-    _logger.debug(
-        "Loaded %s in %.2fs: %d node(s), %d key(s), %d warning(s).",
-        path,
-        time.monotonic() - started,
-        len(nodes),
-        len(keys),
-        len(warnings),
-    )
+    loaded = parse_database(data, source=path)
     refresh_known_good(path, content=data, source_stat=stat_result)
-    return LoadedDatabase(path=path, nodes=nodes, keys=keys, warnings=tuple(warnings))
+    return loaded
 
 
 def verify(path: Path) -> tuple[IntegrityWarning, ...]:

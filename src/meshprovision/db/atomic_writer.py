@@ -46,7 +46,7 @@ import os
 import re
 import shutil
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -785,22 +785,41 @@ def write_bytes_atomic(
             ) from exc
 
 
-def restore_backup(backup: Path, target: Path, *, backup_dir: Path | None = None) -> None:
+def restore_backup(
+    backup: Path,
+    target: Path,
+    *,
+    backup_dir: Path | None = None,
+    validate: Callable[[bytes], object] | None = None,
+) -> None:
     """Restore ``target`` from a backup file, atomically.
 
-    Backs up the *current* ``target`` first (so the restore itself is
-    reversible), then atomically replaces ``target`` with the backup's
-    contents.
+    When ``validate`` is given, it runs against the backup's bytes
+    *before* anything is written -- neither a pre-restore backup of
+    ``target`` nor the replace itself happens until it returns. A bad
+    ``backup`` file (wrong format, fails schema validation) therefore
+    never touches ``target``: the caller finds out the same way it would
+    have found out on the very next unrelated read of the live database,
+    just before that damage would have been done instead of after.
+
+    Absent ``validate``, or once it passes, backs up the *current*
+    ``target`` first (so the restore itself is reversible), then
+    atomically replaces ``target`` with the backup's contents.
 
     Args:
         backup: Path to the backup file to restore from.
         target: The file to restore.
         backup_dir: Directory to store the pre-restore backup of
             ``target`` under.
+        validate: Called with the backup's bytes before any write. Its
+            return value is discarded; it signals a bad backup by
+            raising. ``None`` skips validation, restoring unconditionally.
 
     Raises:
         AtomicWriteError: If ``backup`` cannot be read, or the restore
             write fails.
+        Exception: Whatever ``validate`` raises, when the backup's
+            content fails validation. Propagates before any write.
     """
     if not backup.is_file():
         raise AtomicWriteError(f"Backup file not found: {backup}", path=str(backup))
@@ -808,4 +827,6 @@ def restore_backup(backup: Path, target: Path, *, backup_dir: Path | None = None
         data = backup.read_bytes()
     except OSError as exc:
         raise AtomicWriteError(f"Failed to read backup {backup}: {exc}", path=str(backup)) from exc
+    if validate is not None:
+        validate(data)
     write_bytes_atomic(target, data, backup=True, backup_dir=backup_dir)
