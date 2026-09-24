@@ -11,8 +11,8 @@ across a full ``mesh status`` run). This module docstring restates that
 guarantee so a future reader does not have to rediscover it.
 
 The one exception: a successful load also best-effort refreshes the
-known-good safety copy under ``data/backups/`` (see
-:func:`meshprovision.db.known_good.refresh_known_good`, wired in at
+known-good safety copy in a ``backups/`` directory next to the database
+(see :func:`meshprovision.db.known_good.refresh_known_good`, wired in at
 :func:`meshprovision.db.ods.load_database`) -- a side-channel copy, never
 a write to the live database file itself, so it does not affect the
 mtime guarantee above.

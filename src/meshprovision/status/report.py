@@ -22,11 +22,11 @@ changes.
 loading the database never marks the in-memory session dirty.
 
 None of this is contradicted by :func:`~meshprovision.db.ods
-.load_database` best-effort refreshing the known-good safety copy under
-``data/backups/`` on every successful load, including this module's own
--- that is a side-channel copy elsewhere on disk, never a write to
-``OdsDatabase``'s in-memory state or the live database file this
-module's own guarantee is about.
+.load_database` best-effort refreshing the known-good safety copy in a
+``backups/`` directory next to the database on every successful load,
+including this module's own -- that is a side-channel copy elsewhere on
+disk, never a write to ``OdsDatabase``'s in-memory state or the live
+database file this module's own guarantee is about.
 """
 
 from __future__ import annotations

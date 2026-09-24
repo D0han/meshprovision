@@ -13,12 +13,15 @@ import pytest
 from meshprovision.db import atomic_writer
 from meshprovision.db.atomic_writer import (
     BackupInfo,
+    _backup_name_re,
     _backup_sort_key,
     _claim_backup_path,
     _parse_backup_timestamp,
     atomic_write,
+    backup_dir_for,
     backup_name,
     create_backup,
+    legacy_backup_notice,
     link_no_clobber,
     list_backups,
     prune_backups,
@@ -937,3 +940,186 @@ def test_atomic_write_cleans_up_temp_when_backup_step_raises_keyboard_interrupt(
     assert target.read_bytes() == b"v0"
     stray = [p for p in tmp_path.iterdir() if p.name.startswith(f".{target.name}.tmp")]
     assert stray == []
+
+
+# --- backup_dir_for: per-target resolution (1a) ------------------------------------
+
+
+def test_backup_dir_for_resolves_next_to_an_absolute_target(tmp_path: Path) -> None:
+    target = tmp_path / "fleet" / "nodes_db.ods"
+    target.parent.mkdir()
+    assert backup_dir_for(target) == target.parent / "backups"
+
+
+def test_backup_dir_for_is_cwd_independent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    target = tmp_path / "fleet" / "nodes_db.ods"
+    target.parent.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    monkeypatch.chdir(elsewhere)
+    assert backup_dir_for(target) == target.parent / "backups"
+
+
+def test_backup_dir_for_resolves_a_relative_target_from_the_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    target = Path("data/nodes_db.ods")
+    assert backup_dir_for(target) == tmp_path / "data" / "backups"
+
+
+def test_backup_dir_for_explicit_override_ignores_target_location(tmp_path: Path) -> None:
+    target = tmp_path / "fleetA" / "nodes_db.ods"
+    override = tmp_path / "elsewhere" / "custom-backups"
+    assert backup_dir_for(target, override) is override
+
+
+def test_backup_dir_for_two_same_named_databases_never_share_a_directory(tmp_path: Path) -> None:
+    fleet_a = tmp_path / "fleetA" / "nodes_db.ods"
+    fleet_b = tmp_path / "fleetB" / "nodes_db.ods"
+    fleet_a.parent.mkdir()
+    fleet_b.parent.mkdir()
+
+    assert backup_dir_for(fleet_a) != backup_dir_for(fleet_b)
+
+
+# --- strict backup-name matching (1b) ------------------------------------------
+
+
+def test_backup_name_re_rejects_a_sibling_stem_prefixed_database(tmp_path: Path) -> None:
+    target = tmp_path / "fleet.ods"
+    pattern = _backup_name_re(target)
+
+    assert pattern.fullmatch("fleet-20260825T031410.123456Z.ods") is not None
+    assert pattern.fullmatch("fleet-west-20260825T031410.123456Z.ods") is None
+    assert pattern.fullmatch("fleet-west.known-good.ods") is None
+
+
+def test_list_backups_excludes_a_sibling_database_sharing_a_stem_prefix(tmp_path: Path) -> None:
+    """Reproduces aspect 3's HIGH, widened.
+
+    `fleet-west.ods`'s files must never be counted among `fleet.ods`'s
+    own backups, despite sharing a stem prefix and living in the same
+    directory.
+    """
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    target = tmp_path / "fleet.ods"
+
+    own = backup_dir / "fleet-20260101T000000.000000Z.ods"
+    own.write_bytes(b"fleet's own backup")
+    (backup_dir / "fleet-west-20260102T000000.000000Z.ods").write_bytes(b"west's backup")
+    (backup_dir / "fleet-west.known-good.ods").write_bytes(b"west's known-good")
+
+    backups = list_backups(target, backup_dir=backup_dir)
+
+    assert [info.path for info in backups] == [own]
+
+
+def test_prune_backups_never_deletes_a_sibling_stem_prefixed_databases_files(
+    tmp_path: Path,
+) -> None:
+    backup_dir = tmp_path / "backups"
+    fleet = tmp_path / "fleet.ods"
+    fleet_west = tmp_path / "fleet-west.ods"
+    fleet.write_bytes(b"fleet v0")
+    fleet_west.write_bytes(b"fleet-west v0")
+
+    for i in range(3):
+        fleet.write_bytes(f"fleet v{i + 1}".encode())
+        create_backup(
+            fleet,
+            backup_dir=backup_dir,
+            retention=1000,
+            now=datetime(2026, 1, 1, 0, 0, i, tzinfo=UTC),
+        )
+    for i in range(3):
+        fleet_west.write_bytes(f"fleet-west v{i + 1}".encode())
+        create_backup(
+            fleet_west,
+            backup_dir=backup_dir,
+            retention=1000,
+            now=datetime(2026, 1, 1, 0, 0, i, tzinfo=UTC),
+        )
+    (backup_dir / "fleet-west.known-good.ods").write_bytes(b"west's known-good")
+
+    removed = prune_backups(fleet, backup_dir=backup_dir, retention=1)
+
+    assert all("fleet-west" not in path.name for path in removed)
+    assert len(list_backups(fleet_west, backup_dir=backup_dir)) == 3
+    assert (backup_dir / "fleet-west.known-good.ods").exists()
+
+
+def test_hand_named_backup_is_no_longer_listed_or_pruned(tmp_path: Path) -> None:
+    """Documented behavior change (1b).
+
+    A hand-named file that merely starts with the target's stem is no
+    longer treated as one of its backups.
+    """
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    target = tmp_path / "nodes_db.ods"
+    hand_named = backup_dir / "nodes_db-old.ods"
+    hand_named.write_bytes(b"kept by hand")
+
+    assert list_backups(target, backup_dir=backup_dir) == ()
+    assert prune_backups(target, backup_dir=backup_dir, retention=0) == ()
+    assert hand_named.exists()
+
+
+# --- legacy CWD-relative backup directory notice (1d, D1=A) --------------------
+
+
+def test_legacy_backup_notice_none_when_backup_dir_is_overridden(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    assert legacy_backup_notice(target, backup_dir=tmp_path / "custom") is None
+
+
+def test_legacy_backup_notice_none_when_no_legacy_directory_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "elsewhere" / "nodes_db.ods"
+    assert legacy_backup_notice(target) is None
+
+
+def test_legacy_backup_notice_none_for_the_default_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data" / "backups").mkdir(parents=True)
+    target = tmp_path / "data" / "nodes_db.ods"
+    assert legacy_backup_notice(target) is None
+
+
+def test_legacy_backup_notice_none_when_no_matching_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    legacy_dir = tmp_path / "data" / "backups"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "unrelated-thing.ods").write_bytes(b"x")
+    target = tmp_path / "elsewhere" / "nodes_db.ods"
+
+    assert legacy_backup_notice(target) is None
+
+
+def test_legacy_backup_notice_reports_matching_legacy_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    legacy_dir = tmp_path / "data" / "backups"
+    legacy_dir.mkdir(parents=True)
+    target = tmp_path / "elsewhere" / "nodes_db.ods"
+    target.parent.mkdir()
+    (legacy_dir / "nodes_db-20260101T000000.000000Z.ods").write_bytes(b"x")
+    (legacy_dir / "nodes_db-20260102T000000.000000Z.ods").write_bytes(b"y")
+    (legacy_dir / "nodes_db_other-20260101T000000.000000Z.ods").write_bytes(b"not a match")
+
+    notice = legacy_backup_notice(target)
+
+    assert notice is not None
+    assert "2 older backups" in notice
+    assert "data/backups" in notice
+    assert "--known-good" in notice

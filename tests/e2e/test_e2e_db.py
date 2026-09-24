@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.crypto.keys import generate_keypair
-from meshprovision.db import ods
+from meshprovision.db import atomic_writer, ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType
@@ -525,8 +525,12 @@ def test_db_restore_overwrites_the_live_database(
     assert str(db_path) in result.stderr
     assert str(old_backup) in result.stderr
 
-    # The pre-restore content was itself backed up -- a restore is reversible.
-    assert len(list(backup_dir.glob("*.ods"))) == 2
+    # The pre-restore content was itself backed up -- a restore is
+    # reversible. Counted via list_backups(), not a bare "*.ods" glob:
+    # the restore's own post-load verification also refreshes the
+    # known-good copy here, since --backup-dir happens to coincide with
+    # this database's own default-resolved backup directory.
+    assert len(atomic_writer.list_backups(db_path, backup_dir=backup_dir)) == 2
 
 
 def test_db_restore_json_reports_target_and_source(
@@ -660,8 +664,9 @@ def test_db_restore_known_good_and_a_path_together_is_a_usage_error(
 ) -> None:
     seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
     invoke(runner, ["db", "verify"], env)
-    backup_dir = Path("data/backups")
-    known_good = backup_dir / f"{Path(env['MESHPROVISION_DB_PATH']).stem}.known-good.ods"
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    backup_dir = atomic_writer.backup_dir_for(db_path)
+    known_good = backup_dir / f"{db_path.stem}.known-good.ods"
 
     result = invoke(runner, ["db", "restore", str(known_good), "--known-good", "--yes"], env)
 
@@ -888,3 +893,167 @@ def test_db_list_shows_the_archived_timestamp(
 
     text_result = invoke(runner, ["db", "list"], env)
     assert "deadbe01" in text_result.stderr
+
+
+# --- cross-database isolation and provenance (aspect 3's HIGH) --------------------
+
+
+def _fleet_env(tmp_path: Path, name: str) -> dict[str, str]:
+    """Build a CLI environment for one of several same-named databases.
+
+    Each fleet's ``nodes_db.ods`` lives side by side under ``tmp_path``,
+    sharing one CWD/config root but never a backup directory.
+    """
+    return {
+        "MESHPROVISION_CONTACT": "meshprovision-tests@example.invalid",
+        "MESHPROVISION_CACHE_DIR": str(tmp_path / "cache"),
+        "MESHPROVISION_LOG_LEVEL": "WARNING",
+        "COLUMNS": "200",
+        "NO_COLOR": "1",
+        "MESHPROVISION_DB_PATH": str(tmp_path / name / "nodes_db.ods"),
+    }
+
+
+def test_known_good_restore_never_crosses_two_same_named_databases(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Reproduces aspect 3's HIGH.
+
+    `fleetA/nodes_db.ods` and `fleetB/nodes_db.ods` must never share a
+    backup directory or known-good slot, and restoring `fleetA`'s
+    known-good copy must never pull in `fleetB`'s data.
+    """
+    env_a = _fleet_env(tmp_path, "fleetA")
+    env_b = _fleet_env(tmp_path, "fleetB")
+
+    assert invoke(runner, ["init", "--yes"], env_a).exit_code == 0
+    assert invoke(runner, ["init", "--yes"], env_b).exit_code == 0
+
+    fleet_a_path = Path(env_a["MESHPROVISION_DB_PATH"])
+    fleet_b_path = Path(env_b["MESHPROVISION_DB_PATH"])
+
+    kp = generate_keypair()
+    imported = invoke(runner, ["admin", "import", f"FLEETB={kp.public_b64}"], env_b)
+    assert imported.exit_code == 0
+    assert "FLEETB_pub" in {row["key_ref"] for row in ods.load_database(fleet_b_path).keys}
+
+    # Any successful load (the init above, the import above) refreshed
+    # fleetB's own known-good copy. fleetA's own `init` load did the same
+    # for fleetA -- corrupt fleetA's live file to force a restore from it.
+    fleet_a_path.write_bytes(b"garbage")
+
+    result = invoke(runner, ["db", "restore", "--known-good", "--yes"], env_a)
+
+    assert result.exit_code == 0
+    restored = ods.load_database(fleet_a_path)
+    assert "FLEETB_pub" not in {row["key_ref"] for row in restored.keys}
+
+    fleet_a_backups = atomic_writer.backup_dir_for(fleet_a_path)
+    fleet_b_backups = atomic_writer.backup_dir_for(fleet_b_path)
+    assert fleet_a_backups.is_dir()
+    assert fleet_b_backups.is_dir()
+    assert fleet_a_backups != fleet_b_backups
+    assert not (tmp_path / "data" / "backups").exists()
+
+
+def test_prune_backups_never_shares_a_retention_budget_across_fleets(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    env_a = _fleet_env(tmp_path, "fleetA")
+    env_b = _fleet_env(tmp_path, "fleetB")
+    assert invoke(runner, ["init", "--yes"], env_a).exit_code == 0
+    assert invoke(runner, ["init", "--yes"], env_b).exit_code == 0
+    fleet_a_path = Path(env_a["MESHPROVISION_DB_PATH"])
+    fleet_b_path = Path(env_b["MESHPROVISION_DB_PATH"])
+
+    for _ in range(3):
+        assert invoke(runner, ["db", "backup", "--retention", "1"], env_a).exit_code == 0
+    for _ in range(3):
+        assert invoke(runner, ["db", "backup", "--retention", "1"], env_b).exit_code == 0
+
+    assert len(atomic_writer.list_backups(fleet_a_path)) == 1
+    assert len(atomic_writer.list_backups(fleet_b_path)) == 1
+
+
+def test_db_restore_known_good_refuses_an_unverified_copy_by_directory_copy(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A whole fleet directory copied elsewhere carries a stale known-good copy.
+
+    It is provably not the copied-to database's own, so `--known-good`
+    must refuse it, but restoring the exact same file by explicit path
+    still works.
+    """
+    env_a = _fleet_env(tmp_path, "fleetA")
+    assert invoke(runner, ["init", "--yes"], env_a).exit_code == 0
+    fleet_a_dir = tmp_path / "fleetA"
+
+    fleet_c_dir = tmp_path / "fleetC"
+    shutil.copytree(fleet_a_dir, fleet_c_dir)
+    env_c = dict(env_a, MESHPROVISION_DB_PATH=str(fleet_c_dir / "nodes_db.ods"))
+    fleet_c_path = Path(env_c["MESHPROVISION_DB_PATH"])
+    fleet_c_path.write_bytes(b"garbage")
+    before_bytes = fleet_c_path.read_bytes()
+
+    refused = invoke(runner, ["db", "restore", "--known-good", "--yes"], env_c)
+
+    assert refused.exit_code == 4
+    assert "could not be confirmed" in refused.stderr
+    assert fleet_c_path.read_bytes() == before_bytes
+
+    known_good_file = atomic_writer.backup_dir_for(fleet_c_path) / "nodes_db.known-good.ods"
+    explicit = invoke(runner, ["db", "restore", str(known_good_file), "--yes"], env_c)
+
+    assert explicit.exit_code == 0
+    assert ods.load_database(fleet_c_path) is not None
+
+
+def test_db_backup_list_tags_known_good_provenance(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    invoke(runner, ["db", "verify"], env)  # refreshes the known-good copy
+
+    result = invoke(runner, ["db", "backup", "--list"], env)
+    assert result.exit_code == 0
+    assert "[verified]" in result.stdout
+
+    as_json = invoke(runner, ["db", "backup", "--list", "--json"], env)
+    document = json.loads(as_json.stdout)
+    assert document["known_good"]["provenance"] == "verified"
+
+
+def test_load_failure_hint_for_an_unverified_known_good_points_at_its_path(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    env_a = _fleet_env(tmp_path, "fleetA")
+    assert invoke(runner, ["init", "--yes"], env_a).exit_code == 0
+    fleet_a_path = Path(env_a["MESHPROVISION_DB_PATH"])
+    sidecar = atomic_writer.backup_dir_for(fleet_a_path) / "nodes_db.known-good.json"
+    sidecar.unlink()  # simulate a copy left by an older meshprovision
+
+    fleet_a_path.write_bytes(b"not a zip file at all")
+
+    result = invoke(runner, ["db", "verify"], env_a)
+
+    assert result.exit_code == 4
+    assert "could not be confirmed" in result.stderr
+    assert "mesh db restore --known-good" not in result.stderr
+
+
+def test_db_backup_list_reports_a_legacy_backup_dir_notice(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    env_a = _fleet_env(tmp_path, "fleetA")
+    assert invoke(runner, ["init", "--yes"], env_a).exit_code == 0
+
+    legacy_dir = tmp_path / "data" / "backups"
+    legacy_dir.mkdir(parents=True)
+    (legacy_dir / "nodes_db-20260101T000000.000000Z.ods").write_bytes(b"old fleet's backup")
+
+    result = invoke(runner, ["db", "backup", "--list"], env_a)
+
+    assert result.exit_code == 0
+    assert "data" in result.stdout
+    assert "backups" in result.stdout
+    assert "explicit path" in result.stdout

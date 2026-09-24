@@ -1053,15 +1053,23 @@ class CliContext:
         unreadable ODF, a missing sheet, a header mismatch, a bad cell,
         a duplicate row) gets its ``hint`` extended with a pointer at the
         known-good safety copy (see :func:`meshprovision.db.known_good
-        .refresh_known_good`), when one exists, naming the exact
-        ``mesh db restore --known-good`` command to run. A locking or
+        .refresh_known_good`), when one exists and its provenance is
+        verified (see :func:`meshprovision.db.known_good
+        .known_good_status`), naming the exact ``mesh db restore
+        --known-good`` command to run. An unverified copy gets a
+        different hint pointing at it by path instead, since
+        ``--known-good`` itself would refuse it. A locking or
         atomic-write failure is left alone -- those aren't about bad
         file content, so a known-good copy isn't the relevant remedy.
         """
         from meshprovision.db import ods as ods_module
         from meshprovision.db import schema
         from meshprovision.db.keys import KeyRepository
-        from meshprovision.db.known_good import known_good_info
+        from meshprovision.db.known_good import (
+            KnownGoodProvenance,
+            known_good_status,
+            provenance_reason,
+        )
         from meshprovision.db.nodes import NodeRepository
         from meshprovision.db.ods import OdsDatabase
 
@@ -1084,12 +1092,19 @@ class CliContext:
                 ods_module.create_empty(path, backup=False)
                 db.load(force=True)
         except DbError as exc:
-            known_good = known_good_info(path)
-            if known_good is not None:
-                remediation = (
-                    f"A known-good copy from {schema.utc_timestamp(known_good.created_at)} "
-                    "is available. Run: mesh db restore --known-good"
-                )
+            status = known_good_status(path)
+            if status is not None:
+                if status.provenance is KnownGoodProvenance.VERIFIED:
+                    remediation = (
+                        f"A known-good copy from {schema.utc_timestamp(status.info.created_at)} "
+                        "is available. Run: mesh db restore --known-good"
+                    )
+                else:
+                    remediation = (
+                        f"A known-good copy exists at {status.info.path}, but it could not be "
+                        f"confirmed as this database's ({provenance_reason(status)}). Inspect "
+                        "it before restoring it by path."
+                    )
                 exc.hint = f"{exc.hint}\n{remediation}" if exc.hint else remediation
             db.unlock()
             raise

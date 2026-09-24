@@ -31,7 +31,13 @@ anywhere in the codebase -- not just through this module. ``mesh db
 restore --known-good`` restores it without needing its path, and it is
 exactly what a load-failure error's hint (see
 :meth:`~meshprovision.cli.common.CliContext.open_database`) points an
-operator at after a hand-edit breaks the live file.
+operator at after a hand-edit breaks the live file -- but only when a
+provenance sidecar (see :func:`~meshprovision.db.known_good
+.known_good_status`) confirms the copy actually belongs to this
+database; ``restore --known-good`` refuses otherwise. Both the backup
+directory and the known-good copy live next to the database itself (see
+:func:`~meshprovision.db.atomic_writer.backup_dir_for`), never at a
+single CWD-relative location shared by every same-named database.
 """
 
 from __future__ import annotations
@@ -54,7 +60,12 @@ from meshprovision.cli.common import (
 )
 from meshprovision.crypto import weakkeys
 from meshprovision.db import atomic_writer, locking, ods, schema
-from meshprovision.db.known_good import known_good_info
+from meshprovision.db.known_good import (
+    KnownGoodProvenance,
+    known_good_path,
+    known_good_status,
+    provenance_reason,
+)
 from meshprovision.db.verify import ProblemSeverity, verify_database
 from meshprovision.errors import (
     AdminKeyCapacityError,
@@ -169,7 +180,7 @@ def db_verify(ctx: CliContext, *, strict: bool, json_output: bool) -> None:
     "--backup-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Directory to store backups under. Defaults to data/backups.",
+    help="Directory to store backups under. Defaults to a backups/ directory next to the database.",
 )
 @click.option(
     "--retention",
@@ -208,7 +219,13 @@ def db_backup(
     :func:`~meshprovision.db.known_good.refresh_known_good`), when one
     exists, ahead of the timestamped backups it is not one of --
     ``mesh db restore --known-good`` restores it directly, without
-    needing to name its path.
+    needing to name its path -- tagged with its provenance, so an
+    unverified copy (see :func:`~meshprovision.db.known_good
+    .known_good_status`) is visibly not one ``--known-good`` will accept.
+    It also prints a one-line notice (see :func:`~meshprovision.db
+    .atomic_writer.legacy_backup_notice`) when matching backups are
+    sitting in the old, pre-per-database ``data/backups`` location for a
+    non-default ``--db-path``.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
@@ -224,16 +241,16 @@ def db_backup(
             back up), or the backup copy fails.
     """
     path = ctx.settings.db_path
-    resolved_backup_dir = backup_dir if backup_dir is not None else atomic_writer.DEFAULT_BACKUP_DIR
+    resolved_backup_dir = atomic_writer.backup_dir_for(path, backup_dir)
 
     if list_only:
         infos = atomic_writer.list_backups(path, backup_dir=resolved_backup_dir)
-        # Deliberately not resolved_backup_dir: the known-good copy is a
-        # single, global safety net refreshed by every successful load
+        # Deliberately not resolved_backup_dir: the known-good copy always
+        # lives at this database's own default-resolved location
         # (load_database() never sees a per-invocation --backup-dir
-        # override), so it always lives under the default location
-        # regardless of what this specific --backup-dir names.
-        known_good = known_good_info(path)
+        # override), independent of what this specific --backup-dir names.
+        status = known_good_status(path)
+        notice = atomic_writer.legacy_backup_notice(path, backup_dir=backup_dir)
         if json_output:
             payload: dict[str, object] = {
                 "backups": [
@@ -245,19 +262,23 @@ def db_backup(
                     for info in infos
                 ]
             }
-            if known_good is not None:
+            if status is not None:
                 payload["known_good"] = {
-                    "path": str(known_good.path),
-                    "created_at": schema.utc_timestamp(known_good.created_at),
-                    "size_bytes": known_good.size_bytes,
+                    "path": str(status.info.path),
+                    "created_at": schema.utc_timestamp(status.info.created_at),
+                    "size_bytes": status.info.size_bytes,
+                    "provenance": status.provenance.value,
                 }
+            if notice is not None:
+                payload["legacy_backup_notice"] = notice
             echo_json(payload)
         else:
-            if known_good is not None:
+            if status is not None:
                 ctx.print_out(
-                    f"known-good: {known_good.path}  "
-                    f"{schema.utc_timestamp(known_good.created_at)}  "
-                    f"{known_good.size_bytes} bytes"
+                    f"known-good: {status.info.path}  "
+                    f"{schema.utc_timestamp(status.info.created_at)}  "
+                    f"{status.info.size_bytes} bytes  "
+                    f"[{status.provenance.value}]"
                 )
             if not infos:
                 ctx.print_out("No backups found.")
@@ -267,6 +288,8 @@ def db_backup(
                         f"{info.path}  {schema.utc_timestamp(info.created_at)}  "
                         f"{info.size_bytes} bytes"
                     )
+            if notice is not None:
+                ctx.print_out(notice)
         return
 
     if not path.is_file():
@@ -306,7 +329,10 @@ def db_backup(
     "--backup-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Directory the pre-restore safety backup is stored under. Defaults to data/backups.",
+    help=(
+        "Directory the pre-restore safety backup is stored under. Defaults to a backups/ "
+        "directory next to the database."
+    ),
 )
 @click.option(
     "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of human text."
@@ -339,7 +365,14 @@ def db_restore(
     latter restores the safety copy every successful database load
     refreshes (see :func:`~meshprovision.db.known_good
     .refresh_known_good`) -- exactly what a load-failure error's hint
-    points at, without needing to first hunt down its path.
+    points at, without needing to first hunt down its path. ``--known
+    -good`` additionally refuses, before the confirmation prompt and
+    without touching the database, when that copy's recorded provenance
+    (see :func:`~meshprovision.db.known_good.known_good_status`) is not
+    verified -- for example after a database directory was copied or
+    renamed, or the sidecar is missing or stale. An explicit ``BACKUP``
+    path is never provenance-checked: naming a file by path is itself
+    the operator's own verification.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
@@ -350,38 +383,50 @@ def db_restore(
             from ``--known-good``.
         yes: Whether to assume yes to the confirmation, from ``-y``/``--yes``.
         backup_dir: Pre-restore safety-backup directory override, from
-            ``--backup-dir``. Also where the known-good copy itself is
-            looked up, when ``--known-good`` is used.
+            ``--backup-dir``. Never affects where the known-good copy
+            itself is looked up -- that is always this database's own
+            default-resolved location (see :func:`~meshprovision.db
+            .atomic_writer.backup_dir_for`), when ``--known-good`` is
+            used.
         json_output: Whether to emit JSON, from ``--json``.
 
     Raises:
         click.UsageError: If neither ``BACKUP`` nor ``--known-good`` is
             given, or both are.
         AtomicWriteError: If the resolved backup file cannot be read, the
-            restore write fails, or ``--known-good`` was given but no
-            known-good copy exists yet.
+            restore write fails, ``--known-good`` was given but no
+            known-good copy exists yet, or its provenance is not
+            verified.
         SchemaError: If the restored file does not load as a valid
             database. The pre-restore backup is still available via
             ``mesh db backup --list``.
     """
     ctx = ctx.with_assume_yes(yes)
     path = ctx.settings.db_path
-    resolved_backup_dir = backup_dir if backup_dir is not None else atomic_writer.DEFAULT_BACKUP_DIR
+    resolved_backup_dir = atomic_writer.backup_dir_for(path, backup_dir)
 
     if use_known_good and backup is not None:
         raise click.UsageError("Pass either BACKUP or --known-good, not both.")
     if use_known_good:
         # Deliberately not resolved_backup_dir -- see the matching
         # comment in db_backup(): the known-good copy always lives at
-        # the default location, independent of --backup-dir (which here
-        # only controls where the *pre-restore* safety backup lands).
-        known_good = known_good_info(path)
-        if known_good is None:
+        # this database's own default-resolved location, independent of
+        # --backup-dir (which here only controls where the *pre-restore*
+        # safety backup lands).
+        status = known_good_status(path)
+        if status is None:
             raise AtomicWriteError(
-                f"No known-good copy exists yet under {atomic_writer.DEFAULT_BACKUP_DIR}.",
+                f"No known-good copy exists yet under {known_good_path(path).parent}.",
                 path=str(path),
             )
-        resolved_backup = known_good.path
+        if status.provenance is not KnownGoodProvenance.VERIFIED:
+            raise AtomicWriteError(
+                f"The known-good copy at {status.info.path} could not be confirmed as this "
+                f"database's ({provenance_reason(status)}). If you have checked it really is "
+                f"this database's, restore it by path: mesh db restore {status.info.path}",
+                path=str(path),
+            )
+        resolved_backup = status.info.path
     elif backup is not None:
         resolved_backup = backup
     else:

@@ -357,6 +357,7 @@ def test_read_only_guarantee_across_run_modes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
+    from meshprovision.db import atomic_writer
     from meshprovision.db.known_good import known_good_info
     from meshprovision.db.nodes import NodeRecord
 
@@ -393,9 +394,14 @@ def test_read_only_guarantee_across_run_modes(
         invoke(runner, ["status", "--watch", "--interval", "1"], env)
         assert db_fingerprint(db_path) == before
 
-    backups_dir = tmp_path / "data" / "backups"
+    backups_dir = atomic_writer.backup_dir_for(db_path)
     assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
-    assert [p.resolve() for p in backups_dir.iterdir()] == [known_good.path.resolve()]
+    # The known-good copy plus its provenance sidecar -- nothing else.
+    sidecar = backups_dir / f"{db_path.stem}.known-good.json"
+    assert {p.resolve() for p in backups_dir.iterdir()} == {
+        known_good.path.resolve(),
+        sidecar.resolve(),
+    }
 
 
 def test_missing_contact_exits_two(runner: CliRunner, env: dict[str, str]) -> None:

@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision.crypto.keys import encode_key
-from meshprovision.db import ods, schema
+from meshprovision.db import atomic_writer, ods, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.known_good import known_good_info
 from meshprovision.db.nodes import NodeRecord
@@ -936,7 +936,7 @@ def test_ods_database_save_backup_true_creates_one_timestamped_backup(
     db.save(backup=True)
     assert db.dirty() is False
 
-    backups_dir = Path("data/backups")
+    backups_dir = atomic_writer.backup_dir_for(path)
     assert backups_dir.is_dir()
     timestamped = list(backups_dir.glob(f"{path.stem}-*{path.suffix}"))
     assert len(timestamped) == 1

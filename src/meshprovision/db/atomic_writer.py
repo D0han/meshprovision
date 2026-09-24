@@ -10,9 +10,14 @@ partially-copied backup can never appear under a final name), then
 taken **before** the replace, so an interrupted or failed replace never
 loses the pre-write state.
 
-Backups default to ``data/backups/`` (already covered by ``.gitignore``)
-with a retention limit, since key material lives in the ODS this module
-is typically used to protect. Both the target file and each backup are
+Backups default to a ``backups/`` directory next to the target file
+(see ``backup_dir_for``) with a retention limit, since key material
+lives in the ODS this module is typically used to protect. For the
+project's own default database path, ``data/nodes_db.ods``, that is
+``data/backups/`` -- already covered by ``.gitignore`` -- but a
+non-default ``--db-path``/``MESHPROVISION_DB_PATH`` puts backups beside
+*that* file instead, which is not necessarily covered by any
+``.gitignore``. Both the target file and each backup are
 created with mode ``0o600``: the target's temp file is pre-created at
 that mode before it is handed to the caller, and ``os.replace`` carries
 it onto the target unchanged; each backup's temp copy is chmodded to the
@@ -38,6 +43,7 @@ import contextlib
 import errno
 import logging
 import os
+import re
 import shutil
 import uuid
 from collections.abc import Iterator
@@ -50,13 +56,13 @@ from meshprovision.errors import AtomicWriteError
 
 __all__ = [
     "BACKUP_TIMESTAMP_FORMAT",
-    "DEFAULT_BACKUP_DIR",
     "DEFAULT_RETENTION",
     "BackupInfo",
     "atomic_write",
     "backup_dir_for",
     "backup_name",
     "create_backup",
+    "legacy_backup_notice",
     "link_no_clobber",
     "list_backups",
     "prune_backups",
@@ -66,8 +72,19 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 
-DEFAULT_BACKUP_DIR: Final[Path] = Path("data/backups")
-"""Default backup directory, relative to the current working directory."""
+_BACKUP_DIR_NAME: Final[str] = "backups"
+"""Name of the backup directory created next to each target file."""
+
+_LEGACY_BACKUP_DIR: Final[Path] = Path("data/backups")
+"""Old CWD-relative default backup directory, from before backup
+directories followed the target file's own location.
+
+Kept only so :func:`legacy_backup_notice` can point an operator at
+files that may still be sitting there for a non-default
+``--db-path``/``MESHPROVISION_DB_PATH``. Never consulted for a restore,
+and never migrated automatically -- a leftover file there cannot be
+safely attributed to any one database by this module alone.
+"""
 
 DEFAULT_RETENTION: Final[int] = 20
 """Default number of backups to keep per target file."""
@@ -180,22 +197,31 @@ def _normalize_utc(when: datetime | None) -> datetime:
     return resolved.replace(tzinfo=UTC) if resolved.tzinfo is None else resolved.astimezone(UTC)
 
 
-def backup_dir_for(target: Path, backup_dir: Path | None = None) -> Path:  # noqa: ARG001
+def backup_dir_for(target: Path, backup_dir: Path | None = None) -> Path:
     """Resolve the backup directory to use for a target file.
 
     Args:
-        target: The file backups are being resolved for. Accepted for API
-            symmetry with :func:`backup_name` and :func:`create_backup`
-            and to leave room for a future per-target default; the
-            current default is always :data:`DEFAULT_BACKUP_DIR`,
-            independent of ``target``'s own location.
+        target: The file backups are being resolved for.
         backup_dir: An explicit backup directory to use instead of the
             default.
 
     Returns:
-        ``backup_dir`` if given, otherwise :data:`DEFAULT_BACKUP_DIR`.
+        ``backup_dir`` if given, otherwise a ``backups/`` directory next
+        to ``target``'s real location: ``target.resolve().parent /
+        "backups"``. This is CWD-independent, and it means two different
+        databases that merely happen to share a file name -- for example
+        two fleets each named ``nodes_db.ods`` -- never share a backup
+        directory or known-good slot. Resolving ``target`` (non-strict,
+        so it need not exist yet) also means a symlinked database's
+        backups live beside the real file, not the link. For the
+        project's own default, ``data/nodes_db.ods``, this resolves to
+        ``<cwd>/data/backups`` -- the same directory used before this
+        function considered ``target`` at all -- so default layouts see
+        no change beyond messages now showing an absolute path.
     """
-    return backup_dir if backup_dir is not None else DEFAULT_BACKUP_DIR
+    if backup_dir is not None:
+        return backup_dir
+    return target.resolve().parent / _BACKUP_DIR_NAME
 
 
 def backup_name(target: Path, when: datetime) -> str:
@@ -209,6 +235,93 @@ def backup_name(target: Path, when: datetime) -> str:
         For example ``"nodes_db-20260825T031410Z.ods"``.
     """
     return f"{target.stem}-{when.strftime(BACKUP_TIMESTAMP_FORMAT)}{target.suffix}"
+
+
+_BACKUP_NAME_TIMESTAMP: Final[str] = r"\d{8}T\d{6}(?:\.\d{6})?Z"
+
+
+def _backup_name_re(target: Path) -> re.Pattern[str]:
+    """Build the strict backup-file-name pattern for one target file.
+
+    Always matched with :meth:`re.Pattern.fullmatch`, never as a
+    prefix/glob match, so a sibling database whose name merely starts
+    with the same stem (``fleet-west.ods`` for target ``fleet.ods``) is
+    never mistaken for one of ``target``'s own backups -- the glob used
+    to prefilter candidate files is deliberately loose, this regex is
+    what actually decides membership.
+
+    Accepts the current microsecond-resolution timestamp format, the
+    legacy second-resolution format still on disk from before it, and
+    :func:`_claim_backup_path`'s ``-N`` collision suffix.
+
+    Args:
+        target: The file whose backup names should match.
+
+    Returns:
+        A compiled pattern over ``"<stem>-<timestamp>[-N]<suffix>"``,
+        with the timestamp token captured in group 1.
+    """
+    return re.compile(
+        rf"{re.escape(target.stem)}-({_BACKUP_NAME_TIMESTAMP})(?:-\d+)?{re.escape(target.suffix)}"
+    )
+
+
+def legacy_backup_notice(target: Path, *, backup_dir: Path | None = None) -> str | None:
+    """Build a one-line notice about a legacy CWD-relative backup directory, if relevant.
+
+    Before :func:`backup_dir_for` resolved backups next to the target
+    file, every database defaulted to a single ``data/backups``,
+    relative to the current working directory. A non-default
+    ``--db-path``/``MESHPROVISION_DB_PATH`` run before this version may
+    have left backups there -- possibly mixed with a different,
+    same-named database's own backups, which is exactly the ambiguity
+    the per-target directory now avoids. This performs no migration and
+    is never consulted for a restore or offered for ``--known-good``; it
+    only surfaces a pointer so ``mesh db backup --list`` can tell an
+    operator to go look, and restore by explicit path after checking.
+
+    Args:
+        target: The database file to check for matching legacy backups.
+        backup_dir: An explicit backup directory override that was
+            passed to the caller's own operation. When given, there is
+            no default-location ambiguity to report.
+
+    Returns:
+        A human-readable notice, or ``None`` when: ``backup_dir`` was
+        explicitly given; the legacy directory does not exist; it is
+        already ``target``'s own resolved backup directory (the default
+        layout, where nothing changed); or it holds no file names that
+        match ``target``.
+    """
+    if backup_dir is not None:
+        return None
+    if not _LEGACY_BACKUP_DIR.is_dir():
+        return None
+
+    resolved = backup_dir_for(target)
+    try:
+        if _LEGACY_BACKUP_DIR.resolve() == resolved.resolve():
+            return None
+    except OSError:
+        pass
+
+    pattern = _backup_name_re(target)
+    count = sum(
+        1
+        for path in _LEGACY_BACKUP_DIR.glob(f"{target.stem}-*{target.suffix}")
+        if path.is_file() and pattern.fullmatch(path.name)
+    )
+    if count == 0:
+        return None
+
+    plural = "" if count == 1 else "s"
+    return (
+        f"{count} older backup{plural} named like this database are under "
+        f"{_LEGACY_BACKUP_DIR} (the location used before this version). They may "
+        "belong to a different database that happens to share this file name -- "
+        "restore one only by explicit path, after checking it. Never offered for "
+        "--known-good."
+    )
 
 
 def link_no_clobber(source: Path, destination: Path) -> None:
@@ -405,33 +518,28 @@ def create_backup(
 def _parse_backup_timestamp(name: str, target: Path) -> datetime | None:
     """Extract the embedded timestamp from a backup file name, if possible.
 
-    Tolerates a trailing collision suffix (``-N``) from
-    :func:`_claim_backup_path`, which is not itself part of the
-    timestamp. Accepts both :data:`BACKUP_TIMESTAMP_FORMAT` and the
-    legacy second-resolution format backups may still carry on disk.
+    Uses :func:`_backup_name_re` for both the shape check and the
+    timestamp extraction, so the two can never drift apart -- a name
+    this rejects is never counted as one of ``target``'s backups
+    elsewhere, and a name it accepts always parses.
 
     Args:
         name: The backup file's bare name (no directory component).
-        target: The target file the backup belongs to, used to strip the
-            shared stem/suffix.
+        target: The target file the backup belongs to.
 
     Returns:
         The parsed tz-aware UTC timestamp, or ``None`` if ``name`` does
         not match the expected ``"<stem>-<timestamp>[-N]<suffix>"`` shape.
     """
-    prefix = f"{target.stem}-"
-    if not name.startswith(prefix):
+    match = _backup_name_re(target).fullmatch(name)
+    if match is None:
         return None
-    remainder = name[len(prefix) :]
-    if target.suffix and remainder.endswith(target.suffix):
-        remainder = remainder[: -len(target.suffix)]
-    token = remainder.split("-", 1)[0]
-    for fmt in (BACKUP_TIMESTAMP_FORMAT, _LEGACY_BACKUP_TIMESTAMP_FORMAT):
-        try:
-            return datetime.strptime(token, fmt).replace(tzinfo=UTC)
-        except ValueError:
-            continue
-    return None
+    token = match.group(1)
+    fmt = BACKUP_TIMESTAMP_FORMAT if "." in token else _LEGACY_BACKUP_TIMESTAMP_FORMAT
+    try:
+        return datetime.strptime(token, fmt).replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 def _backup_sort_key(path: Path, target: Path) -> tuple[datetime, float]:
@@ -486,14 +594,21 @@ def list_backups(target: Path, *, backup_dir: Path | None = None) -> tuple[Backu
         :func:`_backup_sort_key` for how same-second ties are broken).
         Empty when the backup directory does not exist. A backup deleted
         by a concurrent pruner between the directory scan and its own
-        stat is silently omitted rather than raising.
+        stat is silently omitted rather than raising. Only names that
+        :func:`_backup_name_re` fully matches count -- a sibling
+        database's backups (``fleet-west-<ts>.ods`` for target
+        ``fleet.ods``) and a hand-named file (``nodes_db-old.ods``) are
+        both excluded, even though a looser glob would catch them.
     """
     resolved_dir = backup_dir_for(target, backup_dir)
     if not resolved_dir.is_dir():
         return ()
 
+    pattern = _backup_name_re(target)
     keyed: list[tuple[Path, tuple[datetime, float], int]] = []
     for path in resolved_dir.glob(f"{target.stem}-*{target.suffix}"):
+        if not pattern.fullmatch(path.name):
+            continue
         try:
             if not path.is_file():
                 continue

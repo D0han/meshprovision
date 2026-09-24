@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.crypto.keys import generate_keypair
-from meshprovision.db import ods
+from meshprovision.db import atomic_writer, ods
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import ExitCode
@@ -162,7 +162,7 @@ def test_transactional_write_failure_drop_security_keys(
     # earlier read (inside open_database) does refresh the known-good
     # safety copy, per load_database()'s own contract -- that is
     # expected, not a leak of this refused write.
-    backups_dir = tmp_path / "data" / "backups"
+    backups_dir = atomic_writer.backup_dir_for(db_path)
     assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
 
 
@@ -220,7 +220,7 @@ def test_post_reconnect_verify_read_failure_leaves_the_database_untouched(
     # earlier read (inside open_database) does refresh the known-good
     # safety copy, per load_database()'s own contract -- that is
     # expected, not a leak of this refused write.
-    backups_dir = tmp_path / "data" / "backups"
+    backups_dir = atomic_writer.backup_dir_for(db_path)
     assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
 
 
@@ -243,5 +243,5 @@ def test_transactional_write_failure_section_raises(
     # earlier read (inside open_database) does refresh the known-good
     # safety copy, per load_database()'s own contract -- that is
     # expected, not a leak of this refused write.
-    backups_dir = tmp_path / "data" / "backups"
+    backups_dir = atomic_writer.backup_dir_for(db_path)
     assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))

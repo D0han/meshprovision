@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
 from meshprovision.db import known_good
-from meshprovision.db.atomic_writer import create_backup, list_backups
+from meshprovision.db.atomic_writer import BackupInfo, create_backup, list_backups
 
 pytestmark = pytest.mark.unit
 
@@ -166,3 +169,239 @@ def test_refresh_known_good_cleans_up_its_temp_file_on_failure(
     assert info is None
     leftover_temps = list(backup_dir.glob(".*.tmp-*"))
     assert leftover_temps == []
+
+
+# --- provenance sidecar (1c, D2=A) ----------------------------------------------
+
+
+def test_refresh_known_good_writes_a_provenance_sidecar(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+
+    known_good.refresh_known_good(target, backup_dir=backup_dir)
+
+    sidecar = backup_dir / "nodes_db.known-good.json"
+    assert sidecar.is_file()
+    assert sidecar.stat().st_mode & 0o777 == 0o600
+    payload = json.loads(sidecar.read_bytes())
+    assert payload["format"] == 1
+    assert payload["source"] == str(target.resolve())
+    assert payload["sha256"] == hashlib.sha256(b"v1").hexdigest()
+
+
+def test_refresh_known_good_rewrites_the_sidecar_when_content_changes(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    backup_dir = tmp_path / "backups"
+
+    target.write_bytes(b"v1")
+    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    first_mtime = target.stat().st_mtime
+
+    target.write_bytes(b"v2-longer-content")
+    os.utime(target, (first_mtime + 5, first_mtime + 5))
+    known_good.refresh_known_good(target, backup_dir=backup_dir)
+
+    sidecar = backup_dir / "nodes_db.known-good.json"
+    payload = json.loads(sidecar.read_bytes())
+    assert payload["sha256"] == hashlib.sha256(b"v2-longer-content").hexdigest()
+
+
+def test_known_good_status_verified_immediately_after_refresh(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    known_good.refresh_known_good(target, backup_dir=backup_dir)
+
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.VERIFIED
+    assert status.recorded_source == str(target.resolve())
+
+
+def test_known_good_status_none_when_no_copy_exists(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    assert known_good.known_good_status(target, backup_dir=tmp_path / "backups") is None
+
+
+def test_known_good_status_unrecorded_when_sidecar_is_missing(tmp_path: Path) -> None:
+    """A known-good copy left by an older meshprovision, before the sidecar existed."""
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    (backup_dir / "nodes_db.known-good.json").unlink()
+
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.UNRECORDED
+    assert status.recorded_source is None
+
+
+def test_known_good_status_unrecorded_when_sidecar_is_malformed_json(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    (backup_dir / "nodes_db.known-good.json").write_bytes(b"not json{{")
+
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.UNRECORDED
+
+
+def test_known_good_status_other_source_after_a_directory_copy(tmp_path: Path) -> None:
+    """Reproduces the "whole fleet directory copied elsewhere" case (D2's headline)."""
+    fleet_a_dir = tmp_path / "fleetA"
+    fleet_a_dir.mkdir()
+    target_a = fleet_a_dir / "nodes_db.ods"
+    target_a.write_bytes(b"a")
+    known_good.refresh_known_good(target_a, backup_dir=fleet_a_dir / "backups")
+
+    fleet_c_dir = tmp_path / "fleetC"
+    shutil.copytree(fleet_a_dir, fleet_c_dir)
+    target_c = fleet_c_dir / "nodes_db.ods"
+
+    status = known_good.known_good_status(target_c, backup_dir=fleet_c_dir / "backups")
+
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.OTHER_SOURCE
+    assert status.recorded_source == str(target_a.resolve())
+
+
+def test_known_good_status_content_mismatch_when_the_copy_is_tampered_with(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    known_good.refresh_known_good(target, backup_dir=backup_dir)
+    (backup_dir / "nodes_db.known-good.ods").write_bytes(b"tampered content, different size")
+
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.CONTENT_MISMATCH
+
+
+def test_known_good_status_never_hashes_when_no_copy_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+
+    def fail_read(*args: object, **kwargs: object) -> bytes:
+        raise AssertionError("must not read a nonexistent known-good copy")
+
+    monkeypatch.setattr(Path, "read_bytes", fail_read)
+
+    assert known_good.known_good_status(target, backup_dir=tmp_path / "backups") is None
+
+
+def _dummy_backup_info(tmp_path: Path) -> BackupInfo:
+    return BackupInfo(
+        path=tmp_path / "nodes_db.known-good.ods",
+        source=tmp_path / "nodes_db.ods",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        size_bytes=1,
+    )
+
+
+def test_provenance_reason_describes_each_non_verified_case(tmp_path: Path) -> None:
+    info = _dummy_backup_info(tmp_path)
+
+    unrecorded = known_good.KnownGood(
+        info=info, provenance=known_good.KnownGoodProvenance.UNRECORDED, recorded_source=None
+    )
+    assert "no provenance record" in known_good.provenance_reason(unrecorded)
+
+    other_source = known_good.KnownGood(
+        info=info,
+        provenance=known_good.KnownGoodProvenance.OTHER_SOURCE,
+        recorded_source="/fleetB/nodes_db.ods",
+    )
+    assert "/fleetB/nodes_db.ods" in known_good.provenance_reason(other_source)
+
+    mismatch = known_good.KnownGood(
+        info=info,
+        provenance=known_good.KnownGoodProvenance.CONTENT_MISMATCH,
+        recorded_source=str(tmp_path / "nodes_db.ods"),
+    )
+    assert "checksum" in known_good.provenance_reason(mismatch)
+
+
+def test_provenance_reason_raises_for_an_already_verified_status(tmp_path: Path) -> None:
+    info = _dummy_backup_info(tmp_path)
+    verified = known_good.KnownGood(
+        info=info,
+        provenance=known_good.KnownGoodProvenance.VERIFIED,
+        recorded_source=str(tmp_path / "nodes_db.ods"),
+    )
+
+    with pytest.raises(ValueError, match="already verified"):
+        known_good.provenance_reason(verified)
+
+
+def test_refresh_known_good_heals_a_legacy_copy_missing_its_sidecar(tmp_path: Path) -> None:
+    """A known-good copy from before the sidecar existed must still heal.
+
+    Given a matching ``(mtime_ns, size)``, it must still gain a sidecar
+    on the next load -- otherwise it can never become VERIFIED.
+    """
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    legacy_copy = backup_dir / "nodes_db.known-good.ods"
+    shutil.copy2(target, legacy_copy)
+    assert not (backup_dir / "nodes_db.known-good.json").exists()
+
+    info = known_good.refresh_known_good(target, backup_dir=backup_dir)
+
+    assert info is not None
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.VERIFIED
+
+
+def test_refresh_known_good_fast_path_requires_a_matching_sidecar_source(tmp_path: Path) -> None:
+    """The (mtime_ns, size) fast path alone is not enough.
+
+    A copy whose sidecar names a different source must still be
+    recopied and get its own sidecar.
+    """
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    known_good.refresh_known_good(target, backup_dir=backup_dir)
+
+    # Simulate a directory copy: the sidecar still names the old source.
+    sidecar = backup_dir / "nodes_db.known-good.json"
+    stale = json.loads(sidecar.read_bytes())
+    stale["source"] = str(tmp_path / "elsewhere" / "nodes_db.ods")
+    sidecar.write_bytes(json.dumps(stale).encode())
+
+    known_good.refresh_known_good(target, backup_dir=backup_dir)
+
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.VERIFIED
+    assert status.recorded_source == str(target.resolve())
+
+
+def test_known_good_path_differs_for_two_same_named_databases_in_different_directories(
+    tmp_path: Path,
+) -> None:
+    """Aspect 5's headline regression for the original HIGH.
+
+    Two same-named databases in different directories must never share
+    a known-good slot.
+    """
+    fleet_a = tmp_path / "fleetA" / "nodes_db.ods"
+    fleet_b = tmp_path / "fleetB" / "nodes_db.ods"
+    fleet_a.parent.mkdir()
+    fleet_b.parent.mkdir()
+
+    assert known_good.known_good_path(fleet_a) != known_good.known_good_path(fleet_b)

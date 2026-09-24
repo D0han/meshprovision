@@ -120,7 +120,9 @@ otherwise reported by fingerprint only, never its raw material;
 - Run `mesh db verify` after every hand-edit. If it fails, see
   **Recovering from a bad hand-edit** below before doing anything else.
 - `mesh db backup` before a risky edit; every save also writes a
-  timestamped backup into `data/backups/` with a retention limit.
+  timestamped backup into a `backups/` directory next to the database
+  (`data/backups/` for the default `data/nodes_db.ods` path) with a
+  retention limit.
 - Opening the database in LibreOffice Calc, resizing columns, and saving
   is safe — including adding your own comments to a cell, which will not
   corrupt that cell's value. Every header cell carries its column's
@@ -137,12 +139,27 @@ Beyond the timestamped backups `mesh db backup`/`--retention` manage,
 meshprovision keeps a single **known-good safety copy** — refreshed
 automatically every time *any* `mesh` command successfully loads the
 database, read or write alike, not just when you remember to run
-`mesh db backup` yourself. It always lives at
-`data/backups/nodes_db.known-good.ods` (the default backup location,
+`mesh db backup` yourself. It always lives next to the database itself,
+in that database's own `backups/` directory (`data/backups/
+nodes_db.known-good.ods` for the default `data/nodes_db.ods` path),
 regardless of any `--backup-dir` a specific `db backup`/`db restore`
-invocation used), and it is a best-effort, silent side effect: if it
-can't be written (a full disk, a read-only-mounted `data/backups/`), the
-command that triggered it still succeeds normally.
+invocation used — two different databases that merely happen to share a
+file name (for example two fleets each provisioned from a `nodes_db.ods`
+in their own directory) never share this slot. It is a best-effort,
+silent side effect: if it can't be written (a full disk, a
+read-only-mounted backup directory), the command that triggered it still
+succeeds normally.
+
+Alongside the copy, a small `nodes_db.known-good.json` sidecar records
+which database it was refreshed from and a content checksum. `mesh db
+restore --known-good` checks this before touching anything: if the
+sidecar is missing, names a different database, or its checksum no
+longer matches (for example after a whole database directory was copied
+or renamed), the restore is refused with an explanation, before the
+confirmation prompt and without touching the live database. The escape
+hatch is to restore by explicit path instead — naming a file directly is
+itself your own verification, so it is never provenance-checked:
+`mesh db restore <path to the copy> --yes`.
 
 If a hand-edit breaks the file badly enough that it no longer loads at
 all, the resulting error names the known-good copy's timestamp and the
@@ -158,14 +175,23 @@ mesh db restore --known-good      # restores it, after the usual confirmation
 mesh db verify                    # confirms you're back to a good state
 ```
 
-`mesh db backup --list` also reports the known-good copy's timestamp
-directly, so you can check how fresh it is before relying on it.
-Because it is refreshed on every load, it is normally very recent — but
-it is still only as good as the last database state some `mesh` command
-actually saw, so a hand-edit that both breaks the schema *and* happens
-between two edits with no `mesh` command run in between will lose
-whatever changed since that last successful load, not just the bad edit
-itself.
+`mesh db backup --list` also reports the known-good copy's timestamp and
+provenance directly, so you can check how fresh and trustworthy it is
+before relying on it. Because it is refreshed on every load, it is
+normally very recent — but it is still only as good as the last database
+state some `mesh` command actually saw, so a hand-edit that both breaks
+the schema *and* happens between two edits with no `mesh` command run in
+between will lose whatever changed since that last successful load, not
+just the bad edit itself.
+
+If you run with a non-default `--db-path`/`MESHPROVISION_DB_PATH`, `mesh
+db backup --list` also notes when older backups are still sitting under
+the pre-per-database `data/backups` (relative to wherever you happened
+to run the command from). Those are never migrated automatically and
+never offered for `--known-good` — they may belong to an entirely
+different database that happens to share the same file name — so treat
+that notice as a pointer to go check by hand, and restore one only by
+explicit path.
 
 ## The shipped example
 

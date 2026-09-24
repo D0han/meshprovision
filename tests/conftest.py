@@ -24,7 +24,8 @@ The autouse ``_isolated_cwd_and_env`` fixture additionally chdirs every
 test into a fresh ``tmp_path`` and strips every ``MESHPROVISION_*``
 environment variable, which is what keeps
 ``meshprovision.db.ods.OdsDatabase.save()``'s ``backup=True`` default
-(which resolves ``data/backups/`` relative to the CWD) and
+(which resolves a ``backups/`` directory next to the database file --
+see ``meshprovision.db.atomic_writer.backup_dir_for``) and
 ``meshprovision.config.settings.load_settings()``'s upward ``.env``
 search from ever touching this repository's real files, and what keeps a
 developer's shell environment from leaking into a test run.

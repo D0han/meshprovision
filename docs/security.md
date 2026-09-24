@@ -144,7 +144,7 @@ it private key material. Override the file's location with
 | `config/template.yaml` | IGNORED | Your operational template |
 | `data/nodes_db.example.ods` | tracked | Fake nodes, ASCII placeholder "keys" |
 | `data/nodes_db.ods` | IGNORED | Your real database — contains live private keys and BLE PINs |
-| `data/backups/` | IGNORED (except `.gitkeep`) | Timestamped database backups, plus the single `nodes_db.known-good.ods` safety copy (same directory, same `0700`/`0600` treatment, same ignore rule — see [Recovering from a bad hand-edit](database.md#recovering-from-a-bad-hand-edit)) |
+| `data/backups/` | IGNORED (except `.gitkeep`) | Timestamped database backups, plus the single `nodes_db.known-good.ods` safety copy and its `nodes_db.known-good.json` provenance sidecar (same directory, same `0700`/`0600` treatment, same ignore rule — see [Recovering from a bad hand-edit](database.md#recovering-from-a-bad-hand-edit)). This is the default location for the default `data/nodes_db.ods` path only — a non-default `--db-path`/`MESHPROVISION_DB_PATH` gets its own `backups/` directory next to *that* file, which is **not** necessarily covered by this repo's `.gitignore` |
 | `data/known_bad_keys.txt` | tracked | Public small-order X25519 points; no private material |
 | `.cache/` and the platform cache dir | IGNORED | HTTP TTL response cache |
 | A Meshtastic app `.cfg`/`.yaml`/node-db `.json` backup (for `mesh adopt --from-backup`) | never tracked; not covered by `.gitignore` since it can live anywhere | A `.cfg`/`.yaml` profile carries the node's **private key** and, when set, a channel PSK, both in clear — treat it exactly like `data/nodes_db.ods`. Keep it outside the repo, or under a path your own `.gitignore` already excludes |

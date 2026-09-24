@@ -4,30 +4,57 @@ A single, stable-named copy of a target file -- refreshed on every
 successful load (see :func:`meshprovision.db.ods.load_database`) -- kept
 outside the timestamped backup rotation in :mod:`meshprovision.db.atomic_writer`
 so it is never pruned and never listed alongside it.
+
+Alongside the copy itself, a small JSON sidecar (``<stem>.known-good.json``)
+records which database it was refreshed from and a content hash. Two
+different databases that happen to share a file name (two fleets, both
+``nodes_db.ods``, one at each database's own resolved ``backups/``
+directory) never collide on this copy, since :func:`~meshprovision.db.
+atomic_writer.backup_dir_for` resolves per target -- but a directory
+*copied or renamed* wholesale still carries an old known-good copy that
+is no longer this database's, and the sidecar is what makes that
+detectable. See :func:`known_good_status`.
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import logging
 import os
 import shutil
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from meshprovision.db.atomic_writer import _BACKUP_DIR_MODE, _FILE_MODE, BackupInfo, backup_dir_for
+from meshprovision.db.atomic_writer import (
+    _BACKUP_DIR_MODE,
+    _FILE_MODE,
+    BackupInfo,
+    backup_dir_for,
+    write_bytes_atomic,
+)
+from meshprovision.errors import AtomicWriteError
 
 __all__ = [
     "KNOWN_GOOD_SUFFIX",
+    "KnownGood",
+    "KnownGoodProvenance",
     "known_good_info",
     "known_good_name",
     "known_good_path",
+    "known_good_status",
+    "provenance_reason",
     "refresh_known_good",
 ]
 
 _logger = logging.getLogger(__name__)
+
+_SIDECAR_FORMAT: Final[int] = 1
 
 KNOWN_GOOD_SUFFIX: Final[str] = ".known-good"
 """Marker inserted between a target's stem and suffix for its known-good copy.
@@ -100,6 +127,202 @@ def known_good_info(target: Path, *, backup_dir: Path | None = None) -> BackupIn
     )
 
 
+def _sidecar_name(target: Path) -> str:
+    """Build the provenance sidecar's file name for one target file.
+
+    Args:
+        target: The file the known-good copy (and its sidecar) is for.
+
+    Returns:
+        For example ``"nodes_db.known-good.json"``. The ``.json``
+        extension means this can never fullmatch
+        :func:`meshprovision.db.atomic_writer._backup_name_re`'s pattern
+        or the glob that prefilters it, so it is never mistaken for a
+        timestamped backup.
+    """
+    return f"{target.stem}{KNOWN_GOOD_SUFFIX}.json"
+
+
+def _sidecar_path(target: Path, backup_dir: Path | None = None) -> Path:
+    """Resolve the provenance sidecar's path for a target file.
+
+    Args:
+        target: The file the known-good copy (and its sidecar) is for.
+        backup_dir: An explicit backup directory to use instead of the
+            default.
+
+    Returns:
+        ``backup_dir_for(target, backup_dir) / _sidecar_name(target)``.
+    """
+    return backup_dir_for(target, backup_dir) / _sidecar_name(target)
+
+
+def _read_sidecar(path: Path) -> dict[str, object] | None:
+    """Read and parse a provenance sidecar, tolerating any way it can be bad.
+
+    Args:
+        path: The sidecar file's path.
+
+    Returns:
+        Its parsed JSON object, or ``None`` if the file is missing,
+        unreadable, not valid JSON, or not a JSON object -- all treated
+        the same as "no provenance recorded", never raised.
+    """
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _write_sidecar(path: Path, *, source: str, sha256_hex: str) -> None:
+    """Atomically write a provenance sidecar.
+
+    Args:
+        path: The sidecar file's path.
+        source: ``str(target.resolve())`` at the moment the known-good
+            copy was refreshed.
+        sha256_hex: Hex SHA-256 digest of the known-good copy's bytes.
+
+    Raises:
+        AtomicWriteError: If the write fails. The caller is expected to
+            catch this alongside :class:`OSError`, matching
+            :func:`refresh_known_good`'s "never raises" contract.
+    """
+    payload = json.dumps(
+        {"format": _SIDECAR_FORMAT, "source": source, "sha256": sha256_hex}
+    ).encode("ascii")
+    write_bytes_atomic(path, payload, backup=False)
+
+
+class KnownGoodProvenance(StrEnum):
+    """How trustworthy a known-good copy's recorded origin is."""
+
+    VERIFIED = "verified"
+    """The sidecar's recorded source and content hash both match."""
+
+    UNRECORDED = "unrecorded"
+    """No sidecar, or it could not be parsed -- written by an older
+    meshprovision, or the sidecar was lost/removed independently of the
+    copy."""
+
+    OTHER_SOURCE = "other_source"
+    """The sidecar names a different database as this copy's source --
+    typically a whole directory tree copied or renamed."""
+
+    CONTENT_MISMATCH = "content_mismatch"
+    """The sidecar's recorded source matches, but its content hash does
+    not -- a torn or interleaved concurrent refresh, or the copy was
+    modified independently of :func:`refresh_known_good`."""
+
+
+@dataclass(frozen=True, slots=True)
+class KnownGood:
+    """A known-good copy together with how much its provenance can be trusted.
+
+    Attributes:
+        info: The copy's own metadata (path, timestamp, size).
+        provenance: How trustworthy the recorded origin is.
+        recorded_source: The sidecar's ``source`` field, or ``None`` when
+            ``provenance`` is :attr:`KnownGoodProvenance.UNRECORDED`
+            because no sidecar could be read at all.
+    """
+
+    info: BackupInfo
+    provenance: KnownGoodProvenance
+    recorded_source: str | None
+
+
+def known_good_status(target: Path, *, backup_dir: Path | None = None) -> KnownGood | None:
+    """Look up the current known-good copy of a target file, with provenance.
+
+    Unlike :func:`known_good_info`, this reads and hashes the copy's
+    bytes and its sidecar, so it is not free -- callers that only need
+    to know a copy exists (for example a per-load fast-path check, or a
+    display-only listing) should prefer :func:`known_good_info`. This is
+    meant for the error and restore paths, which run rarely, where the
+    provenance decision actually matters.
+
+    Args:
+        target: The file to look up a known-good copy for.
+        backup_dir: Directory the known-good copy is stored under.
+            Defaults to :func:`meshprovision.db.atomic_writer.backup_dir_for`'s
+            resolution.
+
+    Returns:
+        ``None`` if no known-good copy exists yet (same as
+        :func:`known_good_info`). Otherwise a :class:`KnownGood` whose
+        ``provenance`` is :attr:`~KnownGoodProvenance.VERIFIED` only when
+        a sidecar exists, names this exact resolved ``target`` as its
+        source, and its recorded hash matches the copy's actual bytes.
+    """
+    info = known_good_info(target, backup_dir=backup_dir)
+    if info is None:
+        return None
+
+    sidecar = _read_sidecar(_sidecar_path(target, backup_dir))
+    recorded_source = sidecar.get("source") if sidecar is not None else None
+    if sidecar is None or not isinstance(recorded_source, str):
+        return KnownGood(info=info, provenance=KnownGoodProvenance.UNRECORDED, recorded_source=None)
+
+    try:
+        current_source = str(target.resolve())
+    except OSError:
+        current_source = str(target)
+    if recorded_source != current_source:
+        return KnownGood(
+            info=info,
+            provenance=KnownGoodProvenance.OTHER_SOURCE,
+            recorded_source=recorded_source,
+        )
+
+    try:
+        actual_sha256 = hashlib.sha256(info.path.read_bytes()).hexdigest()
+    except OSError:
+        return KnownGood(
+            info=info, provenance=KnownGoodProvenance.UNRECORDED, recorded_source=recorded_source
+        )
+    if sidecar.get("sha256") != actual_sha256:
+        return KnownGood(
+            info=info,
+            provenance=KnownGoodProvenance.CONTENT_MISMATCH,
+            recorded_source=recorded_source,
+        )
+
+    return KnownGood(
+        info=info, provenance=KnownGoodProvenance.VERIFIED, recorded_source=recorded_source
+    )
+
+
+def provenance_reason(status: KnownGood) -> str:
+    """Describe why a known-good copy's provenance is not verified.
+
+    Args:
+        status: A :class:`KnownGood` whose ``provenance`` is not
+            :attr:`~KnownGoodProvenance.VERIFIED`.
+
+    Returns:
+        A short, lowercase clause suitable for embedding in a sentence,
+        for example "it has no provenance record...".
+
+    Raises:
+        ValueError: If ``status.provenance`` is already
+            :attr:`~KnownGoodProvenance.VERIFIED` -- there is nothing to
+            explain.
+    """
+    if status.provenance is KnownGoodProvenance.UNRECORDED:
+        return "it has no provenance record (written by an older meshprovision)"
+    if status.provenance is KnownGoodProvenance.OTHER_SOURCE:
+        return f"it was taken from {status.recorded_source}, not this database"
+    if status.provenance is KnownGoodProvenance.CONTENT_MISMATCH:
+        return "its recorded checksum no longer matches its content"
+    raise ValueError(f"{status.provenance} is already verified; there is no mismatch to explain")
+
+
 def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> BackupInfo | None:
     """Refresh the single, stable known-good copy of a target file.
 
@@ -125,6 +348,14 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
     (``cp -p``, ``rsync -t``) -- either of which could otherwise leave
     the known-good copy silently stale.
 
+    The fast path additionally requires the sidecar (see
+    :func:`known_good_status`) to already name this exact resolved
+    ``target`` as its source. Without that, a known-good copy left by an
+    older meshprovision (no sidecar yet) whose ``(mtime_ns, size)``
+    happens to match would never gain one -- this makes sure a first
+    load after upgrading still writes it, healing the legacy copy into
+    a verifiable one, at the cost of one extra recopy that one time.
+
     Args:
         target: The file to refresh a known-good copy of.
         backup_dir: Directory to store the known-good copy under.
@@ -140,6 +371,11 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
 
     resolved_dir = backup_dir_for(target, backup_dir)
     destination = resolved_dir / known_good_name(target)
+    sidecar_path = _sidecar_path(target, backup_dir)
+    try:
+        current_source = str(target.resolve())
+    except OSError:
+        current_source = str(target)
     tmp_destination: Path | None = None
     try:
         target_stat = target.stat()
@@ -147,7 +383,9 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
         if destination.is_file():
             dest_stat = destination.stat()
             if (dest_stat.st_mtime_ns, dest_stat.st_size) == target_identity:
-                return known_good_info(target, backup_dir=backup_dir)
+                sidecar = _read_sidecar(sidecar_path)
+                if sidecar is not None and sidecar.get("source") == current_source:
+                    return known_good_info(target, backup_dir=backup_dir)
 
         resolved_dir.mkdir(parents=True, exist_ok=True)
         try:
@@ -161,8 +399,11 @@ def refresh_known_good(target: Path, *, backup_dir: Path | None = None) -> Backu
             tmp_destination.chmod(_FILE_MODE)
         except OSError:
             _logger.debug("Failed to chmod known-good copy %s", tmp_destination)
+        digest = hashlib.sha256(tmp_destination.read_bytes()).hexdigest()
         tmp_destination.replace(destination)
-    except OSError as exc:
+        tmp_destination = None
+        _write_sidecar(sidecar_path, source=current_source, sha256_hex=digest)
+    except (OSError, AtomicWriteError) as exc:
         _logger.warning("Failed to refresh known-good copy of %s: %s", target, exc)
         if tmp_destination is not None:
             with contextlib.suppress(OSError):
