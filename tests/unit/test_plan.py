@@ -273,6 +273,40 @@ def test_to_record_keeps_recorded_hw_model_when_live_reports_unmapped(make_live,
     assert plan.to_record().hw_model == "RAK4631"
 
 
+def test_to_record_keeps_recorded_firmware_and_hw_model_when_live_reports_neither(
+    make_live, template
+) -> None:
+    """Regression test for Round 37 Aspect 1 Finding 9.
+
+    A blank live firmware_version (detect.py's no-metadata sentinel) and a
+    blank hw_model with hw_model_raw=None (also no metadata, distinct from
+    the unrecognized-enum case above) must both be treated as "no new
+    information," not persisted over an already-recorded value.
+    """
+    live = make_live(
+        template,
+        security=make_security(empty=True),
+        hw_model="",
+        hw_model_raw=None,
+        firmware_version="",
+    )
+    record = NodeRecord(
+        node_id="deadbe01",
+        short_name=live.short_name,
+        long_name=live.long_name,
+        hw_model="HELTEC_V3",
+        firmware_version="2.7.1",
+    )
+    inputs = PlanInputs(
+        live=live, template=template, db_entry=record, state=detect.NodeState.PROVISIONED
+    )
+    plan = build_plan(inputs)
+
+    to_record = plan.to_record()
+    assert to_record.hw_model == "HELTEC_V3"
+    assert to_record.firmware_version == "2.7.1"
+
+
 def test_admin_nodes_empty_never_strips_live_keys(make_live, template, keypair_factory) -> None:
     kp1, kp2 = keypair_factory(), keypair_factory()
     live = make_live(template, security=make_security(admin_keys=(kp1.public, kp2.public)))

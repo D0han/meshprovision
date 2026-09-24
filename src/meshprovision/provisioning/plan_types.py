@@ -651,18 +651,16 @@ class ChangePlan:
                 if confirmed_long_name is not None
                 else self.name_change.desired_long_name
             ),
-            # A blank hw_model paired with a non-None hw_model_raw means the
-            # device reported a model this build's enum table doesn't
-            # recognize -- "cannot evaluate," not "no hardware model" (see
-            # provisioning.repair.diff_record's matching guard). Keep
-            # whatever was already recorded rather than erase it with that
-            # empty sentinel.
-            "hw_model": (
-                base.hw_model
-                if self.hw_model_raw is not None and not self.hw_model
-                else self.hw_model
-            ),
-            "firmware_version": self.firmware_version,
+            # A blank live hw_model/firmware_version is "no new information,"
+            # not "no hardware model"/"no firmware" -- it covers both an
+            # unrecognized live hw_model (a non-None hw_model_raw this
+            # build's enum table doesn't map; see
+            # provisioning.repair.diff_record's matching guard) and no
+            # metadata at all (hw_model_raw is None, or detect.py couldn't
+            # read firmware_version). Keep whatever was already recorded
+            # rather than erase it with that empty sentinel.
+            "hw_model": base.hw_model if not self.hw_model else self.hw_model,
+            "firmware_version": self.firmware_version or base.firmware_version,
             "role": self.role,
             "region": self.region,
             "management": ManagementMode.TEMPLATE,
