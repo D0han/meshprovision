@@ -16,7 +16,7 @@ from meshprovision.config.template import load_template_text
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.provisioning.admin_custody import collect_admins
 
 if TYPE_CHECKING:
@@ -61,7 +61,7 @@ def test_collect_admins_discovers_a_fleet_admin_not_in_template(
     """
     node = NodeRecord(node_id="deadbe01", authorized_admin_keys=("EXTRA1_pub",))
     nodes.upsert(node)
-    pub, priv = KeyRecord.for_keypair("EXTRA1", keypair)
+    pub, priv = KeyRecord.for_keypair("EXTRA1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     keys.upsert(priv)
 
@@ -85,7 +85,7 @@ def test_collect_admins_ignores_a_fleet_key_authorized_nowhere(
     """
     node = NodeRecord(node_id="deadbe01", authorized_admin_keys=())
     nodes.upsert(node)
-    pub, priv = KeyRecord.for_keypair("UNUSED1", keypair)
+    pub, priv = KeyRecord.for_keypair("UNUSED1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     keys.upsert(priv)
 
@@ -106,7 +106,7 @@ def test_collect_admins_does_not_double_count_a_template_admin_via_fleet_discove
     template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
     node = NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",))
     nodes.upsert(node)
-    pub, priv = KeyRecord.for_keypair("ADMIN1", keypair)
+    pub, priv = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     keys.upsert(priv)
 
@@ -130,8 +130,8 @@ def test_collect_admins_keeps_discovering_after_skipping_a_template_admin(
     """
     template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
     nodes.upsert(NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub", "EXTRA1_pub")))
-    admin_pub, _ = KeyRecord.for_keypair("ADMIN1", keypair_factory())
-    extra_pub, _ = KeyRecord.for_keypair("EXTRA1", keypair_factory())
+    admin_pub, _ = KeyRecord.for_keypair("ADMIN1", keypair_factory(), origin=KeyOrigin.IMPORTED)
+    extra_pub, _ = KeyRecord.for_keypair("EXTRA1", keypair_factory(), origin=KeyOrigin.IMPORTED)
     keys.upsert(admin_pub)
     keys.upsert(extra_pub)
     enumerated = [record.key_ref for record in keys.of_type(KeyType.ADMIN_PUBLIC)]
@@ -187,12 +187,12 @@ def test_collect_admins_resolves_node_id_via_key_material_match(
     other_node = NodeRecord(node_id="deadbe02")
     nodes.upsert(owner_node)
     nodes.upsert(other_node)
-    admin_pub, admin_priv = KeyRecord.for_keypair("ADMIN1", keypair)
+    admin_pub, admin_priv = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(admin_pub)
     keys.upsert(admin_priv)
     # deadbe01's own public key is the SAME material as ADMIN1's -- the
     # scenario where an admin's key was adopted as a node's own keypair.
-    owner_pub, _ = KeyRecord.for_keypair("deadbe01", keypair)
+    owner_pub, _ = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     keys.upsert(owner_pub)
 
     summaries = collect_admins(nodes, keys, template2, known_bad=frozenset())

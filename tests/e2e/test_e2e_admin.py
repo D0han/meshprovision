@@ -24,7 +24,7 @@ from meshprovision.crypto.keys import encode_key, generate_keypair
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import ManagementMode
+from meshprovision.db.schema import KeyOrigin, ManagementMode
 from meshprovision.errors import ExitCode
 from tests.e2e.conftest import FakeMeshInterface, invoke
 
@@ -200,9 +200,9 @@ def test_admin_bootstrap_pending_message_names_the_right_ref_and_node_on_rotatio
             ),
         ],
         keys=[
-            *KeyRecord.for_keypair("aaaa0001", admin1_kp),
-            *KeyRecord.for_keypair("ADMIN1", admin1_kp),
-            *KeyRecord.for_keypair("ADMIN2", old_admin2_kp),
+            *KeyRecord.for_keypair("aaaa0001", admin1_kp, origin=KeyOrigin.CAPTURED),
+            *KeyRecord.for_keypair("ADMIN1", admin1_kp, origin=KeyOrigin.IMPORTED),
+            *KeyRecord.for_keypair("ADMIN2", old_admin2_kp, origin=KeyOrigin.IMPORTED),
         ],
     )
 
@@ -242,7 +242,7 @@ def test_admin_bootstrap_ref_aliases_the_existing_on_file_key_without_regenerati
     node_kp = keypair_factory()
     seed_db(
         nodes=[NodeRecord(node_id="aaaa0001", management=ManagementMode.TEMPLATE)],
-        keys=list(KeyRecord.for_keypair("aaaa0001", node_kp)),
+        keys=list(KeyRecord.for_keypair("aaaa0001", node_kp, origin=KeyOrigin.CAPTURED)),
     )
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
 
@@ -305,9 +305,9 @@ def test_admin_bootstrap_pending_message_for_its_own_ref_names_ref_first_then_no
             ),
         ],
         keys=[
-            *KeyRecord.for_keypair("aaaa0001", admin1_kp),
-            *KeyRecord.for_keypair("ADMIN1", admin1_kp),
-            *KeyRecord.for_keypair("ADMIN2", placeholder_admin2_kp),
+            *KeyRecord.for_keypair("aaaa0001", admin1_kp, origin=KeyOrigin.CAPTURED),
+            *KeyRecord.for_keypair("ADMIN1", admin1_kp, origin=KeyOrigin.IMPORTED),
+            *KeyRecord.for_keypair("ADMIN2", placeholder_admin2_kp, origin=KeyOrigin.IMPORTED),
         ],
     )
     bus.use(FakeMeshInterface("aaaa0002"))
@@ -355,7 +355,7 @@ def test_admin_bootstrap_uncertain_outcome_skips_reporting_and_exits_nonzero(
     existing_kp = keypair_factory()
     seed_db(
         nodes=[NodeRecord(node_id="aaaa0001", authorized_admin_keys=("EXISTING_pub",))],
-        keys=list(KeyRecord.for_keypair("EXISTING", existing_kp)),
+        keys=list(KeyRecord.for_keypair("EXISTING", existing_kp, origin=KeyOrigin.IMPORTED)),
     )
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["EXISTING"]))
     bus.use(FakeMeshInterface("deadbe01", fail_reads_after_write=True))

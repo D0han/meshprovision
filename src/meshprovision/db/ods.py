@@ -597,6 +597,29 @@ def read_raw(path: Path, *, data: bytes | None = None) -> DatabaseData:
     return DatabaseData(path=path, sheets=sheets)
 
 
+def _tolerated_headers(sheet_spec: schema.SheetSpec) -> tuple[tuple[str, ...], ...]:
+    """Build every header shape :func:`_check_header` accepts for one sheet.
+
+    The first entry is the full, current column list. Each further entry
+    drops one more trailing ``legacy_optional`` column, stopping at the
+    first trailing column that is not ``legacy_optional`` -- so a
+    database written before a ``legacy_optional`` column (for example
+    ``Keys.origin``) existed still loads, while a genuinely mangled or
+    reordered header still fails.
+
+    Args:
+        sheet_spec: The sheet to build tolerated header shapes for.
+
+    Returns:
+        At least one entry: ``sheet_spec.column_names()`` itself.
+    """
+    names = sheet_spec.column_names()
+    variants = [names]
+    while variants[-1] and sheet_spec.column(variants[-1][-1]).legacy_optional:
+        variants.append(variants[-1][:-1])
+    return tuple(variants)
+
+
 def _check_header(sheet_data: SheetData, sheet_spec: schema.SheetSpec) -> None:
     """Confirm a sheet's header row matches its expected column order.
 
@@ -604,7 +627,10 @@ def _check_header(sheet_data: SheetData, sheet_spec: schema.SheetSpec) -> None:
     trailing whitespace (an easy hand-edit slip) is not itself a
     mismatch, and trailing extra blank columns are tolerated entirely --
     order is otherwise strict, since the ODF formulas reference fixed
-    column letters.
+    column letters. A header missing a trailing run of
+    ``legacy_optional`` columns (see :func:`_tolerated_headers`) is
+    tolerated too, so a database written before such a column existed
+    still loads.
 
     Args:
         sheet_data: The sheet's raw data.
@@ -615,14 +641,14 @@ def _check_header(sheet_data: SheetData, sheet_spec: schema.SheetSpec) -> None:
             :func:`~meshprovision.db.header_diff.describe_header_mismatch`
             table as the message and a best-guess diagnosis as the hint.
     """
-    expected = sheet_spec.column_names()
+    expected_variants = _tolerated_headers(sheet_spec)
     found = tuple(cell.strip() for cell in sheet_data.header)
     while found and not found[-1]:
         found = found[:-1]
-    if found == expected:
+    if found in expected_variants:
         return
     message, hint = header_diff.describe_header_mismatch(
-        sheet=sheet_spec.name, found=found, expected=expected
+        sheet=sheet_spec.name, found=found, expected=expected_variants[0]
     )
     raise SchemaError(message, sheet=sheet_spec.name, hint=hint)
 

@@ -16,6 +16,7 @@ from meshprovision.crypto.keys import KeyPair, encode_key, generate_keypair
 from meshprovision.db.keys import KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
+from meshprovision.db.schema import KeyOrigin
 from meshprovision.errors import (
     AtomicWriteError,
     ConnectionBackendError,
@@ -936,7 +937,9 @@ def test_apply_plan_success_confirmed_and_persist_result(tmp_path, make_live) ->
     db = OdsDatabase.create(db_path)
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
-    persisted = persist_result(outcome, nodes=nodes, keys=keys, keypair=kp)
+    persisted = persist_result(
+        outcome, nodes=nodes, keys=keys, keypair=kp, origin=KeyOrigin.CAPTURED
+    )
     assert persisted is True
     assert nodes.exists("deadbe01")
     assert keys.find("deadbe01_pub") is not None
@@ -1640,7 +1643,9 @@ def test_verify_reports_uncertain_when_get_public_key_raises(tmp_path, make_live
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
     mtime_before = db_path.stat().st_mtime_ns
-    persisted = persist_result(outcome, nodes=nodes, keys=keys, keypair=kp)
+    persisted = persist_result(
+        outcome, nodes=nodes, keys=keys, keypair=kp, origin=KeyOrigin.CAPTURED
+    )
     assert persisted is False
     assert db_path.stat().st_mtime_ns == mtime_before
     assert nodes.exists("deadbe01") is False
@@ -1656,7 +1661,7 @@ def test_persist_result_refuses_on_uncertain_outcome(tmp_path) -> None:
     keys = KeyRepository(db)
 
     mtime_before = db_path.stat().st_mtime_ns
-    persisted = persist_result(outcome, nodes=nodes, keys=keys)
+    persisted = persist_result(outcome, nodes=nodes, keys=keys, origin=KeyOrigin.CAPTURED)
     assert persisted is False
     assert db_path.stat().st_mtime_ns == mtime_before
     assert nodes.exists("deadbe01") is False
@@ -1689,7 +1694,7 @@ def test_persist_result_refuses_when_may_update_database_is_false_with_a_record_
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
 
-    persisted = persist_result(outcome, nodes=nodes, keys=keys)
+    persisted = persist_result(outcome, nodes=nodes, keys=keys, origin=KeyOrigin.CAPTURED)
     assert persisted is False
     assert nodes.exists("deadbe01") is False
 
@@ -1724,7 +1729,7 @@ def test_persist_result_reports_divergence_when_the_save_fails(
     monkeypatch.setattr(db, "save", _boom)
     mtime_before = db_path.stat().st_mtime_ns
     with pytest.raises(AtomicWriteError) as excinfo:
-        persist_result(outcome, nodes=nodes, keys=keys, keypair=kp)
+        persist_result(outcome, nodes=nodes, keys=keys, keypair=kp, origin=KeyOrigin.CAPTURED)
 
     assert "written and verified on the device" in excinfo.value.message
     assert "could not be saved" in excinfo.value.message
@@ -1752,7 +1757,7 @@ def test_persist_result_converts_a_bare_oserror_from_the_save(
 
     monkeypatch.setattr(db, "save", _boom)
     with pytest.raises(AtomicWriteError) as excinfo:
-        persist_result(outcome, nodes=nodes, keys=keys, keypair=kp)
+        persist_result(outcome, nodes=nodes, keys=keys, keypair=kp, origin=KeyOrigin.CAPTURED)
 
     assert "written and verified on the device" in excinfo.value.message
     assert "disagree" in excinfo.value.message
@@ -1776,7 +1781,7 @@ def test_persist_result_omits_the_keypair_hint_when_no_key_was_generated(
 
     monkeypatch.setattr(db, "save", _boom)
     with pytest.raises(AtomicWriteError) as excinfo:
-        persist_result(outcome, nodes=nodes, keys=keys, keypair=None)
+        persist_result(outcome, nodes=nodes, keys=keys, keypair=None, origin=KeyOrigin.CAPTURED)
 
     assert "--force-regenerate-key" not in excinfo.value.user_message
     assert "re-run `mesh provision`" in excinfo.value.user_message

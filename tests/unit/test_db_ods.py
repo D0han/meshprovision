@@ -15,7 +15,7 @@ from meshprovision.db import atomic_writer, ods, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.known_good import KnownGoodProvenance, known_good_info, known_good_status
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import KeyType, ManagementMode
+from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import (
     DbIntegrityError,
     DbReadError,
@@ -48,7 +48,7 @@ def _sample_records(keypair) -> tuple[NodeRecord, KeyRecord, KeyRecord]:
         ble_pin="012345",
     )
     pub, priv = KeyRecord.for_keypair(
-        "deadbe01", keypair, created_ts=datetime(2026, 1, 1, tzinfo=UTC)
+        "deadbe01", keypair, origin=KeyOrigin.CAPTURED, created_ts=datetime(2026, 1, 1, tzinfo=UTC)
     )
     return node, pub, priv
 
@@ -311,7 +311,7 @@ def test_stale_cached_formula_main_chipset(tmp_path: Path, keypair) -> None:
 
 def test_hex_node_id_looking_like_scientific_notation_survives(tmp_path: Path, keypair) -> None:
     node = NodeRecord(node_id="12345e78")
-    pub, priv = KeyRecord.for_keypair("12345e78", keypair)
+    pub, priv = KeyRecord.for_keypair("12345e78", keypair, origin=KeyOrigin.CAPTURED)
     path = tmp_path / "db.ods"
     ods.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
@@ -598,7 +598,7 @@ def _write_raw_row(
     node = NodeRecord(node_id="deadbe01")
     row = node.to_row()
     row.update(node_overrides)
-    pub, priv = KeyRecord.for_keypair("deadbe01", keypair)
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     key_rows = [pub.to_row(), priv.to_row()]
     if key_overrides:
         key_rows[0].update(key_overrides)
@@ -740,7 +740,7 @@ def test_five_digit_ble_pin_raises_without_value(tmp_path: Path, keypair) -> Non
 
 @pytest.mark.parametrize("column", ["key_ref", "owner_node_id", "key_type", "key_value"])
 def test_missing_required_key_column_raises(tmp_path: Path, keypair, column: str) -> None:
-    pub, priv = KeyRecord.for_keypair("deadbe01", keypair)
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     row = pub.to_row()
     row[column] = ""
     node = NodeRecord(node_id="deadbe01")
@@ -863,7 +863,7 @@ def test_repeated_non_blank_row_keeps_later_row_numbers_accurate(tmp_path: Path,
 
 
 def test_duplicate_key_ref_raises(tmp_path: Path, keypair) -> None:
-    pub, _priv = KeyRecord.for_keypair("deadbe01", keypair)
+    pub, _priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     path = tmp_path / "db.ods"
     ods.write_database(
         path,

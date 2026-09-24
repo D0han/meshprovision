@@ -16,7 +16,7 @@ from meshprovision.db import atomic_writer, ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.locking import lock_path_for
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.provisioning.observed_keys import observed_key_ref
 from tests.e2e.conftest import invoke
 
@@ -35,7 +35,7 @@ def test_db_verify_clean_database_ok(
 ) -> None:
     kp = generate_keypair()
     node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
-    pub, priv = KeyRecord.for_keypair("deadbe01", kp)
+    pub, priv = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
     seed_db(nodes=[node], keys=[pub, priv])
 
     result = invoke(runner, ["db", "verify"], env)
@@ -61,7 +61,7 @@ def test_db_verify_survives_a_real_libreoffice_save(
     """
     kp = generate_keypair()
     node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
-    pub, priv = KeyRecord.for_keypair("deadbe01", kp)
+    pub, priv = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
     db_path = seed_db(nodes=[node], keys=[pub, priv])
 
     out_dir = tmp_path / "libreoffice_out"
@@ -103,7 +103,9 @@ def test_db_verify_all_zero_admin_key_exits_six(
     still reporting "Database OK."
     """
     node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
-    weak_pub = KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, bytes(32))
+    weak_pub = KeyRecord.from_material(
+        "deadbe01", KeyType.ADMIN_PUBLIC, bytes(32), origin=KeyOrigin.CAPTURED
+    )
     seed_db(nodes=[node], keys=[weak_pub])
 
     result = invoke(runner, ["db", "verify", "--json"], env)
@@ -210,8 +212,8 @@ def test_db_verify_duplicate_public_key_across_nodes_exits_six(
     kp = generate_keypair()
     node_a = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
     node_b = NodeRecord(node_id="deadbe02", short_name="MT01", region="EU_868")
-    pub_a, priv_a = KeyRecord.for_keypair("deadbe01", kp)
-    pub_b, priv_b = KeyRecord.for_keypair("deadbe02", kp)
+    pub_a, priv_a = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
+    pub_b, priv_b = KeyRecord.for_keypair("deadbe02", kp, origin=KeyOrigin.CAPTURED)
     seed_db(nodes=[node_a, node_b], keys=[pub_a, priv_a, pub_b, priv_b])
 
     result = invoke(runner, ["db", "verify", "--json"], env)
@@ -236,8 +238,8 @@ def test_db_verify_duplicate_public_key_not_yet_adopted_still_exits_six(
     colliding node has a Nodes sheet row yet.
     """
     kp = generate_keypair()
-    pub_a, priv_a = KeyRecord.for_keypair("deadbe01", kp)
-    pub_b, priv_b = KeyRecord.for_keypair("deadbe02", kp)
+    pub_a, priv_a = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
+    pub_b, priv_b = KeyRecord.for_keypair("deadbe02", kp, origin=KeyOrigin.CAPTURED)
     seed_db(nodes=[], keys=[pub_a, priv_a, pub_b, priv_b])
 
     result = invoke(runner, ["db", "verify", "--json"], env)
@@ -264,8 +266,8 @@ def test_db_verify_hex_shaped_labels_sharing_a_key_are_an_alias_not_critical(
     CVE-2025-52464 clone.
     """
     kp = generate_keypair()
-    pub_a, priv_a = KeyRecord.for_keypair("cafe", kp)
-    pub_b, priv_b = KeyRecord.for_keypair("face", kp)
+    pub_a, priv_a = KeyRecord.for_keypair("cafe", kp, origin=KeyOrigin.IMPORTED)
+    pub_b, priv_b = KeyRecord.for_keypair("face", kp, origin=KeyOrigin.IMPORTED)
     seed_db(nodes=[], keys=[pub_a, priv_a, pub_b, priv_b])
 
     result = invoke(runner, ["db", "verify", "--json"], env)
@@ -293,7 +295,9 @@ def test_db_verify_shared_observed_ref_across_two_nodes_exits_six(
     owner = ref.removesuffix("_pub")
     node_a = NodeRecord(node_id="deadbe01", short_name="MT00", authorized_admin_keys=(ref,))
     node_b = NodeRecord(node_id="deadbe02", short_name="MT01", authorized_admin_keys=(ref,))
-    observed_pub = KeyRecord.from_material(owner, KeyType.ADMIN_PUBLIC, kp.public)
+    observed_pub = KeyRecord.from_material(
+        owner, KeyType.ADMIN_PUBLIC, kp.public, origin=KeyOrigin.IMPORTED
+    )
     seed_db(nodes=[node_a, node_b], keys=[observed_pub])
 
     result = invoke(runner, ["db", "verify", "--json"], env)
@@ -312,8 +316,8 @@ def test_db_verify_alias_public_key_is_a_warning_unless_strict(
 ) -> None:
     kp = generate_keypair()
     node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
-    node_pub, node_priv = KeyRecord.for_keypair("deadbe01", kp)
-    label_pub, label_priv = KeyRecord.for_keypair("ADMIN1", kp)
+    node_pub, node_priv = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
+    label_pub, label_priv = KeyRecord.for_keypair("ADMIN1", kp, origin=KeyOrigin.IMPORTED)
     seed_db(nodes=[node], keys=[node_pub, node_priv, label_pub, label_priv])
 
     lenient = invoke(runner, ["db", "verify", "--json"], env)
@@ -339,8 +343,8 @@ def test_db_verify_admin_key_mismatch_exits_six(
     severity was the only one that mattered in practice.
     """
     kp_a, kp_b = generate_keypair(), generate_keypair()
-    pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a)
-    _, priv = KeyRecord.for_keypair("ADMIN1", kp_b)
+    pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a, origin=KeyOrigin.IMPORTED)
+    _, priv = KeyRecord.for_keypair("ADMIN1", kp_b, origin=KeyOrigin.IMPORTED)
     seed_db(keys=[pub, priv])
 
     result = invoke(runner, ["db", "verify", "--json"], env)
@@ -355,7 +359,7 @@ def test_db_verify_does_not_report_an_orphan_private_key_as_a_mismatch(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:
     kp = generate_keypair()
-    _, priv = KeyRecord.for_keypair("ADMIN1", kp)
+    _, priv = KeyRecord.for_keypair("ADMIN1", kp, origin=KeyOrigin.IMPORTED)
     seed_db(keys=[priv])
 
     result = invoke(runner, ["db", "verify", "--json"], env)

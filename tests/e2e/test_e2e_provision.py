@@ -18,7 +18,7 @@ from meshprovision.crypto import weakkeys
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import KeyType, ManagementMode
+from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import ExitCode
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
@@ -327,7 +327,7 @@ def test_drift_repair_renames_back_and_updates_role(
         region="EU_868",
         management=ManagementMode.TEMPLATE,
     )
-    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp)
+    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
     seed_db(nodes=[node_record], keys=[pub_record, priv_record])
 
     iface = bus.use(FakeMeshInterface("deadbe01", short_name="be01"))
@@ -414,7 +414,7 @@ def test_stale_db_key_is_corrected_by_adopting_the_devices_reported_key(
     loaded = ods.load_database(db_path)
     node_record = NodeRecord.from_row(loaded.nodes[0])
     stale = keypair_factory()
-    stale_pub, stale_priv = KeyRecord.for_keypair("deadbe01", stale)
+    stale_pub, stale_priv = KeyRecord.for_keypair("deadbe01", stale, origin=KeyOrigin.CAPTURED)
     seed_db(nodes=[node_record], keys=[stale_pub, stale_priv])
 
     second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
@@ -455,8 +455,10 @@ def test_repair_with_no_admin_nodes_template_preserves_existing_admin_keys(
         authorized_admin_keys=("ADMIN1_pub",),
         management=ManagementMode.TEMPLATE,
     )
-    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp)
-    admin_pub_record, admin_priv_record = KeyRecord.for_keypair("ADMIN1", admin_kp)
+    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
+    admin_pub_record, admin_priv_record = KeyRecord.for_keypair(
+        "ADMIN1", admin_kp, origin=KeyOrigin.IMPORTED
+    )
     seed_db(
         nodes=[node_record],
         keys=[pub_record, priv_record, admin_pub_record, admin_priv_record],
@@ -501,14 +503,16 @@ def test_revoked_live_admin_key_is_dropped_from_the_record(
         authorized_admin_keys=("ADMIN1_pub", "ADMIN2_pub"),
         management=ManagementMode.TEMPLATE,
     )
-    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp)
-    admin2_pub, admin2_priv = KeyRecord.for_keypair("ADMIN2", admin2_kp)
+    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
+    admin2_pub, admin2_priv = KeyRecord.for_keypair("ADMIN2", admin2_kp, origin=KeyOrigin.IMPORTED)
     seed_db(
         nodes=[node_record],
         keys=[
             pub_record,
             priv_record,
-            KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, weak_public),
+            KeyRecord.from_material(
+                "ADMIN1", KeyType.ADMIN_PUBLIC, weak_public, origin=KeyOrigin.IMPORTED
+            ),
             admin2_pub,
             admin2_priv,
         ],

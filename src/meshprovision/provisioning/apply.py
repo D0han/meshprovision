@@ -51,7 +51,7 @@ from meshprovision.crypto import redact
 from meshprovision.crypto.keys import KeyPair, decode_key
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRepository
-from meshprovision.db.schema import BLE_PIN_LENGTH
+from meshprovision.db.schema import BLE_PIN_LENGTH, KeyOrigin
 from meshprovision.errors import (
     AtomicWriteError,
     ConnectionBackendError,
@@ -801,6 +801,7 @@ def persist_result(
     nodes: NodeRepository,
     keys: KeyRepository,
     keypair: KeyPair | None = None,
+    origin: KeyOrigin,
     admin_key_refs: Sequence[str] = (),
     now: datetime | None = None,
 ) -> bool:
@@ -819,6 +820,11 @@ def persist_result(
             overwriting it (``key_plan.adopt_device_key``, firmware issue
             #7449). Either way, ``keys`` is updated to match what the
             device now holds.
+        origin: How ``keypair``'s material came to be recorded -- computed
+            by the caller (see ``cli/provision.py``'s ``_node_key_origin``).
+            Required even when ``keypair`` is ``None`` (unused in that
+            case), so every caller is forced to compute it rather than
+            accidentally defaulting.
         admin_key_refs: Unused directly here (the confirmed record's
             ``authorized_admin_keys`` already reflects the plan); kept as
             part of this function's documented signature for callers that
@@ -853,7 +859,7 @@ def persist_result(
 
     if keypair is not None:
         public_record, private_record = KeyRecord.for_keypair(
-            outcome.record.node_id, keypair, created_ts=now
+            outcome.record.node_id, keypair, origin=origin, created_ts=now
         )
         keys.upsert(public_record)
         keys.upsert(private_record)

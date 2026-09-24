@@ -63,7 +63,7 @@ from meshprovision.crypto.keys import decode_key, encode_key  # noqa: E402
 from meshprovision.db import ods  # noqa: E402
 from meshprovision.db.keys import KeyRecord  # noqa: E402
 from meshprovision.db.nodes import NodeRecord  # noqa: E402
-from meshprovision.db.schema import FirmwareType, KeyType, ManagementMode  # noqa: E402
+from meshprovision.db.schema import FirmwareType, KeyOrigin, KeyType, ManagementMode  # noqa: E402
 from meshprovision.errors import MeshprovisionError  # noqa: E402
 
 __all__ = ["EXAMPLE_DB_PATH", "EXAMPLE_TIMESTAMP", "build_records", "generate", "main"]
@@ -180,19 +180,29 @@ def build_records() -> tuple[tuple[NodeRecord, ...], tuple[KeyRecord, ...]]:
             "example-admin",
             KeyType.ADMIN_PUBLIC,
             _PLACEHOLDER_ADMIN_PUB,
+            origin=KeyOrigin.IMPORTED,
             created_ts=EXAMPLE_TIMESTAMP,
         ),
         KeyRecord.from_material(
             "example-admin",
             KeyType.ADMIN_PRIVATE,
             _PLACEHOLDER_ADMIN_PRIV,
+            origin=KeyOrigin.IMPORTED,
             created_ts=EXAMPLE_TIMESTAMP,
         ),
         KeyRecord.from_material(
-            "deadbe01", KeyType.ADMIN_PUBLIC, _PLACEHOLDER_NODE_PUB, created_ts=EXAMPLE_TIMESTAMP
+            "deadbe01",
+            KeyType.ADMIN_PUBLIC,
+            _PLACEHOLDER_NODE_PUB,
+            origin=KeyOrigin.CAPTURED,
+            created_ts=EXAMPLE_TIMESTAMP,
         ),
         KeyRecord.from_material(
-            "deadbe01", KeyType.CHANNEL_PSK, _PLACEHOLDER_PSK, created_ts=EXAMPLE_TIMESTAMP
+            "deadbe01",
+            KeyType.CHANNEL_PSK,
+            _PLACEHOLDER_PSK,
+            origin=KeyOrigin.CAPTURED,
+            created_ts=EXAMPLE_TIMESTAMP,
         ),
     )
     return nodes, keys

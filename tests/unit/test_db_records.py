@@ -15,7 +15,7 @@ from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository, find_next_free_name
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import FirmwareType, KeyType, ManagementMode
+from meshprovision.db.schema import FirmwareType, KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import (
     AdminRefUnresolvedError,
     DbIntegrityError,
@@ -203,7 +203,9 @@ def test_with_updates_revalidates_and_never_mutates() -> None:
 
 
 def test_key_record_key_value_canonicalised(keypair) -> None:
-    record = KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, keypair.public)
+    record = KeyRecord.from_material(
+        "deadbe01", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+    )
     assert record.key_value.get_secret_value() == keypair.public_b64
 
 
@@ -218,7 +220,9 @@ def test_key_record_inconsistent_key_ref_raises() -> None:
 
 
 def test_key_record_repr_shows_only_ref_and_fingerprint(keypair) -> None:
-    record = KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, keypair.public)
+    record = KeyRecord.from_material(
+        "deadbe01", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+    )
     text = repr(record)
     assert "deadbe01_pub" in text
     assert "sha256:" in text
@@ -226,14 +230,16 @@ def test_key_record_repr_shows_only_ref_and_fingerprint(keypair) -> None:
 
 
 def test_key_record_material_secret_fingerprint(keypair) -> None:
-    record = KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, keypair.public)
+    record = KeyRecord.from_material(
+        "deadbe01", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+    )
     assert record.material() == keypair.public
     assert record.secret().reveal() == keypair.public
     assert record.fingerprint.startswith("sha256:")
 
 
 def test_for_keypair_produces_pub_priv_pair(keypair) -> None:
-    pub, priv = KeyRecord.for_keypair("deadbe01", keypair)
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     assert pub.key_ref == "deadbe01_pub"
     assert priv.key_ref == "deadbe01_priv"
     assert pub.material() == keypair.public
@@ -249,7 +255,9 @@ def test_for_keypair_records_the_caller_supplied_created_ts(keypair) -> None:
     cli.admin, cli.provision) all pass an explicit timestamp.
     """
     created = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
-    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, created_ts=created)
+    pub, priv = KeyRecord.for_keypair(
+        "deadbe01", keypair, origin=KeyOrigin.CAPTURED, created_ts=created
+    )
     assert pub.created_ts == created
     assert priv.created_ts == created
     assert pub.to_row()["created_ts"] == "2026-03-04T05:06:07Z"
@@ -259,7 +267,11 @@ def test_for_keypair_records_the_caller_supplied_created_ts(keypair) -> None:
 def test_from_material_records_the_caller_supplied_created_ts(keypair) -> None:
     created = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
     record = KeyRecord.from_material(
-        "deadbe01", KeyType.ADMIN_PUBLIC, keypair.public, created_ts=created
+        "deadbe01",
+        KeyType.ADMIN_PUBLIC,
+        keypair.public,
+        origin=KeyOrigin.CAPTURED,
+        created_ts=created,
     )
     assert record.created_ts == created
     assert KeyRecord.from_row(record.to_row()).created_ts == created
@@ -316,7 +328,7 @@ def test_key_repo_get_missing_raises(keys: KeyRepository) -> None:
 
 
 def test_key_repo_upsert_find_delete(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
-    pub, _ = KeyRecord.for_keypair("deadbe01", keypair)
+    pub, _ = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     keys.upsert(pub)
     db.save()
 
@@ -347,8 +359,8 @@ def test_resolve_admin_refs_unknown_ref_hint_mentions_both_bootstrap_commands(
 def test_admin_key_bytes_ordering(keys: KeyRepository, keypair_factory, db: OdsDatabase) -> None:
     kp1 = keypair_factory()
     kp2 = keypair_factory()
-    pub1, _ = KeyRecord.for_keypair("ADMIN1", kp1)
-    pub2, _ = KeyRecord.for_keypair("ADMIN2", kp2)
+    pub1, _ = KeyRecord.for_keypair("ADMIN1", kp1, origin=KeyOrigin.IMPORTED)
+    pub2, _ = KeyRecord.for_keypair("ADMIN2", kp2, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub1)
     keys.upsert(pub2)
     db.save()
@@ -359,7 +371,7 @@ def test_admin_key_bytes_ordering(keys: KeyRepository, keypair_factory, db: OdsD
 
 def test_public_key_map(keys: KeyRepository, keypair_factory, db: OdsDatabase) -> None:
     kp = keypair_factory()
-    pub, priv = KeyRecord.for_keypair("deadbe01", kp)
+    pub, priv = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
     keys.upsert(pub)
     keys.upsert(priv)
     db.save()
@@ -369,7 +381,7 @@ def test_public_key_map(keys: KeyRepository, keypair_factory, db: OdsDatabase) -
 
 def test_has_private(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
     assert keys.has_private("ADMIN1") is False
-    _, priv = KeyRecord.for_keypair("ADMIN1", keypair)
+    _, priv = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(priv)
     db.save()
     assert keys.has_private("ADMIN1") is True
@@ -379,8 +391,8 @@ def test_has_private_rejects_a_private_key_that_does_not_match_its_public(
     keys: KeyRepository, keypair_factory, db: OdsDatabase
 ) -> None:
     kp_a, kp_b = keypair_factory(), keypair_factory()
-    pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a)
-    _, priv = KeyRecord.for_keypair("ADMIN1", kp_b)
+    pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a, origin=KeyOrigin.IMPORTED)
+    _, priv = KeyRecord.for_keypair("ADMIN1", kp_b, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     keys.upsert(priv)
     db.save()
@@ -389,7 +401,7 @@ def test_has_private_rejects_a_private_key_that_does_not_match_its_public(
 
 
 def test_has_private_accepts_a_matching_pair(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
-    pub, priv = KeyRecord.for_keypair("ADMIN1", keypair)
+    pub, priv = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     keys.upsert(priv)
     db.save()
@@ -400,7 +412,7 @@ def test_has_private_accepts_a_matching_pair(keys: KeyRepository, keypair, db: O
 def test_has_private_tolerates_malformed_private_material(
     keys: KeyRepository, keypair, db: OdsDatabase
 ) -> None:
-    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair)
+    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     db.replace(
         schema.KEYS_SHEET,
@@ -421,7 +433,7 @@ def test_has_private_tolerates_malformed_private_material(
 def test_private_key_mismatch_is_false_when_no_private_row_exists(
     keys: KeyRepository, keypair, db: OdsDatabase
 ) -> None:
-    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair)
+    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     db.save()
     assert keys.has_private("ADMIN1") is False
@@ -434,7 +446,7 @@ def test_keypair_for(keys: KeyRepository, keypair, db: OdsDatabase) -> None:
     assert material_absent.private is None
     assert material_absent.fingerprint() is None
 
-    pub, priv = KeyRecord.for_keypair("deadbe01", keypair)
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     keys.upsert(pub)
     keys.upsert(priv)
     db.save()
@@ -450,7 +462,7 @@ def test_keypair_for_private_only_falls_back_from_public(
     keys: KeyRepository, keypair, db: OdsDatabase
 ) -> None:
     """fingerprint() falls back to the private key when only it is present."""
-    _pub, priv = KeyRecord.for_keypair("deadbe02", keypair)
+    _pub, priv = KeyRecord.for_keypair("deadbe02", keypair, origin=KeyOrigin.CAPTURED)
     keys.upsert(priv)
     db.save()
 
@@ -467,7 +479,7 @@ def test_unresolved_admin_refs(
 ) -> None:
     record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub", "ADMIN2_pub"))
     nodes.upsert(record)
-    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair)
+    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     db.save()
 

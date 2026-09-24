@@ -32,7 +32,7 @@ from meshprovision.crypto.keys import KeyPair, decode_key, encode_key, public_ke
 from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db import schema
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import (
     AdminRefUnresolvedError,
     DbIntegrityError,
@@ -60,6 +60,10 @@ class KeyRecord(BaseModel):
             :meth:`material` unwraps it, and even then returns bytes,
             never a printable string.
         created_ts: Tz-aware UTC timestamp this key was recorded.
+        origin: How this key's material came to be recorded, or ``None``
+            for a row written before the ``Keys.origin`` column existed
+            (a blank legacy cell parses to ``None``, never a guessed
+            value -- see :meth:`with_origin`).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", str_strip_whitespace=True)
@@ -69,6 +73,7 @@ class KeyRecord(BaseModel):
     key_type: KeyType
     key_value: SecretStr
     created_ts: datetime | None = None
+    origin: KeyOrigin | None = None
 
     @field_validator("key_value", mode="before")
     @classmethod
@@ -156,7 +161,7 @@ class KeyRecord(BaseModel):
         """Render this record as a ``Keys`` sheet row.
 
         Returns:
-            The full ``{column_name: text}`` row, covering exactly the 5
+            The full ``{column_name: text}`` row, covering exactly the 6
             :data:`~meshprovision.db.schema.KEYS_SHEET_SPEC` columns.
         """
         return {
@@ -165,6 +170,7 @@ class KeyRecord(BaseModel):
             "key_type": self.key_type.value,
             "key_value": self.key_value.get_secret_value(),
             "created_ts": "" if self.created_ts is None else schema.utc_timestamp(self.created_ts),
+            "origin": "" if self.origin is None else self.origin.value,
         }
 
     @classmethod
@@ -176,15 +182,20 @@ class KeyRecord(BaseModel):
                 validated by :mod:`meshprovision.db.ods`.
 
         Returns:
-            The constructed :class:`KeyRecord`.
+            The constructed :class:`KeyRecord`. ``origin`` is ``None``
+            when ``row``'s ``origin`` cell is blank -- either a legacy
+            row written before the column existed, or one whose
+            provenance was never recorded.
         """
         created_raw = row.get("created_ts", "")
+        origin_raw = row.get("origin", "")
         return cls(
             key_ref=row.get("key_ref", ""),
             owner_node_id=row.get("owner_node_id", ""),
             key_type=KeyType(row.get("key_type", "")),
             key_value=SecretStr(row.get("key_value", "")),
             created_ts=schema.parse_timestamp(created_raw) if created_raw else None,
+            origin=KeyOrigin(origin_raw) if origin_raw else None,
         )
 
     @classmethod
@@ -194,6 +205,7 @@ class KeyRecord(BaseModel):
         key_type: KeyType,
         raw: bytes | SecretBytes,
         *,
+        origin: KeyOrigin,
         created_ts: datetime | None = None,
     ) -> KeyRecord:
         """Build a :class:`KeyRecord` from raw key bytes.
@@ -204,6 +216,10 @@ class KeyRecord(BaseModel):
             key_type: The kind of key ``raw`` holds.
             raw: The raw 32 key bytes, or a :class:`SecretBytes` wrapping
                 them.
+            origin: How this key's material came to be recorded. Required
+                -- every call site knows this at construction time; use
+                :meth:`with_origin` for the one case that must propagate
+                "unknown" (``None``) instead.
             created_ts: Timestamp to record. Defaults to unset.
 
         Returns:
@@ -217,11 +233,12 @@ class KeyRecord(BaseModel):
             key_type=key_type,
             key_value=SecretStr(encode_key(raw_bytes)),
             created_ts=created_ts,
+            origin=origin,
         )
 
     @classmethod
     def for_keypair(
-        cls, owner: str, pair: KeyPair, *, created_ts: datetime | None = None
+        cls, owner: str, pair: KeyPair, *, origin: KeyOrigin, created_ts: datetime | None = None
     ) -> tuple[KeyRecord, KeyRecord]:
         """Build the public/private :class:`KeyRecord` pair for an X25519 keypair.
 
@@ -229,6 +246,9 @@ class KeyRecord(BaseModel):
             owner: The owning ``node_id`` or template ``admin_nodes``
                 reference.
             pair: The generated or restored keypair.
+            origin: How this keypair's material came to be recorded,
+                recorded on both rows. Required -- see
+                :meth:`from_material`.
             created_ts: Timestamp to record on both rows. Defaults to
                 unset.
 
@@ -236,12 +256,29 @@ class KeyRecord(BaseModel):
             ``(public_record, private_record)``.
         """
         public_record = cls.from_material(
-            owner, KeyType.ADMIN_PUBLIC, pair.public, created_ts=created_ts
+            owner, KeyType.ADMIN_PUBLIC, pair.public, origin=origin, created_ts=created_ts
         )
         private_record = cls.from_material(
-            owner, KeyType.ADMIN_PRIVATE, pair.private, created_ts=created_ts
+            owner, KeyType.ADMIN_PRIVATE, pair.private, origin=origin, created_ts=created_ts
         )
         return public_record, private_record
+
+    def with_origin(self, origin: KeyOrigin | None) -> KeyRecord:
+        """Return a copy of this record with :attr:`origin` replaced.
+
+        The single greppable place that propagates an "unknown" origin
+        (``None``) from one row onto another -- for example, copying an
+        existing ``<hex>_pub`` row's origin onto an admin-alias row filed
+        under a different reference for the same material.
+
+        Args:
+            origin: The origin to set on the returned copy.
+
+        Returns:
+            A new :class:`KeyRecord`, identical to ``self`` except for
+            :attr:`origin`.
+        """
+        return self.model_copy(update={"origin": origin})
 
     def __repr__(self) -> str:
         """Return a representation that never exposes key material.

@@ -23,6 +23,7 @@ from meshprovision.db import locking, schema
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
+from meshprovision.db.schema import KeyOrigin
 from meshprovision.errors import DatabaseLockedError
 
 pytestmark = pytest.mark.unit
@@ -30,7 +31,7 @@ pytestmark = pytest.mark.unit
 
 def _upsert_node_and_key(db: OdsDatabase, node_id: str, keypair: KeyPair) -> None:
     NodeRepository(db).upsert(NodeRecord(node_id=node_id, hw_model="RAK4631"))
-    public_record, _ = KeyRecord.for_keypair(node_id, keypair)
+    public_record, _ = KeyRecord.for_keypair(node_id, keypair, origin=KeyOrigin.CAPTURED)
     KeyRepository(db).upsert(public_record)
 
 

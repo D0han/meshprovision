@@ -18,7 +18,7 @@ from meshprovision.crypto.keys import encode_key
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import DbIntegrityError
 from meshprovision.provisioning import observed_keys
 from meshprovision.provisioning.key_registry import adopt_canonical_ref, register_observed_key
@@ -73,7 +73,7 @@ def test_register_observed_key_reuses_an_existing_real_ref(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
     # Arrange
-    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair)
+    pub, _ = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
 
     # Act
@@ -102,10 +102,14 @@ def test_register_observed_key_prefers_a_node_owned_ref_over_a_stale_observed_on
     """A key already registered under a real node id wins over its own observed ref."""
     # Arrange: material registered both under a real node id and (as if from
     # an earlier adopt, before this node was known) under an observed ref.
-    real_pub, _ = KeyRecord.for_keypair("deadbe01", keypair)
+    real_pub, _ = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     keys.upsert(real_pub)
     observed_owner = observed_keys.observed_owner(keypair.public)
-    keys.upsert(KeyRecord.from_material(observed_owner, KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            observed_owner, KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
 
     # Act
     ref = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
@@ -122,7 +126,11 @@ def test_register_observed_key_widens_digest_on_collision(
     # unrelated material.
     a, b = keypair_factory(), keypair_factory()
     narrow_owner = observed_keys.observed_owner(a.public)
-    keys.upsert(KeyRecord.from_material(narrow_owner, KeyType.ADMIN_PUBLIC, b.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            narrow_owner, KeyType.ADMIN_PUBLIC, b.public, origin=KeyOrigin.IMPORTED
+        )
+    )
 
     # Act
     ref = register_observed_key(nodes, keys, a.public, created_ts=_NOW)
@@ -138,8 +146,16 @@ def test_register_observed_key_raises_when_both_widths_collide(
     a, b, c = keypair_factory(), keypair_factory(), keypair_factory()
     narrow_owner = observed_keys.observed_owner(a.public)
     wide_owner = observed_keys.observed_owner(a.public, chars=16)
-    keys.upsert(KeyRecord.from_material(narrow_owner, KeyType.ADMIN_PUBLIC, b.public))
-    keys.upsert(KeyRecord.from_material(wide_owner, KeyType.ADMIN_PUBLIC, c.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            narrow_owner, KeyType.ADMIN_PUBLIC, b.public, origin=KeyOrigin.IMPORTED
+        )
+    )
+    keys.upsert(
+        KeyRecord.from_material(
+            wide_owner, KeyType.ADMIN_PUBLIC, c.public, origin=KeyOrigin.IMPORTED
+        )
+    )
 
     with pytest.raises(DbIntegrityError):
         register_observed_key(nodes, keys, a.public, created_ts=_NOW)
@@ -157,7 +173,7 @@ def test_adopt_canonical_ref_rewrites_authorized_admin_keys_and_deletes_observed
     observed_ref = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
     node = NodeRecord(node_id="cafe0001", authorized_admin_keys=(observed_ref,))
     nodes.upsert(node)
-    keys.upsert(KeyRecord.for_keypair("deadbe01", keypair)[0])
+    keys.upsert(KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)[0])
 
     # Act
     changed = adopt_canonical_ref(nodes, keys, material=keypair.public, canonical_owner="deadbe01")
@@ -260,7 +276,10 @@ def test_adopt_canonical_ref_continues_past_a_delete_that_finds_nothing(
 ) -> None:
     """The cleanup loop must keep going even when a delete() call is a no-op."""
     matching = KeyRecord.from_material(
-        observed_keys.observed_owner(keypair.public), KeyType.ADMIN_PUBLIC, keypair.public
+        observed_keys.observed_owner(keypair.public),
+        KeyType.ADMIN_PUBLIC,
+        keypair.public,
+        origin=KeyOrigin.IMPORTED,
     )
     node = NodeRecord(
         node_id="cafe0001", authorized_admin_keys=(observed_keys.observed_key_ref(keypair.public),)
@@ -331,8 +350,16 @@ def test_adopt_canonical_ref_deletes_every_matching_observed_row(
     # here since provoking a real sha256 collision is not feasible).
     narrow_owner = observed_keys.observed_owner(keypair.public)
     wide_owner = observed_keys.observed_owner(keypair.public, chars=16)
-    keys.upsert(KeyRecord.from_material(narrow_owner, KeyType.ADMIN_PUBLIC, keypair.public))
-    keys.upsert(KeyRecord.from_material(wide_owner, KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            narrow_owner, KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
+    keys.upsert(
+        KeyRecord.from_material(
+            wide_owner, KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
     node = NodeRecord(
         node_id="cafe0001",
         authorized_admin_keys=(f"{narrow_owner}_pub", f"{wide_owner}_pub"),

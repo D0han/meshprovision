@@ -33,7 +33,7 @@ from typing import TYPE_CHECKING
 
 from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import DbIntegrityError, KeyMaterialError
 from meshprovision.provisioning import observed_keys, pipeline
 
@@ -99,7 +99,11 @@ def register_observed_key(
         if keys.find(ref) is None:
             keys.upsert(
                 KeyRecord.from_material(
-                    owner, KeyType.ADMIN_PUBLIC, material, created_ts=created_ts
+                    owner,
+                    KeyType.ADMIN_PUBLIC,
+                    material,
+                    origin=KeyOrigin.CAPTURED,
+                    created_ts=created_ts,
                 )
             )
             return ref

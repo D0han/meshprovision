@@ -12,7 +12,7 @@ from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.pipeline import (
@@ -68,7 +68,11 @@ def _audit_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
 def test_soft_audit_finding_logs_a_warning(
     keys: KeyRepository, caplog: pytest.LogCaptureFixture
 ) -> None:
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, _LOW_ENTROPY_PUBLIC))
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, _LOW_ENTROPY_PUBLIC, origin=KeyOrigin.IMPORTED
+        )
+    )
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         resolved = resolve_admin_keys(keys, _template_with_admin("ADMIN1"), known_bad=frozenset())
@@ -82,7 +86,11 @@ def test_soft_audit_finding_logs_a_warning(
 def test_compromised_admin_key_logs_an_error(
     keys: KeyRepository, keypair: KeyPair, caplog: pytest.LogCaptureFixture
 ) -> None:
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
 
     with caplog.at_level(logging.WARNING, logger=_LOGGER_NAME):
         resolved = resolve_admin_keys(
@@ -99,8 +107,8 @@ def test_resolve_admin_keys_reports_a_private_key_mismatch(
     keys: KeyRepository, keypair_factory, caplog: pytest.LogCaptureFixture
 ) -> None:
     kp_a, kp_b = keypair_factory(), keypair_factory()
-    pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a)
-    _, mismatched_priv = KeyRecord.for_keypair("ADMIN1", kp_b)
+    pub, _ = KeyRecord.for_keypair("ADMIN1", kp_a, origin=KeyOrigin.IMPORTED)
+    _, mismatched_priv = KeyRecord.for_keypair("ADMIN1", kp_b, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     keys.upsert(mismatched_priv)
 

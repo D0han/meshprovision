@@ -51,7 +51,7 @@ from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import BLE_PIN_LENGTH, KeyType, ManagementMode
+from meshprovision.db.schema import BLE_PIN_LENGTH, KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import KeyMaterialError
 from meshprovision.provisioning import detect, pipeline
 from meshprovision.provisioning.key_registry import adopt_canonical_ref, register_observed_key
@@ -752,13 +752,19 @@ def persist_adoption(
     if live.security.has_public_key and node_public is not None:
         if live.security.has_private_key and node_private is not None:
             pair = crypto_keys.KeyPair(private=node_private, public=node_public)
-            pub_record, priv_record = KeyRecord.for_keypair(node_id_hex, pair, created_ts=now)
+            pub_record, priv_record = KeyRecord.for_keypair(
+                node_id_hex, pair, origin=KeyOrigin.CAPTURED, created_ts=now
+            )
             keys.upsert(pub_record)
             keys.upsert(priv_record)
         else:
             keys.upsert(
                 KeyRecord.from_material(
-                    node_id_hex, KeyType.ADMIN_PUBLIC, node_public, created_ts=now
+                    node_id_hex,
+                    KeyType.ADMIN_PUBLIC,
+                    node_public,
+                    origin=KeyOrigin.CAPTURED,
+                    created_ts=now,
                 )
             )
         # Reconcile: this key may already sit on some other node's row
@@ -773,7 +779,13 @@ def persist_adoption(
     # this column, which was built for X25519-sized (32-byte) material.
     if channel is not None:
         keys.upsert(
-            KeyRecord.from_material(node_id_hex, KeyType.CHANNEL_PSK, channel.psk, created_ts=now)
+            KeyRecord.from_material(
+                node_id_hex,
+                KeyType.CHANNEL_PSK,
+                channel.psk,
+                origin=KeyOrigin.CAPTURED,
+                created_ts=now,
+            )
         )
 
     # Resolve every live admin key's ref *now*, after the own-keypair

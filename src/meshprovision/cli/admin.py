@@ -41,7 +41,7 @@ from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import (
     ExitCode,
     KeyVerificationError,
@@ -421,7 +421,11 @@ def admin_import(
             # unless db.db.save() runs below, which is still dry_run-gated.
             db.keys.upsert(
                 KeyRecord.from_material(
-                    ref, KeyType.ADMIN_PUBLIC, material, created_ts=datetime.now(tz=UTC)
+                    ref,
+                    KeyType.ADMIN_PUBLIC,
+                    material,
+                    origin=KeyOrigin.IMPORTED,
+                    created_ts=datetime.now(tz=UTC),
                 )
             )
             adopt_canonical_ref(db.nodes, db.keys, material=material, canonical_owner=ref)

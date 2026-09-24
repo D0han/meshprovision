@@ -18,7 +18,7 @@ from meshprovision.crypto.keys import encode_key
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import KeyType, ManagementMode
+from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import ExitCode
 from meshprovision.provisioning.observed_keys import observed_key_ref
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
@@ -158,7 +158,7 @@ def test_dry_run_warns_when_adopt_would_overwrite_existing_key_material(
     seed_db(
         nodes=[NodeRecord(node_id="deadbe01")],
         keys=[
-            *KeyRecord.for_keypair("deadbe01", old_kp),
+            *KeyRecord.for_keypair("deadbe01", old_kp, origin=KeyOrigin.CAPTURED),
         ],
     )
     db_path = Path(env["MESHPROVISION_DB_PATH"])
@@ -229,7 +229,10 @@ def test_adopting_the_true_owner_renames_a_stale_observed_ref(
         nodes=[NodeRecord(node_id="aaaa0001", authorized_admin_keys=(observed_ref,))],
         keys=[
             KeyRecord.from_material(
-                observed_ref.removesuffix("_pub"), KeyType.ADMIN_PUBLIC, kp.public
+                observed_ref.removesuffix("_pub"),
+                KeyType.ADMIN_PUBLIC,
+                kp.public,
+                origin=KeyOrigin.IMPORTED,
             )
         ],
     )
@@ -273,7 +276,10 @@ def test_adopting_a_self_admining_node_does_not_persist_the_ref_it_just_deleted(
         nodes=[NodeRecord(node_id="aaaa0001", authorized_admin_keys=(observed_ref,))],
         keys=[
             KeyRecord.from_material(
-                observed_ref.removesuffix("_pub"), KeyType.ADMIN_PUBLIC, kp.public
+                observed_ref.removesuffix("_pub"),
+                KeyType.ADMIN_PUBLIC,
+                kp.public,
+                origin=KeyOrigin.IMPORTED,
             )
         ],
     )
@@ -682,7 +688,7 @@ def test_adopt_does_not_warn_when_the_live_key_is_already_a_known_registered_adm
     device must be silent.
     """
     shared_kp = keypair_factory()
-    pub, priv = KeyRecord.for_keypair("OTHER", shared_kp)
+    pub, priv = KeyRecord.for_keypair("OTHER", shared_kp, origin=KeyOrigin.IMPORTED)
     seed_db(
         nodes=[NodeRecord(node_id="cafe0001", authorized_admin_keys=("OTHER_pub",))],
         keys=[pub, priv],
@@ -717,7 +723,10 @@ def test_adopt_warns_on_a_duplicate_admin_key_already_filed_as_observed(
         nodes=[NodeRecord(node_id="cafe0001", authorized_admin_keys=(observed_ref,))],
         keys=[
             KeyRecord.from_material(
-                observed_ref.removesuffix("_pub"), KeyType.ADMIN_PUBLIC, cloned_kp.public
+                observed_ref.removesuffix("_pub"),
+                KeyType.ADMIN_PUBLIC,
+                cloned_kp.public,
+                origin=KeyOrigin.IMPORTED,
             )
         ],
     )
@@ -1058,7 +1067,7 @@ def test_fleet_adopt_heterogeneous_batch(
     kp_d = keypair_factory()
     key_lookup = {"a": kp_a.public, "b": kp_b.public, "c": kp_c.public, "d": kp_d.public}
 
-    pub_a, priv_a = KeyRecord.for_keypair("FRIENDA", kp_a)
+    pub_a, priv_a = KeyRecord.for_keypair("FRIENDA", kp_a, origin=KeyOrigin.IMPORTED)
     seed_db(nodes=[], keys=[pub_a, priv_a])
 
     fleet_results: dict[str, dict[str, object]] = {}
@@ -1472,7 +1481,11 @@ def test_from_backup_public_key_match_resolves_node_id(
                 management=ManagementMode.OBSERVED,
             )
         ],
-        keys=[KeyRecord.from_material("a0cb5cc4", KeyType.ADMIN_PUBLIC, kp.public)],
+        keys=[
+            KeyRecord.from_material(
+                "a0cb5cc4", KeyType.ADMIN_PUBLIC, kp.public, origin=KeyOrigin.CAPTURED
+            )
+        ],
     )
     cfg = _write_profile_cfg(tmp_path / "profile.cfg", public_key=kp.public)
 

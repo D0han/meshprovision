@@ -20,7 +20,7 @@ from meshprovision.crypto.keys import encode_key
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.db.verify import (
     DbProblemKind,
     ProblemSeverity,
@@ -172,7 +172,7 @@ def test_check_template_refs_resolved_entry_produces_no_problem(
     keys: KeyRepository, template, db: OdsDatabase, keypair: KeyPair
 ) -> None:
     template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
-    pub, priv = KeyRecord.for_keypair("ADMIN1", keypair)
+    pub, priv = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     keys.upsert(priv)
 
@@ -196,8 +196,16 @@ def test_check_duplicate_keys_two_distinct_nodes_sharing_a_key_is_critical(
     keys: KeyRepository, keypair: KeyPair
 ) -> None:
     """Two real devices holding the same public key is the CVE-2025-52464 signature."""
-    keys.upsert(KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, keypair.public))
-    keys.upsert(KeyRecord.from_material("deadbe02", KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "deadbe01", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+        )
+    )
+    keys.upsert(
+        KeyRecord.from_material(
+            "deadbe02", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+        )
+    )
 
     problems = _check_duplicate_keys(keys)
 
@@ -217,8 +225,16 @@ def test_check_duplicate_keys_node_plus_its_own_alias_is_only_a_warning(
     ``<LABEL>_pub`` is the expected, documented shape -- an
     informational alias warning, never the critical clone finding.
     """
-    keys.upsert(KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, keypair.public))
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "deadbe01", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+        )
+    )
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
 
     problems = _check_duplicate_keys(keys)
 
@@ -237,8 +253,16 @@ def test_check_duplicate_keys_two_hex_shaped_labels_are_only_a_warning(
     its own canonical ``NodeId.hex`` form (``"0000cafe"``), so neither
     counts as a real device and the group stays a warning.
     """
-    keys.upsert(KeyRecord.from_material("cafe", KeyType.ADMIN_PUBLIC, keypair.public))
-    keys.upsert(KeyRecord.from_material("face", KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "cafe", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
+    keys.upsert(
+        KeyRecord.from_material(
+            "face", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
 
     problems = _check_duplicate_keys(keys)
 
@@ -250,8 +274,16 @@ def test_check_duplicate_keys_two_hex_shaped_labels_are_only_a_warning(
 def test_check_duplicate_keys_distinct_keys_produce_no_problem(
     keys: KeyRepository, keypair_factory: Callable[[], KeyPair]
 ) -> None:
-    keys.upsert(KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, keypair_factory().public))
-    keys.upsert(KeyRecord.from_material("deadbe02", KeyType.ADMIN_PUBLIC, keypair_factory().public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "deadbe01", KeyType.ADMIN_PUBLIC, keypair_factory().public, origin=KeyOrigin.CAPTURED
+        )
+    )
+    keys.upsert(
+        KeyRecord.from_material(
+            "deadbe02", KeyType.ADMIN_PUBLIC, keypair_factory().public, origin=KeyOrigin.CAPTURED
+        )
+    )
 
     assert _check_duplicate_keys(keys) == []
 
@@ -263,10 +295,17 @@ def test_check_duplicate_keys_mixed_observed_and_real_alias_names_the_stale_ref(
     observed_ref = observed_key_ref(keypair.public)
     keys.upsert(
         KeyRecord.from_material(
-            observed_ref.removesuffix("_pub"), KeyType.ADMIN_PUBLIC, keypair.public
+            observed_ref.removesuffix("_pub"),
+            KeyType.ADMIN_PUBLIC,
+            keypair.public,
+            origin=KeyOrigin.IMPORTED,
         )
     )
-    keys.upsert(KeyRecord.from_material("deadbe01", KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "deadbe01", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+        )
+    )
 
     problems = _check_duplicate_keys(keys)
 
@@ -312,8 +351,16 @@ def test_check_admin_key_mismatch_flags_a_private_key_that_does_not_derive_its_p
     keys: KeyRepository, keypair_factory: Callable[[], KeyPair]
 ) -> None:
     """A `_priv` row holding unrelated bytes means corruption or a partial restore."""
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, keypair_factory().public))
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PRIVATE, keypair_factory().private))
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, keypair_factory().public, origin=KeyOrigin.IMPORTED
+        )
+    )
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PRIVATE, keypair_factory().private, origin=KeyOrigin.IMPORTED
+        )
+    )
 
     problems = _check_admin_key_mismatch(keys)
 
@@ -326,7 +373,7 @@ def test_check_admin_key_mismatch_flags_a_private_key_that_does_not_derive_its_p
 def test_check_admin_key_mismatch_accepts_a_consistent_pair(
     keys: KeyRepository, keypair: KeyPair
 ) -> None:
-    pub, priv = KeyRecord.for_keypair("ADMIN1", keypair)
+    pub, priv = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
     keys.upsert(pub)
     keys.upsert(priv)
 
@@ -337,7 +384,11 @@ def test_check_admin_key_mismatch_skips_a_private_key_with_no_public_row(
     keys: KeyRepository, keypair: KeyPair
 ) -> None:
     """With no public row there is nothing to derive against, so nothing to report."""
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PRIVATE, keypair.private))
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PRIVATE, keypair.private, origin=KeyOrigin.IMPORTED
+        )
+    )
 
     assert _check_admin_key_mismatch(keys) == []
 
@@ -359,7 +410,11 @@ def test_check_unresolved_admin_refs_flags_a_ref_absent_from_the_keys_sheet(
 def test_check_unresolved_admin_refs_accepts_a_resolvable_ref(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
     nodes.upsert(NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",)))
 
     assert _check_unresolved_admin_refs(nodes, keys) == []
@@ -393,7 +448,11 @@ def test_check_unregistered_duplicate_keys_flags_a_clone_of_another_nodes_regist
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
     """One device's never-imported key matching another device's registered key."""
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
     nodes.upsert(NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",)))
     nodes.upsert(
         NodeRecord(node_id="deadbe02", unregistered_admin_keys=(encode_key(keypair.public),))
@@ -412,7 +471,11 @@ def test_check_unregistered_duplicate_keys_ignores_a_nodes_own_registered_key(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
     """One node holding the same key both registered and unregistered is not a clone."""
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
     nodes.upsert(
         NodeRecord(
             node_id="deadbe01",
@@ -486,7 +549,11 @@ def test_check_unregistered_duplicate_keys_checks_every_material_on_a_multi_key_
     keypair_y = keypair_factory()
     material_x = encode_key(keypair_factory().public)
     material_y = encode_key(keypair_y.public)
-    keys.upsert(KeyRecord.from_material("ADMINC", KeyType.ADMIN_PUBLIC, keypair_y.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMINC", KeyType.ADMIN_PUBLIC, keypair_y.public, origin=KeyOrigin.IMPORTED
+        )
+    )
     nodes.upsert(NodeRecord(node_id="deadbe0a", unregistered_admin_keys=(material_x, material_y)))
     nodes.upsert(NodeRecord(node_id="deadbe0b", unregistered_admin_keys=(material_x,)))
     nodes.upsert(NodeRecord(node_id="deadbe0c", authorized_admin_keys=("ADMINC_pub",)))
@@ -523,7 +590,11 @@ def test_check_unregistered_duplicate_keys_prefers_registered_tier_when_both_mat
     below so the test fails loudly either way.
     """
     material = encode_key(keypair.public)
-    keys.upsert(KeyRecord.from_material("ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public))
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
     nodes.upsert(
         NodeRecord(
             node_id="deadbe01",
@@ -566,7 +637,7 @@ def test_verify_database_reports_node_count_and_key_count(
     nodes: NodeRepository, keys: KeyRepository, template, db: OdsDatabase, keypair: KeyPair
 ) -> None:
     nodes.upsert(NodeRecord(node_id="deadbe01"))
-    pub, priv = KeyRecord.for_keypair("deadbe01", keypair)
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     keys.upsert(pub)
     keys.upsert(priv)
 
