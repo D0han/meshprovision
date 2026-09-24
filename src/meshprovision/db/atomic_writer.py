@@ -677,6 +677,13 @@ def atomic_write(
 ) -> Iterator[Path]:
     """Yield a temp path in ``target.parent``; replace ``target`` atomically on success.
 
+    ``target`` is resolved (non-strict) before anything else, so a
+    symlinked database path is written through to the real file rather
+    than having the symlink itself replaced by a regular file -- a
+    concurrent write through a different symlink to the same real file
+    is then a genuine collision, not a silent split-brain. See
+    :func:`lock_path_for`, which resolves for the same reason.
+
     On clean exit from the ``with`` block, a backup of the current
     ``target`` is taken (when ``backup`` is true and ``target`` exists),
     and then the temp file is moved into place via ``os.replace()`` --
@@ -702,9 +709,15 @@ def atomic_write(
         ``write_bytes`` truncate without changing the mode.
 
     Raises:
-        AtomicWriteError: If creating the temporary file, creating the
-            backup, or replacing ``target`` fails.
+        AtomicWriteError: If ``target`` cannot be resolved (for example a
+            symlink loop), or if creating the temporary file, creating
+            the backup, or replacing ``target`` fails.
     """
+    try:
+        target = target.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise AtomicWriteError(f"Failed to resolve {target}: {exc}", path=str(target)) from exc
+
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

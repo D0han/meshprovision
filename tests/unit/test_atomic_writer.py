@@ -1123,3 +1123,80 @@ def test_legacy_backup_notice_reports_matching_legacy_files(
     assert "2 older backups" in notice
     assert "data/backups" in notice
     assert "--known-good" in notice
+
+
+# --- atomic_write resolves a symlinked target (B3) ------------------------------
+
+
+def test_atomic_write_through_a_symlink_updates_the_real_file(tmp_path: Path) -> None:
+    real_dir = tmp_path / "shared"
+    real_dir.mkdir()
+    real_target = real_dir / "nodes_db.ods"
+    link_dir = tmp_path / "ws1" / "data"
+    link_dir.mkdir(parents=True)
+    link = link_dir / "nodes_db.ods"
+    link.symlink_to(real_target)
+
+    write_bytes_atomic(link, b"hello", backup=False)
+
+    assert link.is_symlink()
+    assert link.resolve() == real_target
+    assert real_target.read_bytes() == b"hello"
+
+
+def test_atomic_write_through_a_symlink_does_not_replace_the_link_with_a_regular_file(
+    tmp_path: Path,
+) -> None:
+    real_dir = tmp_path / "shared"
+    real_dir.mkdir()
+    real_target = real_dir / "nodes_db.ods"
+    real_target.write_bytes(b"original")
+    link_dir = tmp_path / "ws1" / "data"
+    link_dir.mkdir(parents=True)
+    link = link_dir / "nodes_db.ods"
+    link.symlink_to(real_target)
+
+    write_bytes_atomic(link, b"updated", backup=False)
+
+    assert link.is_symlink()
+    assert real_target.read_bytes() == b"updated"
+
+
+def test_atomic_write_backups_follow_a_symlinked_target(tmp_path: Path) -> None:
+    real_dir = tmp_path / "shared"
+    real_dir.mkdir()
+    real_target = real_dir / "nodes_db.ods"
+    real_target.write_bytes(b"original")
+    link_dir = tmp_path / "ws1" / "data"
+    link_dir.mkdir(parents=True)
+    link = link_dir / "nodes_db.ods"
+    link.symlink_to(real_target)
+
+    write_bytes_atomic(link, b"updated", backup=True)
+
+    assert backup_dir_for(real_target).is_dir()
+    assert not (link_dir / "backups").exists()
+
+
+def test_atomic_write_creates_the_real_file_through_a_dangling_symlink(tmp_path: Path) -> None:
+    real_dir = tmp_path / "shared"
+    link_dir = tmp_path / "ws1" / "data"
+    link_dir.mkdir(parents=True)
+    real_target = real_dir / "nodes_db.ods"
+    link = link_dir / "nodes_db.ods"
+    link.symlink_to(real_target)
+
+    write_bytes_atomic(link, b"hello", backup=False)
+
+    assert link.is_symlink()
+    assert real_target.read_bytes() == b"hello"
+
+
+def test_atomic_write_symlink_loop_raises_atomic_write_error(tmp_path: Path) -> None:
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    a.symlink_to(b)
+    b.symlink_to(a)
+
+    with pytest.raises(AtomicWriteError):
+        write_bytes_atomic(a, b"hello", backup=False)

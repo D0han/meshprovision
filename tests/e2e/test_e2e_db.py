@@ -14,6 +14,7 @@ import pytest
 from meshprovision.crypto.keys import generate_keypair
 from meshprovision.db import atomic_writer, ods
 from meshprovision.db.keys import KeyRecord
+from meshprovision.db.locking import lock_path_for
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType
 from meshprovision.provisioning.observed_keys import observed_key_ref
@@ -1057,3 +1058,71 @@ def test_db_backup_list_reports_a_legacy_backup_dir_notice(
     assert "data" in result.stdout
     assert "backups" in result.stdout
     assert "explicit path" in result.stdout
+
+
+def _symlinked_fleet_env(tmp_path: Path, *, link: Path, real_target: Path) -> dict[str, str]:
+    """Build a CLI environment whose ``MESHPROVISION_DB_PATH`` is a symlink.
+
+    Args:
+        tmp_path: Pytest's per-test temporary directory, used for the
+            cache directory.
+        link: The symlink path handed to the CLI as ``--db-path``/
+            ``MESHPROVISION_DB_PATH``.
+        real_target: What ``link`` points at.
+    """
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(real_target)
+    return {
+        "MESHPROVISION_CONTACT": "meshprovision-tests@example.invalid",
+        "MESHPROVISION_CACHE_DIR": str(tmp_path / "cache"),
+        "MESHPROVISION_LOG_LEVEL": "WARNING",
+        "COLUMNS": "200",
+        "NO_COLOR": "1",
+        "MESHPROVISION_DB_PATH": str(link),
+    }
+
+
+def test_write_through_a_symlinked_db_path_updates_the_real_file(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """Reproduces aspect 3's MEDIUM: a symlinked database is no longer split-brained.
+
+    ``ws1/data/nodes_db.ods`` links to ``shared/nodes_db.ods``. Writing
+    through the link must update the real file (not replace the link
+    with a private local copy), and the write lock and backups must sit
+    beside the real file, not the link.
+    """
+    real_target = tmp_path / "shared" / "nodes_db.ods"
+    link = tmp_path / "ws1" / "data" / "nodes_db.ods"
+    env_ws1 = _symlinked_fleet_env(tmp_path, link=link, real_target=real_target)
+
+    assert invoke(runner, ["init", "--yes"], env_ws1).exit_code == 0
+    assert link.is_symlink()
+    assert real_target.is_file()
+
+    kp = generate_keypair()
+    imported = invoke(runner, ["admin", "import", f"WS1={kp.public_b64}"], env_ws1)
+    assert imported.exit_code == 0
+
+    assert link.is_symlink()
+    real_keys = {row["key_ref"] for row in ods.load_database(real_target).keys}
+    assert "WS1_pub" in real_keys
+
+    assert lock_path_for(real_target).exists()
+    assert not (link.parent / "nodes_db.ods.lock").exists()
+
+    assert atomic_writer.backup_dir_for(real_target).is_dir()
+    assert not (link.parent / "backups").exists()
+
+
+def test_write_through_a_dangling_symlinked_db_path_creates_the_real_file(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    real_target = tmp_path / "shared" / "nodes_db.ods"
+    link = tmp_path / "ws1" / "data" / "nodes_db.ods"
+    env_ws1 = _symlinked_fleet_env(tmp_path, link=link, real_target=real_target)
+
+    assert invoke(runner, ["init", "--yes"], env_ws1).exit_code == 0
+
+    assert link.is_symlink()
+    assert real_target.is_file()

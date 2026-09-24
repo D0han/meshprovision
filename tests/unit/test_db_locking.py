@@ -262,3 +262,42 @@ def test_read_holder_pid_returns_none_when_the_lock_file_cannot_be_read(
     fd = os.open(tmp_path / "nodes_db.ods.lock", os.O_CREAT | os.O_RDWR, 0o600)
     os.close(fd)
     assert locking._read_holder_pid(fd) is None
+
+
+# --- lock_path_for resolves a symlinked target (B3) -----------------------------
+
+
+def test_lock_path_for_resolves_a_symlinked_target(tmp_path: Path) -> None:
+    real_dir = tmp_path / "shared"
+    real_dir.mkdir()
+    real_target = real_dir / "nodes_db.ods"
+    real_target.write_bytes(b"x")
+    link_dir = tmp_path / "ws1" / "data"
+    link_dir.mkdir(parents=True)
+    link = link_dir / "nodes_db.ods"
+    link.symlink_to(real_target)
+
+    assert locking.lock_path_for(link) == locking.lock_path_for(real_target)
+    assert locking.lock_path_for(link) == real_target.with_name(
+        real_target.name + locking.LOCK_SUFFIX
+    )
+
+
+@_POSIX_ONLY
+def test_exclusive_lock_contends_across_a_symlink_and_the_real_path(tmp_path: Path) -> None:
+    real_dir = tmp_path / "shared"
+    real_dir.mkdir()
+    real_target = real_dir / "nodes_db.ods"
+    real_target.write_bytes(b"x")
+    link_dir = tmp_path / "ws1" / "data"
+    link_dir.mkdir(parents=True)
+    link = link_dir / "nodes_db.ods"
+    link.symlink_to(real_target)
+
+    with (
+        locking.exclusive_lock(real_target, timeout=1.0),
+        pytest.raises(DatabaseLockedError),
+        locking.exclusive_lock(link, timeout=0.1),
+    ):
+        pass
+    assert not (link_dir / "nodes_db.ods.lock").exists()

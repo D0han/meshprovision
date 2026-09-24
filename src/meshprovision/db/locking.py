@@ -115,10 +115,17 @@ def lock_path_for(target: Path) -> Path:
         target: The file being protected.
 
     Returns:
-        ``target`` with :data:`LOCK_SUFFIX` appended to its name, for
-        example ``data/nodes_db.ods.lock`` for ``data/nodes_db.ods``.
+        ``target``, resolved (non-strict) and with :data:`LOCK_SUFFIX`
+        appended to its name, for example ``data/nodes_db.ods.lock`` for
+        ``data/nodes_db.ods``. Resolving means a symlinked database's
+        lock sits beside the real file rather than the symlink, so two
+        workspaces addressing the same real file through different paths
+        contend for the same lock -- consistent with
+        :func:`~meshprovision.db.atomic_writer.atomic_write`, which
+        resolves for the same reason.
     """
-    return target.with_name(target.name + LOCK_SUFFIX)
+    resolved = target.resolve()
+    return resolved.with_name(resolved.name + LOCK_SUFFIX)
 
 
 def _resolve_timeout(timeout: float | None) -> float:
