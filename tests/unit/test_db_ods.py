@@ -18,6 +18,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import (
     DbIntegrityError,
+    DbReadError,
     DbValidationError,
     DuplicateNodeError,
     SchemaError,
@@ -1464,7 +1465,7 @@ def test_load_database_known_good_fast_path_leaves_an_unchanged_copy_untouched(
     assert second.path.stat().st_mtime_ns == path.stat().st_mtime_ns
 
 
-def test_load_database_unreadable_file_raises_schema_error(tmp_path: Path, keypair) -> None:
+def test_load_database_unreadable_file_raises_db_read_error(tmp_path: Path, keypair) -> None:
     if os.getuid() == 0:
         pytest.skip("root bypasses file permission checks")
     node, pub, priv = _sample_records(keypair)
@@ -1474,7 +1475,10 @@ def test_load_database_unreadable_file_raises_schema_error(tmp_path: Path, keypa
     )
     path.chmod(0o000)
     try:
-        with pytest.raises(SchemaError, match="is not a readable ODF spreadsheet"):
+        with pytest.raises(DbReadError, match="Could not read") as exc_info:
             ods.load_database(path)
     finally:
         path.chmod(0o644)
+    assert "not a readable ODF spreadsheet" not in str(exc_info.value)
+    assert exc_info.value.hint is not None
+    assert "permissions" in exc_info.value.hint

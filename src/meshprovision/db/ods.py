@@ -68,7 +68,7 @@ from odf.opendocument import OpenDocumentSpreadsheet
 from meshprovision.db import header_diff, locking, schema, sorting
 from meshprovision.db.atomic_writer import DEFAULT_RETENTION, atomic_write
 from meshprovision.db.known_good import refresh_known_good
-from meshprovision.errors import DbIntegrityError, DuplicateNodeError, SchemaError
+from meshprovision.errors import DbIntegrityError, DbReadError, DuplicateNodeError, SchemaError
 
 __all__ = [
     "HEADER_CELL_STYLE_NAME",
@@ -537,14 +537,22 @@ def _read_db_file(path: Path) -> tuple[bytes, os.stat_result]:
         The file's raw bytes and its ``fstat`` result at read time.
 
     Raises:
-        SchemaError: If ``path`` cannot be opened or read.
+        DbReadError: If ``path`` cannot be opened or read (permissions,
+            I/O) -- distinct from a file that reads fine but is not
+            valid ODF content, which :func:`read_raw` reports instead.
     """
     try:
         with path.open("rb") as fh:
             stat_result = os.fstat(fh.fileno())
             data = fh.read()
     except OSError as exc:
-        raise SchemaError(f"{path} is not a readable ODF spreadsheet: {exc}") from exc
+        raise DbReadError(
+            f"Could not read {path}: {exc.strerror or exc}",
+            hint=(
+                "Check the file's owner and permissions (a `sudo mesh …` run leaves it "
+                "root-owned: `sudo chown $USER <path>`). The file's content was not examined."
+            ),
+        ) from exc
     return data, stat_result
 
 
@@ -838,9 +846,10 @@ def load_database(path: Path) -> LoadedDatabase:
         regardless of the file's own row order.
 
     Raises:
-        SchemaError: If the file cannot be read, is missing the
-            ``Nodes`` or ``Keys`` sheet, or either sheet's header does
-            not match its schema.
+        DbReadError: If the file cannot be opened or read (permissions, I/O).
+        SchemaError: If the file is not valid ODF content, is missing
+            the ``Nodes`` or ``Keys`` sheet, or either sheet's header
+            does not match its schema.
         DbValidationError: If any cell fails validation.
         DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
         DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
@@ -901,7 +910,8 @@ def verify(path: Path) -> tuple[IntegrityWarning, ...]:
         Every cached-vs-recomputed disagreement found while loading.
 
     Raises:
-        SchemaError: If the file cannot be read or does not match its schema.
+        DbReadError: If the file cannot be opened or read (permissions, I/O).
+        SchemaError: If the file is not valid ODF content or does not match its schema.
         DbValidationError: If any cell fails validation.
         DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
         DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
@@ -1333,8 +1343,8 @@ class OdsDatabase:
                 any unsaved in-memory changes.
 
         Raises:
-            SchemaError: If the file cannot be read or does not match
-                its schema.
+            DbReadError: If the file cannot be opened or read (permissions, I/O).
+            SchemaError: If the file is not valid ODF content or does not match its schema.
             DbValidationError: If any cell fails validation.
             DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
             DbIntegrityError: If ``Keys.key_ref`` has a duplicate.

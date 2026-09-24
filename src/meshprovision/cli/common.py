@@ -51,6 +51,7 @@ from meshprovision.errors import (
     AmbiguousDeviceError,
     AtomicWriteError,
     DbError,
+    DbReadError,
     ExitCode,
     MeshprovisionError,
     NonInteractiveError,
@@ -1043,7 +1044,10 @@ class CliContext:
 
         Raises:
             SchemaError: If ``must_exist`` is true and the database file
-                does not exist, or if the file fails to load.
+                does not exist, or if the file loads but is not valid
+                ODF content or does not match its schema.
+            DbReadError: If the database file exists but could not be
+                opened or read (permissions, I/O).
             DbValidationError: If any cell fails validation on load.
             DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
             DbIntegrityError: If a derived value disagrees with its
@@ -1058,19 +1062,23 @@ class CliContext:
                 false, and ``MESHPROVISION_LOCK_TIMEOUT`` is set to a
                 malformed value.
 
-        A load failure that is specifically a :class:`~meshprovision.
-        errors.DbError` (the file loaded but its *content* is bad --
-        unreadable ODF, a missing sheet, a header mismatch, a bad cell,
-        a duplicate row) gets its ``hint`` extended with a pointer at the
-        known-good safety copy (see :func:`meshprovision.db.known_good
-        .refresh_known_good`), when one exists and its provenance is
-        verified (see :func:`meshprovision.db.known_good
-        .known_good_status`), naming the exact ``mesh db restore
-        --known-good`` command to run. An unverified copy gets a
-        different hint pointing at it by path instead, since
-        ``--known-good`` itself would refuse it. A locking or
-        atomic-write failure is left alone -- those aren't about bad
-        file content, so a known-good copy isn't the relevant remedy.
+        A load failure that is specifically a content error -- a
+        :class:`~meshprovision.errors.DbError` other than
+        :class:`~meshprovision.errors.DbReadError` or
+        :class:`~meshprovision.errors.AtomicWriteError` (a missing
+        sheet, a header mismatch, a bad cell, a duplicate row, or ODF
+        content that fails to parse) -- gets its ``hint`` extended with
+        a pointer at the known-good safety copy (see
+        :func:`meshprovision.db.known_good.refresh_known_good`), when
+        one exists and its provenance is verified (see
+        :func:`meshprovision.db.known_good.known_good_status`), naming
+        the exact ``mesh db restore --known-good`` command to run. An
+        unverified copy gets a different hint pointing at it by path
+        instead, since ``--known-good`` itself would refuse it. A
+        :class:`~meshprovision.errors.DbReadError` (the file could not
+        even be opened -- permissions, I/O) or a locking/atomic-write
+        failure is left alone -- neither is about bad file content, so
+        a known-good copy isn't the relevant remedy.
         """
         from meshprovision.db import ods as ods_module
         from meshprovision.db import schema
@@ -1121,20 +1129,22 @@ class CliContext:
                 ods_module.create_empty(path, backup=False)
                 db.load(force=True)
         except DbError as exc:
-            status = known_good_status(path)
-            if status is not None:
-                if status.provenance is KnownGoodProvenance.VERIFIED:
-                    remediation = (
-                        f"A known-good copy from {schema.utc_timestamp(status.info.created_at)} "
-                        "is available. Run: mesh db restore --known-good"
-                    )
-                else:
-                    remediation = (
-                        f"A known-good copy exists at {status.info.path}, but it could not be "
-                        f"confirmed as this database's ({provenance_reason(status)}). Inspect "
-                        "it before restoring it by path."
-                    )
-                exc.hint = f"{exc.hint}\n{remediation}" if exc.hint else remediation
+            if not isinstance(exc, (DbReadError, AtomicWriteError)):
+                status = known_good_status(path)
+                if status is not None:
+                    if status.provenance is KnownGoodProvenance.VERIFIED:
+                        remediation = (
+                            f"A known-good copy from "
+                            f"{schema.utc_timestamp(status.info.created_at)} is available. "
+                            "Run: mesh db restore --known-good"
+                        )
+                    else:
+                        remediation = (
+                            f"A known-good copy exists at {status.info.path}, but it could "
+                            f"not be confirmed as this database's ({provenance_reason(status)})"
+                            ". Inspect it before restoring it by path."
+                        )
+                    exc.hint = f"{exc.hint}\n{remediation}" if exc.hint else remediation
             db.unlock()
             raise
         except BaseException:

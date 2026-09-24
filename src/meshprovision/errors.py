@@ -43,6 +43,7 @@ __all__ = [
     "DatabaseLockedError",
     "DbError",
     "DbIntegrityError",
+    "DbReadError",
     "DbValidationError",
     "DetectionError",
     "DeviceNotFoundError",
@@ -556,6 +557,17 @@ class SchemaError(DbError):
         super().__init__(message, hint=hint)
         self.sheet = sheet
         self.column = column
+
+
+class DbReadError(DbError):
+    """The database file exists but could not be read: permissions or I/O.
+
+    Distinct from :class:`SchemaError`, which means the file *was* read
+    but its content is not a valid ODF spreadsheet. A read failure never
+    examined any content, so it isn't evidence of corruption, and a
+    known-good copy is not the relevant remedy (see
+    :meth:`meshprovision.cli.common.CliContext.open_database`).
+    """
 
 
 class DbValidationError(DbError):

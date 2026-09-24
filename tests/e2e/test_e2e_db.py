@@ -642,6 +642,31 @@ def test_load_failure_with_no_known_good_copy_gets_no_extra_hint(
     assert "A known-good copy" not in result.stderr
 
 
+def test_load_failure_permission_error_gets_permission_hint_not_restore(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """A permission error isn't corruption: no restore hint, even with a known-good copy."""
+    if os.getuid() == 0:
+        pytest.skip("root bypasses file permission checks")
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+
+    # Refresh the known-good copy first, so one is available.
+    assert invoke(runner, ["db", "verify"], env).exit_code == 0
+
+    db_path.chmod(0o000)
+    try:
+        result = invoke(runner, ["db", "verify"], env)
+    finally:
+        db_path.chmod(0o644)
+
+    assert result.exit_code == 4
+    assert "not a readable ODF spreadsheet" not in result.stderr
+    assert "permissions" in result.stderr
+    assert "mesh db restore --known-good" not in result.stderr
+    assert "A known-good copy" not in result.stderr
+
+
 def test_db_restore_known_good_restores_it(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:
