@@ -334,6 +334,43 @@ _ERR_CONSOLE: Final[Console] = Console(stderr=True)
 """Module-level stderr console used by :func:`_emit_error`."""
 
 
+class _LibrarySecretFilter(logging.Filter):
+    """Withholds ``meshtastic`` library records that may carry secret material.
+
+    Installed on the **handler** in :func:`configure_logging`, deliberately
+    not on the ``meshtastic`` logger itself: a filter attached to a
+    logger only runs for records emitted directly on that logger, never
+    for records emitted on its children (``meshtastic.mesh_interface``,
+    ``meshtastic.stream_interface``, ...) -- and those child loggers are
+    exactly the ones the installed ``meshtastic`` library uses to print
+    raw protobuf text (private keys rendered as octal escapes) and raw
+    serialized frames (a Python ``bytes`` repr) at ``-vv``/``-vvv``. A
+    handler-level filter sees every record the handler emits, regardless
+    of which logger in the hierarchy produced it.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        """Rewrite a risky ``meshtastic`` record's message in place; never drop it.
+
+        Args:
+            record: The candidate log record.
+
+        Returns:
+            Always ``True``. The operator still sees that library
+            traffic happened, at the withheld record's original level
+            and logger name -- only the risky content is replaced.
+        """
+        if record.name == "meshtastic" or record.name.startswith("meshtastic."):
+            message = record.getMessage()
+            if redact.library_record_may_leak(message):
+                record.msg = (
+                    f"[{record.name}: {len(message)}-char record withheld; "
+                    "may contain key material]"
+                )
+                record.args = ()
+        return True
+
+
 def _build_shared_processors() -> list[structlog.typing.Processor]:
     """Build the processor chain shared by structlog- and stdlib-originated events.
 
@@ -459,6 +496,13 @@ def configure_logging(
     variables -- i.e. potentially raw key material -- into the log on any
     traceback.
 
+    :class:`_LibrarySecretFilter` is attached to the handler here too, so
+    that at ``-vv``/``-vvv`` (see ``verbosity`` below) the released
+    ``meshtastic`` library's own DEBUG logging -- which prints raw
+    protobuf text and frame bytes, a shape ``redact_processor``'s
+    base64/hex scrubbing does not catch -- never reaches the renderer
+    unredacted.
+
     Idempotent: calling this twice never duplicates handlers, since the
     root logger's existing handlers are removed first.
 
@@ -506,6 +550,8 @@ def configure_logging(
 
     handler = logging.StreamHandler(stream if stream is not None else sys.stderr)
     handler.setFormatter(formatter)
+    # On the handler, not the "meshtastic" logger: see _LibrarySecretFilter.
+    handler.addFilter(_LibrarySecretFilter())
 
     root = logging.getLogger()
     for existing in list(root.handlers):

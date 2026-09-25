@@ -38,6 +38,7 @@ __all__ = [
     "SENSITIVE_KEY_SUFFIXES",
     "SecretBytes",
     "fingerprint",
+    "library_record_may_leak",
     "redact",
     "redact_processor",
     "reveal",
@@ -121,6 +122,28 @@ _HEX_KEY_RE: Final[re.Pattern[str]] = re.compile(r"(?<![0-9A-Fa-f])[0-9A-Fa-f]{6
 ``sha256:xxxxxxxx`` fingerprint labels are far too short to ever match
 this pattern -- they are never eaten by their own scrubber.
 """
+
+_LIBRARY_BYTES_LITERAL_RE: Final[re.Pattern[str]] = re.compile(r"""b['"]""")
+"""Matches the start of a Python ``bytes`` literal, e.g. the ``b'...'``/
+``b"..."`` a raw frame's ``repr()`` produces (``meshtastic.stream_interface``'s
+``f"sending header:{header!r} b:{b!r}"``)."""
+
+_LIBRARY_ESCAPED_QUOTE_RE: Final[re.Pattern[str]] = re.compile(
+    r'"[^"\n]*\\(?:[0-7]{3}|x[0-9A-Fa-f]{2})'
+)
+"""Matches a protobuf text-format quoted string containing a C-style octal
+or hex byte escape, e.g. ``private_key: "\\320Z\\300..."`` -- how the
+installed ``meshtastic`` library's own ``str(FromRadio(...))``/
+``str(ToRadio(...))`` renders non-printable key bytes."""
+
+_LIBRARY_SECRET_FIELD_RE: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:private_key|privateKey|admin_key|adminKey|psk|fixed_pin|fixedPin|"
+    r"session_passkey|sessionPasskey)\b"
+)
+"""Matches a secret protobuf field name, snake_case or camelCase, as it
+appears in protobuf text format (``field_name: value``) regardless of
+whether the value itself needed an escape -- e.g. a private key made
+entirely of printable ASCII bytes renders with no octal escape at all."""
 
 
 class SecretBytes:
@@ -339,6 +362,41 @@ def scrub_text(text: str) -> str:
     """
     scrubbed = _B64_KEY_RE.sub(REDACTED, text)
     return _HEX_KEY_RE.sub(REDACTED, scrubbed)
+
+
+def library_record_may_leak(message: str) -> bool:
+    r"""Decide whether a third-party (``meshtastic``) log message may carry secret bytes.
+
+    ``scrub_text`` only catches base64/hex *encodings* of a 32-byte key.
+    The installed ``meshtastic`` library instead logs raw protobuf
+    messages via their default ``str()``/``repr()``, which renders
+    non-printable bytes as C-style octal/hex escapes inside a quoted
+    field (``private_key: "\320Z..."``), or dumps a raw serialized frame
+    as a Python ``bytes`` literal (``b'...'``) -- neither shape is caught
+    by ``scrub_text``. This is a coarse, message-shape predicate meant to
+    be paired with withholding the whole message, not a scrubber: it
+    deliberately over-matches (e.g. any admin response containing a
+    ``payload:`` field) rather than risk missing a real leak.
+
+    Args:
+        message: The already-interpolated log message
+            (``logging.LogRecord.getMessage()``), not the raw format
+            string.
+
+    Returns:
+        ``True`` if the message contains a Python bytes-literal prefix,
+        a protobuf text-format escaped byte string, a secret field name
+        (``private_key``, ``admin_key``, ``psk``, ``fixed_pin``,
+        ``session_passkey``, in snake_case or camelCase), or a
+        ``payload:`` field (which can carry a serialized ``AdminMessage``
+        including a pushed private key).
+    """
+    return bool(
+        _LIBRARY_BYTES_LITERAL_RE.search(message)
+        or _LIBRARY_ESCAPED_QUOTE_RE.search(message)
+        or _LIBRARY_SECRET_FIELD_RE.search(message)
+        or "payload:" in message
+    )
 
 
 def _normalize_key_name(name: str) -> str:
