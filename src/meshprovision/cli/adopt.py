@@ -344,40 +344,51 @@ def _render_admin_key_lines(
 def _own_keypair_warnings(
     live: detect.LiveConfig, *, known_bad: frozenset[bytes]
 ) -> tuple[str, ...]:
-    """Audit a node's own public/private keypair, when a backup reports both.
+    """Audit a node's own public (and, when reported, private) key.
 
-    A ``.cfg``/``.yaml`` backup is the one place ``mesh adopt`` ever sees
-    a node's *private* key without touching the device (a live device
-    also reports it, but ``build_adoption_report`` has never audited it --
-    only the device's *admin* keys). :func:`~meshprovision.crypto.weakkeys.
-    audit_keypair` covers both the structural/blocklist battery and the
+    Covers both a live device and a ``.cfg``/``.yaml`` backup, either of
+    which may report the node's private key alongside its public one.
+    When both are present, :func:`~meshprovision.crypto.weakkeys.
+    audit_keypair` covers the structural/blocklist battery and the
     public-derived-from-private consistency check (firmware issue
-    #7449) in one call.
+    #7449) in one call; when only the public key is present,
+    :func:`~meshprovision.crypto.weakkeys.audit_public_key` covers the
+    structural/blocklist battery alone.
 
     Args:
-        live: The backup's normalized live configuration.
+        live: The node's normalized live configuration, from a live
+            device or a backup.
         known_bad: The loaded weak-key blocklist.
 
     Returns:
-        Zero or one warning line. Silently does nothing when either key
-        is absent (nothing to audit) or malformed (already surfaced
-        elsewhere; :func:`~meshprovision.crypto.weakkeys.audit_keypair`
-        itself would raise on a non-32-byte key, which
+        Zero or one warning line. Silently does nothing when no public
+        key is present (nothing to audit) or the key material is
+        malformed (already surfaced elsewhere;
+        :func:`~meshprovision.crypto.weakkeys.audit_keypair` and
+        :func:`~meshprovision.crypto.weakkeys.audit_public_key`
+        themselves raise on a non-32-byte key, which
         :mod:`meshprovision.provisioning.detect` never guarantees).
     """
     public = live.security.public_key
     private = live.security.private_key
-    if public is None or private is None:
+    if public is None:
         return ()
     try:
-        audit = weakkeys.audit_keypair(
-            private, public, node_id=live.node_id.display, known_bad=known_bad
-        )
+        if private is not None:
+            audit = weakkeys.audit_keypair(
+                private, public, node_id=live.node_id.display, known_bad=known_bad
+            )
+        else:
+            audit = weakkeys.audit_public_key(
+                public, node_id=live.node_id.display, known_bad=known_bad
+            )
     except KeyMaterialError:
         return ()
     if not audit.findings:
         return ()
-    return (f"the node's own keypair failed the weak-key audit: {audit.summary()}",)
+    if private is not None:
+        return (f"the node's own keypair failed the weak-key audit: {audit.summary()}",)
+    return (f"the node's own public key failed the weak-key audit: {audit.summary()}",)
 
 
 def _suggest_node_ids(ctx: CliContext, long_name: str) -> tuple[NodeId, ...]:
@@ -875,7 +886,7 @@ def adopt(
             )
             live = backup_mod.live_config_from_backup(bundle, node_id=node_id)
             fixed_position = bundle.fixed_position
-            extra_warnings = (*bundle.warnings, *_own_keypair_warnings(live, known_bad=known_bad))
+            extra_warnings = (*extra_warnings, *bundle.warnings)
             if not no_channel_psk and bundle.channel is not None:
                 channel = bundle.channel
                 if len(channel.psk) != _AES256_PSK_LENGTH:
@@ -901,6 +912,8 @@ def adopt(
 
             with connected_with_progress(ctx, backend) as iface:
                 live = detect.read_live_config(iface)
+
+        extra_warnings = (*extra_warnings, *_own_keypair_warnings(live, known_bad=known_bad))
 
         existing = db.nodes.find(live.node_id)
         if existing is not None and existing.is_archived:
@@ -942,6 +955,8 @@ def adopt(
                 channel_name_to_record=channel.name if channel is not None else None,
                 warnings=(*report.warnings, *extra_warnings),
             )
+        else:
+            report = dataclasses.replace(report, warnings=(*report.warnings, *extra_warnings))
 
         duplicate_warnings = _duplicate_name_warnings(
             db.nodes,

@@ -2067,6 +2067,22 @@ def test_from_backup_flags_a_mismatched_own_keypair(
     assert not _BASE64_KEY_RE.search(result.stderr)
 
 
+def test_adopt_flags_a_mismatched_own_keypair_from_a_live_device(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """A live device's own keypair is audited too, not just a --from-backup one."""
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = bytes(range(32))
+    iface.localNode.localConfig.security.private_key = bytes(range(32, 64))
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    payload = json.loads(result.stdout)
+    assert any("weak-key audit" in warning for warning in payload["warnings"])
+    assert not _BASE64_KEY_RE.search(result.stdout)
+    assert not _BASE64_KEY_RE.search(result.stderr)
+
+
 def test_from_backup_json_output_never_leaks_key_material(
     runner: CliRunner, env: dict[str, str], tmp_path: Path, keypair_factory: Callable[[], KeyPair]
 ) -> None:
