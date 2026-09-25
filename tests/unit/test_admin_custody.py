@@ -8,6 +8,7 @@ docstring says the extraction out of cli/admin.py was meant to enable.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -169,6 +170,90 @@ def test_collect_admins_resolves_node_id_from_ref_alone_with_no_key_present(
     entry = next(s for s in summaries if s.ref == "deadbe01")
     assert entry.present is False
     assert entry.node_id == "deadbe01"
+
+
+def test_collect_admins_does_not_loosely_resolve_a_short_hex_label(
+    nodes: NodeRepository, keys: KeyRepository, template, keypair_factory
+) -> None:
+    """A short hex-looking label must not loosely resolve via zero-padding.
+
+    ``NodeId.try_parse("cafe")`` succeeds and zero-pads to ``0000cafe``,
+    but ``"cafe" != "0000cafe"`` -- a template label that merely looks
+    hex-shaped must not be treated as that real node's own ref just
+    because a node with that padded id happens to exist. Mirrors
+    ``db/verify.py``'s ``parsed.hex == owner`` canonical round-trip
+    check.
+    """
+    template2 = template.model_copy(update={"admin_nodes": ("cafe",)})
+    nodes.upsert(NodeRecord(node_id="0000cafe"))
+    admin_pub, _ = KeyRecord.for_keypair("cafe", keypair_factory(), origin=KeyOrigin.IMPORTED)
+    keys.upsert(admin_pub)
+
+    summaries = collect_admins(nodes, keys, template2, known_bad=frozenset())
+
+    entry = next(s for s in summaries if s.ref == "cafe")
+    assert entry.node_id is None
+
+
+def test_collect_admins_excludes_an_archived_admin_node_from_pending_on(
+    nodes: NodeRepository, keys: KeyRepository, template, keypair_factory
+) -> None:
+    """An archived admin's own node must not haunt other admins' pending_on.
+
+    A retired/archived admin node must not resolve a ``node_id`` at
+    all (via the material-match fallback), so it never appears in
+    another admin's ``pending_on`` list -- otherwise a decommissioned
+    node shows up there forever.
+    """
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1", "ADMIN2")})
+    admin1_keypair = keypair_factory()
+    admin2_keypair = keypair_factory()
+    admin1_pub, _ = KeyRecord.for_keypair("ADMIN1", admin1_keypair, origin=KeyOrigin.IMPORTED)
+    admin2_pub, _ = KeyRecord.for_keypair("ADMIN2", admin2_keypair, origin=KeyOrigin.IMPORTED)
+    keys.upsert(admin1_pub)
+    keys.upsert(admin2_pub)
+    # ADMIN1's own node is archived, but its key material still matches
+    # ADMIN1's -- the material-match fallback must not resolve it.
+    nodes.upsert(NodeRecord(node_id="deadbe01", archived_at=datetime(2026, 1, 1, tzinfo=UTC)))
+    owner1_pub, _ = KeyRecord.for_keypair("deadbe01", admin1_keypair, origin=KeyOrigin.CAPTURED)
+    keys.upsert(owner1_pub)
+    # ADMIN2's own node is active, and should resolve normally.
+    nodes.upsert(NodeRecord(node_id="deadbe02"))
+    owner2_pub, _ = KeyRecord.for_keypair("deadbe02", admin2_keypair, origin=KeyOrigin.CAPTURED)
+    keys.upsert(owner2_pub)
+
+    summaries = collect_admins(nodes, keys, template2, known_bad=frozenset())
+
+    by_ref = {s.ref: s for s in summaries}
+    assert by_ref["ADMIN1"].node_id is None
+    assert by_ref["ADMIN2"].node_id == "deadbe02"
+    assert "deadbe01" not in by_ref["ADMIN2"].pending_on
+
+
+def test_collect_admins_excludes_an_archived_node_from_authorized_on(
+    nodes: NodeRepository, keys: KeyRepository, template, keypair: KeyPair
+) -> None:
+    """An archived node authorizing an admin must not count as authorized_on.
+
+    A node that once authorized ADMIN1 but has since been archived
+    (retired) must not appear in ``authorized_on`` -- it can no longer
+    act as a live custodian of that authorization.
+    """
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    admin_pub, _ = KeyRecord.for_keypair("ADMIN1", keypair, origin=KeyOrigin.IMPORTED)
+    keys.upsert(admin_pub)
+    nodes.upsert(
+        NodeRecord(
+            node_id="deadbe01",
+            authorized_admin_keys=("ADMIN1_pub",),
+            archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+    )
+
+    summaries = collect_admins(nodes, keys, template2, known_bad=frozenset())
+
+    entry = next(s for s in summaries if s.ref == "ADMIN1")
+    assert entry.authorized_on == ()
 
 
 def test_collect_admins_resolves_node_id_via_key_material_match(

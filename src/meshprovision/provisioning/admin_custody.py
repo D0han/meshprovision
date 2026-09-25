@@ -179,6 +179,8 @@ def collect_admins(
         described above.
     """
     all_nodes = nodes.all()
+    active_nodes = [node for node in all_nodes if not node.is_archived]
+    active_node_ids = {node.node_id for node in active_nodes}
     template_refs = list(template.admin_nodes)
     template_set = set(template_refs)
 
@@ -187,7 +189,7 @@ def collect_admins(
         owner = admin_public_record.owner_node_id
         if owner in template_set:
             continue
-        if any(admin_public_record.key_ref in node.authorized_admin_keys for node in all_nodes):
+        if any(admin_public_record.key_ref in node.authorized_admin_keys for node in active_nodes):
             extra_refs.add(owner)
 
     refs = [*template_refs, *sorted(extra_refs)]
@@ -206,18 +208,18 @@ def collect_admins(
 
         node_id: str | None = None
         parsed = NodeId.try_parse(ref)
-        if parsed is not None and nodes.exists(parsed):
+        if parsed is not None and parsed.hex == ref and parsed.hex in active_node_ids:
             node_id = parsed.hex
         elif record is not None:
             material = record.material()
-            for node in all_nodes:
+            for node in active_nodes:
                 node_pub = keys.find(node.public_key_ref)
                 if node_pub is not None and node_pub.material() == material:
                     node_id = node.node_id
                     break
 
         authorized_on = tuple(
-            sorted(node.node_id for node in all_nodes if key_ref in node.authorized_admin_keys)
+            sorted(node.node_id for node in active_nodes if key_ref in node.authorized_admin_keys)
         )
 
         provisional.append(
