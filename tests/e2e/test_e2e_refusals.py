@@ -224,19 +224,32 @@ def test_post_reconnect_verify_read_failure_leaves_the_database_untouched(
     assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
 
 
-def test_transactional_write_failure_section_raises(
+def test_write_failure_mid_plan_stops_and_never_writes_security(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, tmp_path: Path
 ) -> None:
-    bus.use(FakeMeshInterface("deadbe01", fail_sections=frozenset({"lora"})))
+    iface = bus.use(FakeMeshInterface("deadbe01", fail_sections=frozenset({"lora"})))
     db_path = Path(env["MESHPROVISION_DB_PATH"])
     before = db_fingerprint(db_path)
+    before_security = bytes(iface.security.SerializeToString())
 
     result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == ExitCode.PROVISIONING
     assert "UNCERTAIN" in result.stderr
     assert "the database was NOT updated" in result.stderr
     assert db_fingerprint(db_path) == before
+
+    # The failing section is the last thing written to the device, and
+    # nothing after it (security included) was ever sent.
+    assert iface.localNode.written_sections[-1] == "lora"
+    assert "security" not in iface.localNode.written_sections
+    assert bytes(iface.security.SerializeToString()) == before_security
+
+    # write_section's snapshot-restore means the failed write never left
+    # the in-memory config mutated, so an in-place read-back never shows
+    # a contradictory "confirmed" line for the section that failed.
+    assert iface.localNode.localConfig.lora.region == 0
+    assert "lora.region: confirmed" not in result.stderr
 
     # No *timestamped* backup was created -- the write never got far
     # enough to call atomic_write()'s pre-write backup+replace. The

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import errno
 from collections.abc import Callable
 from typing import Final, Self
 
@@ -1680,6 +1681,42 @@ class _FakeIfaceRaisesOnWrite(_FakeIfaceForApply):
         self.localNode = _FakeLocalNodeRaisesOnWrite(self, exc)
 
 
+class _FakeLocalNodeFailsOnSections(_FakeLocalNode):
+    """Simulates a device I/O failure for specific sections only; others succeed."""
+
+    def __init__(
+        self,
+        iface: _FakeIfaceForApply,
+        *,
+        fail_sections: frozenset[str],
+        exc: BaseException | None = None,
+    ) -> None:
+        super().__init__(iface)
+        self._fail_sections = fail_sections
+        self._exc = exc
+
+    def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
+        self.written_sections.append(section)
+        if section in self._fail_sections:
+            raise (
+                self._exc if self._exc is not None else OSError(errno.EIO, "simulated I/O failure")
+            )
+
+
+class _FakeIfaceFailsOnSections(_FakeIfaceForApply):
+    """An interface whose config section write raises only for ``fail_sections``."""
+
+    def __init__(
+        self,
+        *,
+        fail_sections: frozenset[str],
+        exc: BaseException | None = None,
+        node_num: int = _DEFAULT_NODE_NUM,
+    ) -> None:
+        super().__init__(node_num)
+        self.localNode = _FakeLocalNodeFailsOnSections(self, fail_sections=fail_sections, exc=exc)
+
+
 # ---------------------------------------------------------------------------
 # Device I/O exceptions besides OSError/RuntimeError (BLE, MeshInterface, ...)
 # must be caught and converted, never escape as a raw traceback.
@@ -1733,6 +1770,263 @@ def test_apply_plan_owner_write_failure_reports_failed_for_every_device_io_error
     owner_result = next(r for r in outcome.results if r.section == "owner")
     assert owner_result.status == WriteStatus.FAILED
     assert "Failed to set owner" in owner_result.message
+
+
+# ---------------------------------------------------------------------------
+# Stop-on-first-failure: a mid-plan failure must never let a later section
+# (security in particular) be written.
+# ---------------------------------------------------------------------------
+
+
+def _lockdown_regenerate_plan(make_live, make_admin_key) -> ChangePlan:
+    """Build a real plan on a factory node with lockdown authorized and a regenerated key."""
+    admin = make_admin_key("ADMIN1", has_private=True, audit_ok=True)
+    base_template = _template()
+    template = base_template.model_copy(
+        update={
+            "admin_nodes": ("ADMIN1",),
+            "security": base_template.security.model_copy(update={"is_managed": True}),
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+        allow_lockdown=True,
+    )
+    return build_plan(inputs)
+
+
+def test_apply_plan_lockdown_write_failure_never_writes_security(make_live, make_admin_key) -> None:
+    """The review's headline probe: an early I/O failure must withhold ``security`` too."""
+    plan = _lockdown_regenerate_plan(make_live, make_admin_key)
+    security_section = plan.section("security")
+    assert security_section is not None
+    assert plan.key_plan.regenerate is True
+
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    plan = dataclasses.replace(plan, sections=(lora_change, security_section))
+    kp = generate_keypair()
+
+    iface = _FakeIfaceFailsOnSections(
+        fail_sections=frozenset({"lora"}), exc=OSError(errno.EIO, "fake I/O error")
+    )
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert iface.localNode.written_sections == ["lora"]
+    assert "security" not in iface.localNode.written_sections
+    assert iface.localNode.localConfig.security.is_managed is False
+    assert bytes(iface.localNode.localConfig.security.private_key) != kp.private.reveal()
+
+    security_result = next(r for r in outcome.results if r.section == "security")
+    assert security_result.status == WriteStatus.SKIPPED
+    assert "not written" in security_result.message
+
+    lora_result = next(r for r in outcome.results if r.section == "lora")
+    assert lora_result.status == WriteStatus.FAILED
+    assert "may or may not" in lora_result.message
+
+    assert outcome.exit_code == ExitCode.PROVISIONING
+    assert outcome.may_update_database is False
+    assert outcome.security_attempted is False
+    assert outcome.public_key_fingerprint is None
+
+
+def test_apply_plan_an_io_failure_skips_every_later_section_not_only_security(
+    make_live, make_admin_key
+) -> None:
+    """A non-security section between the failure and security must also be skipped.
+
+    Pins "stop everything" against a future narrowing to "skip security
+    only": ``device`` sits between the failing ``lora`` write and
+    ``security`` here, and it must never be attempted either.
+    """
+    plan = _lockdown_regenerate_plan(make_live, make_admin_key)
+    security_section = plan.section("security")
+    assert security_section is not None
+
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    plan = dataclasses.replace(plan, sections=(lora_change, device_change, security_section))
+    kp = generate_keypair()
+
+    iface = _FakeIfaceFailsOnSections(
+        fail_sections=frozenset({"lora"}), exc=OSError(errno.EIO, "fake I/O error")
+    )
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert iface.localNode.written_sections == ["lora"]
+
+    device_result = next(r for r in outcome.results if r.section == "device")
+    assert device_result.status == WriteStatus.SKIPPED
+    assert "not written" in device_result.message
+
+    security_result = next(r for r in outcome.results if r.section == "security")
+    assert security_result.status == WriteStatus.SKIPPED
+    assert "not written" in security_result.message
+
+    assert outcome.security_attempted is False
+    assert outcome.may_update_database is False
+
+
+def test_apply_plan_owner_write_failure_stops_every_section(make_live) -> None:
+    """A name-phase failure must also withhold every section, not only security."""
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="MT01",
+        desired_long_name="Meshtastic MT01",
+    )
+    plan = build_plan(inputs)
+    assert not plan.name_change.is_empty
+    security_section = plan.section("security")
+    assert security_section is not None
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    plan = dataclasses.replace(plan, sections=(lora_change, security_section))
+    kp = generate_keypair()
+
+    iface = _FakeIfaceRaisesOnSetOwner()
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert iface.localNode.written_sections == []
+    for change in plan.sections:
+        result = next(r for r in outcome.results if r.section == change.section)
+        assert result.status == WriteStatus.SKIPPED
+    assert outcome.security_attempted is False
+    assert outcome.may_update_database is False
+
+
+def test_apply_plan_pre_io_failure_is_labelled_not_written_and_not_verified(make_live) -> None:
+    """A pre-I/O (enum-mapping) failure must not be verified, and must stop later sections."""
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    bad_lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(
+            FieldChange(
+                section="lora", field="modem_preset", current="LONG_FAST", desired="NOT_A_PRESET"
+            ),
+        ),
+    )
+    good_device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    plan = dataclasses.replace(plan, sections=(bad_lora_change, good_device_change))
+
+    iface = _FakeIfaceForApply()
+    pre_call_lora = localonly_pb2.LocalConfig()
+    pre_call_lora.CopyFrom(iface.localNode.localConfig)
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    lora_result = next(r for r in outcome.results if r.section == "lora")
+    assert lora_result.status == WriteStatus.FAILED
+    assert lora_result.message.startswith("not written")
+
+    device_result = next(r for r in outcome.results if r.section == "device")
+    assert device_result.status == WriteStatus.SKIPPED
+
+    # lora was never sent to the device: writeConfig was never even called.
+    assert "lora" not in iface.localNode.written_sections
+    assert iface.localNode.localConfig.lora == pre_call_lora.lora
+
+
+def test_apply_plan_in_place_no_contradictory_confirmed_after_a_failed_write(make_live) -> None:
+    """The in-place-session contradiction the review found: no false 'confirmed'.
+
+    Before the snapshot-restore fix, a failed write left the in-memory
+    section mutated, so an in-place (``--no-reconnect``) read-back of the
+    *same* interface would show that section's fields as CONFIRMED right
+    next to the section itself being FAILED.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    plan = dataclasses.replace(plan, sections=(lora_change,))
+
+    iface = _FakeIfaceFailsOnSections(fail_sections=frozenset({"lora"}))
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    for result in outcome.results:
+        if result.section == "lora" and result.field is not None:
+            assert result.status != WriteStatus.CONFIRMED, result
+
+
+def test_apply_plan_adopt_key_still_verified_when_security_is_skipped(
+    make_live, keypair_factory
+) -> None:
+    """An adopt-device-key plan's key material is still verified after an earlier failure.
+
+    ``_verify_key_material`` for ``adopt_device_key`` checks that the
+    device's pre-existing key survived this run's writes -- that check is
+    independent of whether this run's own security write happened.
+    """
+    kp = keypair_factory()
+    other_kp = keypair_factory()
+    plan = _adopt_device_key_plan(make_live, kp, other_kp)
+
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    security_section = plan.section("security")
+    sections = (lora_change, *(() if security_section is None else (security_section,)))
+    plan = dataclasses.replace(plan, sections=sections)
+
+    iface = _FakeIfaceFailsOnSections(
+        fail_sections=frozenset({"lora"}), exc=OSError(errno.EIO, "fake I/O error")
+    )
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    key_result = next(r for r in outcome.results if r.field == "public_key")
+    assert key_result.status == WriteStatus.CONFIRMED
+    assert outcome.security_attempted is False
 
 
 class _ReadFailsAfterReconnectSession:

@@ -106,7 +106,10 @@ other section must land first. Module sections are written after these
 (in sorted-name order) but before ``"security"`` -- :func:`build_plan`
 emits :attr:`~meshprovision.provisioning.plan_types.ChangePlan.sections`
 already in this final execution order, so
-:mod:`meshprovision.provisioning.apply` just iterates it."""
+:mod:`meshprovision.provisioning.apply` just iterates it. This ordering
+invariant is enforced by :func:`~meshprovision.provisioning.apply.apply_plan`,
+which stops writing at the first section that fails, so nothing after it
+(``security`` or otherwise) is ever sent."""
 
 _POSITION_FIXED_FIELDS: Final[frozenset[str]] = frozenset(
     {"fixed_latitude", "fixed_longitude", "fixed_altitude"}

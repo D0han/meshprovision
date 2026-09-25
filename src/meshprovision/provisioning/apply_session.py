@@ -149,6 +149,14 @@ class ApplyOutcome:
         record: The :class:`~meshprovision.db.nodes.NodeRecord` to
             persist, set only when :attr:`may_update_database` is
             ``True``.
+        security_attempted: Whether the ``security`` section's
+            ``writeConfig`` was actually called during this run. A
+            successful security write appends no :class:`WriteResult` of
+            its own (its confirmation comes from ``verify_plan``, which
+            an early-stop path never runs), so this is the only reliable
+            signal that a regenerated key or new admin keys may have left
+            the host -- see :func:`~meshprovision.provisioning.apply.apply_plan`'s
+            stop-on-first-failure behavior.
     """
 
     node_id: NodeId
@@ -157,6 +165,7 @@ class ApplyOutcome:
     verified: bool = True
     public_key_fingerprint: str | None = None
     record: NodeRecord | None = None
+    security_attempted: bool = False
 
     @property
     def ok(self) -> bool:

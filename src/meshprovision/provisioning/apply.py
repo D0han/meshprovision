@@ -48,7 +48,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -300,6 +300,11 @@ def write_section(
         ProvisioningError: If the device write itself fails (including a
             ``SystemExit`` raised by ``meshtastic.util.our_exit()``,
             converted here rather than allowed to kill the process).
+
+    On any failure the section's in-memory message is restored to its
+    pre-call state (a snapshot taken before any field is applied), so an
+    in-place read-back (``--no-reconnect``) never reports an unwritten
+    value as confirmed.
     """
     is_config = change.section in detect.CONFIG_SECTIONS
     is_module = change.section in detect.MODULE_SECTIONS
@@ -308,29 +313,37 @@ def write_section(
 
     root = iface.localNode.localConfig if is_config else iface.localNode.moduleConfig
     msg = getattr(root, change.section)
+    snapshot = type(msg)()
+    snapshot.CopyFrom(msg)
 
-    for field_change in change.changes:
-        apply_field(msg, field_change.field, field_change.desired)
-
-    if change.section == "security" and key_plan is not None:
-        if key_plan.regenerate:
-            if keypair is None:
-                raise PlanConflictError(
-                    "Plan requires a fresh keypair but none was supplied",
-                    field="security.private_key",
-                )
-            msg.private_key = keypair.private.reveal()
-            msg.public_key = keypair.public
-        if key_plan.change_admin_keys:
-            del msg.admin_key[:]
-            msg.admin_key.extend(key_plan.desired_admin_keys)
-
+    ok = False
     try:
-        iface.localNode.writeConfig(change.section)
-    except (*_DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
-        raise ProvisioningError(
-            f"Failed to write config section {change.section!r}: {exc}"
-        ) from exc
+        for field_change in change.changes:
+            apply_field(msg, field_change.field, field_change.desired)
+
+        if change.section == "security" and key_plan is not None:
+            if key_plan.regenerate:
+                if keypair is None:
+                    raise PlanConflictError(
+                        "Plan requires a fresh keypair but none was supplied",
+                        field="security.private_key",
+                    )
+                msg.private_key = keypair.private.reveal()
+                msg.public_key = keypair.public
+            if key_plan.change_admin_keys:
+                del msg.admin_key[:]
+                msg.admin_key.extend(key_plan.desired_admin_keys)
+
+        try:
+            iface.localNode.writeConfig(change.section)
+        except (*_DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
+            raise ProvisioningError(
+                f"Failed to write config section {change.section!r}: {exc}"
+            ) from exc
+        ok = True
+    finally:
+        if not ok:
+            msg.CopyFrom(snapshot)
 
     _logger.info("Wrote config section %s (%d fields)", change.section, len(change.changes))
 
@@ -544,6 +557,7 @@ def verify_plan(
     *,
     keypair: KeyPair | None,
     device_public_key: object = None,
+    attempted_sections: Collection[str] | None = None,
 ) -> tuple[WriteResult, ...]:
     """Compare a freshly re-read device state against a plan's intent.
 
@@ -559,6 +573,19 @@ def verify_plan(
             one.
         device_public_key: The raw value of ``iface.getPublicKey()``, as
             documented on :func:`_verify_key_material`.
+        attempted_sections: The section names whose ``writeConfig`` was
+            actually called (see :func:`apply_plan`'s stop-on-first-failure
+            behavior). ``None`` (the default) means every section in
+            ``plan.sections`` was attempted -- today's behavior for every
+            direct caller. A section not in this collection is skipped
+            entirely: reporting it "unconfirmed: value mismatch" would
+            wrongly suggest it was written. When ``"security"`` was not
+            attempted, :func:`_verify_admin_keys` is skipped outright, and
+            :func:`_verify_key_material` is skipped only when
+            ``plan.key_plan.regenerate`` is set -- an ``adopt_device_key``
+            plan still verifies that the device's pre-existing key
+            survived the earlier writes and reboot, independent of
+            whether this run's own security write happened.
 
     Returns:
         One :class:`WriteResult` per verified field/section, covering the
@@ -566,6 +593,7 @@ def verify_plan(
         key-material and admin-key checks.
     """
     results: list[WriteResult] = []
+    security_attempted = attempted_sections is None or "security" in attempted_sections
 
     short_result = _verify_name(
         live_after,
@@ -583,6 +611,8 @@ def verify_plan(
         results.append(long_result)
 
     for change in plan.sections:
+        if attempted_sections is not None and change.section not in attempted_sections:
+            continue
         for field_change in change.changes:
             if change.section == "security":
                 # LiveConfig.sections/module_sections deliberately exclude
@@ -615,15 +645,17 @@ def verify_plan(
                     )
                 )
 
-    key_result = _verify_key_material(
-        plan, live_after, keypair=keypair, device_public_key=device_public_key
-    )
-    if key_result is not None:
-        results.append(key_result)
+    if security_attempted or not plan.key_plan.regenerate:
+        key_result = _verify_key_material(
+            plan, live_after, keypair=keypair, device_public_key=device_public_key
+        )
+        if key_result is not None:
+            results.append(key_result)
 
-    admin_result = _verify_admin_keys(plan, live_after)
-    if admin_result is not None:
-        results.append(admin_result)
+    if security_attempted:
+        admin_result = _verify_admin_keys(plan, live_after)
+        if admin_result is not None:
+            results.append(admin_result)
 
     confirmed = sum(1 for r in results if r.status == WriteStatus.CONFIRMED)
     _logger.debug(
@@ -678,6 +710,16 @@ def apply_plan(
     cannot be re-read is by definition unverified, and the ODS must not
     be written.
 
+    Stops on the first failure: once the name phase or any section fails
+    to write, every remaining section (``security`` included) is recorded
+    :attr:`WriteStatus.SKIPPED` and never sent to the device. This is what
+    enforces :data:`~meshprovision.provisioning.plan.SECTION_ORDER`'s
+    documented invariant -- without it, a later section (not only
+    ``security``) could still land after an earlier one failed, including
+    one that locks the node against further management. The final verify
+    pass only checks sections that were actually attempted (see
+    :func:`verify_plan`'s ``attempted_sections``).
+
     Args:
         plan: The change plan to execute.
         session: The device session to write and re-read through.
@@ -729,19 +771,59 @@ def apply_plan(
         )
 
     results: list[WriteResult] = []
+    attempted: list[str] = []
+    stop_reason: str | None = None
     iface = session.interface
 
     name_failure = _run_name_phase(iface, plan)
     if name_failure is not None:
         results.append(name_failure)
+        stop_reason = "the owner (name) write failed"
 
     last_index = len(plan.sections) - 1
     for index, change in enumerate(plan.sections):
+        if stop_reason is not None:
+            # SECTION_ORDER's invariant ("security is always last") is
+            # enforced here: once anything upstream has failed, nothing
+            # further is written -- security included, since it is not
+            # the only section that can restrict later management (e.g.
+            # serial_enabled). A re-run always re-plans fresh from the
+            # device, so stopping loses no correctness, only progress on
+            # a run that is already uncertain.
+            results.append(
+                WriteResult(
+                    change.section,
+                    WriteStatus.SKIPPED,
+                    f"not written: stopped because {stop_reason}",
+                )
+            )
+            continue
+
         try:
             write_section(iface, change, key_plan=plan.key_plan, keypair=keypair)
-        except (ProvisioningError, EnumMappingError) as exc:
-            results.append(WriteResult(change.section, WriteStatus.FAILED, str(exc)))
+        except (PlanConflictError, EnumMappingError) as exc:
+            # Pre-I/O failure: apply_field rejected the plan before any
+            # device write was attempted, so this section was never even
+            # sent. PlanConflictError is a ProvisioningError subclass, so
+            # this arm must come first.
+            results.append(WriteResult(change.section, WriteStatus.FAILED, f"not written: {exc}"))
+            stop_reason = f"{change.section} could not be written"
             continue
+        except ProvisioningError as exc:
+            # The write call itself failed -- the bytes may have left the
+            # host, so this section IS counted as attempted.
+            attempted.append(change.section)
+            results.append(
+                WriteResult(
+                    change.section,
+                    WriteStatus.FAILED,
+                    f"{exc} (the device may or may not have applied it)",
+                )
+            )
+            stop_reason = f"the {change.section} write failed"
+            continue
+
+        attempted.append(change.section)
         if change.reboots_device and index < last_index:
             # A section besides the last (always "security", written last
             # precisely to avoid a self-inflicted lockout, see
@@ -766,8 +848,14 @@ def apply_plan(
                     )
                 )
                 return ApplyOutcome(
-                    node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
+                    node_id=plan.node_id,
+                    results=tuple(results),
+                    dry_run=False,
+                    verified=True,
+                    security_attempted="security" in attempted,
                 )
+
+    security_attempted = "security" in attempted
 
     sleep(settle_seconds)
     try:
@@ -777,7 +865,11 @@ def apply_plan(
             WriteResult("<verify>", WriteStatus.FAILED, "Could not reconnect to verify the writes")
         )
         return ApplyOutcome(
-            node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
+            node_id=plan.node_id,
+            results=tuple(results),
+            dry_run=False,
+            verified=True,
+            security_attempted=security_attempted,
         )
 
     try:
@@ -792,13 +884,29 @@ def apply_plan(
             )
         )
         return ApplyOutcome(
-            node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
+            node_id=plan.node_id,
+            results=tuple(results),
+            dry_run=False,
+            verified=True,
+            security_attempted=security_attempted,
         )
 
-    results.extend(verify_plan(plan, live_after, keypair=keypair, device_public_key=device_pub))
+    results.extend(
+        verify_plan(
+            plan,
+            live_after,
+            keypair=keypair,
+            device_public_key=device_pub,
+            attempted_sections=frozenset(attempted),
+        )
+    )
 
     outcome = ApplyOutcome(
-        node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
+        node_id=plan.node_id,
+        results=tuple(results),
+        dry_run=False,
+        verified=True,
+        security_attempted=security_attempted,
     )
     if outcome.uncertain or not outcome.ok:
         _logger.warning(
@@ -817,6 +925,7 @@ def apply_plan(
         dry_run=False,
         verified=True,
         public_key_fingerprint=fingerprint,
+        security_attempted=security_attempted,
         record=plan.to_record(
             confirmed_short_name=_confirmed_name(outcome.results, "short_name"),
             confirmed_long_name=_confirmed_name(outcome.results, "long_name"),

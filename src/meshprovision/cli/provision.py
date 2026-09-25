@@ -901,6 +901,26 @@ def _apply_and_persist(
                 line = f"{line} -- {failure.message}"
             ctx.error(line)
 
+        not_written = [r.section for r in outcome.results if r.status is apply.WriteStatus.SKIPPED]
+        if not_written:
+            ctx.error(f"Not written (stopped after the failure above): {', '.join(not_written)}")
+        if "security" in not_written:
+            security_change = next(
+                (c for c in change_plan.sections if c.section == "security"), None
+            )
+            sets_is_managed = security_change is not None and any(
+                fc.field == "is_managed" and fc.desired is True for fc in security_change.changes
+            )
+            if sets_is_managed:
+                ctx.info(
+                    "The security section was not written: the node was not locked, "
+                    "and its keys and admin keys are unchanged."
+                )
+            else:
+                ctx.info(
+                    "The security section was not written: its keys and admin keys are unchanged."
+                )
+
     return outcome, persisted
 
 
