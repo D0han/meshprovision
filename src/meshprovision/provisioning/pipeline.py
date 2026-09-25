@@ -25,7 +25,7 @@ import re
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.crypto import redact, weakkeys
-from meshprovision.db.schema import KeyOrigin
+from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import KeyMaterialError, NamespaceExhaustedError, WeakKeySeverity
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.observed_keys import is_observed_ref
@@ -37,6 +37,7 @@ if TYPE_CHECKING:
     from meshprovision.config.template import TemplateConfig
     from meshprovision.db.keys import KeyRepository
     from meshprovision.db.nodes import NodeRecord, NodeRepository
+    from meshprovision.nodeid import NodeId
 
 __all__ = [
     "allocate_names",
@@ -44,6 +45,7 @@ __all__ = [
     "audit_node_key",
     "is_host_generated_key",
     "match_admin_key_refs",
+    "node_key_admin_refs",
     "resolve_admin_keys",
     "resolve_removed_admin_refs",
 ]
@@ -102,6 +104,60 @@ def match_admin_key_refs(material: bytes, public_keys: Mapping[str, bytes]) -> t
             key=_ref_sort_key,
         )
     )
+
+
+def node_key_admin_refs(
+    node_id: NodeId, *, keys: KeyRepository, nodes: NodeRepository, template: TemplateConfig
+) -> tuple[str, ...]:
+    """Find the admin refs whose material this node's ``<hex>_pub`` row currently backs.
+
+    Used by :func:`~meshprovision.cli.provision.run_provision` to populate
+    :attr:`~meshprovision.provisioning.plan_types.PlanInputs.node_key_admin_refs`,
+    which gates :func:`~meshprovision.provisioning.plan._plan_node_keypair`:
+    a node whose recorded key is also an authorized admin key may not have
+    that key silently replaced (adopted or regenerated), because doing so
+    would rotate -- or hand an attacker -- the fleet's admin key. See
+    :class:`~meshprovision.errors.AdminKeyRotationRefusedError`.
+
+    Determined from **DB material only**, never the live device's
+    self-reported key -- the live value is exactly what an impostor
+    controls.
+
+    Args:
+        node_id: The node to check.
+        keys: The already-open key repository.
+        nodes: The already-open node repository.
+        template: The validated provisioning template.
+
+    Returns:
+        Every ``Keys`` sheet public-key reference whose material equals
+        this node's ``<hex>_pub`` row and that actually functions as an
+        admin ref -- named in ``template.admin_nodes``, or authorized on
+        at least one non-archived node's ``authorized_admin_keys``. This
+        excludes another node's own identity key merely for sharing the
+        same material (the clone/CVE-2025-52464 duplicate-key case) unless
+        that other node's ref is itself functioning as an admin the same
+        way. Empty when there is no ``<hex>_pub`` row for this node, or
+        when the row exists but backs no admin ref at all.
+    """
+    own_pub = keys.find(f"{node_id.hex}_pub")
+    if own_pub is None:
+        return ()
+    material = own_pub.material()
+
+    active_nodes = tuple(node for node in nodes.all() if not node.is_archived)
+    template_refs = frozenset(template.admin_nodes)
+
+    refs = [
+        record.key_ref
+        for record in keys.of_type(KeyType.ADMIN_PUBLIC)
+        if record.material() == material
+        and (
+            record.owner_node_id in template_refs
+            or any(record.key_ref in node.authorized_admin_keys for node in active_nodes)
+        )
+    ]
+    return tuple(sorted(refs))
 
 
 def resolve_admin_keys(

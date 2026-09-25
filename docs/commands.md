@@ -119,6 +119,15 @@ A node archived via `mesh db forget` is refused outright, checked before
 the enrollment gate (exit code 5, no bypass flag) — `mesh admin
 bootstrap` inherits this too.
 
+A node whose recorded key also backs an authorized admin key is refused
+(exit code 5, `AdminKeyRotationRefusedError`, no bypass flag —
+`--force-regenerate-key`, `--allow-weak-admin-key`, `--allow-lockdown`,
+`--enroll` and `--rename` all still refuse) the moment the plan would
+regenerate or adopt a new keypair for it. `mesh admin bootstrap` inherits
+this too. Nothing is written to the device or the database. See
+["Rotating an admin node's key"](security.md#rotating-an-admin-nodes-key)
+for the out-of-band procedure a genuine rotation requires.
+
 **Transactional guarantee:** after each `writeConfig(section)` the config
 is re-read and compared to intent; key writes are additionally verified
 by reading the public key back off the device. Any unconfirmed write
@@ -343,7 +352,10 @@ mesh admin list --json
   them. It reuses `run_provision` wholesale, so it accepts and honors
   every option in `mesh provision`'s table above (`--dry-run`, `--enroll`,
   `--allow-lockdown`, `--allow-weak-admin-key`, `--force-regenerate-key`,
-  `--no-reconnect`, `-y`/`--yes`, `--json`) in addition to its own `--ref`.
+  `--no-reconnect`, `-y`/`--yes`, `--json`) in addition to its own `--ref`
+  -- including the admin-key-rotation refusal above: bootstrapping a node
+  whose recorded key already backs an admin ref is refused the same way,
+  with no bypass flag.
 - `import` registers a public key you already hold, without touching a
   device. It validates length and canonical base64, runs the weak-key
   audit, and refuses a key already registered under a different reference

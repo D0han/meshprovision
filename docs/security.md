@@ -62,6 +62,52 @@ One hard interlock on top: `is_managed=true` with **zero** authorized
 admin keys is refused outright — that combination locks the node with
 nobody able to administer it.
 
+### Rotating an admin node's key
+
+A node whose recorded key is also an authorized admin key (named in
+`admin_nodes`, or authorized on another node's `authorized_admin_keys`)
+can never have that key silently replaced. `mesh provision`/`mesh admin
+bootstrap` refuse outright — with `AdminKeyRotationRefusedError` — the
+moment such a run would regenerate or adopt a new keypair for it, whether
+that regeneration was forced (`--force-regenerate-key`), triggered by a
+factory-default or missing-key state, triggered by the weak-key audit, or
+an ordinary adopt of a device reporting a different public key than the
+one on file. **There is no flag that overrides this refusal.** The device
+cannot authenticate itself — the only proof of identity the protocol
+offers is "it reports the private key we hold" — and a key *change* is by
+definition the case where that proof is absent. Accepting one on the
+strength of a command-line flag would let any device claiming an admin
+node's id silently take over the fleet's admin key.
+
+A legitimate rotation — a genuine key loss (firmware issue #7449) or a
+deliberate replacement — instead goes through an out-of-band, two-step
+flow:
+
+1. **Bootstrap a replacement admin under a new ref**, add it to
+   `admin_nodes`, and provision the fleet so every node authorizes it
+   too. Skip this step if a second admin is already in place.
+2. **Remove the affected node's ref(s) from `admin_nodes`**, and
+   re-point or overwrite every alias row that still holds its key (for
+   example `ADMIN1_pub`, or an `observed-*` row from `mesh adopt`) —
+   `mesh admin list` shows every ref currently backed by that material.
+3. **Re-provision the fleet** so no node authorizes the old key any
+   longer.
+4. **Provision the affected node itself.** It is no longer admin-bearing
+   at this point, so the regenerate/adopt it needed all along now
+   proceeds normally.
+5. **Re-bootstrap it as an admin again**, if it should remain one, once
+   its key is settled — this re-authorizes its *new* key, not the old
+   one.
+
+When the loss is on the *same* device (its old private key is gone, but
+the device itself is still trusted and physically verified), steps 1–4
+collapse to one: register the device's newly reported public key
+directly with `mesh admin import --overwrite <hex>=<public key>` (after
+verifying the device in hand — compare the fingerprint `mesh provision`'s
+refusal prints against the one the device itself shows), then re-run
+`mesh provision` on it. The refusal's own stderr message names the exact
+command to run.
+
 ## CVE-2025-52464 and the weak-key audit
 
 **"Repeated Public/Private Keypairs"**, CVSS 9.5, affects firmware

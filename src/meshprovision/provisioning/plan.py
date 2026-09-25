@@ -58,7 +58,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from meshprovision.config.template import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
-from meshprovision.errors import LockdownRefusedError
+from meshprovision.errors import AdminKeyRotationRefusedError, LockdownRefusedError
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, _plan_admin_key_material
 from meshprovision.provisioning.plan_types import (
@@ -375,29 +375,68 @@ def _plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanW
         when not regenerating), whether to adopt the device's reported
         public key into the database instead, and any
         ``"device_key_differs_from_db"`` warning.
+
+    Raises:
+        AdminKeyRotationRefusedError: If the decision would regenerate or
+            adopt this node's key while
+            :attr:`~meshprovision.provisioning.plan_types.PlanInputs.node_key_admin_refs`
+            is non-empty -- i.e. the node's currently-recorded key backs an
+            authorized admin key somewhere in the fleet. There is no flag
+            that overrides this (see the class docstring); a legitimate
+            rotation goes through the out-of-band ``mesh admin import
+            --overwrite`` flow instead. This raise happens here, inside
+            :func:`build_plan`, so it always precedes ``render_plan``,
+            ``ctx.confirm``, ``--dry-run``'s output, the BLE PIN, and any
+            device I/O -- nothing is ever written to the device or the
+            database on this path.
     """
     live_sec = inputs.live.security
+    regenerate: bool
+    reason: str
+    adopt: bool
+    warnings: tuple[PlanWarning, ...]
 
     if inputs.force_regenerate_key:
-        return True, "forced", False, ()
-    if inputs.state is detect.NodeState.FACTORY:
-        return True, "factory_key_presumed_compromised", False, ()
-    if not live_sec.has_public_key or not live_sec.has_private_key:
-        return True, "missing_key_material", False, ()
-    if inputs.node_key_compromised:
-        return True, inputs.node_key_reason or "weak_key_audit", False, ()
-
-    if inputs.db_public_key is not None and inputs.db_public_key != live_sec.public_key:
-        warning = PlanWarning(
-            PlanWarningCode.DEVICE_KEY_DIFFERS_FROM_DB,
-            "The device's reported public key differs from the Keys sheet; adopting the "
-            "device's key rather than overwriting it (firmware issue #7449).",
-            section="security",
-            field="public_key",
+        regenerate, reason, adopt, warnings = True, "forced", False, ()
+    elif inputs.state is detect.NodeState.FACTORY:
+        regenerate, reason, adopt, warnings = (
+            True,
+            "factory_key_presumed_compromised",
+            False,
+            (),
         )
-        return False, "", True, (warning,)
+    elif not live_sec.has_public_key or not live_sec.has_private_key:
+        regenerate, reason, adopt, warnings = True, "missing_key_material", False, ()
+    elif inputs.node_key_compromised:
+        regenerate, reason, adopt, warnings = (
+            True,
+            inputs.node_key_reason or "weak_key_audit",
+            False,
+            (),
+        )
+    elif inputs.db_public_key is not None and inputs.db_public_key != live_sec.public_key:
+        regenerate, reason, adopt = False, "", True
+        warnings = (
+            PlanWarning(
+                PlanWarningCode.DEVICE_KEY_DIFFERS_FROM_DB,
+                "The device's reported public key differs from the Keys sheet; adopting the "
+                "device's key rather than overwriting it (firmware issue #7449).",
+                section="security",
+                field="public_key",
+            ),
+        )
+    else:
+        regenerate, reason, adopt, warnings = False, "", False, ()
 
-    return False, "", False, ()
+    if (regenerate or adopt) and inputs.node_key_admin_refs:
+        raise AdminKeyRotationRefusedError(
+            f"{inputs.live.node_id.display}'s key would change while it backs authorized "
+            f"admin key(s): {', '.join(inputs.node_key_admin_refs)}.",
+            reason=reason if regenerate else "adopt",
+            admin_refs=inputs.node_key_admin_refs,
+        )
+
+    return regenerate, reason, adopt, warnings
 
 
 def _evaluate_lockdown(
@@ -617,6 +656,9 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
     Raises:
         AdminKeyCapacityError: If ``template.admin_nodes`` resolves to
             more admin keys than the firmware supports.
+        AdminKeyRotationRefusedError: If this node's key would regenerate
+            or be adopted while it backs an authorized admin key -- see
+            :func:`_plan_node_keypair`.
         LockdownRefusedError: If the template opts into
             ``security.is_managed`` but the safety gates are not
             satisfied (zero admin keys, no private counterpart on hand,

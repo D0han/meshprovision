@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
@@ -15,12 +16,14 @@ from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
+from meshprovision.provisioning.observed_keys import observed_key_ref, observed_owner
 from meshprovision.provisioning.pipeline import (
     allocate_names,
     audit_live_admin_keys,
     audit_node_key,
     is_host_generated_key,
     match_admin_key_refs,
+    node_key_admin_refs,
     resolve_admin_keys,
     resolve_removed_admin_refs,
 )
@@ -50,6 +53,30 @@ def nodes(empty_ods: Path) -> NodeRepository:
     db = OdsDatabase(empty_ods)
     db.load()
     return NodeRepository(db)
+
+
+@pytest.fixture
+def admin_refs_db(empty_ods: Path) -> OdsDatabase:
+    """A single session shared by ``admin_refs_keys``/``admin_refs_nodes``.
+
+    ``node_key_admin_refs`` reads both repositories together, so they must
+    see each other's writes without a reload -- unlike the module-level
+    ``keys``/``nodes`` fixtures above, which each open their own session
+    and are only ever used one at a time by the existing tests.
+    """
+    session = OdsDatabase(empty_ods)
+    session.load()
+    return session
+
+
+@pytest.fixture
+def admin_refs_keys(admin_refs_db: OdsDatabase) -> KeyRepository:
+    return KeyRepository(admin_refs_db)
+
+
+@pytest.fixture
+def admin_refs_nodes(admin_refs_db: OdsDatabase) -> NodeRepository:
+    return NodeRepository(admin_refs_db)
 
 
 def _naming_template() -> TemplateConfig:
@@ -652,3 +679,175 @@ def test_allocate_names_falls_back_when_the_long_pattern_cannot_render_the_short
 
     assert short == "MT10"
     assert long == "L0"
+
+
+def test_node_key_admin_refs_no_row_returns_empty(
+    admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository
+) -> None:
+    """No ``<hex>_pub`` row at all -- there is nothing to rotate."""
+    refs = node_key_admin_refs(
+        NodeId.from_hex("deadbe01"),
+        keys=admin_refs_keys,
+        nodes=admin_refs_nodes,
+        template=_template_with_admin(),
+    )
+    assert refs == ()
+
+
+def test_node_key_admin_refs_plain_node_returns_empty(
+    admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository, keypair: KeyPair
+) -> None:
+    """A node's own key, unreferenced anywhere, is not an admin ref."""
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    admin_refs_keys.upsert(pub)
+    admin_refs_keys.upsert(priv)
+    admin_refs_nodes.upsert(NodeRecord(node_id="deadbe01"))
+
+    refs = node_key_admin_refs(
+        NodeId.from_hex("deadbe01"),
+        keys=admin_refs_keys,
+        nodes=admin_refs_nodes,
+        template=_template_with_admin(),
+    )
+    assert refs == ()
+
+
+def test_node_key_admin_refs_self_ref_in_template(
+    admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository, keypair: KeyPair
+) -> None:
+    """A self-ref bootstrap (the node's own id named in ``admin_nodes``) is included."""
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    admin_refs_keys.upsert(pub)
+    admin_refs_keys.upsert(priv)
+    admin_refs_nodes.upsert(NodeRecord(node_id="deadbe01"))
+
+    refs = node_key_admin_refs(
+        NodeId.from_hex("deadbe01"),
+        keys=admin_refs_keys,
+        nodes=admin_refs_nodes,
+        template=_template_with_admin("deadbe01"),
+    )
+    assert refs == ("deadbe01_pub",)
+
+
+def test_node_key_admin_refs_includes_an_aliased_admin_ref(
+    admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository, keypair: KeyPair
+) -> None:
+    """A separately-labeled ref (``ADMIN1_pub``) with identical material is included."""
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    admin_refs_keys.upsert(pub)
+    admin_refs_keys.upsert(priv)
+    admin_refs_keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
+    admin_refs_nodes.upsert(NodeRecord(node_id="deadbe01"))
+
+    refs = node_key_admin_refs(
+        NodeId.from_hex("deadbe01"),
+        keys=admin_refs_keys,
+        nodes=admin_refs_nodes,
+        template=_template_with_admin("ADMIN1"),
+    )
+    assert refs == ("ADMIN1_pub",)
+
+
+def test_node_key_admin_refs_includes_an_observed_ref(
+    admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository, keypair: KeyPair
+) -> None:
+    """A ``mesh adopt``-minted ``observed-*`` ref with identical material is included."""
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    admin_refs_keys.upsert(pub)
+    admin_refs_keys.upsert(priv)
+    observed_owner_ref = observed_owner(keypair.public)
+    admin_refs_keys.upsert(
+        KeyRecord.from_material(
+            observed_owner_ref, KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+        )
+    )
+    admin_refs_nodes.upsert(NodeRecord(node_id="deadbe01"))
+    admin_refs_nodes.upsert(
+        NodeRecord(node_id="bbbb0001", authorized_admin_keys=(observed_key_ref(keypair.public),))
+    )
+
+    refs = node_key_admin_refs(
+        NodeId.from_hex("deadbe01"),
+        keys=admin_refs_keys,
+        nodes=admin_refs_nodes,
+        template=_template_with_admin(),
+    )
+    assert refs == (observed_key_ref(keypair.public),)
+
+
+def test_node_key_admin_refs_included_via_another_nodes_authorization(
+    admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository, keypair: KeyPair
+) -> None:
+    """Empty template, but another node's ``authorized_admin_keys`` names this ref."""
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    admin_refs_keys.upsert(pub)
+    admin_refs_keys.upsert(priv)
+    admin_refs_nodes.upsert(NodeRecord(node_id="deadbe01"))
+    admin_refs_nodes.upsert(NodeRecord(node_id="bbbb0001", authorized_admin_keys=("deadbe01_pub",)))
+
+    refs = node_key_admin_refs(
+        NodeId.from_hex("deadbe01"),
+        keys=admin_refs_keys,
+        nodes=admin_refs_nodes,
+        template=_template_with_admin(),
+    )
+    assert refs == ("deadbe01_pub",)
+
+
+def test_node_key_admin_refs_excludes_another_nodes_own_clone(
+    admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository, keypair: KeyPair
+) -> None:
+    """Another node's own identity key sharing material (a clone) is excluded.
+
+    ``cccc0001`` reports the exact same public key as ``deadbe01`` (the
+    CVE-2025-52464 duplicate-key case), but ``cccc0001`` is not itself an
+    admin anywhere -- this must never be mistaken for an admin alias.
+    """
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    admin_refs_keys.upsert(pub)
+    admin_refs_keys.upsert(priv)
+    admin_refs_keys.upsert(
+        KeyRecord.from_material(
+            "cccc0001", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+        )
+    )
+    admin_refs_nodes.upsert(NodeRecord(node_id="deadbe01"))
+    admin_refs_nodes.upsert(NodeRecord(node_id="cccc0001"))
+
+    refs = node_key_admin_refs(
+        NodeId.from_hex("deadbe01"),
+        keys=admin_refs_keys,
+        nodes=admin_refs_nodes,
+        template=_template_with_admin(),
+    )
+    assert refs == ()
+
+
+def test_node_key_admin_refs_ignores_an_archived_nodes_authorization(
+    admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository, keypair: KeyPair
+) -> None:
+    """An archived node's ``authorized_admin_keys`` entry does not count."""
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    admin_refs_keys.upsert(pub)
+    admin_refs_keys.upsert(priv)
+    admin_refs_nodes.upsert(NodeRecord(node_id="deadbe01"))
+    admin_refs_nodes.upsert(
+        NodeRecord(
+            node_id="bbbb0001",
+            authorized_admin_keys=("deadbe01_pub",),
+            archived_at=datetime(2024, 1, 1, tzinfo=UTC),
+        )
+    )
+
+    refs = node_key_admin_refs(
+        NodeId.from_hex("deadbe01"),
+        keys=admin_refs_keys,
+        nodes=admin_refs_nodes,
+        template=_template_with_admin(),
+    )
+    assert refs == ()

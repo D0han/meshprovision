@@ -49,10 +49,11 @@ from meshprovision.cli.common import (
 from meshprovision.cli.progress import heartbeat
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
-from meshprovision.crypto.redact import SecretBytes
+from meshprovision.crypto.redact import SecretBytes, fingerprint
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import (
+    AdminKeyRotationRefusedError,
     DeviceNotFoundError,
     ExitCode,
     NodeArchivedError,
@@ -68,6 +69,8 @@ from meshprovision.provisioning.pipeline import (
     audit_live_admin_keys,
     audit_node_key,
     is_host_generated_key,
+    match_admin_key_refs,
+    node_key_admin_refs,
     resolve_admin_keys,
     resolve_removed_admin_refs,
 )
@@ -789,6 +792,70 @@ def _apply_and_persist(
     return outcome, persisted
 
 
+_ADMIN_KEY_ROTATION_DOC_HINT: Final[str] = (
+    "meshprovision has no in-tool way to rotate an admin node's key. See the \"Rotating an "
+    "admin node's key\" section of docs/security.md for the out-of-band procedure."
+)
+
+
+def _finalize_admin_key_rotation_error(
+    exc: AdminKeyRotationRefusedError, live: detect.LiveConfig
+) -> AdminKeyRotationRefusedError:
+    """Attach the operator-facing hint to an admin-key-rotation refusal.
+
+    :mod:`meshprovision.provisioning.plan` cannot import
+    :mod:`meshprovision.crypto` (see its module docstring: "digests are
+    the caller's job"), so it raises :class:`AdminKeyRotationRefusedError`
+    with no hint at all. This is the one place that both catches the pure
+    layer's refusal and has ``live`` (and a crypto import) in scope to
+    compute the redacted fingerprint the operator needs to verify the
+    device by hand -- never the raw base64 key.
+
+    Args:
+        exc: The refusal :func:`~meshprovision.provisioning.plan.build_plan`
+            raised, with no hint set.
+        live: The device's normalized live configuration, already read by
+            the caller.
+
+    Returns:
+        A new :class:`AdminKeyRotationRefusedError` carrying the same
+        ``reason``/``admin_refs`` plus a filled-in ``hint`` and, for the
+        ``"adopt"`` reason, ``reported_fingerprint``.
+    """
+    if exc.reason == "adopt":
+        live_public = live.security.public_key
+        reported_fingerprint = fingerprint(live_public) if live_public is not None else "<unknown>"
+        hint = (
+            f"The connected device reports a different key (fingerprint "
+            f"{reported_fingerprint}) than the one recorded for this admin node. It is "
+            "either a different device claiming its node id, or a genuine key loss "
+            "(firmware #7449). Verify the physical device, and compare the fingerprint "
+            "with the one the device itself shows. If it is genuine, register its key "
+            f"with `mesh admin import --overwrite {live.node_id.hex}=<public key>` and "
+            "re-run `mesh provision`."
+        )
+        others = ", ".join(ref for ref in exc.admin_refs if ref != f"{live.node_id.hex}_pub")
+        if others:
+            hint = f"{hint} Also re-import: {others}."
+    elif "CVE-2025-52464" in exc.reason:
+        reported_fingerprint = None
+        hint = (
+            "Upgrade the node's firmware to >= 2.6.11 and re-run, or follow the rotation "
+            'procedure in the "Rotating an admin node\'s key" section of docs/security.md.'
+        )
+    else:
+        reported_fingerprint = None
+        hint = _ADMIN_KEY_ROTATION_DOC_HINT
+
+    return AdminKeyRotationRefusedError(
+        exc.message,
+        reason=exc.reason,
+        admin_refs=exc.admin_refs,
+        reported_fingerprint=reported_fingerprint,
+        hint=hint,
+    )
+
+
 def run_provision(
     ctx: CliContext,
     session: apply.DeviceSession,
@@ -885,6 +952,26 @@ def run_provision(
         else apply.generate_ble_pin()
     )
 
+    admin_refs = node_key_admin_refs(live.node_id, keys=db.keys, nodes=db.nodes, template=template)
+
+    # Secondary check (S1 1b): the live-reported key claims material registered
+    # under some OTHER ref -- not this node's own recorded identity or an alias
+    # of it -- meaning the device claims to hold someone else's admin key.
+    # Folded into the same node_key_admin_refs tuple: the gate in
+    # _plan_node_keypair already only fires when the plan changes the key, so
+    # this never produces a false refusal when nothing would change.
+    if live.security.public_key is not None:
+        public_key_map = db.keys.public_key_map()
+        own_material_refs = (
+            match_admin_key_refs(db_public_key, public_key_map) if db_public_key is not None else ()
+        )
+        identity_conflict_refs = tuple(
+            ref
+            for ref in match_admin_key_refs(live.security.public_key, public_key_map)
+            if ref not in own_material_refs
+        )
+        admin_refs = tuple(sorted({*admin_refs, *identity_conflict_refs}))
+
     inputs = plan_mod.PlanInputs(
         live=live,
         template=template,
@@ -902,8 +989,12 @@ def run_provision(
         force_regenerate_key=opts.force_regenerate_key,
         allow_lockdown=opts.allow_lockdown,
         allow_weak_admin_key=opts.allow_weak_admin_key,
+        node_key_admin_refs=admin_refs,
     )
-    change_plan = plan_mod.build_plan(inputs)
+    try:
+        change_plan = plan_mod.build_plan(inputs)
+    except AdminKeyRotationRefusedError as exc:
+        raise _finalize_admin_key_rotation_error(exc, live) from exc
 
     render_plan(ctx, change_plan, drifts=drifts, json_output=opts.json_output)
 

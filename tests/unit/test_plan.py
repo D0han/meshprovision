@@ -9,7 +9,11 @@ import pytest
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import ManagementMode
-from meshprovision.errors import AdminKeyCapacityError, LockdownRefusedError
+from meshprovision.errors import (
+    AdminKeyCapacityError,
+    AdminKeyRotationRefusedError,
+    LockdownRefusedError,
+)
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan import (
     SECTION_ORDER,
@@ -1272,6 +1276,126 @@ def test_db_public_key_differs_adopts_device_key(
     assert not any(section.section == "security" for section in plan.sections)
     assert plan.key_plan.is_empty is False  # the run still has work to do
     assert plan.is_empty is False
+
+
+# ---------------------------------------------------------------------------
+# Admin-key rotation refusal (D1=B / D2): no flag overrides this.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "kind", ["forced", "factory", "missing_key_material", "node_key_compromised", "adopt"]
+)
+def test_admin_key_rotation_refused_for_every_key_changing_branch(
+    make_live, template, keypair, keypair_factory, kind: str
+) -> None:
+    """D2: every branch that changes the node's key refuses when it backs an admin ref.
+
+    No flag exists to relax this -- see ``AdminKeyRotationRefusedError``'s
+    docstring. ``"factory"`` is easy to miss: FACTORY is a regenerate
+    branch too, and D2 says "always", not "every regenerate branch except
+    FACTORY".
+    """
+    admin_refs = ("aaaa0001_pub",)
+
+    if kind == "forced":
+        live = make_live(template, node_id="aaaa0001", security=make_security(keypair=keypair))
+        record = NodeRecord(
+            node_id="aaaa0001", short_name=live.short_name, long_name=live.long_name
+        )
+        inputs = PlanInputs(
+            live=live,
+            template=template,
+            db_entry=record,
+            state=detect.NodeState.PROVISIONED,
+            force_regenerate_key=True,
+            node_key_admin_refs=admin_refs,
+        )
+        expected_reason = "forced"
+    elif kind == "factory":
+        live = make_live(template, node_id="aaaa0001", security=make_security(empty=True))
+        inputs = PlanInputs(
+            live=live,
+            template=template,
+            db_entry=None,
+            state=detect.NodeState.FACTORY,
+            node_key_admin_refs=admin_refs,
+        )
+        expected_reason = "factory_key_presumed_compromised"
+    elif kind == "missing_key_material":
+        live = make_live(template, node_id="aaaa0001", security=make_security(empty=True))
+        record = NodeRecord(
+            node_id="aaaa0001", short_name=live.short_name, long_name=live.long_name
+        )
+        inputs = PlanInputs(
+            live=live,
+            template=template,
+            db_entry=record,
+            state=detect.NodeState.PROVISIONED,
+            node_key_admin_refs=admin_refs,
+        )
+        expected_reason = "missing_key_material"
+    elif kind == "node_key_compromised":
+        live = make_live(template, node_id="aaaa0001", security=make_security(keypair=keypair))
+        record = NodeRecord(
+            node_id="aaaa0001", short_name=live.short_name, long_name=live.long_name
+        )
+        inputs = PlanInputs(
+            live=live,
+            template=template,
+            db_entry=record,
+            state=detect.NodeState.PROVISIONED,
+            node_key_compromised=True,
+            node_key_reason="node_key_compromised",
+            node_key_admin_refs=admin_refs,
+        )
+        expected_reason = "node_key_compromised"
+    else:
+        assert kind == "adopt"
+        other = keypair_factory()
+        live = make_live(template, node_id="aaaa0001", security=make_security(keypair=keypair))
+        record = NodeRecord(
+            node_id="aaaa0001", short_name=live.short_name, long_name=live.long_name
+        )
+        inputs = PlanInputs(
+            live=live,
+            template=template,
+            db_entry=record,
+            state=detect.NodeState.PROVISIONED,
+            db_public_key=other.public,
+            node_key_admin_refs=admin_refs,
+        )
+        expected_reason = "adopt"
+
+    with pytest.raises(AdminKeyRotationRefusedError) as excinfo:
+        build_plan(inputs)
+
+    assert excinfo.value.reason == expected_reason
+    assert excinfo.value.admin_refs == admin_refs
+
+
+def test_admin_key_rotation_gate_is_a_no_op_without_admin_refs(
+    make_live, template, keypair, keypair_factory
+) -> None:
+    """``node_key_admin_refs=()`` -- today's #7449 adopt accommodation is untouched.
+
+    Guards against the gate becoming unconditional: an ordinary
+    (non-admin-bearing) node's #7449 adopt must keep working exactly as
+    before, with no raise.
+    """
+    other = keypair_factory()
+    live = make_live(template, security=make_security(keypair=keypair))
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        db_public_key=other.public,
+    )
+    plan = build_plan(inputs)
+    assert plan.key_plan.adopt_device_key is True
+    assert any(w.code == "device_key_differs_from_db" for w in plan.warnings)
 
 
 # ---------------------------------------------------------------------------

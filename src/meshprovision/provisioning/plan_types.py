@@ -324,6 +324,15 @@ class PlanInputs:
             (``--allow-weak-admin-key``). Affects only the desired
             admin-key set; ``_evaluate_lockdown``'s hard refusal is
             deliberately not relaxed by it.
+        node_key_admin_refs: The ``Keys`` sheet references under which
+            this node's DB-recorded key (``<hex>_pub`` material) is
+            currently authorized as an admin key, resolved by the caller
+            via :func:`meshprovision.provisioning.pipeline.node_key_admin_refs`.
+            Empty for an ordinary (non-admin-bearing) node. When
+            non-empty, :func:`~meshprovision.provisioning.plan._plan_node_keypair`
+            refuses to regenerate or adopt this node's key -- there is no
+            flag that overrides this; see
+            :class:`~meshprovision.errors.AdminKeyRotationRefusedError`.
     """
 
     live: detect.LiveConfig
@@ -342,6 +351,7 @@ class PlanInputs:
     force_regenerate_key: bool = False
     allow_lockdown: bool = False
     allow_weak_admin_key: bool = False
+    node_key_admin_refs: tuple[str, ...] = ()
 
     def __repr__(self) -> str:
         """Return a repr that never exposes :attr:`ble_pin` or :attr:`db_public_key`.
@@ -365,7 +375,8 @@ class PlanInputs:
             f"node_key_reason={self.node_key_reason!r}, db_public_key={db_key_repr!r}, "
             f"force_regenerate_key={self.force_regenerate_key!r}, "
             f"allow_lockdown={self.allow_lockdown!r}, "
-            f"allow_weak_admin_key={self.allow_weak_admin_key!r})"
+            f"allow_weak_admin_key={self.allow_weak_admin_key!r}, "
+            f"node_key_admin_refs={self.node_key_admin_refs!r})"
         )
 
 

@@ -1017,3 +1017,227 @@ def test_admin_list_with_unregistered_template_ref_exits_two(
     result = invoke(runner, ["admin", "list"], env)
     assert result.exit_code == 2
     assert "missing" in result.stderr.lower()
+
+
+# ---------------------------------------------------------------------------
+# Admin-key rotation refusal (D1=B / D2): no flag overrides this.
+# ---------------------------------------------------------------------------
+
+_IMPOSTOR_BYPASS_FLAG_SETS = [
+    pytest.param([], id="no-extra-flags"),
+    pytest.param(["--force-regenerate-key"], id="force-regenerate-key"),
+    pytest.param(["--allow-weak-admin-key"], id="allow-weak-admin-key"),
+    pytest.param(["--allow-lockdown"], id="allow-lockdown"),
+    pytest.param(["--enroll"], id="enroll"),
+    pytest.param(["--rename"], id="rename"),
+]
+
+
+@pytest.mark.parametrize("extra_flags", _IMPOSTOR_BYPASS_FLAG_SETS)
+def test_no_flag_bypasses_the_admin_key_rotation_refusal(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    extra_flags: list[str],
+) -> None:
+    """D2: no flag -- including ``--force-regenerate-key`` -- overrides the refusal.
+
+    Reproduces S1's impostor headline: a device claiming an admin node's
+    id (``aaaa0001``, bootstrapped as a self-ref admin) must never be
+    able to rotate the fleet's admin key, whatever combination of
+    provisioning flags is passed. This is the non-vacuous form of
+    "no flag exists" -- it proves every flag that touches this code
+    path still refuses, not merely that a made-up flag name is absent.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(runner, ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert bootstrap.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = ods.load_database(db_path)
+    before_keys = {row["key_ref"]: dict(row) for row in before.keys}
+    legit_pub = KeyRecord.from_row(before_keys["aaaa0001_pub"]).material()
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["aaaa0001"]))
+    impostor = bus.use(FakeMeshInterface("aaaa0001"))
+    fresh = generate_keypair()
+    impostor.localNode.localConfig.security.public_key = fresh.public
+    impostor.localNode.localConfig.security.private_key = fresh.private.reveal()
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", *extra_flags], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "admin key" in result.stderr.lower()
+    assert impostor.localNode.written_sections == []
+    assert impostor.admin_keys == ()
+    assert not _BASE64_KEY_RE.search(result.stderr)
+
+    after = ods.load_database(db_path)
+    assert after.nodes == before.nodes
+    assert after.keys == before.keys
+    assert KeyRecord.from_row(
+        {row["key_ref"]: row for row in after.keys}["aaaa0001_pub"]
+    ).material() == (legit_pub)
+
+
+def test_admin_key_rotation_refused_then_recovered_via_admin_import_overwrite(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, write_template: Callable[..., Path]
+) -> None:
+    """The full D1=B out-of-band flow: refused, then recovered via ``admin import --overwrite``.
+
+    Simulates a genuine firmware #7449 key loss on the SAME physical
+    device (not an impostor): the device's persisted key changed, but
+    it is still the device the operator is physically holding. There is
+    still no flag that lets ``mesh provision`` push the new key straight
+    into the DB -- D1=B requires the explicit, out-of-band ``mesh admin
+    import --overwrite`` step first.
+
+    Custody assertions on ``aaaa0001_priv`` are deliberately NOT made
+    here: ``admin import --overwrite`` never touches the ``_priv`` row
+    (CC-D1), and pinning today's stale-``_priv`` state now would lock in
+    a gap a later batch closes.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(runner, ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert bootstrap.exit_code == 0
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["aaaa0001"]))
+    bbbb_iface = bus.use(FakeMeshInterface("bbbb0001"))
+    provision_fleet = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert provision_fleet.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert bbbb_iface.admin_keys == (KeyRecord.from_row(rows["aaaa0001_pub"]).material(),)
+
+    # Simulate a genuine #7449 loss on the SAME device: its persisted key
+    # is now something new, but this is still the physical device.
+    same_device = FakeMeshInterface("aaaa0001")
+    new_kp = generate_keypair()
+    same_device.localNode.localConfig.security.public_key = new_kp.public
+    same_device.localNode.localConfig.security.private_key = new_kp.private.reveal()
+    bus.use(same_device)
+
+    refused = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert refused.exit_code == ExitCode.PROVISIONING
+    assert "mesh admin import --overwrite aaaa0001=" in refused.stderr
+    assert redact.fingerprint(new_kp.public) in refused.stderr
+    assert not _BASE64_KEY_RE.search(refused.stderr)
+    assert same_device.localNode.written_sections == []
+
+    overwrite = invoke(
+        runner, ["admin", "import", f"aaaa0001={new_kp.public_b64}", "--overwrite"], env
+    )
+    assert overwrite.exit_code == 0
+
+    loaded2 = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows2 = {row["key_ref"]: row for row in loaded2.keys}
+    assert KeyRecord.from_row(rows2["aaaa0001_pub"]).material() == new_kp.public
+
+    bus.use(same_device)
+    recovered = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert recovered.exit_code == 0
+    # No key material was written -- the plan neither regenerates nor
+    # adopts, since the DB now already matches the device's reported key.
+    assert bytes(same_device.security.public_key) == new_kp.public
+
+    loaded3 = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows3 = {row["key_ref"]: row for row in loaded3.keys}
+    assert KeyRecord.from_row(rows3["aaaa0001_pub"]).material() == new_kp.public
+
+    bus.use(bbbb_iface)
+    reprovision_fleet = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert reprovision_fleet.exit_code == 0
+    assert bbbb_iface.admin_keys == (new_kp.public,)
+
+
+def test_force_regenerate_key_on_a_legitimate_admin_bearing_node_is_refused(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, write_template: Callable[..., Path]
+) -> None:
+    """D2, inverting the old (pre-S1) A1#5 headline test.
+
+    A prior round's plan asserted the opposite -- that
+    ``--force-regenerate-key`` on a ``--ref ADMIN1`` node rewrites
+    ``ADMIN1_pub`` -- which directly contradicts D2 and has been
+    replaced by this one: ``--force-regenerate-key`` never exempts an
+    admin-bearing node, even run by the node's own legitimate operator.
+    """
+    iface = bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+    assert bootstrap.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = ods.load_database(db_path)
+    before_keys = {row["key_ref"]: dict(row) for row in before.keys}
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN1"]))
+    iface.localNode.written_sections.clear()
+    bus.use(iface)
+    result = invoke(
+        runner,
+        ["provision", "--port", "/dev/ttyFAKE0", "--force-regenerate-key", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert iface.localNode.written_sections == []
+
+    after = ods.load_database(db_path)
+    after_keys = {row["key_ref"]: dict(row) for row in after.keys}
+    for ref in ("ADMIN1_pub", "ADMIN1_priv", "aaaa0001_pub", "aaaa0001_priv"):
+        assert after_keys[ref] == before_keys[ref]
+
+
+def test_impostor_reporting_an_unrelated_admins_public_key_is_refused(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """The secondary check (S1 1b): a live key matching someone else's admin ref is refused.
+
+    ``cccc0001``'s own DB-recorded key has nothing to do with ``ADMIN1``
+    -- the primary check (``node_key_admin_refs(cccc0001)``) is empty.
+    But the connected device reports ``ADMIN1``'s own public key as its
+    live identity, which would otherwise adopt a fleet admin's public
+    key onto an unrelated node's row, creating a spurious alias a later
+    check would trust. This must be refused the same way, on every
+    key-changing branch, not only the plain node's own admin refs.
+    """
+    admin1_kp = keypair_factory()
+    import_result = invoke(runner, ["admin", "import", f"ADMIN1={admin1_kp.public_b64}"], env)
+    assert import_result.exit_code == 0
+
+    cccc_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="cccc0001", management=ManagementMode.TEMPLATE)],
+        keys=list(KeyRecord.for_keypair("cccc0001", cccc_kp, origin=KeyOrigin.CAPTURED)),
+    )
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN1"]))
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = ods.load_database(db_path)
+
+    iface = bus.use(FakeMeshInterface("cccc0001"))
+    iface.localNode.localConfig.security.public_key = admin1_kp.public
+    iface.localNode.localConfig.security.private_key = admin1_kp.private.reveal()
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "admin key" in result.stderr.lower()
+    assert iface.localNode.written_sections == []
+    assert not _BASE64_KEY_RE.search(result.stderr)
+
+    after = ods.load_database(db_path)
+    assert after.nodes == before.nodes
+    assert after.keys == before.keys

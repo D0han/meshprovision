@@ -29,6 +29,7 @@ __all__ = [
     "MAX_ADMIN_KEYS",
     "AdminKeyCapacityError",
     "AdminKeyError",
+    "AdminKeyRotationRefusedError",
     "AdminRefUnresolvedError",
     "AdoptionRefusedError",
     "AmbiguousDeviceError",
@@ -1238,6 +1239,67 @@ class LockdownRefusedError(AdminKeyError):
         """
         super().__init__(message, hint=hint)
         self.reason = reason
+
+
+class AdminKeyRotationRefusedError(AdminKeyError):
+    """A node's own key would change while it backs an authorized admin key.
+
+    Raised by :func:`meshprovision.provisioning.plan.build_plan` before any
+    device I/O when the node being provisioned would regenerate or adopt a
+    new keypair (see :func:`~meshprovision.provisioning.plan._plan_node_keypair`)
+    while :attr:`~meshprovision.provisioning.plan_types.PlanInputs.node_key_admin_refs`
+    is non-empty -- i.e. the node's currently-recorded key is authorized as
+    an admin key somewhere in the fleet. There is deliberately no flag that
+    overrides this: a legitimate admin-key rotation goes through the
+    out-of-band ``mesh admin import --overwrite`` flow instead (see
+    ``docs/security.md``, "Rotating an admin node's key").
+
+    ``message``/``hint`` are set by :func:`build_plan`'s pure layer only
+    partially -- it cannot import :mod:`meshprovision.crypto` to compute a
+    fingerprint, so the CLI layer that catches this error fills in the
+    operator-facing ``hint`` (naming a redacted fingerprint, never a raw
+    key) before it reaches the top-level error boundary.
+
+    Attributes:
+        reason: ``"adopt"`` when the device reports a different key than
+            recorded, otherwise the same regenerate reason
+            :func:`~meshprovision.provisioning.plan._plan_node_keypair`
+            would have used (``"forced"``, ``"factory_key_presumed_compromised"``,
+            ``"missing_key_material"``, or the caller's own
+            ``node_key_reason``/``"weak_key_audit"``).
+        admin_refs: The ``Keys`` sheet references (``"<hex>_pub"``,
+            ``"ADMIN1_pub"``, ...) whose material this node's recorded key
+            currently backs.
+        reported_fingerprint: A redacted fingerprint of the device's
+            reported public key, for the ``"adopt"`` reason -- never raw
+            key material. ``None`` until the CLI layer fills it in, and
+            always ``None`` for a regenerate reason (there is no device
+            report to fingerprint).
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        admin_refs: tuple[str, ...] = (),
+        reported_fingerprint: str | None = None,
+        hint: str | None = None,
+    ) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Human-readable description of what went wrong.
+            reason: Why the key would change; see the class docstring.
+            admin_refs: The admin-key references this node's key backs.
+            reported_fingerprint: A redacted fingerprint of the device's
+                reported public key, when known. Never raw key material.
+            hint: Optional actionable suggestion for resolving the error.
+        """
+        super().__init__(message, hint=hint)
+        self.reason = reason
+        self.admin_refs = admin_refs
+        self.reported_fingerprint = reported_fingerprint
 
 
 # ---------------------------------------------------------------------------
