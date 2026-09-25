@@ -45,6 +45,7 @@ or a ``WriteResult``; nothing here ever does a bare ``except Exception``.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import secrets
 import time
@@ -66,6 +67,7 @@ from meshprovision.errors import (
     PlanConflictError,
     ProvisioningError,
 )
+from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import connection, detect
 from meshprovision.provisioning.apply_session import (
     DEFAULT_RECONNECT_ATTEMPTS,
@@ -692,6 +694,83 @@ def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | Non
     return None
 
 
+def _identity_mismatch(plan: ChangePlan, got: NodeId) -> WriteResult:
+    """Build the ``FAILED`` result for a reconnect that answered as a different node.
+
+    Scope note: this is an accidental-swap detector, not an
+    authentication control. A node number is not a credential --
+    :mod:`meshprovision.provisioning.plan`'s admin-key-identity checks
+    (``node_key_admin_refs``) are what refuse a *deliberate* impostor
+    that reports the expected node number. This check only catches the
+    device physically answering the reconnect being a different one than
+    the plan was built for (a bench "unplug, plug next" mixup, or a
+    serial path re-enumerating onto a different device).
+
+    Args:
+        plan: The plan being applied.
+        got: The node id the reconnected device actually reported.
+
+    Returns:
+        A ``"<verify>"`` :class:`WriteResult` with
+        :attr:`WriteStatus.FAILED`.
+    """
+    return WriteResult(
+        "<verify>",
+        WriteStatus.FAILED,
+        f"reconnected to a different node ({got.display}) than this plan was built for "
+        f"({plan.node_id.display}); stopped",
+    )
+
+
+def _possible_node_renumber(
+    plan: ChangePlan, live_after: detect.LiveConfig, *, keypair: KeyPair | None
+) -> WriteResult | None:
+    """Give the unverified firmware-2.8 node-renumber case its own diagnostic.
+
+    Firmware 2.8 may derive a node's number from its public key
+    (unverified against source -- see the project's firmware-2.8 notes).
+    If that is true, a key regeneration on the *same* physical device can
+    make the final-verify reconnect land on a new node number that looks
+    exactly like a device swap to :func:`_identity_mismatch`. This
+    function narrows that case: the device the reconnect actually
+    answered from holds the private key this process just generated, a
+    secret that exists nowhere else. That is strong evidence it is the
+    same device, just reporting a new number -- so the message tells the
+    operator that, instead of sending them hunting for a swap that never
+    happened.
+
+    This is diagnostic text only. It does not weaken the refusal: either
+    way the database is not updated, and re-keying a database row to a
+    new node id is never done automatically.
+
+    Args:
+        plan: The plan being applied.
+        live_after: The freshly re-read live configuration from the
+            device that answered the reconnect.
+        keypair: The freshly generated keypair, when the plan regenerated
+            one.
+
+    Returns:
+        The distinct ``"<verify>"`` :class:`WriteResult` when the
+        evidence matches; otherwise ``None`` (the caller falls back to
+        :func:`_identity_mismatch`'s ordinary message).
+    """
+    if not (
+        plan.key_plan.regenerate
+        and keypair is not None
+        and live_after.security.private_key is not None
+        and hmac.compare_digest(live_after.security.private_key.reveal(), keypair.private.reveal())
+    ):
+        return None
+    return WriteResult(
+        "<verify>",
+        WriteStatus.FAILED,
+        f"the device now reports node {live_after.node_id.display} but holds the keypair "
+        "this run generated. Its node number appears to have changed (firmware 2.8+ "
+        "derives it from the public key); stopped; the database was NOT updated",
+    )
+
+
 def apply_plan(
     plan: ChangePlan,
     session: DeviceSession,
@@ -700,6 +779,7 @@ def apply_plan(
     dry_run: bool = False,
     settle_seconds: float = DEFAULT_SETTLE_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
+    on_reconnect: Callable[[], None] | None = None,
 ) -> ApplyOutcome:
     """Execute a change plan against a live device with a write-then-verify guarantee.
 
@@ -720,6 +800,21 @@ def apply_plan(
     pass only checks sections that were actually attempted (see
     :func:`verify_plan`'s ``attempted_sections``).
 
+    Every reconnect (mid-plan, after a reboot-triggering write, and the
+    final verify) also confirms the device that answered is still the
+    same node the plan was built for, via
+    :func:`~meshprovision.provisioning.detect.read_node_id`. A mismatch
+    is an unconditional, unbypassable hard stop: nothing further is
+    written, no result claims a confirmed write, and
+    :attr:`ApplyOutcome.may_update_database` is ``False``. There is no
+    legitimate workflow where the connected node's id changes mid-run --
+    ``ReconnectingSession`` exists only to re-read the same device -- and
+    this scope is deliberately narrow: it catches an *accidental* swap
+    (a bench mixup, a serial path re-enumerating), not a deliberate
+    impostor that reports the expected node number, which is
+    :mod:`~meshprovision.provisioning.plan`'s admin-key-identity gate's
+    territory, not this one's.
+
     Args:
         plan: The change plan to execute.
         session: The device session to write and re-read through.
@@ -735,6 +830,12 @@ def apply_plan(
         settle_seconds: Pause after a reboot-triggering write, and again
             before the final verification reconnect.
         sleep: Sleep function, injectable for tests.
+        on_reconnect: Called right before each ``session.refresh()`` --
+            covers the quiet several-second window during which a reboot
+            reconnect happens, so a caller with a CLI context can warn an
+            operator not to unplug or swap the device while it waits.
+            ``apply.py`` has no CLI context of its own, so this stays a
+            plain callback.
 
     Returns:
         The full :class:`ApplyOutcome`.
@@ -837,6 +938,8 @@ def apply_plan(
             # it, so sleeping here too would just double the wait for
             # the same reboot.
             sleep(settle_seconds)
+            if on_reconnect is not None:
+                on_reconnect()
             try:
                 iface = session.refresh()
             except ConnectionBackendError:
@@ -855,9 +958,62 @@ def apply_plan(
                     security_attempted="security" in attempted,
                 )
 
+            # Confirm the device that answered the reboot reconnect is still
+            # the one this plan was built for, before any further section is
+            # written -- security is always last (SECTION_ORDER), so a stop
+            # here provably means it was never sent. Unconditional: no
+            # override flag, per this project's rule for identity-sensitive
+            # operations (see this function's docstring).
+            try:
+                got = detect.read_node_id(iface)
+            except (*_VERIFY_READBACK_EXCEPTIONS, *connection.device_io_errors()) as exc:
+                results.append(
+                    WriteResult(
+                        "<verify>",
+                        WriteStatus.FAILED,
+                        "reconnected, but could not confirm the node's identity before "
+                        f"continuing: {exc}; stopped",
+                    )
+                )
+                results.extend(
+                    WriteResult(
+                        remaining.section,
+                        WriteStatus.SKIPPED,
+                        "not written: stopped because the node's identity could not be "
+                        "confirmed after reconnecting",
+                    )
+                    for remaining in plan.sections[index + 1 :]
+                )
+                return ApplyOutcome(
+                    node_id=plan.node_id,
+                    results=tuple(results),
+                    dry_run=False,
+                    verified=True,
+                    security_attempted=False,
+                )
+            if got != plan.node_id:
+                results.append(_identity_mismatch(plan, got))
+                results.extend(
+                    WriteResult(
+                        remaining.section,
+                        WriteStatus.SKIPPED,
+                        "not written: stopped after reconnecting to a different node",
+                    )
+                    for remaining in plan.sections[index + 1 :]
+                )
+                return ApplyOutcome(
+                    node_id=plan.node_id,
+                    results=tuple(results),
+                    dry_run=False,
+                    verified=True,
+                    security_attempted=False,
+                )
+
     security_attempted = "security" in attempted
 
     sleep(settle_seconds)
+    if on_reconnect is not None:
+        on_reconnect()
     try:
         fresh_iface = session.refresh()
     except ConnectionBackendError:
@@ -882,6 +1038,26 @@ def apply_plan(
                 WriteStatus.FAILED,
                 f"Reconnected, but could not read back the device state to verify: {exc}",
             )
+        )
+        return ApplyOutcome(
+            node_id=plan.node_id,
+            results=tuple(results),
+            dry_run=False,
+            verified=True,
+            security_attempted=security_attempted,
+        )
+
+    if live_after.node_id != plan.node_id:
+        # Never run verify_plan against another device: its comparisons
+        # would be meaningless, and a CONFIRMED line would be actively
+        # misleading. 3b: when this run generated a keypair that the
+        # reconnected device -- despite the different node number --
+        # actually holds, that is the unverified firmware-2.8
+        # node-renumber case, not a swap; give it a distinct message, but
+        # the refusal to persist is identical either way.
+        results.append(
+            _possible_node_renumber(plan, live_after, keypair=keypair)
+            or _identity_mismatch(plan, live_after.node_id)
         )
         return ApplyOutcome(
             node_id=plan.node_id,

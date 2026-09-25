@@ -76,6 +76,7 @@ __all__ = [
     "is_factory_short_name",
     "live_config_from_protobufs",
     "read_live_config",
+    "read_node_id",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -596,6 +597,47 @@ def live_config_from_protobufs(
     )
 
 
+def read_node_id(iface: MeshInterface) -> NodeId:
+    """Read a connected device's node id, without any other config.
+
+    The identity-only prologue of :func:`read_live_config`, split out so
+    a caller that only needs to confirm *which* device answered a
+    reconnect (see :func:`~meshprovision.provisioning.apply.apply_plan`'s
+    reconnect identity check) does not need a full live-config read to do
+    it. :func:`read_live_config` calls this function itself, so this
+    module stays the only reader of ``myInfo``/``getMyNodeInfo()``.
+
+    Args:
+        iface: A connected, already-handshaked ``MeshInterface``.
+
+    Returns:
+        The device's node id.
+
+    Raises:
+        DetectionError: If the device did not report its node id, or if
+            probing the interface fails in an expected way (a missing
+            attribute, a malformed value). Unexpected exception types are
+            not caught and propagate as-is.
+    """
+    try:
+        if iface.myInfo is not None:
+            return NodeId.from_int(iface.myInfo.my_node_num)
+        info = iface.getMyNodeInfo()
+        if not info:
+            raise DetectionError(
+                "Device did not report its node id",
+                hint="Reconnect; the config handshake may not have completed.",
+            )
+        return NodeId.parse(info["num"])
+    except DetectionError:
+        raise
+    except (AttributeError, TypeError, ValueError, KeyError) as exc:
+        raise DetectionError(
+            f"Failed to read the device's node id: {exc}",
+            hint="Reconnect; the config handshake may not have completed.",
+        ) from exc
+
+
 def read_live_config(iface: MeshInterface) -> LiveConfig:
     """Read the complete live configuration off a connected device.
 
@@ -617,18 +659,8 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
             attribute, a malformed value). Unexpected exception types are
             not caught and propagate as-is.
     """
+    node_id = read_node_id(iface)
     try:
-        if iface.myInfo is not None:
-            node_id = NodeId.from_int(iface.myInfo.my_node_num)
-        else:
-            info = iface.getMyNodeInfo()
-            if not info:
-                raise DetectionError(
-                    "Device did not report its node id",
-                    hint="Reconnect; the config handshake may not have completed.",
-                )
-            node_id = NodeId.parse(info["num"])
-
         user = iface.getMyUser() or {}
         short_name = str(user.get("shortName", ""))
         long_name = str(user.get("longName", ""))

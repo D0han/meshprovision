@@ -1383,6 +1383,252 @@ def test_apply_plan_reports_uncertain_when_mid_loop_reconnect_fails(make_live) -
 
 
 # ---------------------------------------------------------------------------
+# apply_plan reconnect identity check (E3) -- a mid-plan or final reconnect
+# that answers as a different node must be an unconditional hard stop.
+# ---------------------------------------------------------------------------
+
+
+class _FakeIfaceUnreadableIdentity(_FakeIfaceForApply):
+    """Models a reconnect whose identity cannot be read at all (myInfo=None, getMyNodeInfo()={})."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.myInfo = None  # type: ignore[assignment]
+
+    def getMyNodeInfo(self) -> dict[str, int]:  # noqa: N802 -- real MeshInterface method name
+        return {}
+
+
+def _factory_plan_with_reboot_then_security(make_live: Callable[..., object]) -> ChangePlan:
+    """Build a FACTORY plan with an explicit reboot section before security.
+
+    Shared by the mid-plan identity tests below -- same shape as
+    ``test_apply_plan_reconnects_mid_loop_after_a_reboot_before_writing_later_sections``.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    rebooting_lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="hop_limit", current=3, desired=5),),
+        reboots_device=True,
+    )
+    later_device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    return dataclasses.replace(
+        plan, sections=(rebooting_lora_change, later_device_change, security_section)
+    )
+
+
+def test_apply_plan_mid_plan_reconnect_to_a_different_node_is_a_hard_stop(make_live) -> None:
+    """E3 headline: an accidental device swap during a mid-plan reboot never sends security.
+
+    A mid-plan reconnect (after the rebooting `lora` write) that answers
+    as a different node must stop immediately: no further section is
+    written to the swapped-in device (`security` -- the freshly generated
+    keypair and admin keys -- most of all), and the outcome can never be
+    persisted.
+    """
+    plan = _factory_plan_with_reboot_then_security(make_live)
+    kp = generate_keypair()
+
+    first_iface = _FakeIfaceForApply()
+    impostor = _FakeIfaceForApply(node_num=0xCAFE0002)
+    session = _FakeSessionTracksRefresh(first_iface, _serve(impostor))
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert first_iface.localNode.written_sections == ["lora"]
+    assert impostor.localNode.written_sections == []
+    assert bytes(impostor.localNode.localConfig.security.private_key) != kp.private.reveal()
+
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.status == WriteStatus.FAILED
+    assert "!cafe0002" in verify_result.message
+    assert "!deadbe01" in verify_result.message
+
+    device_result = next(r for r in outcome.results if r.section == "device")
+    assert device_result.status == WriteStatus.SKIPPED
+    assert "different node" in device_result.message
+    security_result = next(r for r in outcome.results if r.section == "security")
+    assert security_result.status == WriteStatus.SKIPPED
+    assert "different node" in security_result.message
+
+    assert outcome.may_update_database is False
+    assert outcome.record is None
+    assert outcome.security_attempted is False
+    assert outcome.exit_code == int(ExitCode.PROVISIONING)
+
+
+def test_apply_plan_mid_plan_reconnect_with_unreadable_identity_is_a_hard_stop(make_live) -> None:
+    """An identity that cannot be confirmed after a reconnect must stop too -- not just a mismatch.
+
+    An unknown identity must not receive key material either: treating
+    "could not read the id" as "assume it's fine" would defeat the whole
+    check.
+    """
+    plan = _factory_plan_with_reboot_then_security(make_live)
+    kp = generate_keypair()
+
+    first_iface = _FakeIfaceForApply()
+    unreadable = _FakeIfaceUnreadableIdentity()
+    session = _FakeSessionTracksRefresh(first_iface, _serve(unreadable))
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.status == WriteStatus.FAILED
+    assert "could not confirm the node's identity" in verify_result.message
+    assert unreadable.localNode.written_sections == []
+    assert outcome.security_attempted is False
+    assert outcome.may_update_database is False
+    assert outcome.record is None
+
+
+def test_apply_plan_final_verify_reconnect_to_a_different_node_never_runs_verify_plan(
+    make_live,
+) -> None:
+    """A final-verify-only swap must stop before `verify_plan`, even with a matching config.
+
+    The impostor's `device.role` is set to exactly what the plan wants,
+    proving the stop fires because of the identity check, not because of
+    an unrelated value mismatch `verify_plan` would have reported anyway.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    plan = dataclasses.replace(plan, sections=(device_change,), key_plan=KeyPlan())
+
+    first_iface = _FakeIfaceForApply()
+    impostor = first_iface.reopened(node_num=0xCAFE0002)
+    impostor.localNode.localConfig.device.role = 2  # ROUTER -- matches the plan's intent.
+    session = _FakeSessionTracksRefresh(first_iface, _serve(impostor))
+    outcome = apply_plan(plan, session, keypair=None)  # type: ignore[arg-type]
+
+    assert not any(r.status == WriteStatus.CONFIRMED for r in outcome.results)
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.status == WriteStatus.FAILED
+    assert "!cafe0002" in verify_result.message
+    assert outcome.record is None
+    assert outcome.may_update_database is False
+
+
+def test_apply_plan_final_verify_node_renumber_with_matching_keypair_gets_a_distinct_message(
+    make_live,
+) -> None:
+    """E3 3b: a final reconnect to a new node number holding this run's OWN keypair is not a swap.
+
+    Diagnostic only -- it still refuses to persist, since re-keying a
+    database row to a new node id automatically is out of scope.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    plan = dataclasses.replace(plan, sections=(security_section,))
+    assert plan.key_plan.regenerate is True
+    kp = generate_keypair()
+
+    first_iface = _FakeIfaceForApply()
+    renumbered = first_iface.reopened(node_num=0xCAFE0002)
+    renumbered.localNode.localConfig.security.private_key = kp.private.reveal()
+    renumbered.localNode.localConfig.security.public_key = kp.public
+    session = _FakeSessionTracksRefresh(first_iface, _serve(renumbered))
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.status == WriteStatus.FAILED
+    assert "node number appears to have changed" in verify_result.message
+    assert "firmware 2.8" in verify_result.message
+    assert "database was NOT updated" in verify_result.message
+    # Must stay distinguishable from the ordinary accidental-swap message.
+    assert not verify_result.message.startswith("reconnected to a different node")
+    assert outcome.may_update_database is False
+    assert outcome.record is None
+
+
+def test_apply_plan_final_verify_node_renumber_without_matching_keypair_is_an_ordinary_mismatch(
+    make_live,
+) -> None:
+    """3b must not fire just because the node number changed -- only when the keypair also matches.
+
+    Guards against a too-loose 3b condition swallowing genuine swaps: a
+    device that reports a new number but a DIFFERENT (or no) private key
+    is an ordinary mismatch, not a renumber.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    plan = dataclasses.replace(plan, sections=(security_section,))
+    kp = generate_keypair()
+    other_kp = generate_keypair()
+
+    first_iface = _FakeIfaceForApply()
+    renumbered = first_iface.reopened(node_num=0xCAFE0002)
+    renumbered.localNode.localConfig.security.private_key = other_kp.private.reveal()
+    renumbered.localNode.localConfig.security.public_key = other_kp.public
+    session = _FakeSessionTracksRefresh(first_iface, _serve(renumbered))
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.status == WriteStatus.FAILED
+    assert verify_result.message.startswith("reconnected to a different node")
+    assert "node number appears to have changed" not in verify_result.message
+
+
+def test_apply_plan_same_node_reconnect_is_unaffected_by_the_identity_check(make_live) -> None:
+    """Unchanged behavior: a plain same-device reconnect never trips the new check."""
+    plan = _factory_plan_with_reboot_then_security(make_live)
+    kp = generate_keypair()
+
+    first_iface = _FakeIfaceForApply()
+    session = _FakeSessionTracksRefresh(first_iface, _reopen_same_device)
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert outcome.ok is True, outcome.describe()
+    assert outcome.may_update_database is True
+    assert not any(
+        r.section == "<verify>" and r.status == WriteStatus.FAILED for r in outcome.results
+    )
+
+
+def test_apply_plan_calls_on_reconnect_before_each_refresh(make_live) -> None:
+    """3c: on_reconnect fires once per refresh, including the mid-plan one."""
+    plan = _factory_plan_with_reboot_then_security(make_live)
+    kp = generate_keypair()
+
+    first_iface = _FakeIfaceForApply()
+    session = _FakeSessionTracksRefresh(first_iface, _reopen_same_device)
+    calls: list[int] = []
+    outcome = apply_plan(
+        plan,
+        session,
+        keypair=kp,  # type: ignore[arg-type]
+        on_reconnect=lambda: calls.append(session.refresh_calls),
+    )
+
+    assert outcome.ok is True, outcome.describe()
+    # One call recorded right before each of the two refreshes (mid-plan,
+    # then final) -- refresh_calls is 0 at each recorded moment, since the
+    # callback runs strictly before refresh() increments it.
+    assert calls == [0, 1]
+    assert session.refresh_calls == 2
+
+
+# ---------------------------------------------------------------------------
 # ReconnectingSession.refresh() -- the real retry-with-backoff logic, not a
 # hand-rolled fake session double.
 # ---------------------------------------------------------------------------

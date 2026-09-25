@@ -299,6 +299,31 @@ def test_read_live_config_detection_error_when_nothing_reported() -> None:
 
 
 # ---------------------------------------------------------------------------
+# read_node_id -- parity with read_live_config(...).node_id (E3).
+# ---------------------------------------------------------------------------
+
+
+def test_read_node_id_matches_read_live_config_via_my_info() -> None:
+    iface = _FakeIface()
+    assert detect.read_node_id(iface) == detect.read_live_config(iface).node_id  # type: ignore[arg-type]
+    assert detect.read_node_id(iface) == NodeId.from_hex("deadbe01")  # type: ignore[arg-type]
+
+
+def test_read_node_id_matches_read_live_config_via_get_my_node_info() -> None:
+    iface = _FakeIface(my_info=False)
+    iface._info_fallback = {"num": 0xCAFE0002}
+    assert detect.read_node_id(iface) == detect.read_live_config(iface).node_id  # type: ignore[arg-type]
+    assert detect.read_node_id(iface) == NodeId.from_hex("cafe0002")  # type: ignore[arg-type]
+
+
+def test_read_node_id_detection_error_when_nothing_reported() -> None:
+    iface = _FakeIface(my_info=False)
+    iface._info_fallback = None
+    with pytest.raises(DetectionError):
+        detect.read_node_id(iface)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
 # repair.diff_record.
 # ---------------------------------------------------------------------------
 

@@ -848,7 +848,15 @@ def _apply_and_persist(
     Returns:
         The apply outcome, and whether the database was updated.
     """
-    outcome = apply.apply_plan(change_plan, session, keypair=keypair, dry_run=False)
+    outcome = apply.apply_plan(
+        change_plan,
+        session,
+        keypair=keypair,
+        dry_run=False,
+        on_reconnect=lambda: ctx.info(
+            "Waiting for the device to reboot; do not unplug or swap it..."
+        ),
+    )
     for line in outcome.describe():
         ctx.info(line)
     if outcome.public_key_fingerprint is not None:
@@ -900,6 +908,16 @@ def _apply_and_persist(
             if failure.message:
                 line = f"{line} -- {failure.message}"
             ctx.error(line)
+
+        if any(
+            failure.message.startswith("reconnected to a different node")
+            for failure in outcome.failures()
+        ):
+            ctx.error(
+                "Stopped: the device that answered after the reboot is not "
+                f"{change_plan.node_id.display}. Check which device is connected before "
+                "re-running; nothing further was written to the other device."
+            )
 
         not_written = [r.section for r in outcome.results if r.status is apply.WriteStatus.SKIPPED]
         if not_written:

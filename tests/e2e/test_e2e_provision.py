@@ -150,6 +150,121 @@ def test_a_normal_run_reconnects_more_than_once(
     assert len(bus.connections) > 1
 
 
+def test_reconnect_notice_is_shown_before_each_reboot_reconnect(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """E3 3c: an operator-facing notice covers the quiet reboot/reconnect window.
+
+    The factory template's ``lora.region`` change reboots the device, so a
+    factory provision connects three times (open, mid-plan refresh, final
+    verify) -- the notice must fire before both reconnects that follow the
+    initial open.
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert len(bus.connections) == 3
+    assert result.stderr.count("do not unplug or swap it") == 2
+
+
+def test_reconnect_mid_plan_to_a_different_node_is_a_hard_stop(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """E3 e2e headline: a device swap during the reboot window must never write or persist.
+
+    Serves a second, different device from the mid-plan reconnect onward
+    -- a bench "unplug, plug next" mixup, or a serial path re-enumerating
+    onto a different device during the reboot's quiet window.
+    """
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    bus.use(FakeMeshInterface("deadbe01"))
+    impostor = FakeMeshInterface("cafe0002")
+    bus.then(impostor)
+    # Keeps the WARNING-level structlog line's ISO-timestamp microseconds
+    # (a random 6-digit run) out of stderr, per the same rationale as
+    # test_zero_admin_keys_is_a_valid_outcome_never_repaired above.
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "different node" in result.stderr
+    assert "!deadbe01" in result.stderr
+    assert "!cafe0002" in result.stderr
+    assert "Stopped: the device that answered after the reboot is not !deadbe01" in result.stderr
+
+    assert impostor.localNode.written_sections == []
+    assert impostor.admin_keys == ()
+    assert bytes(impostor.security.private_key) == b""
+
+    assert db_fingerprint(db_path) == before
+    loaded = ods.load_database(db_path)
+    assert loaded.nodes == ()
+    assert loaded.keys == ()
+
+    _assert_no_secrets(result.stdout)
+    _assert_no_secrets(result.stderr)
+
+
+def test_reconnect_final_verify_to_a_different_node_never_persists(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """E3 e2e: a final-verify-only swap (no mid-plan reboot) must also never persist.
+
+    Modeled on ``test_drift_repair_renames_back_and_updates_role``: a
+    ``device.role`` drift repair reboots nothing, so this connects exactly
+    twice -- open, then the final verify -- landing the swap squarely on
+    the one connect this scenario covers.
+    """
+    kp = keypair_factory()
+    node_record = NodeRecord(
+        node_id="deadbe01",
+        short_name="MT07",
+        long_name="Meshtastic MT07",
+        hw_model="RAK4631",
+        role="ROUTER",
+        region="EU_868",
+        management=ManagementMode.TEMPLATE,
+    )
+    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
+    seed_db(nodes=[node_record], keys=[pub_record, priv_record])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    iface = bus.use(FakeMeshInterface("deadbe01", short_name="be01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+    iface.localNode.localConfig.device.role = 2  # ROUTER
+    iface.localNode.localConfig.lora.region = 3  # EU_868 -- matches the template; no reboot.
+
+    impostor = FakeMeshInterface("cafe0002")
+    bus.then(impostor)
+    # Keeps the WARNING-level structlog line's ISO-timestamp microseconds
+    # (a random 6-digit run) out of stderr, per the same rationale as
+    # test_zero_admin_keys_is_a_valid_outcome_never_repaired above.
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert bus.served == ["deadbe01", "cafe0002"]
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "!cafe0002" in result.stderr
+
+    assert impostor.localNode.written_sections == []
+    assert db_fingerprint(db_path) == before
+
+    _assert_no_secrets(result.stdout)
+    _assert_no_secrets(result.stderr)
+
+
 def test_enroll_graduates_an_observed_node_to_template_management(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
 ) -> None:
