@@ -1,7 +1,7 @@
 """``mesh status`` -- strictly read-only network health reporting.
 
 This module MUST NOT reference ``OdsDatabase``, ``NodeRepository``,
-``KeyRepository``, ``atomic_writer``, ``known_good``,
+``KeyRepository``, ``atomic_writer``, ``known_good``, ``pending_keys``,
 ``meshprovision.provisioning.apply``, ``meshprovision.provisioning.repair``,
 :meth:`meshprovision.cli.common.CliContext.open_database`, or any
 ``save``/``replace``/``upsert``/``delete`` name. Everything flows through

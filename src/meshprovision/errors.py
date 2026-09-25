@@ -1262,7 +1262,10 @@ class AdminKeyRotationRefusedError(AdminKeyError):
 
     Attributes:
         reason: ``"adopt"`` when the device reports a different key than
-            recorded, otherwise the same regenerate reason
+            recorded, ``"pending_key_recovered"`` when the device's key
+            matches a pending keypair from an earlier interrupted
+            regenerate (see :mod:`meshprovision.db.pending_keys`),
+            otherwise the same regenerate reason
             :func:`~meshprovision.provisioning.plan._plan_node_keypair`
             would have used (``"forced"``, ``"factory_key_presumed_compromised"``,
             ``"missing_key_material"``, or the caller's own

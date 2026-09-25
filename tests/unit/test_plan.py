@@ -1284,7 +1284,15 @@ def test_db_public_key_differs_adopts_device_key(
 
 
 @pytest.mark.parametrize(
-    "kind", ["forced", "factory", "missing_key_material", "node_key_compromised", "adopt"]
+    "kind",
+    [
+        "forced",
+        "factory",
+        "missing_key_material",
+        "node_key_compromised",
+        "adopt",
+        "pending_key_recovered",
+    ],
 )
 def test_admin_key_rotation_refused_for_every_key_changing_branch(
     make_live, template, keypair, keypair_factory, kind: str
@@ -1350,8 +1358,7 @@ def test_admin_key_rotation_refused_for_every_key_changing_branch(
             node_key_admin_refs=admin_refs,
         )
         expected_reason = "node_key_compromised"
-    else:
-        assert kind == "adopt"
+    elif kind == "adopt":
         other = keypair_factory()
         live = make_live(template, node_id="aaaa0001", security=make_security(keypair=keypair))
         record = NodeRecord(
@@ -1366,6 +1373,21 @@ def test_admin_key_rotation_refused_for_every_key_changing_branch(
             node_key_admin_refs=admin_refs,
         )
         expected_reason = "adopt"
+    else:
+        assert kind == "pending_key_recovered"
+        live = make_live(template, node_id="aaaa0001", security=make_security(keypair=keypair))
+        record = NodeRecord(
+            node_id="aaaa0001", short_name=live.short_name, long_name=live.long_name
+        )
+        inputs = PlanInputs(
+            live=live,
+            template=template,
+            db_entry=record,
+            state=detect.NodeState.PROVISIONED,
+            pending_keypair_recovered=True,
+            node_key_admin_refs=admin_refs,
+        )
+        expected_reason = "pending_key_recovered"
 
     with pytest.raises(AdminKeyRotationRefusedError) as excinfo:
         build_plan(inputs)

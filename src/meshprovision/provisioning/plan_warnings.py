@@ -42,6 +42,7 @@ class PlanWarningCode(StrEnum):
     RESOLVED_ADMIN_KEY_REJECTED = "resolved_admin_key_rejected"
     LIVE_ADMIN_KEY_REVOKED = "live_admin_key_revoked"
     LIVE_ADMIN_KEY_REJECTED = "live_admin_key_rejected"
+    PENDING_KEY_RECOVERED = "pending_key_recovered"
 
 
 @dataclass(frozen=True, slots=True)

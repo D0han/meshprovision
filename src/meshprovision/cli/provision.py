@@ -50,6 +50,7 @@ from meshprovision.cli.progress import heartbeat
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import weakkeys
 from meshprovision.crypto.redact import SecretBytes, fingerprint
+from meshprovision.db import pending_keys
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import (
@@ -79,6 +80,8 @@ from meshprovision.provisioning.pipeline import (
 from meshprovision.provisioning.plan_admin_keys import KeyPlan
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from meshtastic.mesh_interface import MeshInterface
 
     from meshprovision.cli.common import CliContext, DbSession
@@ -621,8 +624,9 @@ def _node_key_origin(key_plan: KeyPlan, *, pending_recovered: bool) -> KeyOrigin
     Args:
         key_plan: The plan's key decisions.
         pending_recovered: Whether this run recovered a pending key
-            regeneration. Batch #35's ``pending_keypair_recovered`` will
-            feed this; until that lands, every caller passes ``False``.
+            regeneration -- fed by
+            :attr:`~meshprovision.provisioning.plan_types.PlanInputs.pending_keypair_recovered`
+            via the plan (see :mod:`meshprovision.db.pending_keys`).
 
     Returns:
         :attr:`~meshprovision.db.schema.KeyOrigin.GENERATED` when this
@@ -830,6 +834,7 @@ def _apply_and_persist(
     keypair: crypto_keys.KeyPair | None,
     live: detect.LiveConfig,
     opts: ProvisionOptions,
+    pending_keypair_recovered: bool = False,
 ) -> tuple[apply.ApplyOutcome, bool]:
     """Apply a change plan to the device and persist the result to the database.
 
@@ -844,54 +849,84 @@ def _apply_and_persist(
             private key -- read before this apply, but unchanged by it
             whenever ``keypair`` is ``None``, the case that matters.
         opts: The operator's provisioning flags.
+        pending_keypair_recovered: Whether this run is recovering a
+            pending keypair from an earlier interrupted regenerate (see
+            :mod:`meshprovision.db.pending_keys`), fed through from
+            :func:`run_provision`'s
+            :attr:`~meshprovision.provisioning.plan_types.PlanInputs.pending_keypair_recovered`.
 
     Returns:
         The apply outcome, and whether the database was updated.
     """
-    outcome = apply.apply_plan(
-        change_plan,
-        session,
-        keypair=keypair,
-        dry_run=False,
-        on_reconnect=lambda: ctx.info(
-            "Waiting for the device to reboot; do not unplug or swap it..."
-        ),
-    )
-    for line in outcome.describe():
-        ctx.info(line)
-    if outcome.public_key_fingerprint is not None:
-        ctx.info(f"Device public key: {outcome.public_key_fingerprint}")
+    # A write-ahead pending-keypair file was written for this node (by
+    # run_provision, before any device write) exactly when this run
+    # generates a fresh keypair -- never for adopt_device_key/no-op key
+    # plans, and never for a pending-keypair recovery itself (that run
+    # reuses an *existing* pending file rather than writing a new one).
+    wrote_pending = keypair is not None and change_plan.key_plan.regenerate
+    pending_path = pending_keys.pending_key_path(db.path, change_plan.node_id)
 
-    # pending_recovered is always False until batch #35 wires up
-    # pending_keypair_recovered.
-    node_origin = _node_key_origin(change_plan.key_plan, pending_recovered=False)
-
-    if (
-        opts.admin_ref is not None
-        and opts.admin_ref != change_plan.node_id.hex
-        and outcome.may_update_database
-    ):
-        _register_admin_alias(
-            ctx,
-            db,
-            admin_ref=opts.admin_ref,
-            node_id=change_plan.node_id,
+    try:
+        outcome = apply.apply_plan(
+            change_plan,
+            session,
             keypair=keypair,
-            node_origin=node_origin,
+            dry_run=False,
+            on_reconnect=lambda: ctx.info(
+                "Waiting for the device to reboot; do not unplug or swap it..."
+            ),
+        )
+        for line in outcome.describe():
+            ctx.info(line)
+        if outcome.public_key_fingerprint is not None:
+            ctx.info(f"Device public key: {outcome.public_key_fingerprint}")
+
+        node_origin = _node_key_origin(
+            change_plan.key_plan, pending_recovered=pending_keypair_recovered
         )
 
-    now = datetime.now(tz=UTC)
-    persisted = apply.persist_result(
-        outcome,
-        nodes=db.nodes,
-        keys=db.keys,
-        keypair=keypair,
-        origin=node_origin,
-        admin_key_refs=change_plan.key_plan.desired_admin_key_refs,
-        now=now,
-    )
+        if (
+            opts.admin_ref is not None
+            and opts.admin_ref != change_plan.node_id.hex
+            and outcome.may_update_database
+        ):
+            _register_admin_alias(
+                ctx,
+                db,
+                admin_ref=opts.admin_ref,
+                node_id=change_plan.node_id,
+                keypair=keypair,
+                node_origin=node_origin,
+            )
+
+        now = datetime.now(tz=UTC)
+        persisted = apply.persist_result(
+            outcome,
+            nodes=db.nodes,
+            keys=db.keys,
+            keypair=keypair,
+            origin=node_origin,
+            admin_key_refs=change_plan.key_plan.desired_admin_key_refs,
+            now=now,
+        )
+    except BaseException:
+        # The outcome is unknown here (Ctrl-C, or any other exception --
+        # including persist_result's own AtomicWriteError, raised after the
+        # device write was already confirmed): keep the pending file and
+        # tell the operator it is there, unconditionally.
+        if wrote_pending:
+            ctx.error(
+                f"The new keypair was saved to {pending_path} before the device write; "
+                "the next `mesh provision` of this node recovers it automatically."
+            )
+        raise
+
     if persisted:
         ctx.success(f"Database updated: {db.path}")
+        # The database and the device are now known to agree: any pending
+        # keypair recorded for this node -- from this run or an earlier
+        # interrupted one -- is provably no longer needed.
+        pending_keys.clear_pending(db.path, change_plan.node_id)
         if _capture_proven_private_key(
             ctx,
             db,
@@ -901,6 +936,12 @@ def _apply_and_persist(
         ):
             db.db.save()
     else:
+        if change_plan.key_plan.regenerate and not outcome.security_attempted:
+            # Hygiene: the freshly generated key never reached the device
+            # (the run stopped before the security section was even
+            # attempted), so the pending file describes a key that was
+            # never sent -- nothing to recover from it.
+            pending_keys.clear_pending(db.path, change_plan.node_id)
         ctx.error("Node is in an UNCERTAIN state; the database was NOT updated.")
         for failure in outcome.failures():
             label = f"{failure.section}.{failure.field}" if failure.field else failure.section
@@ -939,6 +980,15 @@ def _apply_and_persist(
                     "The security section was not written: its keys and admin keys are unchanged."
                 )
 
+        if wrote_pending:
+            if outcome.security_attempted:
+                ctx.error(
+                    f"The new keypair was saved to {pending_path} before the device write; "
+                    "the next `mesh provision` of this node recovers it automatically."
+                )
+            else:
+                ctx.error("The new keypair was never sent to the device; nothing to recover.")
+
     return outcome, persisted
 
 
@@ -949,7 +999,7 @@ _ADMIN_KEY_ROTATION_DOC_HINT: Final[str] = (
 
 
 def _finalize_admin_key_rotation_error(
-    exc: AdminKeyRotationRefusedError, live: detect.LiveConfig
+    exc: AdminKeyRotationRefusedError, live: detect.LiveConfig, *, pending_path: Path | None = None
 ) -> AdminKeyRotationRefusedError:
     """Attach the operator-facing hint to an admin-key-rotation refusal.
 
@@ -966,6 +1016,10 @@ def _finalize_admin_key_rotation_error(
             raised, with no hint set.
         live: The device's normalized live configuration, already read by
             the caller.
+        pending_path: This node's pending-keypair sidecar path (see
+            :mod:`meshprovision.db.pending_keys`), consulted for the
+            ``"pending_key_recovered"`` reason -- a node that became
+            admin-bearing between an interrupted run and its recovery.
 
     Returns:
         A new :class:`AdminKeyRotationRefusedError` carrying the same
@@ -1004,6 +1058,20 @@ def _finalize_admin_key_rotation_error(
             f"{ref!r} must name this device's key, verify it and use "
             "`mesh admin import --overwrite`."
         )
+    elif exc.reason == "pending_key_recovered":
+        # Edge case: this node became admin-bearing between an earlier
+        # interrupted regenerate and this run's recovery of its pending
+        # keypair. The device's key genuinely matches the pending file --
+        # this is not a #7449/impostor situation -- but S1 still refuses,
+        # since the key is about to be (re)recorded on an admin-bearing
+        # node with no operator-verified out-of-band step.
+        reported_fingerprint = None
+        hint = (
+            "The connected device's key matches a keypair saved locally by an earlier "
+            f"interrupted `mesh provision` run (at {pending_path}), but this node now backs "
+            f"authorized admin key(s): {', '.join(exc.admin_refs)}. It was not recorded. "
+            f"{_ADMIN_KEY_ROTATION_DOC_HINT}"
+        )
     else:
         reported_fingerprint = None
         hint = _ADMIN_KEY_ROTATION_DOC_HINT
@@ -1026,11 +1094,14 @@ def run_provision(
 ) -> ProvisionResult:
     """Run the full provisioning pipeline against an already-open device session.
 
-    Detects the node's state, diffs any existing database record for
-    drift, resolves and audits admin keys, builds the change plan, prints
-    it, and -- unless ``opts.dry_run`` is set -- confirms, applies it to
-    the device, optionally registers an admin alias, and persists the
-    result to the database.
+    Detects the node's state, checks for a recoverable write-ahead
+    pending keypair from an earlier interrupted run (see
+    :mod:`meshprovision.db.pending_keys`), diffs any existing database
+    record for drift, resolves and audits admin keys, builds the change
+    plan, prints it, and -- unless ``opts.dry_run`` is set -- confirms,
+    writes the pending keypair ahead of any device write when regenerating,
+    applies the plan to the device, optionally registers an admin alias,
+    and persists the result to the database.
 
     Args:
         ctx: The shared CLI context.
@@ -1045,6 +1116,8 @@ def run_provision(
     Raises:
         AdminKeyCapacityError: If the resolved admin-key set exceeds the
             firmware's capacity.
+        AtomicWriteError: If a fresh keypair's write-ahead pending file
+            could not be written. Raised before any device write.
         LockdownRefusedError: If the template requests
             ``security.is_managed=true`` but the safety gates are not
             satisfied.
@@ -1098,7 +1171,30 @@ def run_provision(
     if db_key_record is not None:
         db_public_key = db_key_record.material()
 
-    host_generated = is_host_generated_key(db.keys, live)
+    # Recovery check for a write-ahead pending keypair (batch #35, see
+    # meshprovision.db.pending_keys): a prior interrupted regenerate may
+    # have left a keypair on disk that the device still holds. Both halves
+    # must match exactly -- the private half is what proves this is the
+    # device the pending keypair was actually written to.
+    pending = pending_keys.load_pending(db.path, live.node_id)
+    pending_matches = (
+        pending is not None
+        and live.security.public_key is not None
+        and live.security.private_key is not None
+        and pending.matches(public=live.security.public_key, private=live.security.private_key)
+    )
+    if pending is not None and not pending_matches:
+        # %Y-%m-%dT%H:%M:%SZ, not .isoformat(): the latter's microseconds
+        # field is a bare 6-digit run indistinguishable from a BLE PIN by
+        # this project's own stderr secret-hygiene check.
+        pending_ts = pending.created_ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        ctx.warn(
+            f"A pending keypair from {pending_ts} for this node does not "
+            f"match the device; it was not used. Kept at "
+            f"{pending_keys.pending_key_path(db.path, live.node_id)}."
+        )
+
+    host_generated = is_host_generated_key(db.keys, live) or pending_matches
     node_key_compromised, node_key_reason = audit_node_key(
         live, known_bad=known_bad, host_generated=host_generated
     )
@@ -1151,11 +1247,13 @@ def run_provision(
         allow_lockdown=opts.allow_lockdown,
         allow_weak_admin_key=opts.allow_weak_admin_key,
         node_key_admin_refs=admin_refs,
+        pending_keypair_recovered=pending_matches,
     )
+    pending_path = pending_keys.pending_key_path(db.path, live.node_id)
     try:
         change_plan = plan_mod.build_plan(inputs)
     except AdminKeyRotationRefusedError as exc:
-        raise _finalize_admin_key_rotation_error(exc, live) from exc
+        raise _finalize_admin_key_rotation_error(exc, live, pending_path=pending_path) from exc
 
     if opts.admin_ref is not None and opts.admin_ref != change_plan.node_id.hex:
         existing_alias_pub = db.keys.find(f"{opts.admin_ref}_pub")
@@ -1174,6 +1272,7 @@ def run_provision(
                     admin_refs=(f"{opts.admin_ref}_pub",),
                 ),
                 live,
+                pending_path=pending_path,
             )
 
     render_plan(ctx, change_plan, drifts=drifts, json_output=opts.json_output)
@@ -1202,8 +1301,24 @@ def run_provision(
 
     keypair = _select_keypair(change_plan, live)
 
+    if keypair is not None and change_plan.key_plan.regenerate:
+        # Write-ahead, before any device write (the database's write lock
+        # is already held): if the run never reaches persist_result --
+        # UNCERTAIN outcome, Ctrl-C, or a kill -- this is the only record
+        # of the key the device is about to receive. Deliberately outside
+        # _apply_and_persist's own control flow, so a write-ahead failure
+        # here propagates before apply.apply_plan ever runs.
+        pending_keys.write_pending(db.path, change_plan.node_id, keypair, now=datetime.now(tz=UTC))
+
     outcome, persisted = _apply_and_persist(
-        ctx, db, session, change_plan=change_plan, keypair=keypair, live=live, opts=opts
+        ctx,
+        db,
+        session,
+        change_plan=change_plan,
+        keypair=keypair,
+        live=live,
+        opts=opts,
+        pending_keypair_recovered=pending_matches,
     )
 
     return ProvisionResult(

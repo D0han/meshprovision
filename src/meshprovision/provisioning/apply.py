@@ -1178,6 +1178,11 @@ def persist_result(
         keys.upsert(public_record)
         keys.upsert(private_record)
 
+    # Captured before the upsert below, which would otherwise always find
+    # a row (the one it is about to write) -- this is what lets the
+    # save-failure hint tell a first provision/bootstrap (no prior row)
+    # apart from an already-provisioned node's key change.
+    had_row = nodes.find(outcome.record.node_id) is not None
     nodes.upsert(outcome.record, now=now)
     try:
         nodes.db.save()
@@ -1189,7 +1194,14 @@ def persist_result(
             "saved, a node `mesh adopt` first recorded is still marked observed -- "
             "pass --enroll again on the re-run."
         )
-        if keypair is not None:
+        if keypair is not None and had_row:
+            hint = (
+                f"{hint} This run also generated a new node keypair that was never "
+                "recorded; the next `mesh provision` re-reads the device's key and "
+                "records it (it will be reported as differing from the Keys sheet -- "
+                "expected here)."
+            )
+        elif keypair is not None:
             hint = (
                 f"{hint} This run also generated a new node keypair that was never "
                 "recorded, and a later run will not adopt a device key the database "

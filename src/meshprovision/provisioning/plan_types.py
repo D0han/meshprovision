@@ -333,6 +333,18 @@ class PlanInputs:
             refuses to regenerate or adopt this node's key -- there is no
             flag that overrides this; see
             :class:`~meshprovision.errors.AdminKeyRotationRefusedError`.
+        pending_keypair_recovered: Whether the caller's own
+            :mod:`meshprovision.db.pending_keys` lookup found a pending
+            keypair from an earlier interrupted regenerate whose public
+            *and* private halves both match the device's current
+            live-reported keypair exactly. When ``True``,
+            :func:`~meshprovision.provisioning.plan._plan_node_keypair`
+            adopts the device's (already-matching) key rather than
+            regenerating it again, with a distinct
+            ``"pending_key_recovered"`` reason -- deliberately a plain
+            ``bool`` call argument, not a :class:`~meshprovision.
+            provisioning.plan_admin_keys.KeyPlan` field (see that class's
+            module docstring).
     """
 
     live: detect.LiveConfig
@@ -352,6 +364,7 @@ class PlanInputs:
     allow_lockdown: bool = False
     allow_weak_admin_key: bool = False
     node_key_admin_refs: tuple[str, ...] = ()
+    pending_keypair_recovered: bool = False
 
     def __repr__(self) -> str:
         """Return a repr that never exposes :attr:`ble_pin` or :attr:`db_public_key`.
@@ -376,7 +389,8 @@ class PlanInputs:
             f"force_regenerate_key={self.force_regenerate_key!r}, "
             f"allow_lockdown={self.allow_lockdown!r}, "
             f"allow_weak_admin_key={self.allow_weak_admin_key!r}, "
-            f"node_key_admin_refs={self.node_key_admin_refs!r})"
+            f"node_key_admin_refs={self.node_key_admin_refs!r}, "
+            f"pending_keypair_recovered={self.pending_keypair_recovered!r})"
         )
 
 

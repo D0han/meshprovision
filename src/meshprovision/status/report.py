@@ -11,7 +11,7 @@ to :mod:`meshprovision.status.render` for presentation.
 test.** Nothing in this module may reference
 ``OdsDatabase.save``, ``OdsDatabase.replace``, ``NodeRepository.upsert``,
 ``NodeRepository.delete``, ``KeyRepository.upsert``, ``db.atomic_writer``,
-or anything in
+``db.pending_keys``, or anything in
 ``meshprovision.provisioning.apply`` or ``meshprovision.provisioning.
 repair``. An e2e test asserts the **live** ODS file's mtime is unchanged
 across a full ``mesh status`` run, and a unit test

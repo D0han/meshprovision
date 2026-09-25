@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -15,11 +16,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.crypto import weakkeys
-from meshprovision.db import ods
+from meshprovision.crypto.keys import KeyPair
+from meshprovision.db import ods, pending_keys
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
-from meshprovision.errors import ExitCode
+from meshprovision.errors import AtomicWriteError, ExitCode
+from meshprovision.provisioning import apply as apply_mod
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -27,7 +30,6 @@ if TYPE_CHECKING:
 
     from click.testing import CliRunner
 
-    from meshprovision.crypto.keys import KeyPair
     from tests.e2e.conftest import DeviceBus
 
 pytestmark = pytest.mark.e2e
@@ -381,6 +383,239 @@ def test_ble_write_failure_reports_uncertain_not_a_traceback(
 
     _assert_no_secrets(result.stdout)
     _assert_no_secrets(result.stderr)
+
+
+def test_uncertain_regenerate_writes_a_recoverable_pending_keypair(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """B4/#35 headline: a lost final reconnect must not lose a freshly generated keypair.
+
+    A factory provision on the example template connects three times:
+    open, a mid-plan reconnect after the rebooting ``lora`` section, and
+    the final verify. The key is written by ``security``, which comes
+    *after* the mid-plan refresh -- the fault must hit the final connect
+    (``bus.use(dev); bus.then(dev, None)``), or the mid-plan refresh
+    itself fails first, ``security`` is never attempted, and the
+    "pending file exists and equals the device's live key" assertion
+    below would pass for the wrong reason (CONSISTENCY-CHECK.md #2.6).
+    """
+    dev = bus.use(FakeMeshInterface("deadbe01"))
+    bus.then(dev, None)
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert bus.served[:3] == ["deadbe01", "deadbe01", None]
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "UNCERTAIN" in result.stderr
+    assert "recovers it automatically" in result.stderr
+
+    device_public = bytes(dev.localNode.localConfig.security.public_key)
+    device_private = bytes(dev.localNode.localConfig.security.private_key)
+    assert device_public
+
+    pending_path = pending_keys.pending_key_path(db_path, dev.nid)
+    assert pending_path.is_file()
+    assert stat.S_IMODE(pending_path.stat().st_mode) == 0o600
+    pending = pending_keys.load_pending(db_path, dev.nid)
+    assert pending is not None
+    assert pending.public == device_public
+    assert pending.private.reveal() == device_private
+
+    loaded = ods.load_database(db_path)
+    assert loaded.nodes == ()
+
+    _assert_no_secrets(result.stdout)
+    _assert_no_secrets(result.stderr)
+
+    # A working reconnect on the next run recovers it automatically.
+    bus.use(dev)
+    result2 = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result2.exit_code == 0
+    assert "#7449" not in result2.stdout
+    assert "#7449" not in result2.stderr
+
+    loaded2 = ods.load_database(db_path)
+    assert len(loaded2.nodes) == 1
+    rows2 = {row["key_ref"]: row for row in loaded2.keys}
+    assert KeyRecord.from_row(rows2["deadbe01_pub"]).material() == device_public
+    assert KeyRecord.from_row(rows2["deadbe01_priv"]).secret().reveal() == device_private
+    assert KeyRecord.from_row(rows2["deadbe01_pub"]).origin is KeyOrigin.GENERATED
+
+    assert not pending_path.exists()
+
+    _assert_no_secrets(result2.stdout)
+    _assert_no_secrets(result2.stderr)
+
+
+def test_pending_keypair_recovery_on_an_existing_row_avoids_7449(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """The existing-row variant: recorded with PENDING_KEY_RECOVERED, never the #7449 adopt text."""
+    dev = bus.use(FakeMeshInterface("deadbe01"))
+    first = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    old_public = bytes(dev.localNode.localConfig.security.public_key)
+
+    # Regenerate again, but lose the (now sole, since lora already matches
+    # the template and triggers no mid-plan reboot) final reconnect --
+    # modeled on the "final-verify-only swap" e2e's two-connect fault.
+    bus.use(dev)
+    bus.then(None)
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+    served_before = len(bus.served)
+    second = invoke(
+        runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--force-regenerate-key"], env
+    )
+
+    # open succeeds, then the final verify (and its retries) all fail: the
+    # queued None is consumed the instant open() pops it, so every
+    # connect from there on is refused, same as the headline test.
+    assert bus.served[served_before] == "deadbe01"
+    assert bus.served[served_before + 1] is None
+    assert second.exit_code == int(ExitCode.PROVISIONING)
+
+    new_public = bytes(dev.localNode.localConfig.security.public_key)
+    assert new_public != old_public
+
+    pending_path = pending_keys.pending_key_path(db_path, dev.nid)
+    assert pending_path.is_file()
+
+    # A third run, with a working reconnect, recovers it -- with a
+    # distinct warning, never the #7449 adopt message.
+    bus.use(dev)
+    third = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert third.exit_code == 0
+    assert "#7449" not in third.stderr
+    assert "interrupted `mesh provision` run" in third.stderr
+    assert not pending_path.exists()
+
+    loaded = ods.load_database(db_path)
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["deadbe01_pub"]).material() == new_public
+    assert KeyRecord.from_row(rows["deadbe01_pub"]).origin is KeyOrigin.GENERATED
+
+    _assert_no_secrets(third.stdout)
+    _assert_no_secrets(third.stderr)
+
+
+def test_keyboard_interrupt_during_apply_keeps_the_pending_keypair(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dev = bus.use(FakeMeshInterface("deadbe01"))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+
+    original_apply_plan = apply_mod.apply_plan
+
+    def _apply_then_interrupt(*args: object, **kwargs: object) -> object:
+        outcome = original_apply_plan(*args, **kwargs)  # type: ignore[arg-type]
+        del outcome
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(apply_mod, "apply_plan", _apply_then_interrupt)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.INTERRUPTED)
+    assert "Interrupted." in result.stderr
+
+    pending_path = pending_keys.pending_key_path(db_path, dev.nid)
+    assert str(pending_path) in result.stderr
+    assert "recovers it automatically" in result.stderr
+    assert pending_path.is_file()
+
+    loaded = ods.load_database(db_path)
+    assert loaded.nodes == ()
+
+
+def test_pending_keypair_write_ahead_failure_writes_nothing_to_the_device(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    def _raise(*args: object, **kwargs: object) -> None:
+        raise AtomicWriteError("simulated backup-directory failure", path="pending")
+
+    monkeypatch.setattr(pending_keys, "write_pending", _raise)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.DB)
+    assert iface.localNode.written_sections == []
+
+
+def test_lora_failure_before_security_clears_the_pending_keypair(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """3d hygiene: a key that never reached the device leaves nothing to recover."""
+    from meshtastic.ble_interface import BLEInterface
+
+    dev = bus.use(
+        FakeMeshInterface(
+            "deadbe01",
+            fail_sections=frozenset({"lora"}),
+            fail_exc=lambda _section: BLEInterface.BLEError("Error writing BLE", "write"),
+        )
+    )
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "UNCERTAIN" in result.stderr
+    assert "recovers it automatically" not in result.stderr
+    assert "never sent to the device; nothing to recover" in result.stderr
+
+    pending_path = pending_keys.pending_key_path(db_path, dev.nid)
+    assert not pending_path.exists()
+
+    _assert_no_secrets(result.stdout)
+    _assert_no_secrets(result.stderr)
+
+
+def test_mismatched_pending_keypair_is_never_adopted(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Both halves must match exactly -- a public-only match proves nothing.
+
+    The private half is what proves the checked device is the one the
+    pending keypair was actually written to. Once this run's own
+    read-back confirms the device's real (different) key, that stale,
+    unverifiable pending file no longer serves any purpose and is
+    cleared along with the ordinary successful persist.
+    """
+    dev = bus.use(FakeMeshInterface("deadbe01"))
+    first = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    device_public = bytes(dev.localNode.localConfig.security.public_key)
+    device_private = bytes(dev.localNode.localConfig.security.private_key)
+    bogus = keypair_factory()
+    bogus_keypair = KeyPair(private=bogus.private, public=device_public)
+    pending_keys.write_pending(db_path, dev.nid, bogus_keypair, now=datetime.now(tz=UTC))
+
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert second.exit_code == 0
+    assert "does not match the device" in second.stderr
+    assert "recovers it automatically" not in second.stderr
+
+    loaded = ods.load_database(db_path)
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["deadbe01_priv"]).secret().reveal() == device_private
+
+    _assert_no_secrets(second.stdout)
+    _assert_no_secrets(second.stderr)
 
 
 def test_declining_the_apply_prompt_aborts_before_any_write(
