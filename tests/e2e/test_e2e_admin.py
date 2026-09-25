@@ -1247,10 +1247,11 @@ def test_admin_key_rotation_refused_then_recovered_via_admin_import_overwrite(
     into the DB -- D1=B requires the explicit, out-of-band ``mesh admin
     import --overwrite`` step first.
 
-    Custody assertions on ``aaaa0001_priv`` are deliberately NOT made
-    here: ``admin import --overwrite`` never touches the ``_priv`` row
-    (CC-D1), and pinning today's stale-``_priv`` state now would lock in
-    a gap a later batch closes.
+    ``admin import --overwrite`` never touches the ``_priv`` row
+    (CC-D1); the custody gap that leaves open is closed by the
+    ``recovered`` ``mesh provision`` run below, which proves possession
+    of the new private key against the freshly-imported public key and
+    records it into ``aaaa0001_priv`` (CC-D1 Option A).
     """
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
     bus.use(FakeMeshInterface("aaaa0001"))
@@ -1293,13 +1294,20 @@ def test_admin_key_rotation_refused_then_recovered_via_admin_import_overwrite(
     bus.use(same_device)
     recovered = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
     assert recovered.exit_code == 0
-    # No key material was written -- the plan neither regenerates nor
-    # adopts, since the DB now already matches the device's reported key.
+    # No key material was written to the device -- the plan neither
+    # regenerates nor adopts, since the DB now already matches the
+    # device's reported key.
     assert bytes(same_device.security.public_key) == new_kp.public
 
     loaded3 = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     rows3 = {row["key_ref"]: row for row in loaded3.keys}
     assert KeyRecord.from_row(rows3["aaaa0001_pub"]).material() == new_kp.public
+    # The custody gap CC-D1 Option A closes: the recovery run proved
+    # possession of the new private key and recorded it, CAPTURED.
+    aaaa0001_priv = KeyRecord.from_row(rows3["aaaa0001_priv"])
+    assert aaaa0001_priv.material() == new_kp.private.reveal()
+    assert aaaa0001_priv.origin is KeyOrigin.CAPTURED
+    assert "Recorded the device's private key" in recovered.stderr
 
     bus.use(bbbb_iface)
     reprovision_fleet = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)

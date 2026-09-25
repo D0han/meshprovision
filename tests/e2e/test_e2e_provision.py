@@ -743,6 +743,127 @@ def test_captured_origin_key_on_cve_window_firmware_still_regenerates(
     assert KeyRecord.from_row(rows["deadbe01_pub"]).origin is KeyOrigin.GENERATED
 
 
+def test_provision_captures_a_proven_private_key_for_an_ordinary_node(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """A node with a public-only key gets its private key recorded once proven (CC-D1 Option A).
+
+    Not special-cased to admin-bearing nodes: any node whose Keys row
+    has a public key but no recorded private key -- for example, one
+    ``mesh adopt`` enrolled while the device hid its private key -- gets
+    that private key captured the moment the device proves it holds the
+    matching material, the same way ``mesh provision``/``mesh adopt``
+    already record one for every other captured key.
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    first = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    loaded = ods.load_database(db_path)
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    node_row = loaded.nodes[0]
+    pub_only = KeyRecord.from_row(rows["deadbe01_pub"])
+    expected_private = KeyRecord.from_row(rows["deadbe01_priv"]).material()
+
+    # Simulate a node whose private key was never captured -- e.g. one
+    # `mesh adopt` enrolled while the device hid its private key.
+    ods.write_database(db_path, nodes=[node_row], keys=[pub_only.to_row()], backup=False)
+
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert second.exit_code == 0
+    assert "No changes needed." in second.stderr
+    assert "Recorded the device's private key" in second.stderr
+
+    loaded2 = ods.load_database(db_path)
+    rows2 = {row["key_ref"]: row for row in loaded2.keys}
+    priv = KeyRecord.from_row(rows2["deadbe01_priv"])
+    assert priv.material() == expected_private
+    assert priv.origin is KeyOrigin.CAPTURED
+
+
+def test_provision_fills_a_stale_alias_private_key_when_proven(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """An existing stale alias ``_priv`` row is filled once the alias's ``_pub`` is proven.
+
+    CC-D1 Option A also fills any EXISTING alias private row that is
+    stale -- not just the node's own ``<hex>_priv`` row -- when the
+    alias's public row holds the same material the device just proved.
+    """
+    kp = keypair_factory()
+    stale_kp = keypair_factory()  # unrelated material -- makes ADMIN1_priv stale
+    node_pub, node_priv = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.GENERATED)
+    alias_pub = KeyRecord.from_material(
+        "ADMIN1", KeyType.ADMIN_PUBLIC, kp.public, origin=KeyOrigin.IMPORTED
+    )
+    alias_stale_priv = KeyRecord.from_material(
+        "ADMIN1", KeyType.ADMIN_PRIVATE, stale_kp.private, origin=KeyOrigin.IMPORTED
+    )
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE)],
+        keys=[node_pub, node_priv, alias_pub, alias_stale_priv],
+    )
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "Filled the stale private key recorded for alias 'ADMIN1'" in result.stderr
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    alias_priv_after = KeyRecord.from_row(rows["ADMIN1_priv"])
+    assert alias_priv_after.material() == kp.private.reveal()
+    assert alias_priv_after.origin is KeyOrigin.CAPTURED
+
+
+def test_provision_never_creates_a_new_alias_private_key_row(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """An alias with no existing private row never gets one created (CC-D1 Option A / CC #5.2).
+
+    The proven-private-key capture only ever fills an alias's *existing*
+    ``_priv`` row; an alias that has a public row but was never given a
+    private one -- the normal shape for an alias registered via
+    ``mesh admin import`` -- must stay that way.
+    """
+    kp = keypair_factory()
+    node_pub, node_priv = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.GENERATED)
+    alias_pub = KeyRecord.from_material(
+        "ADMIN1", KeyType.ADMIN_PUBLIC, kp.public, origin=KeyOrigin.IMPORTED
+    )
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE)],
+        keys=[node_pub, node_priv, alias_pub],
+    )
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "alias" not in result.stderr.lower()
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert "ADMIN1_priv" not in rows
+
+
 def test_generated_origin_with_mismatched_private_key_still_regenerates(
     runner: CliRunner,
     env: dict[str, str],

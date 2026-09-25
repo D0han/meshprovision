@@ -56,6 +56,7 @@ from meshprovision.errors import (
     AdminKeyRotationRefusedError,
     DeviceNotFoundError,
     ExitCode,
+    KeyMaterialError,
     NodeArchivedError,
     NodeNotEnrolledError,
     PlanConflictError,
@@ -724,6 +725,102 @@ def _register_admin_alias(
         adopt_canonical_ref(db.nodes, db.keys, material=public_material, canonical_owner=admin_ref)
 
 
+def _capture_proven_private_key(
+    ctx: CliContext,
+    db: DbSession,
+    *,
+    node_id: NodeId,
+    live_private_key: SecretBytes | None,
+    now: datetime,
+) -> bool:
+    """Record a device-proven private key into the database (CC-D1 Option A).
+
+    Completes the out-of-band admin-key-rotation flow (``mesh admin import
+    --overwrite``, batches #27-#30): that command only ever writes the new
+    ``<hex>_pub`` row, so nothing records the device's matching private key
+    until this runs on a later ``mesh provision``. It is not admin-specific
+    -- it applies to any node's own ``<hex>_pub``/``_priv`` pair, matching
+    what ``mesh provision``/``mesh adopt`` already record for every other
+    captured key.
+
+    "Proves" means the live-reported private key derives the database's
+    recorded public key (:func:`~meshprovision.crypto.keys.public_key_matches`)
+    -- only a party that already holds the matching private key can satisfy
+    this, and the public key itself was set by a prior, separately-trusted
+    step (an out-of-band import, or an earlier ``persist_result`` write).
+
+    Args:
+        ctx: The shared CLI context, for the info line.
+        db: The already-open database session. Writes land in the
+            in-memory session only; the caller must save.
+        node_id: The node whose own ``<hex>_pub``/``_priv`` pair to check.
+        live_private_key: The device's live-reported private key, or
+            ``None`` when the device reported none.
+        now: Timestamp to record on any row written.
+
+    Returns:
+        Whether any row was written (the caller must persist).
+    """
+    if live_private_key is None:
+        return False
+    pub_record = db.keys.find(f"{node_id.hex}_pub")
+    if pub_record is None:
+        return False
+    try:
+        pub_material = pub_record.material()
+        proven = crypto_keys.public_key_matches(live_private_key, pub_material)
+    except KeyMaterialError:
+        return False
+    if not proven:
+        return False
+
+    wrote = False
+    if not db.keys.has_private(node_id.hex):
+        db.keys.upsert(
+            KeyRecord.from_material(
+                node_id.hex,
+                KeyType.ADMIN_PRIVATE,
+                live_private_key,
+                origin=KeyOrigin.CAPTURED,
+                created_ts=now,
+            )
+        )
+        ctx.info(
+            f"Recorded the device's private key for {node_id.display} "
+            "(proof of possession of the recorded public key)."
+        )
+        wrote = True
+
+    # Also fill any OTHER existing reference (an admin alias) holding the
+    # same proven public material whose own private row is missing or
+    # stale -- but never create a new alias private row that didn't
+    # already exist (CC-D1 Option A / CONSISTENCY-CHECK.md #5.2).
+    for alias_pub in db.keys.of_type(KeyType.ADMIN_PUBLIC):
+        alias_ref = alias_pub.owner_node_id
+        if alias_ref == node_id.hex or db.keys.has_private(alias_ref):
+            continue
+        try:
+            if alias_pub.material() != pub_material:
+                continue
+        except KeyMaterialError:
+            continue
+        if db.keys.find(f"{alias_ref}_priv") is None:
+            continue
+        db.keys.upsert(
+            KeyRecord.from_material(
+                alias_ref,
+                KeyType.ADMIN_PRIVATE,
+                live_private_key,
+                origin=KeyOrigin.CAPTURED,
+                created_ts=now,
+            )
+        )
+        ctx.info(f"Filled the stale private key recorded for alias {alias_ref!r}.")
+        wrote = True
+
+    return wrote
+
+
 def _apply_and_persist(
     ctx: CliContext,
     db: DbSession,
@@ -731,6 +828,7 @@ def _apply_and_persist(
     *,
     change_plan: plan_mod.ChangePlan,
     keypair: crypto_keys.KeyPair | None,
+    live: detect.LiveConfig,
     opts: ProvisionOptions,
 ) -> tuple[apply.ApplyOutcome, bool]:
     """Apply a change plan to the device and persist the result to the database.
@@ -741,6 +839,10 @@ def _apply_and_persist(
         session: The already-open device session.
         change_plan: The plan to apply.
         keypair: The keypair selected by :func:`_select_keypair`.
+        live: The device's live-read configuration, consulted by
+            :func:`_capture_proven_private_key` for the device's live
+            private key -- read before this apply, but unchanged by it
+            whenever ``keypair`` is ``None``, the case that matters.
         opts: The operator's provisioning flags.
 
     Returns:
@@ -770,6 +872,7 @@ def _apply_and_persist(
             node_origin=node_origin,
         )
 
+    now = datetime.now(tz=UTC)
     persisted = apply.persist_result(
         outcome,
         nodes=db.nodes,
@@ -777,10 +880,18 @@ def _apply_and_persist(
         keypair=keypair,
         origin=node_origin,
         admin_key_refs=change_plan.key_plan.desired_admin_key_refs,
-        now=datetime.now(tz=UTC),
+        now=now,
     )
     if persisted:
         ctx.success(f"Database updated: {db.path}")
+        if _capture_proven_private_key(
+            ctx,
+            db,
+            node_id=change_plan.node_id,
+            live_private_key=live.security.private_key,
+            now=now,
+        ):
+            db.db.save()
     else:
         ctx.error("Node is in an UNCERTAIN state; the database was NOT updated.")
         for failure in outcome.failures():
@@ -1054,7 +1165,7 @@ def run_provision(
     keypair = _select_keypair(change_plan, live)
 
     outcome, persisted = _apply_and_persist(
-        ctx, db, session, change_plan=change_plan, keypair=keypair, opts=opts
+        ctx, db, session, change_plan=change_plan, keypair=keypair, live=live, opts=opts
     )
 
     return ProvisionResult(
