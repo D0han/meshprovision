@@ -389,6 +389,81 @@ def test_unexpected_status_raises(tmp_path: Path) -> None:
     assert "unexpected" in str(exc_info.value)
 
 
+@respx.mock
+def test_too_many_redirects_raises_http_error_without_retry(tmp_path: Path) -> None:
+    """A redirect loop is a `RequestError`, not a `TransportError`: it must not be retried."""
+    route = respx.get(URL).mock(return_value=httpx.Response(302, headers={"Location": URL}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    with pytest.raises(HttpError) as exc_info:
+        client.get(URL)
+    assert isinstance(exc_info.value.__cause__, httpx.TooManyRedirects)
+    assert client.stats.retries == 0
+    assert client.stats.network_requests == 1
+    assert route.call_count > 1  # httpx itself follows the loop before giving up.
+    assert "redirecting in a loop" in (exc_info.value.hint or "")
+
+
+class _RawByteStream(httpx.SyncByteStream):
+    """A byte stream whose content is not decoded until it is read.
+
+    Passing bytes directly as `httpx.Response(content=...)` decodes them
+    eagerly in `Response.__init__`, which would raise `DecodingError` at
+    mock-setup time rather than when the client actually reads the
+    response -- this stream defers that to match real network behavior.
+    """
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def __iter__(self) -> object:
+        yield self._data
+
+
+@respx.mock
+def test_undecodable_content_encoding_raises_http_error_without_retry(tmp_path: Path) -> None:
+    """A body that fails to decode per its declared Content-Encoding must not be retried."""
+    bad_response = httpx.Response(
+        200,
+        headers={"content-encoding": "gzip"},
+        stream=_RawByteStream(b"not gzip data"),
+    )
+    route = respx.get(URL).mock(return_value=bad_response)
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    with pytest.raises(HttpError) as exc_info:
+        client.get(URL)
+    assert isinstance(exc_info.value.__cause__, httpx.DecodingError)
+    assert client.stats.retries == 0
+    assert client.stats.network_requests == 1
+    assert route.call_count == 1
+
+
+@respx.mock
+@pytest.mark.parametrize("exc_type", [httpx.RemoteProtocolError, httpx.ReadTimeout])
+def test_transport_errors_mid_body_are_retried_then_wrapped(
+    tmp_path: Path, exc_type: type[httpx.TransportError]
+) -> None:
+    """`TransportError` subclasses still retry: the new `RequestError` arm must not steal them.
+
+    `RemoteProtocolError` and `ReadTimeout` are `TransportError` subclasses
+    and were already retried before the `RequestError` arm was added; this
+    pins that the broader arm -- which sits after `TransportError` in the
+    except chain -- does not change their behavior.
+    """
+    route = respx.get(URL).mock(side_effect=exc_type("simulated"))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    with pytest.raises(HttpError) as exc_info:
+        client.get(URL)
+    assert isinstance(exc_info.value.__cause__, exc_type)
+    assert client.stats.retries == DEFAULT_MAX_RETRIES
+    assert route.call_count == DEFAULT_MAX_RETRIES + 1
+
+
 # ---------------------------------------------------------------------------
 # JSON guard.
 # ---------------------------------------------------------------------------

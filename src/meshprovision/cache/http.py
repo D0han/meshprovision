@@ -1022,8 +1022,10 @@ class CachedHTTPClient:
             The freshly fetched response, with ``from_cache=False``.
 
         Raises:
-            HttpError: On a non-retryable failure, or after exhausting
-                retries on a retryable one.
+            HttpError: On a non-retryable failure (including a
+                ``TooManyRedirects`` redirect loop or an undecodable
+                response body), or after exhausting retries on a
+                retryable transport error.
             RateLimitError: If the server responds with HTTP 429 (never
                 retried automatically).
         """
@@ -1054,6 +1056,25 @@ class CachedHTTPClient:
                 self._stats = replace(self._stats, retries=self._stats.retries + 1)
                 self._backoff(attempt, url=url)
                 continue
+            except httpx.RequestError as exc:
+                # Deterministic for a given server state (a redirect loop, an
+                # undecodable body), unlike `TransportError` above -- so this is
+                # not retried. Must stay after the `TransportError` arm, since
+                # `TransportError` is itself a `RequestError` subclass.
+                hint = None
+                if isinstance(exc, httpx.TooManyRedirects):
+                    last_url = None
+                    with contextlib.suppress(RuntimeError):
+                        # Drop the query string: it is the last hop of a
+                        # redirect loop and may not be this request's own
+                        # `params`, so it is not ours to display in full.
+                        last_url = _display_url(str(exc.request.url.copy_with(query=None)), None)
+                    hint = "the server (or a proxy/captive portal) is redirecting in a loop" + (
+                        f" (last URL: {last_url})" if last_url else ""
+                    )
+                raise HttpError(
+                    f"Request to {url} failed: {exc}", url=url, source=source, hint=hint
+                ) from exc
 
             status = response.status_code
 

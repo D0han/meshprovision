@@ -13,8 +13,10 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx
 import pytest
 
+from meshprovision.datasources.loranet import LORANET_NODES_URL
 from meshprovision.nodeid import NodeId
 from tests.e2e.conftest import db_fingerprint, invoke
 
@@ -286,6 +288,44 @@ def test_invalid_region_returns_html_with_http_200(
     assert "text/html" in failure["message"]
     (node_doc,) = document["nodes"]
     assert "loranet" in node_doc["sources"]
+
+
+def test_a_redirect_loop_on_one_source_degrades_rather_than_crashes(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """`httpx.TooManyRedirects` must reach the CLI as a degraded source, not a traceback.
+
+    Regression test for the `cache/http.py` gap where `TooManyRedirects`
+    and `DecodingError` (both `httpx.RequestError`, neither a
+    `TransportError`) escaped `CachedHTTPClient` unwrapped, past
+    `collect_observations`'s ``DataSourceError`` catch and past
+    `handle_cli_errors`, crashing `mesh status` instead of degrading just
+    the one affected source.
+    """
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    router = mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}})
+    router.get(LORANET_NODES_URL).mock(
+        return_value=httpx.Response(302, headers={"Location": LORANET_NODES_URL})
+    )
+
+    with router:
+        result = invoke(runner, ["--no-cache", "status", "--json"], env)
+
+    assert result.exit_code == 7
+    document = json.loads(result.stdout)
+    assert document["failures"]
+    failure = document["failures"][0]
+    assert failure["source"] == "loranet"
+    (node_doc,) = document["nodes"]
+    assert "lorastats" in node_doc["sources"]
+    assert "loranet" not in node_doc["sources"]
 
 
 def test_cache_behaviour_hits_then_force_refresh(
