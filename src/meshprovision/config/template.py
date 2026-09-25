@@ -1155,9 +1155,13 @@ def load_template_text(text: str, *, source: str = "<string>") -> TemplateConfig
         The validated :class:`TemplateConfig`.
 
     Raises:
-        TemplateValidationError: If ``text`` is not valid YAML, its top
-            level is not a mapping, or its contents fail
-            :class:`TemplateConfig` validation.
+        TemplateValidationError: If ``text`` is empty or comments-only
+            (a YAML document that parses to ``None``), is not valid
+            YAML, its top level is not a mapping, or its contents fail
+            :class:`TemplateConfig` validation. An empty document is
+            rejected rather than silently treated as ``{}``, since that
+            would apply every field default (region, preset, role, name
+            pattern) with no warning.
         MeshprovisionError: Any structured error a :class:`TemplateConfig`
             validator raised directly propagates unchanged -- see the
             module docstring for why this loader deliberately does not
@@ -1169,7 +1173,16 @@ def load_template_text(text: str, *, source: str = "<string>") -> TemplateConfig
         raise TemplateValidationError(f"{source} is not valid YAML: {exc}", field=None) from exc
 
     if data is None:
-        data = {}
+        raise TemplateValidationError(
+            f"{source} is empty (no settings found)",
+            field=None,
+            hint=(
+                "An empty template would silently apply built-in defaults (region, "
+                "preset, role, name pattern) to every node. Restore your template, or "
+                "run `mesh init` in a new directory for a starter file based on "
+                "template.example.yaml."
+            ),
+        )
     if not isinstance(data, Mapping):
         raise TemplateValidationError(f"The top level of {source} must be a mapping.", field=None)
 

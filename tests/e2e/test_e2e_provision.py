@@ -638,6 +638,20 @@ def test_declining_the_apply_prompt_aborts_before_any_write(
     assert db_fingerprint(db_path) == before
 
 
+def test_provision_refuses_an_empty_template_before_any_connect(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, tmp_path: Path
+) -> None:
+    empty = tmp_path / "empty.yaml"
+    empty.write_text("", encoding="utf-8")
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(empty)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.CONFIG)
+    assert "is empty" in result.stderr
+    assert bus.connections == []
+
+
 _CLI_FOREIGN_WARNING = "This node is not in the database and does not look factory-default"
 """``run_provision``'s own pre-confirmation FOREIGN warning.
 

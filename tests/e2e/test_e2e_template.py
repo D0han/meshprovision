@@ -68,6 +68,19 @@ def test_template_validate_malformed_yaml_exits_two(
     assert "not valid YAML" in result.stderr
 
 
+def test_template_validate_empty_file_exits_two(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    empty = tmp_path / "empty.yaml"
+    empty.write_text("", encoding="utf-8")
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(empty)
+
+    result = invoke(runner, ["template", "validate"], env)
+
+    assert result.exit_code == 2
+    assert "is empty" in result.stderr
+
+
 def test_template_validate_reports_a_capacity_warning(
     runner: CliRunner, env: dict[str, str], write_template: Callable[..., Path]
 ) -> None:

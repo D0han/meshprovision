@@ -315,8 +315,20 @@ def test_load_template_text_top_level_list_raises() -> None:
         load_template_text("- 1\n- 2\n", source="<test>")
 
 
-def test_load_template_text_empty_document_uses_defaults() -> None:
-    cfg = load_template_text("", source="<test>")
+@pytest.mark.parametrize("text", ["", "   \n", "# only a comment\n"])
+def test_load_template_text_empty_document_raises(text: str) -> None:
+    """An empty/whitespace-only/comments-only document parses to ``None`` in YAML.
+
+    It must be rejected, not silently treated as ``{}`` and validated with
+    every field default (region, preset, role, name pattern) -- see E5.
+    """
+    with pytest.raises(TemplateValidationError, match="empty"):
+        load_template_text(text, source="<test>")
+
+
+def test_load_template_text_minimal_version_still_loads_defaults() -> None:
+    """A non-empty document (even one with just ``version``) is deliberately still allowed."""
+    cfg = load_template_text("version: 1\n", source="<test>")
     assert cfg.version == 1
     assert cfg.short_name_pattern == "MT{n}{n}"
 
