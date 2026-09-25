@@ -156,7 +156,7 @@ def test_admin_bootstrap_pending_message_names_the_right_ref_and_node_on_rotatio
     seed_db: Callable[..., Path],
     keypair_factory: Callable[[], KeyPair],
 ) -> None:
-    """Rotating an existing admin ref must not conflate two distinct pending facts.
+    """Re-aliasing an existing admin ref must not conflate two distinct pending facts.
 
     Regression test for a bug in ``admin_bootstrap``'s pending-cross-
     authorization message: a second internal check-loop correctly
@@ -165,24 +165,25 @@ def test_admin_bootstrap_pending_message_names_the_right_ref_and_node_on_rotatio
     through the wrong (ref, node) pair -- reusing the just-bootstrapped
     ref's name paired with the *other* admin's own node, producing a
     false claim about a node that was already fully authorized. The
-    original sequential-growth test above never rotates an existing
+    original sequential-growth test above never re-aliases an existing
     ref, so it can't reach this path (see its module docstring).
 
     Setup (seeded directly, so the scenario doesn't depend on exactly
     which keypair a live ``mesh provision`` run happens to generate):
     ``aaaa0001`` is ADMIN1's own device (its identity key is filed both
     as ``aaaa0001_pub`` and, aliased, as ``ADMIN1_pub``) and already
-    authorizes ``ADMIN2_pub``. ``ADMIN2_pub``/``ADMIN2_priv`` hold old,
-    about-to-be-replaced material with no node of their own. ADMIN2 is
-    then rotated onto a brand-new device ``aaaa0003``, using a template
-    that does *not* list ADMIN1 -- so ``aaaa0003`` itself doesn't
-    authorize ``ADMIN1_pub`` yet, even though ``aaaa0001`` already
-    authorizes ``ADMIN2_pub``. The correct message is "authorize
-    ADMIN1_pub on node aaaa0003"; the bug instead printed the false
-    "authorize ADMIN2_pub on node aaaa0001".
+    authorizes ``ADMIN2_pub``. ``ADMIN2_pub``/``ADMIN2_priv`` hold the
+    same material as ``aaaa0003``'s own recorded (and live-reported) key
+    -- an idempotent re-run of ``--ref ADMIN2`` on its own device, per
+    the Round 37 consistency check's §4.2 refusal of any re-point onto
+    *different* material -- using a template that does *not* list ADMIN1,
+    so ``aaaa0003`` itself doesn't authorize ``ADMIN1_pub`` yet, even
+    though ``aaaa0001`` already authorizes ``ADMIN2_pub``. The correct
+    message is "authorize ADMIN1_pub on node aaaa0003"; the bug instead
+    printed the false "authorize ADMIN2_pub on node aaaa0001".
     """
     admin1_kp = keypair_factory()
-    old_admin2_kp = keypair_factory()
+    admin2_kp = keypair_factory()
     seed_db(
         nodes=[
             NodeRecord(
@@ -198,18 +199,25 @@ def test_admin_bootstrap_pending_message_names_the_right_ref_and_node_on_rotatio
                 management=ManagementMode.TEMPLATE,
                 authorized_admin_keys=("ADMIN1_pub",),
             ),
+            # ADMIN2's own device, already on file with the same material
+            # ADMIN2_pub holds -- this run only re-affirms the alias, it
+            # never re-points it onto different material.
+            NodeRecord(node_id="aaaa0003", management=ManagementMode.TEMPLATE),
         ],
         keys=[
             *KeyRecord.for_keypair("aaaa0001", admin1_kp, origin=KeyOrigin.CAPTURED),
             *KeyRecord.for_keypair("ADMIN1", admin1_kp, origin=KeyOrigin.IMPORTED),
-            *KeyRecord.for_keypair("ADMIN2", old_admin2_kp, origin=KeyOrigin.IMPORTED),
+            *KeyRecord.for_keypair("aaaa0003", admin2_kp, origin=KeyOrigin.CAPTURED),
+            *KeyRecord.for_keypair("ADMIN2", admin2_kp, origin=KeyOrigin.IMPORTED),
         ],
     )
 
-    # Rotate ADMIN2 onto a brand-new device; this run's own template omits
+    # Re-affirm ADMIN2 on its own device; this run's own template omits
     # ADMIN1, so aaaa0003 itself won't authorize ADMIN1_pub.
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
-    bus.use(FakeMeshInterface("aaaa0003"))
+    iface = bus.use(FakeMeshInterface("aaaa0003"))
+    iface.localNode.localConfig.security.public_key = admin2_kp.public
+    iface.localNode.localConfig.security.private_key = admin2_kp.private.reveal()
     result = invoke(
         runner,
         ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN2", "--yes"],
@@ -314,6 +322,139 @@ def test_admin_bootstrap_ref_on_an_adopted_key_change_records_captured_origin(
     assert KeyRecord.from_row(rows["ADMIN1_pub"]).origin is KeyOrigin.CAPTURED
 
 
+def test_admin_bootstrap_ref_refuses_to_re_point_an_existing_alias_to_a_new_device(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """Round 37 consistency check §4.2 (C37-2): a THIRD flagless fleet-admin-takeover path.
+
+    ``admin bootstrap --ref R`` on a factory-fresh node with no DB row of
+    its own sails past batch #27's ``node_key_admin_refs`` check (which is
+    keyed on the *connected* node's DB row -- the factory node has none)
+    and, absent this fix, the alias block would hand the fleet's ``ADMIN1``
+    to whatever device answered as ``cccc0001``. This is a flagless
+    fleet takeover with an impostor, or an out-of-band-flow bypass without
+    one; either way D1 requires it be refused, not silently applied.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+    assert bootstrap.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = ods.load_database(db_path)
+    before_admin1_pub = KeyRecord.from_row(
+        {row["key_ref"]: row for row in before.keys}["ADMIN1_pub"]
+    ).material()
+
+    impostor = bus.use(FakeMeshInterface("cccc0001"))
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "admin key" in result.stderr.lower()
+    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert impostor.localNode.written_sections == []
+
+    after = ods.load_database(db_path)
+    after_rows = {row["key_ref"]: row for row in after.keys}
+    assert KeyRecord.from_row(after_rows["ADMIN1_pub"]).material() == before_admin1_pub
+    assert "cccc0001_pub" not in after_rows
+
+
+def test_admin_bootstrap_ref_re_running_on_the_same_device_is_a_no_op(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """Re-running ``bootstrap --ref ADMIN1`` on the same physical device must still succeed.
+
+    Distinguishes the new alias refusal from the ordinary idempotent
+    re-run: the candidate material offered to ``ADMIN1`` is exactly what
+    ``ADMIN1_pub`` already holds, so :func:`~meshprovision.provisioning.
+    pipeline.alias_would_rotate_admin_key` must return ``False`` here even
+    though ``ADMIN1_pub`` already exists.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+    assert bootstrap.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    node_kp_public = KeyRecord.from_row(rows["aaaa0001_pub"]).material()
+
+    same_device = FakeMeshInterface("aaaa0001")
+    same_device.localNode.localConfig.security.public_key = node_kp_public
+    private_secret = KeyRecord.from_row(rows["aaaa0001_priv"]).secret()
+    same_device.localNode.localConfig.security.private_key = private_secret.reveal()
+    bus.use(same_device)
+
+    rerun = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+
+    assert rerun.exit_code == 0
+
+    after = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    after_rows = {row["key_ref"]: row for row in after.keys}
+    assert KeyRecord.from_row(after_rows["ADMIN1_pub"]).material() == node_kp_public
+    assert KeyRecord.from_row(after_rows["aaaa0001_pub"]).material() == node_kp_public
+
+
+def test_admin_bootstrap_new_ref_on_a_different_node_still_succeeds(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """A brand-new alias ref is never subject to the re-point refusal.
+
+    Proves the fix is scoped to an *existing* ``R_pub`` row, not to
+    ``--ref`` aliasing in general -- ``ADMIN2`` has no prior material on
+    file, so :func:`~meshprovision.provisioning.pipeline.
+    alias_would_rotate_admin_key` is never even consulted.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+    assert bootstrap.exit_code == 0
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN1"]))
+    bus.use(FakeMeshInterface("cccc0001"))
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN2", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert "ADMIN2_pub" in rows
+
+
 def test_admin_bootstrap_pending_message_for_its_own_ref_names_ref_first_then_node(
     runner: CliRunner,
     env: dict[str, str],
@@ -331,9 +472,15 @@ def test_admin_bootstrap_pending_message_for_its_own_ref_names_ref_first_then_no
     order swap (``(other_hex, new_ref)`` instead of ``(new_ref,
     other_hex)``) would corrupt into a nonsensical message without the
     rotation test noticing.
+
+    ``aaaa0002`` (the node being bootstrapped) is already on file with
+    the same material ``ADMIN2_pub`` holds, and reports that same key
+    live -- per the Round 37 consistency check's §4.2 refusal of any
+    ``--ref`` re-point onto different material, this run only re-affirms
+    the existing alias, it never rotates it.
     """
     admin1_kp = keypair_factory()
-    placeholder_admin2_kp = keypair_factory()
+    admin2_kp = keypair_factory()
     seed_db(
         nodes=[
             # Owned by ADMIN1 (identity match) but does not yet authorize
@@ -351,14 +498,20 @@ def test_admin_bootstrap_pending_message_for_its_own_ref_names_ref_first_then_no
                 management=ManagementMode.TEMPLATE,
                 authorized_admin_keys=("ADMIN2_pub",),
             ),
+            # ADMIN2's own device, already on file with the same material
+            # ADMIN2_pub holds.
+            NodeRecord(node_id="aaaa0002", management=ManagementMode.TEMPLATE),
         ],
         keys=[
             *KeyRecord.for_keypair("aaaa0001", admin1_kp, origin=KeyOrigin.CAPTURED),
             *KeyRecord.for_keypair("ADMIN1", admin1_kp, origin=KeyOrigin.IMPORTED),
-            *KeyRecord.for_keypair("ADMIN2", placeholder_admin2_kp, origin=KeyOrigin.IMPORTED),
+            *KeyRecord.for_keypair("aaaa0002", admin2_kp, origin=KeyOrigin.CAPTURED),
+            *KeyRecord.for_keypair("ADMIN2", admin2_kp, origin=KeyOrigin.IMPORTED),
         ],
     )
-    bus.use(FakeMeshInterface("aaaa0002"))
+    iface = bus.use(FakeMeshInterface("aaaa0002"))
+    iface.localNode.localConfig.security.public_key = admin2_kp.public
+    iface.localNode.localConfig.security.private_key = admin2_kp.private.reveal()
 
     result = invoke(
         runner,

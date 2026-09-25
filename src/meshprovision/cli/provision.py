@@ -65,6 +65,7 @@ from meshprovision.provisioning import apply, connection, detect, discovery, pla
 from meshprovision.provisioning import plan as plan_mod
 from meshprovision.provisioning.key_registry import adopt_canonical_ref
 from meshprovision.provisioning.pipeline import (
+    alias_would_rotate_admin_key,
     allocate_names,
     audit_live_admin_keys,
     audit_node_key,
@@ -843,6 +844,17 @@ def _finalize_admin_key_rotation_error(
             "Upgrade the node's firmware to >= 2.6.11 and re-run, or follow the rotation "
             'procedure in the "Rotating an admin node\'s key" section of docs/security.md.'
         )
+    elif exc.reason == "alias":
+        reported_fingerprint = None
+        ref = exc.admin_refs[0].removesuffix("_pub") if exc.admin_refs else "<ref>"
+        hint = (
+            f"{ref!r} already names a different admin key. meshprovision does not re-point "
+            f"an admin ref to a new device. Bootstrap this node under a new ref "
+            f"(`--ref <NEW>`), add it to `admin_nodes`, and retire {ref!r} per "
+            'docs/security.md -> "Rotating an admin node\'s key". Or, if '
+            f"{ref!r} must name this device's key, verify it and use "
+            "`mesh admin import --overwrite`."
+        )
     else:
         reported_fingerprint = None
         hint = _ADMIN_KEY_ROTATION_DOC_HINT
@@ -995,6 +1007,25 @@ def run_provision(
         change_plan = plan_mod.build_plan(inputs)
     except AdminKeyRotationRefusedError as exc:
         raise _finalize_admin_key_rotation_error(exc, live) from exc
+
+    if opts.admin_ref is not None and opts.admin_ref != change_plan.node_id.hex:
+        existing_alias_pub = db.keys.find(f"{opts.admin_ref}_pub")
+        if existing_alias_pub is not None and alias_would_rotate_admin_key(
+            existing_alias_public_key=existing_alias_pub.material(),
+            plan_regenerates=change_plan.key_plan.regenerate,
+            plan_adopts_device_key=change_plan.key_plan.adopt_device_key,
+            live_public_key=live.security.public_key,
+            db_public_key=db_public_key,
+        ):
+            raise _finalize_admin_key_rotation_error(
+                AdminKeyRotationRefusedError(
+                    f"{opts.admin_ref!r} already names a different admin key; refusing to "
+                    "re-point it.",
+                    reason="alias",
+                    admin_refs=(f"{opts.admin_ref}_pub",),
+                ),
+                live,
+            )
 
     render_plan(ctx, change_plan, drifts=drifts, json_output=opts.json_output)
 

@@ -42,6 +42,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "adopt_would_rotate_admin_key",
+    "alias_would_rotate_admin_key",
     "allocate_names",
     "audit_live_admin_keys",
     "audit_node_key",
@@ -228,6 +229,72 @@ def adopt_would_rotate_admin_key(
         if not proves_possession:
             return True
     return False
+
+
+def alias_would_rotate_admin_key(
+    *,
+    existing_alias_public_key: bytes,
+    plan_regenerates: bool,
+    plan_adopts_device_key: bool,
+    live_public_key: bytes | None,
+    db_public_key: bytes | None,
+) -> bool:
+    """Decide whether ``admin bootstrap --ref R`` would re-point an existing ``R`` to new material.
+
+    Used by :func:`~meshprovision.cli.provision.run_provision` right after
+    :func:`~meshprovision.provisioning.plan.build_plan`, when ``opts.admin_ref``
+    names an existing ``<admin_ref>_pub`` row: :func:`node_key_admin_refs` only
+    catches a rotation of the *connected node's own* recorded key, keyed on its
+    DB row. It says nothing about the alias ref itself -- a factory-fresh node
+    (no DB row of its own) bootstrapped under an *existing* ``--ref`` sails
+    through that check, and ``_register_admin_alias`` then upserts the new
+    device's material under ``R`` unconditionally, silently handing the fleet's
+    admin ref to a different keypair. This predicate closes that gap by
+    checking the alias ref's own existing material instead.
+
+    Pure: takes already-extracted material and plan flags, never a repository,
+    a device, or a :class:`~meshprovision.provisioning.detect.LiveConfig`.
+
+    Args:
+        existing_alias_public_key: The material already on file for
+            ``<admin_ref>_pub``. Only call this when that row exists --
+            a brand-new alias ref never rotates anything.
+        plan_regenerates: :attr:`~meshprovision.provisioning.plan_admin_keys.
+            KeyPlan.regenerate` from the just-built plan. A regenerate always
+            produces material that cannot yet be compared (it doesn't exist
+            until applied), so it is treated as an unconditional rotation.
+        plan_adopts_device_key: :attr:`~meshprovision.provisioning.
+            plan_admin_keys.KeyPlan.adopt_device_key` from the just-built
+            plan.
+        live_public_key: The connected device's live-reported public key.
+            This is the material the alias block would register when
+            ``plan_adopts_device_key`` is set.
+        db_public_key: The connected node's own recorded ``<hex>_pub``
+            material. This is the material the alias block would register
+            when neither ``plan_regenerates`` nor ``plan_adopts_device_key``
+            is set (the key plan changes nothing, so the alias copies
+            whatever is already on file for the node).
+
+    Returns:
+        ``True`` when registering the alias would change ``R``'s recorded
+        material:
+
+        - The plan regenerates the node's key -- the new material is by
+          definition not what ``R`` already holds.
+        - The material the alias block would otherwise register (the live
+          key under adopt, else the node's own DB key) differs from
+          ``existing_alias_public_key``.
+
+        ``False`` when the plan would register exactly the material ``R``
+        already holds (an idempotent re-run), or when there is no candidate
+        material to compare (nothing would actually be registered).
+    """
+    if plan_regenerates:
+        return True
+    candidate = live_public_key if plan_adopts_device_key else db_public_key
+    if candidate is None:
+        return False
+    return candidate != existing_alias_public_key
 
 
 def resolve_admin_keys(
