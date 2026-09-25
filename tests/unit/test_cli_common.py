@@ -103,6 +103,48 @@ def test_load_template_is_quiet_for_a_clean_template(
     assert buf.getvalue() == ""
 
 
+def test_warn_escapes_terminal_control_sequences(
+    write_template: Callable[..., Path],
+) -> None:
+    """Regression test for Round 37's terminal-escape-injection fix (S6)."""
+    buf = io.StringIO()
+    ctx = _context(write_template(), buf)
+
+    ctx.warn("node reports A\x1b[2KB")
+
+    output = buf.getvalue()
+    assert "\x1b" not in output
+    assert "\\x1b" in output
+
+
+def test_info_renders_drift_describe_line_without_raw_escape(
+    write_template: Callable[..., Path],
+) -> None:
+    """A ``Drift.describe()`` line with an ESC-bearing observed name never reaches stderr raw.
+
+    Regression test for Round 37's terminal-escape-injection fix (S6):
+    ``Drift`` lines reach the operator via ``ctx.info``/``ctx.warn``
+    (see ``provisioning/plan_render.py``), so this exercises the same
+    path a real name-drift warning would take.
+    """
+    from meshprovision.provisioning.repair import Drift, DriftKind
+
+    drift = Drift(
+        kind=DriftKind.NAME,
+        field="long_name",
+        recorded="Old Name",
+        observed="X\x1b]52;c;cm0K\x1b\\\x1b[1A",
+    )
+    buf = io.StringIO()
+    ctx = _context(write_template(), buf)
+
+    ctx.info(drift.describe())
+
+    output = buf.getvalue()
+    assert "\x1b" not in output
+    assert "\\x1b" in output
+
+
 def test_click_abort_prints_aborted_and_exits_interrupted(
     capsys: pytest.CaptureFixture[str],
 ) -> None:

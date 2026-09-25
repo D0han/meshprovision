@@ -213,6 +213,12 @@ class TestRedactProcessor:
         result = redact_processor(None, "info", event)
         assert token not in result["message"]
 
+    def test_plain_string_values_have_terminal_escapes_escaped(self) -> None:
+        event = {"event": "name A\x1b[2KB"}
+        result = redact_processor(None, "info", event)
+        assert "\x1b" not in result["event"]
+        assert "\\x1b" in result["event"]
+
 
 def test_end_to_end_log_output_never_leaks_key_material(
     keypair_factory,

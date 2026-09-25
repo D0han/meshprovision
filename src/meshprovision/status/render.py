@@ -28,6 +28,7 @@ from rich.text import Text
 from meshprovision.status import timefmt
 from meshprovision.status.merge import Availability
 from meshprovision.status.report import StatusReport
+from meshprovision.termsafe import terminal_safe
 
 __all__ = [
     "AVAILABILITY_LABELS",
@@ -65,12 +66,14 @@ def _text_cell(value: str | None) -> str:
     """Render an optional string cell, never as the literal ``"None"``.
 
     Args:
-        value: The cell's value, or ``None``/blank.
+        value: The cell's value, or ``None``/blank. May be sourced from
+            a datasource or a live device, so it is passed through
+            :func:`~meshprovision.termsafe.terminal_safe` before display.
 
     Returns:
-        ``value`` when truthy; otherwise :data:`_DASH`.
+        ``value``, terminal-escaped, when truthy; otherwise :data:`_DASH`.
     """
-    return value if value else _DASH
+    return terminal_safe(value) if value else _DASH
 
 
 def _int_cell(value: int | None) -> str:

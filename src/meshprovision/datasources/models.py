@@ -29,6 +29,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from meshprovision.nodeid import NodeId
+from meshprovision.termsafe import terminal_safe
 
 __all__ = [
     "E7_SCALE",
@@ -445,10 +446,13 @@ def coerce_str(value: object) -> str | None:
         value: The raw value.
 
     Returns:
-        ``value`` stripped, or ``None`` when ``value`` is not a ``str``
-        or is blank after stripping.
+        ``value`` stripped and passed through
+        :func:`~meshprovision.termsafe.terminal_safe` -- every field this
+        helper produces is display-only and sourced from the public
+        loranet/lorastats HTTP APIs -- or ``None`` when ``value`` is not
+        a ``str`` or is blank after stripping.
     """
     if isinstance(value, str):
         token = value.strip()
-        return token or None
+        return terminal_safe(token) if token else None
     return None

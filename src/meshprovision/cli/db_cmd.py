@@ -74,6 +74,7 @@ from meshprovision.errors import (
     MeshprovisionError,
     SchemaError,
 )
+from meshprovision.termsafe import terminal_safe
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
@@ -551,11 +552,11 @@ def db_list(ctx: CliContext, *, json_output: bool) -> None:
     for record in records:
         table.add_row(
             record.node_id,
-            record.short_name or "-",
-            record.long_name or "-",
+            terminal_safe(record.short_name) if record.short_name else "-",
+            terminal_safe(record.long_name) if record.long_name else "-",
             record.management.value,
             record.hw_model or "-",
-            record.firmware_version or "-",
+            terminal_safe(record.firmware_version) if record.firmware_version else "-",
             record.region or "-",
             record.role or "-",
             ", ".join(record.authorized_admin_keys) or "-",

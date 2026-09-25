@@ -82,6 +82,20 @@ def test_coerce_str() -> None:
     assert coerce_str(5) is None
 
 
+def test_coerce_str_escapes_terminal_control_sequences() -> None:
+    """Regression test for Round 37's terminal-escape-injection fix (S6).
+
+    ``coerce_str`` is the ingress boundary for every loranet/lorastats
+    field -- a malicious or MITM'd upstream must never be able to smuggle
+    a raw ESC/CSI/OSC sequence through it into a later terminal render.
+    """
+    result = coerce_str("X\x1b]52;c;cm0gLXJmIH4K\x07\x1b[1A")
+    assert result is not None
+    assert "\x1b" not in result
+    assert "\x07" not in result
+    assert "\\x1b" in result
+
+
 def test_e7_to_degrees() -> None:
     assert e7_to_degrees(500000000, limit=90.0) == 50.0
     assert e7_to_degrees(True, limit=90.0) is None

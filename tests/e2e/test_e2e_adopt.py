@@ -75,6 +75,46 @@ def test_fresh_adopt_persists_an_observed_record(
     assert node.firmware_version == "2.7.11"
 
 
+def test_adopted_device_name_with_terminal_escape_is_escaped_on_db_list(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """Regression test for Round 37's terminal-escape-injection fix (S6/T9c).
+
+    S6 deliberately does not sanitize a device-reported name at adopt
+    ingress (that would cause rename churn against the device's own
+    truth) -- the DB row keeps the raw name, and the render-layer sink
+    (``mesh db list``) is the one place responsible for escaping it
+    before it reaches the terminal. This pins that decision from both
+    sides: the DB cell holds the raw name, the printed table does not.
+
+    Uses a bidi right-to-left-override character rather than a raw ESC
+    byte for the "DB holds it raw" half of this test: a C0/C1/DEL
+    control byte does not survive an ODS save/load round-trip at all in
+    this environment (odfpy/expat silently replace it with U+FFFD on
+    reload, independent of this fix -- confirmed by direct
+    ``odf.opendocument`` reproduction), so asserting the exact raw ESC
+    byte in the reloaded row would test an ODS behavior, not this fix.
+    The escape-at-render half is still exercised on a real ESC payload
+    below via ``ctx``'s own sinks (see ``test_status_merge.py`` and
+    ``test_cli_common.py``), which never touch the ODS layer.
+    """
+    payload = "X‮evil"
+    bus.use(FakeMeshInterface("deadbe01", short_name="AB01", long_name=payload))
+
+    adopt_result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert adopt_result.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes = [NodeRecord.from_row(row) for row in loaded.nodes]
+    assert nodes[0].long_name == payload
+
+    list_result = invoke(runner, ["db", "list"], env)
+    assert list_result.exit_code == 0
+    assert "‮" not in list_result.stdout
+    assert "‮" not in list_result.stderr
+    assert "\\u202e" in list_result.stderr
+
+
 def test_dry_run_writes_nothing_to_the_database(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

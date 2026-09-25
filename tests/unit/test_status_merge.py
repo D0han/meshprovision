@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
+from rich.console import Console
 
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.models import NodeObservation
@@ -1017,3 +1019,29 @@ def test_build_table_returns_expected_columns(local_tz: None) -> None:
         "Nbrs",
         "Sources",
     ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "X\x1b]52;c;cm0K\x1b\\\x1b[1A",  # ESC-led OSC 52 clipboard write + cursor-up CSI
+        "X\x9b31m",  # single-byte C1 CSI
+    ],
+)
+def test_render_console_escapes_terminal_control_sequences_in_long_name(payload: str) -> None:
+    """Regression test for Round 37's terminal-escape-injection fix (S6).
+
+    A loranet ``longName`` carrying raw control bytes must never reach
+    the printed console output unescaped, regardless of whether it
+    arrives as a multi-byte ESC sequence or a single-byte C1 control.
+    """
+    obs = _obs(SOURCE_LORANET, long_name=payload, last_seen=NOW)
+    report = build_report(
+        records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
+    )
+    buf = io.StringIO()
+    render.render_console(report, console=Console(file=buf, no_color=True, width=200))
+    output = buf.getvalue()
+    assert "\x1b" not in output
+    assert "\x9b" not in output
+    assert "\\x1b" in output or "\\x9b" in output

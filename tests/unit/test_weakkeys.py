@@ -232,6 +232,55 @@ def test_audit_node_blank_firmware_warns_same_as_unparseable(keypair_factory) ->
         assert "could not be parsed" in matches[0].reason
 
 
+def test_audit_node_hostile_firmware_string_reason_is_terminal_safe_at_the_sinks(
+    keypair_factory, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regression test for Round 37's terminal-escape-injection fix (S6/T9c).
+
+    ``audit_node`` interpolates the reported firmware string verbatim
+    into the finding's ``reason`` -- it does not sanitize it (that is
+    the sinks' job). This confirms both operator-facing sinks that print
+    a weak-key reason (``ctx.warn``, used by ``mesh admin list``'s audit
+    summary, and ``_emit_error``, used for a raised ``WeakKeyError``)
+    escape a raw ESC/BEL in that reason before it reaches the terminal.
+    """
+    import io
+
+    from rich.console import Console
+
+    from meshprovision.cli.common import CliContext, _emit_error
+    from meshprovision.config.settings import Settings
+
+    kp = keypair_factory()
+    hostile_firmware = "2.6.0\x1b]0;pwn\x07"
+    result = audit_node(public=kp.public, firmware_version=hostile_firmware)
+    matches = [f for f in result.findings if f.check == WeakKeyCheck.FIRMWARE_WINDOW]
+    assert len(matches) == 1
+    reason = matches[0].reason
+    assert hostile_firmware in reason  # the finding itself carries the raw string
+
+    buf = io.StringIO()
+    ctx = CliContext(
+        settings=Settings(),
+        non_interactive=True,
+        force_refresh=False,
+        assume_yes=False,
+        out=Console(file=io.StringIO()),
+        err=Console(file=buf, no_color=True, width=200),
+    )
+    ctx.warn(reason)
+    warned = buf.getvalue()
+    assert "\x1b" not in warned
+    assert "\x07" not in warned
+    assert "\\x1b" in warned
+
+    _emit_error(reason)
+    emitted = capsys.readouterr().err
+    assert "\x1b" not in emitted
+    assert "\x07" not in emitted
+    assert "\\x1b" in emitted
+
+
 def test_parse_firmware_version_and_is_vulnerable() -> None:
     assert parse_firmware_version("2.6.12.9861e82") == (2, 6, 12)
     assert parse_firmware_version("garbage") is None

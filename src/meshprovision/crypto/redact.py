@@ -17,8 +17,9 @@ output (including any that flatten nested structures into strings) still
 passes through this one before anything is written out.
 
 This module is a leaf: it imports only the standard library plus
-:mod:`meshprovision.errors`, so every other module in the crypto group
-(and beyond) can depend on it without risking an import cycle.
+:mod:`meshprovision.termsafe` (itself a pure standard-library leaf), so
+every other module in the crypto group (and beyond) can depend on it
+without risking an import cycle.
 """
 
 from __future__ import annotations
@@ -29,6 +30,8 @@ import hmac
 import re
 from collections.abc import MutableMapping
 from typing import Any, Final
+
+from meshprovision.termsafe import terminal_safe
 
 __all__ = [
     "REDACTED",
@@ -466,8 +469,10 @@ def redact_processor(
         A **new** mapping: every value under a sensitive key name is
         replaced by :func:`redact`, every :class:`SecretBytes` value is
         replaced by :func:`redact` regardless of its key name, and every
-        remaining string value is passed through :func:`scrub_text`. The
-        input mapping is never mutated.
+        remaining string value is passed through :func:`scrub_text` and
+        then :func:`~meshprovision.termsafe.terminal_safe` (multi-line
+        log events are expected, so newlines are kept). The input
+        mapping is never mutated.
     """
     del logger, method_name
     scrubbed: dict[str, Any] = {}
@@ -477,7 +482,7 @@ def redact_processor(
         elif isinstance(value, SecretBytes):
             scrubbed[key] = redact(value)
         elif isinstance(value, str):
-            scrubbed[key] = scrub_text(value)
+            scrubbed[key] = terminal_safe(scrub_text(value), allow_newlines=True)
         else:
             scrubbed[key] = value
     return scrubbed

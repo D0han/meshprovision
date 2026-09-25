@@ -58,6 +58,7 @@ from meshprovision.errors import (
     SchemaError,
     exit_code_for,
 )
+from meshprovision.termsafe import terminal_safe
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -649,10 +650,12 @@ def _emit_error(text: str) -> None:
 
     Args:
         text: The error text to print. Passed through
+            :func:`meshprovision.termsafe.terminal_safe` and then
             :func:`meshprovision.crypto.redact.scrub_text` as defence in
             depth before being printed.
     """
-    _ERR_CONSOLE.print(redact.scrub_text(text), style="red", markup=False, highlight=False)
+    safe_text = terminal_safe(text, allow_newlines=True)
+    _ERR_CONSOLE.print(redact.scrub_text(safe_text), style="red", markup=False, highlight=False)
 
 
 P = ParamSpec("P")
@@ -887,42 +890,69 @@ class CliContext:
         """Print an informational message to stderr, unstyled.
 
         Args:
-            message: The message to print.
+            message: The message to print. Passed through
+                :func:`~meshprovision.termsafe.terminal_safe` first --
+                this may echo a device- or datasource-reported string.
         """
-        self.err.print(message, markup=False, highlight=False)
+        self.err.print(terminal_safe(message, allow_newlines=True), markup=False, highlight=False)
 
     def warn(self, message: str) -> None:
         """Print a warning message to stderr, prefixed and styled yellow.
 
         Args:
-            message: The message to print.
+            message: The message to print. Passed through
+                :func:`~meshprovision.termsafe.terminal_safe` first --
+                this may echo a device- or datasource-reported string.
         """
-        self.err.print(f"warning: {message}", style="yellow", markup=False, highlight=False)
+        self.err.print(
+            f"warning: {terminal_safe(message, allow_newlines=True)}",
+            style="yellow",
+            markup=False,
+            highlight=False,
+        )
 
     def error(self, message: str) -> None:
         """Print an error message to stderr, prefixed and styled red.
 
         Args:
-            message: The message to print.
+            message: The message to print. Passed through
+                :func:`~meshprovision.termsafe.terminal_safe` first --
+                this may echo a device- or datasource-reported string.
         """
-        self.err.print(f"error: {message}", style="red", markup=False, highlight=False)
+        self.err.print(
+            f"error: {terminal_safe(message, allow_newlines=True)}",
+            style="red",
+            markup=False,
+            highlight=False,
+        )
 
     def success(self, message: str) -> None:
         """Print a success message to stderr, styled green.
 
         Args:
-            message: The message to print.
+            message: The message to print. Passed through
+                :func:`~meshprovision.termsafe.terminal_safe` first --
+                this may echo a device- or datasource-reported string.
         """
-        self.err.print(message, style="green", markup=False, highlight=False)
+        self.err.print(
+            terminal_safe(message, allow_newlines=True),
+            style="green",
+            markup=False,
+            highlight=False,
+        )
 
     def print_out(self, text: str) -> None:
         """Print machine-relevant human text to STDOUT.
 
         Args:
             text: The text to print. Not JSON -- use :func:`echo_json`
-                for that.
+                for that. Passed through
+                :func:`~meshprovision.termsafe.terminal_safe` first --
+                this may echo a device- or datasource-reported string.
         """
-        self.out.print(text, markup=False, highlight=False, soft_wrap=True)
+        self.out.print(
+            terminal_safe(text, allow_newlines=True), markup=False, highlight=False, soft_wrap=True
+        )
 
     def confirm(self, question: str, *, default: bool = False) -> bool:
         """Ask a yes/no question, honouring ``assume_yes`` and ``non_interactive``.
@@ -1003,7 +1033,7 @@ class CliContext:
         if not summaries:
             raise AmbiguousDeviceError("Nothing to choose from.", candidates=())
         for index, summary in enumerate(summaries, start=1):
-            self.err.print(f"  [{index}] {summary}", markup=False, highlight=False)
+            self.err.print(f"  [{index}] {terminal_safe(summary)}", markup=False, highlight=False)
         index = click.prompt(prompt, type=click.IntRange(1, len(summaries)), err=True)
         return int(index) - 1
 
