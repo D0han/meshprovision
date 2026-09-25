@@ -1307,6 +1307,63 @@ def test_admin_key_rotation_refused_then_recovered_via_admin_import_overwrite(
     assert bbbb_iface.admin_keys == (new_kp.public,)
 
 
+def test_admin_import_overwrite_warns_about_a_stale_alias(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, write_template: Callable[..., Path]
+) -> None:
+    """Round 37 CONSISTENCY-CHECK.md Sec 4.4 (A1#5, re-scoped to #30).
+
+    D1=B refuses every other stale-alias scenario before any write, so
+    this is the one remaining way an alias goes stale: ``admin import
+    --overwrite`` only ever rewrites the ref it targets
+    (``aaaa0001_pub``), leaving a separate alias ref (``ADMIN1_pub``,
+    filed by ``admin bootstrap --ref ADMIN1`` alongside it) still naming
+    the old material -- and leaving any node that authorizes it stale
+    too, since ``admin import`` never touches a device.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+    assert bootstrap.exit_code == 0
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN1"]))
+    bus.use(FakeMeshInterface("bbbb0001"))
+    provision_fleet = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert provision_fleet.exit_code == 0
+
+    new_kp = generate_keypair()
+    overwrite = invoke(
+        runner, ["admin", "import", f"aaaa0001={new_kp.public_b64}", "--overwrite"], env
+    )
+    assert overwrite.exit_code == 0
+    assert "ADMIN1_pub" in overwrite.stderr
+    assert "still holds the previous key" in overwrite.stderr
+    assert "--overwrite --allow-alias" in overwrite.stderr
+    assert "!bbbb0001" in overwrite.stderr
+    assert not _BASE64_KEY_RE.search(overwrite.stderr)
+
+
+def test_admin_import_overwrite_with_no_alias_does_not_warn(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, write_template: Callable[..., Path]
+) -> None:
+    """The counterpart of the stale-alias warning: no alias present, no such warning."""
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(runner, ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert bootstrap.exit_code == 0
+
+    new_kp = generate_keypair()
+    overwrite = invoke(
+        runner, ["admin", "import", f"aaaa0001={new_kp.public_b64}", "--overwrite"], env
+    )
+    assert overwrite.exit_code == 0
+    assert "still holds the previous key" not in overwrite.stderr
+    assert "still hold the previous key" not in overwrite.stderr
+
+
 def test_force_regenerate_key_on_a_legitimate_admin_bearing_node_is_refused(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, write_template: Callable[..., Path]
 ) -> None:

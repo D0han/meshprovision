@@ -55,6 +55,8 @@ from meshprovision.provisioning.key_registry import adopt_canonical_ref
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
+    from meshprovision.db.keys import KeyRepository
+    from meshprovision.db.nodes import NodeRepository
 
 __all__ = [
     "admin",
@@ -130,6 +132,77 @@ def parse_assignment(raw: str) -> tuple[str, str]:
     b64 = b64.strip()
     _validate_admin_ref(ref)
     return ref, b64
+
+
+def _warn_stale_admin_alias(
+    ctx: CliContext,
+    *,
+    nodes: NodeRepository,
+    keys: KeyRepository,
+    ref: str,
+    key_ref: str,
+    old_material: bytes,
+) -> None:
+    """Warn about custody left stale by an ``admin import --overwrite``.
+
+    Called right after ``key_ref`` has been upserted with new material,
+    replacing what ``old_material`` held. Under D1=B (CONSISTENCY-CHECK.md
+    Round 37 §4.4), this is the only remaining way an admin alias goes
+    stale: every other stale-alias scenario is refused before any write
+    (see :func:`~meshprovision.provisioning.pipeline.node_key_admin_refs`),
+    but ``admin import --overwrite`` is itself the explicit, out-of-band
+    recovery step, and it only ever touches ``key_ref`` -- any other ref
+    still naming ``old_material``, and any device whose on-file admin key
+    changed, is left for the operator to notice and act on.
+
+    Args:
+        ctx: The shared CLI context, used for ``ctx.warn``.
+        nodes: The already-open node repository.
+        keys: The already-open key repository, already reflecting
+            ``key_ref``'s new material.
+        ref: The admin reference just overwritten (as it appears in
+            ``admin_nodes``, not a ``key_ref``).
+        key_ref: ``key_ref``'s ``Keys`` sheet reference (``f"{ref}_pub"``).
+        old_material: The raw public key material ``key_ref`` held before
+            this overwrite.
+    """
+    stale_refs = sorted(
+        other_ref
+        for other_ref, other_material in keys.public_key_map().items()
+        if other_ref != key_ref
+        and other_material == old_material
+        and not observed_keys.is_observed_ref(other_ref)
+    )
+
+    watch_refs = frozenset((key_ref, *stale_refs))
+    stale_nodes = sorted(
+        node.node.display
+        for node in nodes.all()
+        if not node.is_archived
+        and any(admin_ref in node.authorized_admin_keys for admin_ref in watch_refs)
+    )
+
+    if stale_refs:
+        alias_list = ", ".join(stale_refs)
+        pronoun = "it" if len(stale_refs) == 1 else "them"
+        verb = "holds" if len(stale_refs) == 1 else "hold"
+        message = (
+            f"{alias_list} still {verb} the previous key for {key_ref}. Re-import "
+            f"{pronoun} too (`--overwrite --allow-alias`) or point the template at "
+            f"{ref!r}."
+        )
+        if stale_nodes:
+            message = f"{message} Then re-run `mesh provision` on: {', '.join(stale_nodes)}."
+        ctx.warn(message)
+
+    if keys.private_key_mismatch(ref):
+        ctx.warn(
+            f"{key_ref} was overwritten, but "
+            f"{schema.ref_for(ref, KeyType.ADMIN_PRIVATE)} was not, and no longer derives "
+            "it. This command never writes a private key; run `mesh provision` against "
+            "that device once it can prove possession of the new public key -- it will "
+            "record the matching private key automatically."
+        )
 
 
 @click.group(name="admin", cls=MeshGroup, context_settings=CONTEXT_SETTINGS)
@@ -352,6 +425,14 @@ def admin_import(
     exactly one refusal and are independent of one another: none of them
     implicitly grants either of the others.
 
+    When ``--overwrite`` replaces an existing ref's material, this is the
+    one remaining way an admin alias can go stale (every other case is
+    refused up front -- see :func:`~meshprovision.provisioning.pipeline.
+    node_key_admin_refs`): another ref may still name the old material, or
+    a recorded private key may no longer derive it. See
+    :func:`_warn_stale_admin_alias` -- this never blocks the overwrite,
+    it only warns.
+
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
             cli.common.pass_cli`.
@@ -399,6 +480,7 @@ def admin_import(
             key_ref = schema.ref_for(ref, KeyType.ADMIN_PUBLIC)
 
             existing = db.keys.find(key_ref)
+            old_material: bytes | None = None
             if existing is not None:
                 if existing.material() == material:
                     ctx.info(
@@ -412,6 +494,7 @@ def admin_import(
                         key_ref=key_ref,
                         hint="Pass --overwrite to replace it.",
                     )
+                old_material = existing.material()
 
             audit = weakkeys.audit_public_key(material, key_ref=key_ref, known_bad=known_bad)
             if audit.compromised and (not allow_weak or not audit.overridable):
@@ -467,6 +550,15 @@ def admin_import(
                 )
             )
             adopt_canonical_ref(db.nodes, db.keys, material=material, canonical_owner=ref)
+            if old_material is not None:
+                _warn_stale_admin_alias(
+                    ctx,
+                    nodes=db.nodes,
+                    keys=db.keys,
+                    ref=ref,
+                    key_ref=key_ref,
+                    old_material=old_material,
+                )
             registered.append(
                 {"ref": ref, "key_ref": key_ref, "fingerprint": redact.fingerprint(material)}
             )
