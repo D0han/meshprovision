@@ -25,6 +25,7 @@ import re
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.crypto import redact, weakkeys
+from meshprovision.crypto.keys import public_key_matches
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import KeyMaterialError, NamespaceExhaustedError, WeakKeySeverity
 from meshprovision.provisioning import detect
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
     from meshprovision.nodeid import NodeId
 
 __all__ = [
+    "adopt_would_rotate_admin_key",
     "allocate_names",
     "audit_live_admin_keys",
     "audit_node_key",
@@ -158,6 +160,74 @@ def node_key_admin_refs(
         )
     ]
     return tuple(sorted(refs))
+
+
+def adopt_would_rotate_admin_key(
+    *,
+    db_public_key: bytes,
+    db_has_private_key: bool,
+    live_public_key: bytes | None,
+    live_private_key: bytes | None,
+) -> bool:
+    """Decide whether persisting a device's reported key(s) would rotate an admin-bearing key.
+
+    Used by ``mesh adopt`` alongside :func:`node_key_admin_refs`: once
+    ``node_key_admin_refs`` shows a node's recorded ``<hex>_pub`` row backs
+    an authorized admin key, this decides whether the *specific* material
+    the connected (or ``--from-backup``) device reports would actually
+    change what is on file -- exactly mirroring
+    :func:`~meshprovision.provisioning.plan._plan_node_keypair`'s
+    "device_key_differs_from_db" adopt branch, but pure and reusable here
+    since ``mesh adopt`` never goes through :func:`~meshprovision.
+    provisioning.plan.build_plan`.
+
+    Pure: takes already-extracted material, never a repository, a device,
+    or a :class:`~meshprovision.provisioning.detect.LiveConfig`.
+
+    Args:
+        db_public_key: The node's recorded ``<hex>_pub`` material. Always
+            present when this is worth calling -- :func:`node_key_admin_refs`
+            only returns a non-empty tuple when this row exists.
+        db_has_private_key: Whether the node also has a recorded
+            ``<hex>_priv`` row. Only its existence matters here, never its
+            bytes: a device that overwrites it needs to prove possession
+            of ``db_public_key``, not reproduce the old private bytes.
+        live_public_key: The device's live-reported public key, or
+            ``None`` when it reported none.
+        live_private_key: The device's live-reported private key, or
+            ``None`` when it reported none (or when this is a public-only
+            adopt).
+
+    Returns:
+        ``True`` when persisting the device's report would change either
+        recorded row:
+
+        - The device reports a public key that differs from
+          ``db_public_key`` -- an outright key change (or impostor).
+        - The device reports a private key, a ``<hex>_priv`` row already
+          exists, and that private key does *not* derive
+          ``db_public_key`` -- persisting it would silently corrupt the
+          DB's only copy of the admin private key with material that
+          doesn't even correspond to the recorded public key. A private
+          key that *does* derive ``db_public_key`` proves the device
+          holds the genuine keypair, so re-recording it (even if the
+          existing ``_priv`` row happens to differ, e.g. a prior bad
+          write) is allowed through.
+
+        ``False`` -- nothing on file would change -- when the device
+        reports no keys at all, reports back exactly what is recorded, or
+        reports a private key that proves possession of ``db_public_key``.
+    """
+    if live_public_key is not None and live_public_key != db_public_key:
+        return True
+    if live_private_key is not None and db_has_private_key:
+        try:
+            proves_possession = public_key_matches(live_private_key, db_public_key)
+        except KeyMaterialError:
+            proves_possession = False
+        if not proves_possession:
+            return True
+    return False
 
 
 def resolve_admin_keys(

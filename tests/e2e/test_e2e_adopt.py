@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 import pytest
 from meshtastic.protobuf import apponly_pb2, clientonly_pb2, config_pb2
 
+from meshprovision.crypto import redact
 from meshprovision.crypto.keys import encode_key
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
@@ -359,6 +360,231 @@ def test_force_re_adopts_and_demotes_with_explicit_confirmation(
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     persisted = NodeRecord.from_row(loaded.nodes[0])
     assert persisted.management is ManagementMode.OBSERVED
+
+
+# --- admin-key rotation refusal (C37-1) ------------------------------------
+
+
+def _seed_canonicalized_admin_node(seed_db: Callable[..., Path], *, admin_kp: KeyPair) -> None:
+    """Seed ``aaaa0001`` authorizing an observed ref for ``admin_kp``'s material.
+
+    Shared setup for the tests below: adopting ``deadbe01`` reporting
+    ``admin_kp`` canonicalizes this observed ref to ``deadbe01_pub``,
+    which is what makes ``deadbe01`` admin-bearing -- the standard
+    brownfield flow the finding reproduces its probe scenario against.
+    """
+    observed_ref = observed_key_ref(admin_kp.public)
+    seed_db(
+        nodes=[NodeRecord(node_id="aaaa0001", authorized_admin_keys=(observed_ref,))],
+        keys=[
+            KeyRecord.from_material(
+                observed_ref.removesuffix("_pub"),
+                KeyType.ADMIN_PUBLIC,
+                admin_kp.public,
+                origin=KeyOrigin.IMPORTED,
+            )
+        ],
+    )
+
+
+def test_adopt_refuses_to_rotate_an_observed_admin_bearing_nodes_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """The probe scenario (CONSISTENCY-CHECK.md 4.1): no flag bypasses this.
+
+    ``aaaa0001`` authorizes an observed ref; adopting ``deadbe01``
+    reporting that key canonicalizes it to ``deadbe01_pub``, making
+    ``deadbe01`` admin-bearing under ``node_key_admin_refs``. A second
+    adopt of ``deadbe01`` by an impostor reporting a fresh keypair must
+    be refused outright -- with no flag, not even ``--yes`` -- and must
+    not touch the database at all, not even to prompt for confirmation.
+    """
+    admin_kp = keypair_factory()
+    _seed_canonicalized_admin_node(seed_db, admin_kp=admin_kp)
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = admin_kp.public
+    iface.localNode.localConfig.security.private_key = admin_kp.private.reveal()
+    first_adopt = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first_adopt.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = ods.load_database(db_path)
+
+    impostor = bus.use(FakeMeshInterface("deadbe01"))
+    fresh = keypair_factory()
+    impostor.localNode.localConfig.security.public_key = fresh.public
+    impostor.localNode.localConfig.security.private_key = fresh.private.reveal()
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "admin key" in result.stderr.lower()
+    assert "mesh admin import --overwrite deadbe01=" in result.stderr
+    assert redact.fingerprint(fresh.public) in result.stderr
+    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert impostor.localNode.written_sections == []
+
+    after = ods.load_database(db_path)
+    assert after.nodes == before.nodes
+    assert after.keys == before.keys
+
+
+def test_adopt_force_does_not_bypass_admin_key_rotation_refusal_on_a_template_node(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """``--force`` still demotes a TEMPLATE node, but never bypasses this refusal.
+
+    ``admin bootstrap`` self-refs ``aaaa0001`` as its own admin, leaving
+    it ``management=TEMPLATE``. ``--force`` is the flag that normally
+    lets ``mesh adopt`` re-adopt (demote) a TEMPLATE-managed node -- it
+    must not also be read as authorization to rotate the admin key that
+    node backs.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(runner, ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert bootstrap.exit_code == 0
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["aaaa0001"]))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = ods.load_database(db_path)
+
+    impostor = bus.use(FakeMeshInterface("aaaa0001"))
+    fresh = keypair_factory()
+    impostor.localNode.localConfig.security.public_key = fresh.public
+    impostor.localNode.localConfig.security.private_key = fresh.private.reveal()
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--force", "--yes"], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "admin key" in result.stderr.lower()
+    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert impostor.localNode.written_sections == []
+
+    after = ods.load_database(db_path)
+    assert after.nodes == before.nodes
+    assert after.keys == before.keys
+
+
+def test_adopt_from_backup_refuses_to_rotate_an_admin_bearing_nodes_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+    tmp_path: Path,
+) -> None:
+    """The same refusal applies to ``--from-backup``, no device needed.
+
+    Reuses the probe scenario's canonicalized admin-bearing ``deadbe01``,
+    then claims it from a backup profile file carrying a different
+    keypair -- proving the refusal is not merely a property of the
+    live-device write path.
+    """
+    admin_kp = keypair_factory()
+    _seed_canonicalized_admin_node(seed_db, admin_kp=admin_kp)
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = admin_kp.public
+    iface.localNode.localConfig.security.private_key = admin_kp.private.reveal()
+    first_adopt = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first_adopt.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = ods.load_database(db_path)
+
+    fresh = keypair_factory()
+    cfg = _write_profile_cfg(
+        tmp_path / "impostor.cfg", public_key=fresh.public, private_key=fresh.private.reveal()
+    )
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!deadbe01", "--no-lookup", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "admin key" in result.stderr.lower()
+    assert not _BASE64_KEY_RE.search(result.stderr)
+
+    after = ods.load_database(db_path)
+    assert after.nodes == before.nodes
+    assert after.keys == before.keys
+
+
+def test_adopt_reporting_the_same_key_as_an_admin_bearing_node_succeeds(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Re-adopting the genuine device, reporting its own unchanged key, is unaffected."""
+    admin_kp = keypair_factory()
+    _seed_canonicalized_admin_node(seed_db, admin_kp=admin_kp)
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = admin_kp.public
+    iface.localNode.localConfig.security.private_key = admin_kp.private.reveal()
+    first_adopt = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first_adopt.exit_code == 0
+
+    same_device = bus.use(FakeMeshInterface("deadbe01"))
+    same_device.localNode.localConfig.security.public_key = admin_kp.public
+    same_device.localNode.localConfig.security.private_key = admin_kp.private.reveal()
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    keys_by_ref = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert keys_by_ref["deadbe01_pub"].material() == admin_kp.public
+    assert keys_by_ref["deadbe01_priv"].secret().reveal() == admin_kp.private.reveal()
+
+
+def test_adopt_still_re_adopts_a_non_admin_node_with_a_different_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Guard: this refusal must not regress the ordinary re-key/re-flash/spoof case.
+
+    ``deadbe01`` here backs no admin ref at all (``node_key_admin_refs``
+    is empty), so a differing key still adopts normally -- with the
+    pre-existing ``_key_overwrite_warnings`` warning, unchanged.
+    """
+    old_kp = keypair_factory()
+    new_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01")],
+        keys=[*KeyRecord.for_keypair("deadbe01", old_kp, origin=KeyOrigin.CAPTURED)],
+    )
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = new_kp.public
+    iface.localNode.localConfig.security.private_key = new_kp.private.reveal()
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "deadbe01_pub already holds different key material" in result.stderr
+    assert "deadbe01_priv already holds different key material" in result.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    keys_by_ref = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert keys_by_ref["deadbe01_pub"].material() == new_kp.public
+    assert keys_by_ref["deadbe01_priv"].secret().reveal() == new_kp.private.reveal()
 
 
 def test_unregistered_admin_key_default_hides_material(

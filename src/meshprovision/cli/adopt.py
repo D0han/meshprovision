@@ -51,6 +51,7 @@ from meshprovision.crypto import redact, weakkeys
 from meshprovision.datasources.loranet import LoranetSource
 from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import (
+    AdminKeyRotationRefusedError,
     AdoptionRefusedError,
     DataSourceError,
     KeyMaterialError,
@@ -61,9 +62,11 @@ from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning import backup as backup_mod
 from meshprovision.provisioning import connection, detect, observed_keys
+from meshprovision.provisioning.pipeline import adopt_would_rotate_admin_key, node_key_admin_refs
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
+    from meshprovision.config.template import TemplateConfig
     from meshprovision.db.keys import KeyRepository
     from meshprovision.db.nodes import NodeRepository
 
@@ -598,6 +601,106 @@ def _load_backup_bundle(
     return bundle, node_id
 
 
+def _refuse_admin_key_rotation(
+    db_keys: KeyRepository,
+    db_nodes: NodeRepository,
+    *,
+    template: TemplateConfig,
+    live: detect.LiveConfig,
+    own_private_secret: redact.SecretBytes | None,
+) -> None:
+    """Refuse an adopt that would silently rotate an admin-bearing node's key.
+
+    Mirrors the ``mesh provision``/``mesh admin bootstrap`` refusal added
+    for the same root cause (see :class:`~meshprovision.errors.
+    AdminKeyRotationRefusedError`), but reached from a completely
+    different write path: ``adopt()``'s persistence tail
+    (:func:`~meshprovision.provisioning.adopt.persist_adoption`) upserts
+    ``<hex>_pub``/``<hex>_priv`` unconditionally, gated only by the
+    archived/TEMPLATE checks above (and, for TEMPLATE, only by
+    ``--force``) -- neither of which stops an impostor device from
+    silently replacing an admin node's key, and ``--force`` is exactly
+    the kind of flag-based bypass this refusal must not have. Called
+    before :func:`~meshprovision.provisioning.adopt.build_adoption_report`
+    so it precedes the ``--dry-run`` output and the confirmation prompt,
+    and before any write.
+
+    Deliberately does **not** apply :func:`~meshprovision.provisioning.
+    pipeline.node_key_admin_refs`'s secondary "1b" check (a live key
+    claiming *another* ref's material outright) that ``mesh provision``
+    additionally runs: ``mesh adopt``'s own
+    :func:`~meshprovision.provisioning.key_registry.adopt_canonical_ref`
+    is material-preserving, so a device whose own key matches an
+    ``observed-*`` ref it is about to canonicalize is the intended
+    outcome, not a takeover.
+
+    Args:
+        db_keys: The open :class:`~meshprovision.db.keys.KeyRepository`.
+        db_nodes: The open :class:`~meshprovision.db.nodes.NodeRepository`.
+        template: The validated provisioning template.
+        live: The device's (or backup's) normalized live configuration.
+        own_private_secret: The device's live-reported private key,
+            still wrapped, or ``None``. Only ever unwrapped here, in
+            memory, to run :func:`~meshprovision.crypto.keys.
+            public_key_matches`; never logged or persisted by this
+            function.
+
+    Raises:
+        AdminKeyRotationRefusedError: If the node's recorded ``<hex>_pub``
+            row currently backs an authorized admin key, and persisting
+            what ``live`` reports would change either the recorded public
+            or private key material. See
+            :func:`~meshprovision.provisioning.pipeline.
+            adopt_would_rotate_admin_key` for exactly what counts as a
+            change. Carries a redacted fingerprint (never raw key
+            material) and a hint pointing at the out-of-band ``mesh admin
+            import --overwrite`` rotation flow.
+    """
+    admin_refs = node_key_admin_refs(live.node_id, keys=db_keys, nodes=db_nodes, template=template)
+    if not admin_refs:
+        return
+
+    own_pub_record = db_keys.find(f"{live.node_id.hex}_pub")
+    if own_pub_record is None:  # pragma: no cover - node_key_admin_refs already checked this
+        return
+    db_public_key = own_pub_record.material()
+    live_public_key = live.security.public_key if live.security.has_public_key else None
+    live_private_key = own_private_secret.reveal() if own_private_secret is not None else None
+
+    if not adopt_would_rotate_admin_key(
+        db_public_key=db_public_key,
+        db_has_private_key=db_keys.find(f"{live.node_id.hex}_priv") is not None,
+        live_public_key=live_public_key,
+        live_private_key=live_private_key,
+    ):
+        return
+
+    reported_fingerprint = (
+        redact.fingerprint(live_public_key) if live_public_key is not None else "<unknown>"
+    )
+    hint = (
+        f"The connected device reports a different key (fingerprint "
+        f"{reported_fingerprint}) than the one recorded for this admin node. It is "
+        "either a different device claiming its node id, or a genuine key loss "
+        "(firmware #7449). Verify the physical device, and compare the fingerprint "
+        "with the one the device itself shows. If it is genuine, register its key "
+        f"with `mesh admin import --overwrite {live.node_id.hex}=<public key>` and "
+        "re-run `mesh adopt`."
+    )
+    others = ", ".join(ref for ref in admin_refs if ref != f"{live.node_id.hex}_pub")
+    if others:
+        hint = f"{hint} Also re-import: {others}."
+
+    raise AdminKeyRotationRefusedError(
+        f"{live.node_id.display}'s key would change while it backs authorized admin "
+        f"key(s): {', '.join(admin_refs)}.",
+        reason="adopt",
+        admin_refs=admin_refs,
+        reported_fingerprint=reported_fingerprint,
+        hint=hint,
+    )
+
+
 @click.command(name="adopt", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
 @transport_options
 @click.option(
@@ -717,7 +820,10 @@ def adopt(
         json_output: Whether to emit JSON, from ``--json``.
         force: Whether to allow re-adopting (demoting) a template-managed
             node, and to proceed despite conflicting ``--from-backup``
-            node-id evidence, from ``--force``.
+            node-id evidence, from ``--force``. Does **not** bypass the
+            admin-key-rotation refusal below -- a node whose recorded key
+            backs an authorized admin key still refuses outright, with no
+            override flag; see ``AdminKeyRotationRefusedError``.
         show_admin_keys: Whether to print import-ready admin key material,
             from ``--show-admin-keys``.
 
@@ -736,6 +842,11 @@ def adopt(
             via ``mesh db forget`` -- not bypassable with ``--force``.
         AdoptionRefusedError: If the node's database record is already
             ``management=template`` and ``--force`` was not passed.
+        AdminKeyRotationRefusedError: If the node's recorded key currently
+            backs an authorized admin key and persisting what the device
+            (or backup) reports would change that key. Not bypassable
+            with ``--force``; see ``docs/security.md``, "Rotating an
+            admin node's key".
         click.Abort: If the operator declines the confirmation prompt.
     """
     transport_given = any((port, ble_address, ble_scan, host, interface))
@@ -804,6 +915,15 @@ def adopt(
                 node_id=live.node_id.display,
             )
 
+        own_private_secret = live.security.private_key if live.security.has_private_key else None
+        _refuse_admin_key_rotation(
+            db.keys,
+            db.nodes,
+            template=template,
+            live=live,
+            own_private_secret=own_private_secret,
+        )
+
         public_keys = db.keys.public_key_map()
         report = adopt_mod.build_adoption_report(
             live,
@@ -832,7 +952,6 @@ def adopt(
         duplicate_admin_key_warnings = _shared_unimported_admin_key_notes(
             db.nodes, live_node_id=live.node_id.hex, admin_keys=report.admin_keys
         )
-        own_private_secret = live.security.private_key if live.security.has_private_key else None
         overwrite_warnings = _key_overwrite_warnings(
             db.keys,
             node_id_hex=live.node_id.hex,
