@@ -112,12 +112,18 @@ class FakeNode:
                 written.
 
         Raises:
-            RuntimeError: If ``section`` is listed in the owning
+            BaseException: If ``section`` is listed in the owning
                 interface's ``fail_sections`` -- simulates a device-side
-                write failure.
+                write failure. The exception type is
+                ``RuntimeError(f"simulated device write failure for
+                section {section!r}")`` by default, or whatever the
+                owning interface's ``fail_exc(section)`` returns when
+                set.
         """
         self.written_sections.append(section)
         if section in self._iface.fail_sections:
+            if self._iface.fail_exc is not None:
+                raise self._iface.fail_exc(section)
             raise RuntimeError(f"simulated device write failure for section {section!r}")
 
     def setOwner(  # noqa: N802 -- must match meshtastic's own Node.setOwner spelling
@@ -159,6 +165,7 @@ class FakeMeshInterface:
         firmware_version: str = FAKE_FIRMWARE,
         drop_security_keys: bool = False,
         fail_sections: frozenset[str] = frozenset(),
+        fail_exc: Callable[[str], BaseException] | None = None,
         fail_reads_after_write: bool = False,
     ) -> None:
         """Initialize a fake device at factory or custom naming defaults.
@@ -176,8 +183,14 @@ class FakeMeshInterface:
             drop_security_keys: When ``True``, writing the ``"security"``
                 section clears the just-written key material, simulating
                 firmware issue #7449.
-            fail_sections: Section names whose write raises
-                ``RuntimeError``, simulating a device-side write failure.
+            fail_sections: Section names whose write raises, simulating a
+                device-side write failure.
+            fail_exc: A factory from a failing section name to the
+                exception to raise for it. Defaults to ``None``, which
+                keeps today's ``RuntimeError(f"simulated device write
+                failure for section {section!r}")``. Set this to exercise
+                a real device I/O exception type (BLE, ``MeshInterface``,
+                serial, ...) -- see the ``device_io_error`` fixture.
             fail_reads_after_write: When ``True``, ``getMyUser()`` raises
                 ``RuntimeError`` once at least one section has been
                 written -- simulating a flaky serial read during the
@@ -188,6 +201,7 @@ class FakeMeshInterface:
         self.nid = NodeId.from_hex(node_id)
         self.drop_security_keys = drop_security_keys
         self.fail_sections = fail_sections
+        self.fail_exc = fail_exc
         self.fail_reads_after_write = fail_reads_after_write
         self.closed = 0
 
@@ -311,9 +325,9 @@ class _FakeConnectionNode:
 
         Raises:
             OSError: If this connection was already closed.
-            RuntimeError: Propagated from :meth:`FakeNode.writeConfig` when
-                ``section`` is listed in the device's ``fail_sections`` --
-                nothing is persisted in that case.
+            BaseException: Propagated from :meth:`FakeNode.writeConfig`
+                when ``section`` is listed in the device's
+                ``fail_sections`` -- nothing is persisted in that case.
         """
         if self._connection.closed:
             raise OSError(errno.EBADF, "fake connection is closed")

@@ -1643,16 +1643,96 @@ class _FakeIfaceTruncatesLongName(_FakeIfaceForApply):
 class _FakeLocalNodeRaisesOnSetOwner(_FakeLocalNode):
     """Simulates a device/communication failure during the owner (name) write."""
 
+    def __init__(self, iface: _FakeIfaceForApply, exc: BaseException) -> None:
+        super().__init__(iface)
+        self._exc = exc
+
     def setOwner(self, **_kw: object) -> None:  # noqa: N802 -- real MeshInterface method name
-        raise OSError("serial write timed out")
+        raise self._exc
 
 
 class _FakeIfaceRaisesOnSetOwner(_FakeIfaceForApply):
-    """An interface whose owner (name) write always raises."""
+    """An interface whose owner (name) write always raises ``exc``."""
 
-    def __init__(self, node_num: int = _DEFAULT_NODE_NUM) -> None:
+    def __init__(self, exc: BaseException | None = None, node_num: int = _DEFAULT_NODE_NUM) -> None:
         super().__init__(node_num)
-        self.localNode = _FakeLocalNodeRaisesOnSetOwner(self)
+        resolved_exc = exc if exc is not None else OSError("serial write timed out")
+        self.localNode = _FakeLocalNodeRaisesOnSetOwner(self, resolved_exc)
+
+
+class _FakeLocalNodeRaisesOnWrite(_FakeLocalNode):
+    """Simulates a device/communication failure during a config section write."""
+
+    def __init__(self, iface: _FakeIfaceForApply, exc: BaseException) -> None:
+        super().__init__(iface)
+        self._exc = exc
+
+    def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
+        self.written_sections.append(section)
+        raise self._exc
+
+
+class _FakeIfaceRaisesOnWrite(_FakeIfaceForApply):
+    """An interface whose config section write always raises ``exc``."""
+
+    def __init__(self, exc: BaseException, node_num: int = _DEFAULT_NODE_NUM) -> None:
+        super().__init__(node_num)
+        self.localNode = _FakeLocalNodeRaisesOnWrite(self, exc)
+
+
+# ---------------------------------------------------------------------------
+# Device I/O exceptions besides OSError/RuntimeError (BLE, MeshInterface, ...)
+# must be caught and converted, never escape as a raw traceback.
+# ---------------------------------------------------------------------------
+
+
+def test_write_section_wraps_every_device_io_error(
+    device_io_error: Callable[[], BaseException],
+) -> None:
+    exc = device_io_error()
+    iface = _FakeIfaceRaisesOnWrite(exc)
+    change = SectionChange(section="device", kind=detect.SectionKind.CONFIG, changes=())
+
+    with pytest.raises(ProvisioningError) as exc_info:
+        write_section(iface, change)  # type: ignore[arg-type]
+
+    assert exc_info.value.__cause__ is exc
+
+
+def test_write_section_does_not_swallow_a_programming_error() -> None:
+    """Pins the module's "no broad except" discipline against a future regression."""
+    iface = _FakeIfaceRaisesOnWrite(ZeroDivisionError("boom"))
+    change = SectionChange(section="device", kind=detect.SectionKind.CONFIG, changes=())
+
+    with pytest.raises(ZeroDivisionError):
+        write_section(iface, change)  # type: ignore[arg-type]
+
+
+def test_apply_plan_owner_write_failure_reports_failed_for_every_device_io_error(
+    make_live, device_io_error: Callable[[], BaseException]
+) -> None:
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="MT01",
+        desired_long_name="Meshtastic MT01",
+    )
+    plan = build_plan(inputs)
+    assert not plan.name_change.is_empty
+    kp = generate_keypair()
+
+    iface = _FakeIfaceRaisesOnSetOwner(exc=device_io_error())
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert outcome.ok is False
+    owner_result = next(r for r in outcome.results if r.section == "owner")
+    assert owner_result.status == WriteStatus.FAILED
+    assert "Failed to set owner" in owner_result.message
 
 
 class _ReadFailsAfterReconnectSession:

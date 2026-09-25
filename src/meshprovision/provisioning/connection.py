@@ -21,6 +21,7 @@ in. That separation is an invariant the unit tests assert.
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import threading
 from collections.abc import Callable, Iterator, Sequence
@@ -54,10 +55,59 @@ __all__ = [
     "backend_for",
     "close_interface",
     "connected",
+    "device_io_errors",
     "select_backend",
 ]
 
 _logger = logging.getLogger(__name__)
+
+
+@functools.cache
+def device_io_errors() -> tuple[type[Exception], ...]:
+    """Library exception types a device read or write can raise besides ``OSError`` & co.
+
+    This is the single shared source of truth for "these are the device
+    I/O exception types" -- used both by :meth:`BLEBackend.connect` and by
+    every device write/read-back site in
+    :mod:`meshprovision.provisioning.apply`, so the two lists cannot drift
+    apart again the way they did before (BLE write failures used to escape
+    every handler because ``apply.py``'s catch tuple never learned about
+    :class:`~meshtastic.ble_interface.BLEInterface.BLEError`).
+
+    The ``bleak``/``meshtastic.ble_interface`` import is lazy and cached:
+    it happens at most once per process, on the first call, so a
+    serial/TCP-only run never pays for it.
+
+    Returns:
+        A tuple of exception types, always including
+        :class:`~meshtastic.mesh_interface.MeshInterface.MeshInterfaceError`,
+        plus ``BLEInterface.BLEError`` and ``bleak.exc.BleakError`` when
+        the optional BLE dependencies are importable.
+    """
+    from meshtastic.mesh_interface import MeshInterface
+
+    errors: list[type[Exception]] = [MeshInterface.MeshInterfaceError]
+    try:
+        from bleak.exc import BleakError
+        from meshtastic.ble_interface import BLEInterface
+    except ImportError:
+        return tuple(errors)
+    return (*errors, BLEInterface.BLEError, BleakError)
+
+
+_BLE_CONNECT_BASE_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
+    OSError,
+    ValueError,
+    RuntimeError,
+)
+"""Non-library exception types :meth:`BLEBackend.connect` catches.
+
+Kept as its own homogeneous, unbounded tuple (rather than named inline in
+the ``except`` clause) so it star-unpacks cleanly alongside
+:func:`device_io_errors` -- mypy does not accept a tuple literal that
+mixes bare exception names with a starred unpack of a runtime-computed
+tuple.
+"""
 
 
 class Transport(StrEnum):
@@ -226,20 +276,11 @@ class BLEBackend:
                 transport="ble",
                 hint=discovery.BLE_UNAVAILABLE_HINT,
             ) from exc
-        from bleak.exc import BleakError
-        from meshtastic.mesh_interface import MeshInterface
 
         _logger.debug("Connecting over BLE to %s (timeout=%ss).", self.address, self.timeout)
         try:
             iface = BLEInterface(address=self.address, timeout=self.timeout)
-        except (
-            OSError,
-            ValueError,
-            RuntimeError,
-            MeshInterface.MeshInterfaceError,
-            BLEInterface.BLEError,
-            BleakError,
-        ) as exc:
+        except (*_BLE_CONNECT_BASE_EXCEPTIONS, *device_io_errors()) as exc:
             raise ConnectionFailedError(
                 f"Failed to connect over BLE to {self.address}: {exc}",
                 transport="ble",

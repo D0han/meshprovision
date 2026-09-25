@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
 
 import pytest
 
@@ -324,11 +325,38 @@ def test_tcp_backend_connect_wraps_valueerror(monkeypatch: pytest.MonkeyPatch) -
     assert exc_info.value.hint
 
 
-def test_ble_backend_connect_wraps_runtimeerror(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ble_backend_connect_wraps_every_device_io_error(
+    request: pytest.FixtureRequest,
+    device_io_error: Callable[[], BaseException],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Connect must catch every type ``device_io_errors()`` names -- except ``SystemExit``.
+
+    ``SystemExit`` deliberately stays out of connect's catch tuple: all
+    three connect sites (serial, TCP, BLE) exclude it, and the only
+    ``our_exit()`` reachable at connect is ``serial_interface``'s
+    no-``devPath`` port-discovery path, which meshprovision never takes
+    (it always passes an explicit target). This id is a strict xfail,
+    not a skip, so a future regression that starts catching it here would
+    be caught, not silently ignored.
+    """
+    if request.node.callspec.params["device_io_error"] == "system_exit":
+        request.applymarker(
+            pytest.mark.xfail(
+                strict=True,
+                reason=(
+                    "connect deliberately does not catch SystemExit: no connect "
+                    "path with an explicit target calls our_exit"
+                ),
+            )
+        )
+
     import meshtastic.ble_interface as ble_mod
 
+    exc = device_io_error()
+
     def failing_init(self: object, **kwargs: object) -> None:
-        raise RuntimeError("adapter busy")
+        raise exc
 
     monkeypatch.setattr(ble_mod.BLEInterface, "__init__", failing_init)
 
@@ -338,6 +366,7 @@ def test_ble_backend_connect_wraps_runtimeerror(monkeypatch: pytest.MonkeyPatch)
     assert exc_info.value.transport == "ble"
     assert exc_info.value.target == "AA:BB:CC:DD:EE:FF"
     assert exc_info.value.hint
+    assert exc_info.value.__cause__ is exc
 
 
 def test_ble_backend_connect_import_failure_raises_unsupported(
@@ -348,6 +377,38 @@ def test_ble_backend_connect_import_failure_raises_unsupported(
     backend = BLEBackend("AA:BB:CC:DD:EE:FF")
     with pytest.raises(UnsupportedTransportError):
         backend.connect()
+
+
+# ---------------------------------------------------------------------------
+# device_io_errors() -- the shared source of truth for connect and write.
+# ---------------------------------------------------------------------------
+
+
+def test_device_io_errors_includes_ble_types() -> None:
+    from bleak.exc import BleakError
+    from meshtastic.ble_interface import BLEInterface
+    from meshtastic.mesh_interface import MeshInterface
+
+    connection.device_io_errors.cache_clear()
+    try:
+        errors = connection.device_io_errors()
+        assert MeshInterface.MeshInterfaceError in errors
+        assert BLEInterface.BLEError in errors
+        assert BleakError in errors
+    finally:
+        connection.device_io_errors.cache_clear()
+
+
+def test_device_io_errors_degrades_gracefully_without_ble(monkeypatch: pytest.MonkeyPatch) -> None:
+    from meshtastic.mesh_interface import MeshInterface
+
+    monkeypatch.setitem(sys.modules, "meshtastic.ble_interface", None)
+    connection.device_io_errors.cache_clear()
+    try:
+        errors = connection.device_io_errors()
+        assert errors == (MeshInterface.MeshInterfaceError,)
+    finally:
+        connection.device_io_errors.cache_clear()
 
 
 def test_connected_closes_interface_even_when_body_raises() -> None:

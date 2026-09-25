@@ -225,6 +225,49 @@ def test_provision_reports_a_failed_database_save_as_divergence(
     _assert_no_secrets(result.stderr)
 
 
+def test_ble_write_failure_reports_uncertain_not_a_traceback(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """A ``BLEInterface.BLEError`` mid-plan must be caught, not escape as a raw traceback.
+
+    Regression test: ``BLEError`` subclasses plain ``Exception``, not
+    ``OSError``, so it used to pass every ``except`` in
+    ``apply.py``/``handle_cli_errors`` uncaught -- a raw traceback, exit
+    1, and no UNCERTAIN report, silently losing any freshly generated key
+    on a regenerate plan.
+    """
+    from meshtastic.ble_interface import BLEInterface
+
+    bus.use(
+        FakeMeshInterface(
+            "deadbe01",
+            fail_sections=frozenset({"lora"}),
+            fail_exc=lambda _section: BLEInterface.BLEError("Error writing BLE", "write"),
+        )
+    )
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+    # Keeps the WARNING-level structlog line ("left in an UNCERTAIN
+    # STATE") out of stderr: its ISO timestamp's microseconds field is a
+    # random 6-digit run that would otherwise, occasionally, collide with
+    # _assert_no_secrets' bare-6-digit (BLE PIN) pattern below -- a false
+    # positive unrelated to this test's own assertions, both of which are
+    # satisfied by the separate ``ctx.error(...)`` line instead.
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "UNCERTAIN" in result.stderr
+    assert "the database was NOT updated" in result.stderr
+    assert "Traceback" not in result.stdout
+    assert "Traceback" not in result.stderr
+    assert db_fingerprint(db_path) == before
+
+    _assert_no_secrets(result.stdout)
+    _assert_no_secrets(result.stderr)
+
+
 def test_declining_the_apply_prompt_aborts_before_any_write(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

@@ -29,13 +29,18 @@ and :class:`~meshprovision.errors.WriteVerificationError` document
 ``expected``/``actual`` as always-redacted strings.
 
 Exception discipline: the only broad ``except`` in this module is
-:data:`_DEVICE_EXCEPTIONS`, which exists specifically because
-``meshtastic.util.our_exit()`` -- called by ``Node.writeConfig`` and
-``Node.setOwner`` on a bad section name or an empty name -- raises
-``SystemExit``, and letting that propagate would kill the ``mesh``
-process mid-provision. Every catch converts to a
-:class:`~meshprovision.errors.ProvisioningError` subclass or a
-``WriteResult``; nothing here ever does a bare ``except Exception``.
+:data:`_DEVICE_EXCEPTIONS` plus
+:func:`~meshprovision.provisioning.connection.device_io_errors`, which
+exists specifically because ``meshtastic.util.our_exit()`` -- called by
+``Node.writeConfig`` and ``Node.setOwner`` on a bad section name or an
+empty name -- raises ``SystemExit``, and letting that propagate would
+kill the ``mesh`` process mid-provision. ``device_io_errors()`` adds the
+library exception types a device read/write can raise besides
+``OSError`` & co, including a BLE write failure
+(``BLEInterface.BLEError``/``BleakError``), which otherwise escapes as a
+raw traceback since it is not an ``OSError`` subclass. Every catch
+converts to a :class:`~meshprovision.errors.ProvisioningError` subclass
+or a ``WriteResult``; nothing here ever does a bare ``except Exception``.
 """
 
 from __future__ import annotations
@@ -61,7 +66,7 @@ from meshprovision.errors import (
     PlanConflictError,
     ProvisioningError,
 )
-from meshprovision.provisioning import detect
+from meshprovision.provisioning import connection, detect
 from meshprovision.provisioning.apply_session import (
     DEFAULT_RECONNECT_ATTEMPTS,
     DEFAULT_SETTLE_SECONDS,
@@ -112,10 +117,32 @@ unknown section name or an empty name (verified in meshtastic 2.7.11
 ``util.py``). Catching it here and converting it to a
 :class:`~meshprovision.errors.ProvisioningError` is what stops the
 library from killing the ``mesh`` process mid-provision.
-:class:`~meshtastic.mesh_interface.MeshInterface.MeshInterfaceError` is
-added at each call site via a lazy import, since importing ``meshtastic``
-at module level would violate this layer's protobuf-confinement rule for
-every *other* module that is not ``detect.py``/``apply.py``.
+Every call site also catches
+:func:`~meshprovision.provisioning.connection.device_io_errors`, the
+shared tuple of library exception types (including a BLE write failure,
+``BLEInterface.BLEError``/``BleakError``) a device read/write can raise
+besides ``OSError`` & co. That function does its own lazy import, since
+importing ``meshtastic``/``bleak`` at module level would violate this
+layer's protobuf-confinement rule for every *other* module that is not
+``detect.py``/``apply.py``/``connection.py``. ``SystemExit`` is *not*
+part of ``device_io_errors()``: it is caught here, at write time, via
+this tuple instead, and deliberately stays out of
+:meth:`~meshprovision.provisioning.connection.BLEBackend.connect`'s own
+catch tuple, since no connect path meshprovision uses can reach
+``our_exit()``.
+"""
+
+_VERIFY_READBACK_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
+    DetectionError,
+    *_DEVICE_EXCEPTIONS,
+)
+""":data:`_DEVICE_EXCEPTIONS` plus :class:`DetectionError`, for the one
+read-back site (:func:`apply_plan`'s post-write verify) that can also
+fail to *parse* what a successful reconnect read. Kept as its own
+homogeneous, unbounded tuple so it star-unpacks cleanly alongside
+:func:`~meshprovision.provisioning.connection.device_io_errors` -- mypy
+does not accept a tuple literal that mixes a bare exception name with a
+starred unpack of a runtime-computed tuple.
 """
 
 
@@ -279,8 +306,6 @@ def write_section(
     if not is_config and not is_module:
         raise PlanConflictError(f"Unknown config section {change.section!r}", field=change.section)
 
-    from meshtastic.mesh_interface import MeshInterface as _MeshInterface
-
     root = iface.localNode.localConfig if is_config else iface.localNode.moduleConfig
     msg = getattr(root, change.section)
 
@@ -302,7 +327,7 @@ def write_section(
 
     try:
         iface.localNode.writeConfig(change.section)
-    except (*_DEVICE_EXCEPTIONS, _MeshInterface.MeshInterfaceError) as exc:
+    except (*_DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
         raise ProvisioningError(
             f"Failed to write config section {change.section!r}: {exc}"
         ) from exc
@@ -625,14 +650,12 @@ def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | Non
     if plan.name_change.is_empty:
         return None
 
-    from meshtastic.mesh_interface import MeshInterface as _MeshInterface
-
     try:
         iface.localNode.setOwner(
             long_name=plan.name_change.desired_long_name,
             short_name=plan.name_change.desired_short_name,
         )
-    except (*_DEVICE_EXCEPTIONS, _MeshInterface.MeshInterfaceError) as exc:
+    except (*_DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
         return WriteResult("owner", WriteStatus.FAILED, f"Failed to set owner: {exc}")
     return None
 
@@ -757,12 +780,10 @@ def apply_plan(
             node_id=plan.node_id, results=tuple(results), dry_run=False, verified=True
         )
 
-    from meshtastic.mesh_interface import MeshInterface as _MeshInterface
-
     try:
         live_after = detect.read_live_config(fresh_iface)
         device_pub = fresh_iface.getPublicKey()
-    except (DetectionError, *_DEVICE_EXCEPTIONS, _MeshInterface.MeshInterfaceError) as exc:
+    except (*_VERIFY_READBACK_EXCEPTIONS, *connection.device_io_errors()) as exc:
         results.append(
             WriteResult(
                 "<verify>",

@@ -38,6 +38,7 @@ import time
 REAL_SLEEP = time.sleep
 time.sleep = lambda *_a, **_k: None
 
+import errno  # noqa: E402
 import os  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -192,3 +193,77 @@ def keypair_factory() -> Callable[[], KeyPair]:
         :class:`~meshprovision.crypto.keys.KeyPair` each time.
     """
     return generate_keypair
+
+
+_DEVICE_IO_ERRORS: Final[tuple[str, ...]] = (
+    "runtime",
+    "oserror",
+    "system_exit",
+    "mesh_interface",
+    "ble",
+    "bleak",
+    "serial",
+)
+"""Every device I/O exception id :func:`device_io_error` is parametrized over.
+
+One list drives both the connect-time and write-time parametrizations
+(``test_connection_select.py`` and ``test_apply.py``), so adding a type
+here covers connect *and* write in one place -- the drift guard for the
+bug this fixture regression-tests (a BLE write failure used to escape
+every handler because ``apply.py``'s catch tuple never learned about
+``BLEInterface.BLEError``).
+"""
+
+
+@pytest.fixture(params=_DEVICE_IO_ERRORS)
+def device_io_error(request: pytest.FixtureRequest) -> Callable[[], BaseException]:
+    """Return a factory for one exception type a real device read/write can raise.
+
+    Args:
+        request: Pytest's fixture request, carrying the parametrized id.
+
+    Returns:
+        A zero-argument callable that builds a fresh instance of the
+        exception type named by ``request.param``.
+    """
+    exc_id: str = request.param
+
+    def _runtime() -> BaseException:
+        return RuntimeError("simulated device write failure")
+
+    def _oserror() -> BaseException:
+        return OSError(errno.EIO, "simulated device I/O failure")
+
+    def _system_exit() -> BaseException:
+        return SystemExit(1)
+
+    def _mesh_interface() -> BaseException:
+        from meshtastic.mesh_interface import MeshInterface
+
+        return MeshInterface.MeshInterfaceError("simulated mesh interface failure")
+
+    def _ble() -> BaseException:
+        from meshtastic.ble_interface import BLEInterface
+
+        return BLEInterface.BLEError("Error writing BLE", "write")
+
+    def _bleak() -> BaseException:
+        from bleak.exc import BleakError
+
+        return BleakError("simulated bleak failure")
+
+    def _serial() -> BaseException:
+        import serial
+
+        return serial.SerialException("simulated serial failure")
+
+    factories: dict[str, Callable[[], BaseException]] = {
+        "runtime": _runtime,
+        "oserror": _oserror,
+        "system_exit": _system_exit,
+        "mesh_interface": _mesh_interface,
+        "ble": _ble,
+        "bleak": _bleak,
+        "serial": _serial,
+    }
+    return factories[exc_id]
