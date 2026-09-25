@@ -343,23 +343,35 @@ def _resolve_enum_value(table: EnumTable, raw: object) -> int | None:
     return table.try_value(raw)
 
 
-def _parse_seen_by(raw: object) -> tuple[int | None, tuple[str, ...], datetime | None]:
+def _parse_seen_by(
+    raw: object, tracker: CoercionTracker
+) -> tuple[int | None, tuple[str, ...], datetime | None]:
     """Derive ``neighbor_count``, ``seen_by``, and ``last_seen`` from ``seenBy``.
 
     Args:
         raw: The raw ``seenBy`` field; expected to be a JSON object
             mapping MQTT gateway topic to unix epoch seconds.
+        tracker: Counts one coercion failure for the whole field -- not
+            once per topic -- when ``raw`` is present but not a ``dict``,
+            or when any of its values fails to parse via
+            :func:`parse_epoch`. An absent (``None``) ``seenBy`` is not
+            drift and is never counted.
 
     Returns:
         A ``(neighbor_count, seen_by, last_seen)`` tuple. All three stay
-        ``(None, (), None)`` when ``raw`` is not a ``dict``.
+        ``(None, (), None)`` when ``raw`` is absent or not a ``dict``.
     """
+    if raw is None:
+        return None, (), None
     if not isinstance(raw, dict):
+        tracker.record_failure()
         return None, (), None
     neighbor_count = len(raw)
     seen_by = tuple(sorted(str(topic) for topic in raw))[:MAX_SEEN_BY_TOPICS]
-    epochs = [v for v in raw.values() if isinstance(v, int) and not isinstance(v, bool)]
-    last_seen = parse_epoch(max(epochs)) if epochs else None
+    parsed = [parse_epoch(v) for v in raw.values()]
+    if any(p is None for p in parsed):
+        tracker.record_failure()
+    last_seen = max((p for p in parsed if p is not None), default=None)
     return neighbor_count, seen_by, last_seen
 
 
@@ -406,7 +418,7 @@ def parse_node(
         latitude = None
         longitude = None
 
-    neighbor_count, seen_by, seen_by_last_seen = _parse_seen_by(payload.get("seenBy"))
+    neighbor_count, seen_by, seen_by_last_seen = _parse_seen_by(payload.get("seenBy"), tracker)
     last_device_metrics = tracker.coerce(payload.get("lastDeviceMetrics"), parse_epoch)
     last_map_report = tracker.coerce(payload.get("lastMapReport"), parse_epoch)
     # last_seen is documented as "the node's most recent activity," not

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -33,12 +34,14 @@ from meshprovision.datasources.models import (
 )
 from meshprovision.enums import role_table
 from meshprovision.errors import (
+    ExitCode,
     HttpError,
     InvalidResponseError,
     MissingContactError,
     SettingsError,
 )
 from meshprovision.nodeid import NodeId
+from meshprovision.status.report import build_report, collect_observations
 
 pytestmark = pytest.mark.unit
 
@@ -873,6 +876,104 @@ def test_loranet_seen_by_derives_neighbor_count_and_last_seen(tmp_path: Path) ->
     assert obs.neighbor_count == 2
     assert obs.seen_by == ("gw1", "gw2")
     assert obs.last_seen == datetime.fromtimestamp(1_700_000_100, tz=UTC)
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("seen_by_value", "expect_last_seen", "expect_failures"),
+    [
+        pytest.param(
+            {"t": 1_758_700_000},
+            datetime.fromtimestamp(1_758_700_000, tz=UTC),
+            0,
+            id="int-epoch",
+        ),
+        pytest.param(
+            {"t": 1_758_700_000.5},
+            datetime.fromtimestamp(1_758_700_000.5, tz=UTC),
+            0,
+            id="float-epoch-now-works",
+        ),
+        pytest.param({"t": "1758700000"}, None, 1, id="numeric-string-stays-a-failure"),
+        pytest.param([["t", 1_758_700_000]], None, 1, id="wrong-shape-list"),
+        pytest.param({"a": "x", "b": "y"}, None, 1, id="all-values-unparsable-counts-once"),
+        pytest.param(None, None, 0, id="explicit-json-null-same-as-absent"),
+        pytest.param("gw1", None, 1, id="bare-string-not-a-mapping"),
+        pytest.param({"t": -5}, None, 1, id="non-positive-epoch-rejected"),
+        pytest.param({"t": 0}, None, 1, id="zero-epoch-rejected"),
+        pytest.param({"t": True}, None, 1, id="bool-not-an-epoch"),
+    ],
+)
+def test_loranet_seen_by_shapes_tracked_as_coercion_failures(
+    tmp_path: Path,
+    seen_by_value: object,
+    expect_last_seen: datetime | None,
+    expect_failures: int,
+) -> None:
+    """``seenBy`` drift must reach the coercion tracker, not silently vanish.
+
+    Every shape here besides a genuine ``int``/``float`` epoch must count
+    against the field, so an upstream schema change degrades ``mesh
+    status``'s exit code instead of looking identical to those nodes
+    simply being offline.
+    """
+    nid = NodeId.from_hex("deadbe01")
+    payload = {nid.decimal: {"seenBy": seen_by_value}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_all()
+
+    assert result[nid].last_seen == expect_last_seen
+    assert source.last_fetch_field_coercions == expect_failures
+
+
+@respx.mock
+def test_loranet_seen_by_absent_key_not_counted_as_a_coercion_failure(tmp_path: Path) -> None:
+    nid = NodeId.from_hex("deadbe01")
+    payload = {nid.decimal: {"shortName": "no-seen-by-key-at-all"}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    result = source.fetch_all()
+
+    assert result[nid].last_seen is None
+    assert source.last_fetch_field_coercions == 0
+
+
+@respx.mock
+def test_loranet_mass_uncoercible_seen_by_degrades_the_status_report(tmp_path: Path) -> None:
+    """The failure mode E7 exists to prevent: reaches all the way to the exit code.
+
+    If loranet ever sends every node's ``seenBy`` as a shape
+    ``_parse_seen_by`` can't parse, ``last_seen`` silently disappears for
+    the whole fleet -- unless the coercion also reaches the tracker and
+    degrades ``mesh status``'s exit code. Without that, a monitoring/cron
+    job watching the exit code would see a healthy run.
+    """
+    nid1 = NodeId.from_hex("deadbe01")
+    nid2 = NodeId.from_hex("deadbe02")
+    payload = {
+        nid1.decimal: {"seenBy": {"gw1": "1758700000"}},
+        nid2.decimal: {"seenBy": {"gw1": "1758700100"}},
+    }
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    collected = collect_observations([source], [nid1, nid2])
+    report = build_report(
+        records={},
+        observations_by_source=collected.observations,
+        node_ids=[nid1, nid2],
+        now=datetime.now(tz=UTC),
+    )
+    report = dataclasses.replace(report, field_coercions=collected.field_coercions)
+
+    assert collected.field_coercions == {SOURCE_LORANET: 2}
+    assert report.exit_code() == ExitCode.STATUS_DEGRADED
 
 
 @respx.mock

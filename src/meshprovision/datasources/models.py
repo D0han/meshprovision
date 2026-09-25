@@ -84,6 +84,15 @@ class CoercionTracker:
             self.failures += 1
         return result
 
+    def record_failure(self) -> None:
+        """Count one coercion failure directly, for a caller with no single value to coerce.
+
+        For a field whose raw shape itself is wrong (not a single
+        malformed value :meth:`coerce` can run a ``coerce_fn`` over --
+        for example ``seenBy`` arriving as a list instead of a mapping).
+        """
+        self.failures += 1
+
 
 E7_SCALE: Final[float] = 1e7
 """Divisor converting a Meshtastic E7 fixed-point coordinate to degrees."""
