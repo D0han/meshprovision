@@ -297,10 +297,22 @@ def admin_bootstrap(
 @admin.command(name="import")
 @click.argument("assignments", nargs=-1, required=True, metavar="REF=BASE64...")
 @click.option(
-    "--force",
+    "--overwrite",
     is_flag=True,
     default=False,
-    help="Overwrite an existing, differing key; skip the weak-key/duplicate refusal.",
+    help="Allow overwriting an existing ref's differing key material.",
+)
+@click.option(
+    "--allow-alias",
+    is_flag=True,
+    default=False,
+    help="Allow registering a key already authorized under another ref.",
+)
+@click.option(
+    "--allow-weak",
+    is_flag=True,
+    default=False,
+    help="Allow a key that fails the weak-key audit to be registered anyway.",
 )
 @click.option(
     "--dry-run",
@@ -317,7 +329,9 @@ def admin_import(
     ctx: CliContext,
     *,
     assignments: tuple[str, ...],
-    force: bool,
+    overwrite: bool,
+    allow_alias: bool,
+    allow_weak: bool,
     dry_run: bool,
     json_output: bool,
 ) -> None:
@@ -326,27 +340,36 @@ def admin_import(
     Never touches a device. Validates key length and canonical base64
     encoding, runs the weak-key audit, and refuses a duplicate public key
     already registered under a different (non-``observed-*``) reference,
-    unless ``--force`` is passed. Registering a key also reconciles it
-    onto its real ref everywhere else in the database (see
+    unless ``--allow-alias`` is passed. Registering a key also reconciles
+    it onto its real ref everywhere else in the database (see
     :func:`~meshprovision.provisioning.key_registry.adopt_canonical_ref`):
     a synthetic ``observed-*`` row ``mesh adopt`` minted for this exact
     material is deleted and every node's ``authorized_admin_keys``
     rewritten to point at the real ref instead, and any legacy
     ``unregistered_admin_keys`` entry for the same material is dropped.
 
+    ``--overwrite``, ``--allow-alias`` and ``--allow-weak`` each gate
+    exactly one refusal and are independent of one another: none of them
+    implicitly grants either of the others.
+
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
             cli.common.pass_cli`.
         assignments: One or more ``REF=BASE64`` tokens.
-        force: Whether to skip the differing-material and duplicate-key
-            refusals, from ``--force``.
+        overwrite: Whether to allow replacing an existing ref's differing
+            key material, from ``--overwrite``.
+        allow_alias: Whether to allow registering a key already
+            authorized under another (non-``observed-*``) ref, from
+            ``--allow-alias``.
+        allow_weak: Whether to allow a key that fails the weak-key audit
+            to be registered anyway, from ``--allow-weak``.
         dry_run: Whether to run every validation/audit/duplicate check
             and report the outcome without writing anything, from
             ``--dry-run``. Matches ``mesh provision``/``mesh adopt``/
             ``mesh admin bootstrap``'s existing convention -- unlike
             those commands, ``import`` previously had no way to preview
             a registration's outcome (weak-key result, duplicate
-            collision, ``--force`` overwrite) before committing it.
+            collision, ``--overwrite``) before committing it.
         json_output: Whether to emit JSON, from ``--json``.
 
     Raises:
@@ -354,9 +377,10 @@ def admin_import(
         KeyMaterialError: If a base64 value is not exactly 32 bytes of
             canonical base64.
         KeyVerificationError: If a reference already exists with
-            different material and ``--force`` was not passed.
-        WeakKeyError: If a key fails the weak-key audit, or duplicates
-            another registered key, and ``--force`` was not passed.
+            different material and ``--overwrite`` was not passed.
+        WeakKeyError: If a key fails the weak-key audit and
+            ``--allow-weak`` was not passed, or duplicates another
+            registered key and ``--allow-alias`` was not passed.
     """
     registered: list[dict[str, object]] = []
     skipped: list[dict[str, object]] = []
@@ -377,15 +401,15 @@ def admin_import(
                     )
                     skipped.append({"ref": ref, "key_ref": key_ref, "reason": "identical"})
                     continue
-                if not force:
+                if not overwrite:
                     raise KeyVerificationError(
                         f"{key_ref} already exists with different key material.",
                         key_ref=key_ref,
-                        hint="Pass --force to replace it.",
+                        hint="Pass --overwrite to replace it.",
                     )
 
             audit = weakkeys.audit_public_key(material, key_ref=key_ref, known_bad=known_bad)
-            if audit.compromised and not force:
+            if audit.compromised and not allow_weak:
                 audit.raise_if_compromised()
             elif audit.findings:
                 for line in audit.summary().splitlines():
@@ -403,14 +427,17 @@ def admin_import(
                 and existing_material == material
                 and not observed_keys.is_observed_ref(existing_ref)
             ]
-            if dupes and not force:
+            if dupes and not allow_alias:
                 raise WeakKeyError(
                     f"That public key is already registered as {', '.join(dupes)}.",
                     reason="duplicate public key",
                     key_ref=key_ref,
                     severity=WeakKeySeverity.CRITICAL,
                     fingerprint=redact.fingerprint(material),
-                    hint="Pass --force if this is a deliberate alias for the same physical node.",
+                    hint=(
+                        "Pass --allow-alias if this is a deliberate alias for the "
+                        "same physical node."
+                    ),
                 )
 
             # Upserted into the in-memory session unconditionally, even

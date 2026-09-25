@@ -347,13 +347,18 @@ mesh admin list --json
 - `import` registers a public key you already hold, without touching a
   device. It validates length and canonical base64, runs the weak-key
   audit, and refuses a key already registered under a different reference
-  unless `--force` — except when that other reference is one of `mesh
-  adopt`'s own `observed-*` refs, which is not a collision to refuse but
-  exactly the rename this command performs (see
-  [`observed-*` rows](database.md#observed--rows)). `--dry-run` runs every
-  one of those checks and reports the outcome (including a refusal)
-  without registering anything, matching `provision`/`adopt`/`admin
-  bootstrap`'s existing `--dry-run` convention.
+  unless `--allow-alias` — except when that other reference is one of
+  `mesh adopt`'s own `observed-*` refs, which is not a collision to
+  refuse but exactly the rename this command performs (see
+  [`observed-*` rows](database.md#observed--rows)). Three flags each gate
+  exactly one refusal, independently of one another: `--overwrite` allows
+  replacing an existing ref's differing key material, `--allow-alias`
+  allows registering a key already authorized under another ref, and
+  `--allow-weak` allows a key that fails the weak-key audit to be
+  registered anyway. `--dry-run` runs every one of those checks and
+  reports the outcome (including a refusal) without registering anything,
+  matching `provision`/`adopt`/`admin bootstrap`'s existing `--dry-run`
+  convention.
 - `list` shows each admin's ref, whether the public key is present, a
   redacted fingerprint, whether the private counterpart is on hand,
   whether it is in the template, which node it resolves to, its weak-key

@@ -560,8 +560,8 @@ def test_admin_import_dry_run_still_refuses_a_weak_key(
     """--dry-run must still run the weak-key audit and refuse, not silently accept.
 
     Confirms --dry-run previews a *refusal* too, not just a success --
-    the whole point is showing the operator what --force would actually
-    need to override.
+    the whole point is showing the operator what --allow-weak would
+    actually need to override.
     """
     bad_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[0]).decode("ascii")
 
@@ -575,7 +575,7 @@ def test_admin_import_dry_run_still_refuses_a_weak_key(
 def test_admin_import_dry_run_still_refuses_differing_material(
     runner: CliRunner, env: dict[str, str]
 ) -> None:
-    """--dry-run must preview the "differing material without --force" refusal too.
+    """--dry-run must preview the "differing material without --overwrite" refusal too.
 
     The weak-key refusal (above) was the only --dry-run refusal path
     with a dedicated test; this covers the other unconditional-before-
@@ -623,7 +623,7 @@ def test_admin_import_reimporting_identical_material_is_a_noop(
     assert "already registered" in second.stderr
 
 
-def test_admin_import_differing_material_without_force_is_refused(
+def test_admin_import_differing_material_without_overwrite_is_refused(
     runner: CliRunner, env: dict[str, str]
 ) -> None:
     kp1 = generate_keypair()
@@ -638,7 +638,7 @@ def test_admin_import_differing_material_without_force_is_refused(
     rows = {row["key_ref"]: row for row in loaded.keys}
     assert KeyRecord.from_row(rows["ADMIN9_pub"]).material() == kp1.public
 
-    forced = invoke(runner, ["admin", "import", f"ADMIN9={kp2.public_b64}", "--force"], env)
+    forced = invoke(runner, ["admin", "import", f"ADMIN9={kp2.public_b64}", "--overwrite"], env)
     assert forced.exit_code == 0
     loaded2 = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     rows2 = {row["key_ref"]: row for row in loaded2.keys}
@@ -656,11 +656,48 @@ def test_admin_import_duplicate_material_under_a_second_ref(
     assert refused.exit_code == 6
     assert "already registered" in refused.stderr
 
-    forced = invoke(runner, ["admin", "import", f"ADMIN10={kp.public_b64}", "--force"], env)
+    forced = invoke(runner, ["admin", "import", f"ADMIN10={kp.public_b64}", "--allow-alias"], env)
     assert forced.exit_code == 0
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     rows = {row["key_ref"]: row for row in loaded.keys}
     assert KeyRecord.from_row(rows["ADMIN10_pub"]).material() == kp.public
+
+
+def test_admin_import_allow_alias_does_not_suppress_the_weak_key_audit(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    """Regression test for S5: the three overrides must be fully independent.
+
+    Before the split, a single ``--force`` covered the alias refusal
+    *and* the weak-key audit together, so an operator following the
+    DUPLICATE hint's "pass --force" advice could silently also disable
+    the audit for every other, unrelated key in the same batch. Here
+    ``--allow-alias`` authorizes ADMIN10's alias of ADMIN9's material,
+    but must NOT also let ADMIN_BAD's compromised key through -- that
+    needs its own ``--allow-weak``, which this call does not pass.
+    """
+    kp = generate_keypair()
+    first = invoke(runner, ["admin", "import", f"ADMIN9={kp.public_b64}"], env)
+    assert first.exit_code == 0
+
+    bad_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[1]).decode("ascii")
+    result = invoke(
+        runner,
+        [
+            "admin",
+            "import",
+            f"ADMIN10={kp.public_b64}",
+            f"ADMIN_BAD={bad_b64}",
+            "--allow-alias",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 6
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"] for row in loaded.keys}
+    assert rows == {"ADMIN9_pub"}
 
 
 def test_admin_import_all_zero_key_is_refused(runner: CliRunner, env: dict[str, str]) -> None:
@@ -669,14 +706,14 @@ def test_admin_import_all_zero_key_is_refused(runner: CliRunner, env: dict[str, 
     assert result.exit_code == 6
 
 
-def test_provision_refuses_to_authorize_a_force_imported_weak_admin_key(
+def test_provision_refuses_to_authorize_an_allow_weak_imported_weak_admin_key(
     runner: CliRunner,
     env: dict[str, str],
     bus: DeviceBus,
     write_template: Callable[..., Path],
 ) -> None:
     small_order_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[2]).decode("ascii")
-    imported = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--force"], env)
+    imported = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--allow-weak"], env)
     assert imported.exit_code == 0
 
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN9"]))
@@ -693,14 +730,14 @@ def test_provision_refuses_to_authorize_a_force_imported_weak_admin_key(
     assert not _BASE64_KEY_RE.search(result.stderr)
 
 
-def test_provision_allow_weak_admin_key_authorizes_a_force_imported_weak_admin_key(
+def test_provision_allow_weak_admin_key_authorizes_an_allow_weak_imported_weak_admin_key(
     runner: CliRunner,
     env: dict[str, str],
     bus: DeviceBus,
     write_template: Callable[..., Path],
 ) -> None:
     small_order_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[2]).decode("ascii")
-    imported = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--force"], env)
+    imported = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--allow-weak"], env)
     assert imported.exit_code == 0
 
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN9"]))
@@ -879,7 +916,8 @@ def test_admin_list_table_shows_the_weak_key_audit_result(
 ) -> None:
     bad_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[1]).decode("ascii")
     assert (
-        invoke(runner, ["admin", "import", f"ADMIN_BAD={bad_b64}", "--force"], env).exit_code == 0
+        invoke(runner, ["admin", "import", f"ADMIN_BAD={bad_b64}", "--allow-weak"], env).exit_code
+        == 0
     )
 
     kp = generate_keypair()
