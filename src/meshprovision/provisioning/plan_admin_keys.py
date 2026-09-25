@@ -44,10 +44,15 @@ known-compromised key to a device either. The stricter
 (see :func:`_evaluate_lockdown`).
 
 :attr:`PlanInputs.allow_weak_admin_key` (``--allow-weak-admin-key``)
-overrides the exclusion only: the flagged entries are authorized and
-reported as ``"resolved_admin_key_forced"`` warnings instead. It does
-**not** reach :func:`_evaluate_lockdown`, whose ``is_managed=true``
-refusal stands regardless.
+overrides the exclusion only for a key whose ``audit_overridable`` is
+``True``: such flagged entries are authorized and reported as
+``"resolved_admin_key_forced"`` warnings instead. A key that failed the
+audit with ``audit_overridable=False`` (:data:`~meshprovision.crypto.
+weakkeys.NON_OVERRIDABLE_CHECKS` -- all-zero or small-order) stays
+excluded and ``"resolved_admin_key_rejected"`` regardless of the flag: it
+has no usable private counterpart at all, so no flag can authorize it.
+Either way, the exclusion does **not** reach :func:`_evaluate_lockdown`,
+whose ``is_managed=true`` refusal stands regardless.
 """
 
 from __future__ import annotations
@@ -90,6 +95,13 @@ class ResolvedAdminKey:
         private_mismatch: Whether a private counterpart row exists but does
             not derive this public key. Distinct from ``has_private=False``,
             which also covers simple absence.
+        audit_overridable: Whether ``--allow-weak-admin-key`` could ever
+            authorize this key despite a failed audit -- ``False`` when
+            the audit's CRITICAL finding is all-zero or small-order (see
+            :data:`~meshprovision.crypto.weakkeys.NON_OVERRIDABLE_CHECKS`).
+            Meaningless when :attr:`audit_ok` is ``True``; defaults to
+            ``True`` so a caller that never sets it (an already-clean key)
+            does not accidentally read as non-overridable.
     """
 
     ref: str
@@ -100,6 +112,7 @@ class ResolvedAdminKey:
     fingerprint: str
     audit_summary: str = ""
     private_mismatch: bool = False
+    audit_overridable: bool = True
 
     def __repr__(self) -> str:
         """Return a repr that never exposes :attr:`public`'s raw bytes.
@@ -112,7 +125,8 @@ class ResolvedAdminKey:
             f"ResolvedAdminKey(ref={self.ref!r}, key_ref={self.key_ref!r}, "
             f"public=<redacted:{self.fingerprint}>, has_private={self.has_private!r}, "
             f"audit_ok={self.audit_ok!r}, fingerprint={self.fingerprint!r}, "
-            f"audit_summary={self.audit_summary!r})"
+            f"audit_summary={self.audit_summary!r}, "
+            f"audit_overridable={self.audit_overridable!r})"
         )
 
 
@@ -291,9 +305,11 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
                 limit=MAX_ADMIN_KEYS,
             )
         weak = tuple(k for k in inputs.admin_keys if not k.audit_ok)
+        non_overridable = tuple(k for k in weak if not k.audit_overridable)
         if inputs.allow_weak_admin_key:
-            authorized = inputs.admin_keys
-            rejected: tuple[ResolvedAdminKey, ...] = ()
+            overridable = tuple(k for k in weak if k.audit_overridable)
+            authorized = tuple(k for k in inputs.admin_keys if k.audit_ok or k.audit_overridable)
+            rejected: tuple[ResolvedAdminKey, ...] = non_overridable
             warnings.extend(
                 PlanWarning(
                     PlanWarningCode.RESOLVED_ADMIN_KEY_FORCED,
@@ -303,7 +319,20 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
                     section="security",
                     field="admin_key",
                 )
-                for key in weak
+                for key in overridable
+            )
+            warnings.extend(
+                PlanWarning(
+                    PlanWarningCode.RESOLVED_ADMIN_KEY_REJECTED,
+                    f"Admin key {key.key_ref} is not a usable key (all-zero or a degenerate "
+                    f"small-order curve point) and will not be authorized; "
+                    f"--allow-weak-admin-key cannot override this: "
+                    f"{key.audit_summary or 'flagged as compromised'}. Correct or replace that "
+                    f"Keys sheet row (see `mesh admin import`).",
+                    section="security",
+                    field="admin_key",
+                )
+                for key in non_overridable
             )
         else:
             authorized = tuple(k for k in inputs.admin_keys if k.audit_ok)

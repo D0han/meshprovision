@@ -93,7 +93,7 @@ mesh provision --port /dev/ttyUSB0 --enroll
 | `-y`, `--yes` | Assume yes to every confirmation |
 | `--enroll` | Bring an observed (`mesh adopt`-recorded) node under template management |
 | `--allow-lockdown` | Explicitly authorize enabling `security.is_managed` when the safety gates pass |
-| `--allow-weak-admin-key` | Authorize admin keys that fail the weak-key audit; does not relax the `security.is_managed` safety gate |
+| `--allow-weak-admin-key` | Authorize admin keys that fail the weak-key audit; does not relax the `security.is_managed` safety gate, and never overrides an all-zero or small-order key |
 | `--force-regenerate-key` | Regenerate the node keypair unconditionally |
 | `--rename` | Allow renaming an already-provisioned node |
 | `--no-reconnect` | Verify writes against the in-memory interface only (weaker guarantee) |
@@ -355,7 +355,8 @@ mesh admin list --json
   replacing an existing ref's differing key material, `--allow-alias`
   allows registering a key already authorized under another ref, and
   `--allow-weak` allows a key that fails the weak-key audit to be
-  registered anyway. `--dry-run` runs every one of those checks and
+  registered anyway -- except an all-zero or small-order key, which no
+  flag ever authorizes. `--dry-run` runs every one of those checks and
   reports the outcome (including a refusal) without registering anything,
   matching `provision`/`adopt`/`admin bootstrap`'s existing `--dry-run`
   convention.

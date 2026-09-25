@@ -31,6 +31,14 @@ bytes, and (per a unit test in the test layer, not this module)
 ``load_known_bad_keys()`` -- whether or not
 ``data/known_bad_keys.txt`` is present on disk.
 
+**Overridability:** an operator override flag (``--allow-weak-admin-key``,
+``admin import --allow-weak``) can authorize most CRITICAL findings, on
+the theory that the operator has verified out-of-band that the flagged
+key is nonetheless the one they intend to use. :data:`NON_OVERRIDABLE_CHECKS`
+is the exception -- an all-zero or small-order key has no usable private
+counterpart at all, so no flag ever authorizes it. See
+:attr:`AuditResult.overridable`.
+
 **On key clamping:** OpenSSL-family backends can store an X25519 private
 scalar unclamped and clamp only at use time, so an unclamped private key
 is *not*, by itself, evidence of anything wrong. ``check_clamping``
@@ -64,6 +72,7 @@ __all__ = [
     "LOW_HAMMING_MAX",
     "LOW_HAMMING_MIN",
     "MIN_DISTINCT_BYTES",
+    "NON_OVERRIDABLE_CHECKS",
     "SMALL_ORDER_POINTS",
     "AuditResult",
     "WeakKeyCheck",
@@ -204,6 +213,26 @@ class WeakKeyCheck(StrEnum):
     DUPLICATE = "duplicate"
 
 
+NON_OVERRIDABLE_CHECKS: Final[frozenset[WeakKeyCheck]] = frozenset(
+    {WeakKeyCheck.ALL_ZERO, WeakKeyCheck.SMALL_ORDER}
+)
+"""Checks whose CRITICAL finding no flag can ever authorize past.
+
+A structurally degenerate key (all-zero, or one of the 7 canonical
+small-order curve points) has no usable private counterpart at all --
+authorizing it is not a risk trade-off, it is nonsense. **Not**
+:attr:`WeakKeyCheck.BLOCKLIST`: a blocklist-file entry that is not also
+structurally degenerate (a known-*leaked* key, say) stays overridable
+via ``--allow-weak-admin-key``/``admin import --allow-weak``, per this
+project's D4 decision -- an operator who has verified out-of-band that a
+flagged key is nonetheless the one they intend to use may still force it.
+Every :data:`SMALL_ORDER_POINTS` entry also produces a
+:attr:`~WeakKeyCheck.BLOCKLIST` finding (see :func:`load_known_bad_keys`),
+so it stays non-overridable through :attr:`~WeakKeyCheck.SMALL_ORDER`
+regardless.
+"""
+
+
 @dataclass(frozen=True, slots=True)
 class WeakKeyFinding:
     """One weak-key audit finding.
@@ -237,8 +266,12 @@ class WeakKeyFinding:
     node_id: str | None = None
     key_ref: str | None = None
 
-    def as_error(self) -> WeakKeyError:
+    def as_error(self, *, hint: str | None = None) -> WeakKeyError:
         """Convert this finding into a raisable :class:`WeakKeyError`.
+
+        Args:
+            hint: Optional actionable suggestion, attached to the raised
+                error. When ``None``, the error carries no hint.
 
         Returns:
             A :class:`WeakKeyError` carrying this finding's fields.
@@ -250,6 +283,7 @@ class WeakKeyFinding:
             key_ref=self.key_ref,
             severity=self.severity,
             fingerprint=self.fingerprint,
+            hint=hint,
         )
 
 
@@ -303,6 +337,24 @@ class AuditResult:
             return WeakKeySeverity.WARNING
         return None
 
+    @property
+    def overridable(self) -> bool:
+        """Whether an operator override flag could ever authorize this key.
+
+        ``False`` when any CRITICAL finding's check is in
+        :data:`NON_OVERRIDABLE_CHECKS` (:attr:`WeakKeyCheck.ALL_ZERO` or
+        :attr:`WeakKeyCheck.SMALL_ORDER`) -- no flag ever authorizes a
+        structurally degenerate key. A :attr:`WeakKeyCheck.BLOCKLIST`-only
+        CRITICAL finding, or any WARNING-only result, stays overridable.
+
+        Returns:
+            ``True`` unless a non-overridable CRITICAL finding is present.
+        """
+        return not any(
+            f.severity is WeakKeySeverity.CRITICAL and f.check in NON_OVERRIDABLE_CHECKS
+            for f in self.findings
+        )
+
     def summary(self) -> str:
         """Render one already-redacted line per finding.
 
@@ -317,15 +369,19 @@ class AuditResult:
             lines.append(line)
         return "\n".join(lines)
 
-    def raise_if_compromised(self) -> None:
+    def raise_if_compromised(self, *, hint: str | None = None) -> None:
         """Raise the first critical finding as a :class:`WeakKeyError`.
+
+        Args:
+            hint: Optional actionable suggestion, attached to the raised
+                error.
 
         Raises:
             WeakKeyError: If :attr:`compromised` is ``True``.
         """
         for f in self.findings:
             if f.severity is WeakKeySeverity.CRITICAL:
-                raise f.as_error()
+                raise f.as_error(hint=hint)
 
 
 def _sort_findings(findings: list[WeakKeyFinding]) -> tuple[WeakKeyFinding, ...]:

@@ -50,6 +50,14 @@ authorize a flagged key on an unlocked device; it never overrides the
 lockdown refusal. A device can never be sealed with `is_managed=true`
 while a compromised admin key is authorized, flag or no flag.
 
+Two findings are excluded even from the plan-level override: an
+**all-zero** or **small-order** public key has no usable private
+counterpart at all, so `--allow-weak-admin-key` (and `admin import
+--allow-weak`) never authorizes one — that refusal is unconditional. A
+known-*leaked* key from the blocklist file that is not also structurally
+degenerate stays overridable, on the theory that the operator has
+verified out-of-band that it is nonetheless the key they intend to use.
+
 One hard interlock on top: `is_managed=true` with **zero** authorized
 admin keys is refused outright — that combination locks the node with
 nobody able to administer it.

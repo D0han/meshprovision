@@ -24,7 +24,7 @@ from meshprovision.crypto.keys import encode_key, generate_keypair
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.db.schema import KeyOrigin, ManagementMode
+from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import ExitCode
 from tests.e2e.conftest import FakeMeshInterface, invoke
 
@@ -706,15 +706,31 @@ def test_admin_import_all_zero_key_is_refused(runner: CliRunner, env: dict[str, 
     assert result.exit_code == 6
 
 
-def test_provision_refuses_to_authorize_an_allow_weak_imported_weak_admin_key(
+def test_provision_refuses_to_authorize_a_seeded_small_order_admin_key(
     runner: CliRunner,
     env: dict[str, str],
     bus: DeviceBus,
     write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
 ) -> None:
-    small_order_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[2]).decode("ascii")
-    imported = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--allow-weak"], env)
-    assert imported.exit_code == 0
+    """SMALL_ORDER is non-overridable (S4/D4): no flag authorizes it, ever.
+
+    ``admin import --allow-weak`` itself now refuses to register a
+    small-order key (see test_admin_import_allow_weak_still_refuses_a_
+    small_order_key below), so this exercises the planner's own refusal
+    by seeding the row directly -- representing a database that predates
+    that refusal, or was hand-edited.
+    """
+    seed_db(
+        keys=[
+            KeyRecord.from_material(
+                "ADMIN9",
+                KeyType.ADMIN_PUBLIC,
+                weakkeys.SMALL_ORDER_POINTS[2],
+                origin=KeyOrigin.IMPORTED,
+            )
+        ]
+    )
 
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN9"]))
     bus.use(FakeMeshInterface("cccc0001"))
@@ -736,8 +752,9 @@ def test_provision_allow_weak_admin_key_authorizes_an_allow_weak_imported_weak_a
     bus: DeviceBus,
     write_template: Callable[..., Path],
 ) -> None:
-    small_order_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[2]).decode("ascii")
-    imported = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--allow-weak"], env)
+    """MONOTONIC-only is overridable, unlike ALL_ZERO/SMALL_ORDER (verified in test_weakkeys.py)."""
+    monotonic_b64 = base64.b64encode(bytes(range(32))).decode("ascii")
+    imported = invoke(runner, ["admin", "import", f"ADMIN9={monotonic_b64}", "--allow-weak"], env)
     assert imported.exit_code == 0
 
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN9"]))
@@ -758,6 +775,41 @@ def test_provision_allow_weak_admin_key_authorizes_an_allow_weak_imported_weak_a
 
     assert not _BASE64_KEY_RE.search(result.stdout)
     assert not _BASE64_KEY_RE.search(result.stderr)
+
+
+def test_admin_import_allow_weak_still_refuses_a_small_order_key(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    """S4/D4: --allow-weak never authorizes a SMALL_ORDER (or ALL_ZERO) finding."""
+    small_order_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[2]).decode("ascii")
+    result = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--allow-weak"], env)
+
+    assert result.exit_code != 0
+    assert "no flag" in result.stderr.lower() or "cannot override" in result.stderr.lower()
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"] for row in loaded.keys}
+    assert "ADMIN9_pub" not in rows
+
+
+def test_admin_import_allow_weak_authorizes_a_blocklist_file_only_key(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    """Per D4, a BLOCKLIST-only key (not also small-order/all-zero) stays overridable."""
+    kp = generate_keypair()
+    blocklist_path = tmp_path / "known_bad_keys.txt"
+    blocklist_path.write_text(kp.public_b64 + "\n", encoding="utf-8")
+    env["MESHPROVISION_KNOWN_BAD_KEYS"] = str(blocklist_path)
+
+    refused = invoke(runner, ["admin", "import", f"ADMIN9={kp.public_b64}"], env)
+    assert refused.exit_code != 0
+
+    result = invoke(runner, ["admin", "import", f"ADMIN9={kp.public_b64}", "--allow-weak"], env)
+    assert result.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["ADMIN9_pub"]).material() == kp.public
 
 
 def test_admin_import_malformed_assignment_missing_equals(
@@ -912,12 +964,27 @@ def test_admin_import_leaves_a_node_with_no_unregistered_keys_completely_untouch
 
 
 def test_admin_list_table_shows_the_weak_key_audit_result(
-    runner: CliRunner, env: dict[str, str], write_template: Callable[..., Path]
+    runner: CliRunner,
+    env: dict[str, str],
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
 ) -> None:
-    bad_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[1]).decode("ascii")
-    assert (
-        invoke(runner, ["admin", "import", f"ADMIN_BAD={bad_b64}", "--allow-weak"], env).exit_code
-        == 0
+    """SMALL_ORDER is non-overridable (S4/D4), so ADMIN_BAD is seeded directly.
+
+    ``admin import --allow-weak`` can no longer register a small-order
+    key (see test_admin_import_allow_weak_still_refuses_a_small_order_key),
+    so this seeds the row to represent a pre-upgrade or hand-edited
+    database -- the Audit column must still flag it.
+    """
+    seed_db(
+        keys=[
+            KeyRecord.from_material(
+                "ADMIN_BAD",
+                KeyType.ADMIN_PUBLIC,
+                weakkeys.SMALL_ORDER_POINTS[1],
+                origin=KeyOrigin.IMPORTED,
+            )
+        ]
     )
 
     kp = generate_keypair()

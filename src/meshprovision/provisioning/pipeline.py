@@ -169,6 +169,7 @@ def resolve_admin_keys(
                 fingerprint=redact.fingerprint(material),
                 audit_summary=audit.summary(),
                 private_mismatch=private_mismatch,
+                audit_overridable=audit.overridable,
             )
         )
     return tuple(resolved)

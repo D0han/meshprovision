@@ -14,6 +14,7 @@ from meshprovision.crypto.weakkeys import (
     LOW_HAMMING_MAX,
     LOW_HAMMING_MIN,
     MIN_DISTINCT_BYTES,
+    NON_OVERRIDABLE_CHECKS,
     SMALL_ORDER_POINTS,
     WeakKeyCheck,
     audit_keypair,
@@ -708,3 +709,66 @@ def test_audit_result_api(keypair_factory) -> None:
             assert not (len(word) == 44 and word.endswith("="))
     with pytest.raises(Exception):  # noqa: B017
         bad_result.raise_if_compromised()
+
+
+# ---------------------------------------------------------------------------
+# AuditResult.overridable (S4/D4): ALL_ZERO/SMALL_ORDER never overridable;
+# BLOCKLIST-only and heuristic findings stay overridable.
+# ---------------------------------------------------------------------------
+
+
+def test_non_overridable_checks_is_exactly_all_zero_and_small_order() -> None:
+    assert {WeakKeyCheck.ALL_ZERO, WeakKeyCheck.SMALL_ORDER} == NON_OVERRIDABLE_CHECKS
+    assert WeakKeyCheck.BLOCKLIST not in NON_OVERRIDABLE_CHECKS
+
+
+def test_audit_result_overridable_true_when_ok() -> None:
+    kp = generate_keypair()
+    result = audit_public_key(kp.public)
+    assert result.ok is True
+    assert result.overridable is True
+
+
+def test_audit_result_overridable_true_for_low_entropy_only() -> None:
+    """A CRITICAL LOW_ENTROPY-only finding stays overridable."""
+    raw = bytearray(32)
+    raw[0], raw[1], raw[2], raw[3] = 1, 2, 4, 8
+    result = audit_public_key(bytes(raw))
+    checks = {f.check for f in result.findings}
+    assert checks == {WeakKeyCheck.LOW_ENTROPY}
+    assert result.compromised is True
+    assert result.overridable is True
+
+
+def test_audit_result_overridable_false_for_all_zero() -> None:
+    result = audit_public_key(bytes(32))
+    assert WeakKeyCheck.ALL_ZERO in {f.check for f in result.findings}
+    assert result.overridable is False
+
+
+def test_audit_result_overridable_false_for_small_order() -> None:
+    for point in SMALL_ORDER_POINTS:
+        result = audit_public_key(point)
+        assert WeakKeyCheck.SMALL_ORDER in {f.check for f in result.findings}
+        assert result.overridable is False
+
+
+def test_audit_result_overridable_true_for_blocklist_file_only_key(tmp_path: Path) -> None:
+    """Per D4, a BLOCKLIST-only key (not also small-order) stays overridable."""
+    kp = generate_keypair()
+    blocklist_path = tmp_path / "known_bad_keys.txt"
+    blocklist_path.write_text(kp.public_b64 + "\n", encoding="utf-8")
+    known_bad = load_known_bad_keys(blocklist_path)
+
+    result = audit_public_key(kp.public, known_bad=known_bad)
+    checks = {f.check for f in result.findings}
+    assert checks == {WeakKeyCheck.BLOCKLIST}
+    assert result.compromised is True
+    assert result.overridable is True
+
+
+def test_raise_if_compromised_attaches_the_given_hint() -> None:
+    result = audit_public_key(bytes(32))
+    with pytest.raises(Exception) as exc_info:
+        result.raise_if_compromised(hint="no flag can override this")
+    assert exc_info.value.hint == "no flag can override this"

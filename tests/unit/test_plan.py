@@ -920,6 +920,76 @@ def test_allow_weak_admin_key_forces_only_the_weak_key_of_a_mixed_set(
     assert "GOOD_pub" not in forced[0].message
 
 
+def test_allow_weak_admin_key_never_authorizes_a_non_overridable_weak_key(
+    make_live, template, make_admin_key
+) -> None:
+    """ALL_ZERO/SMALL_ORDER stay rejected under --allow-weak-admin-key (S4/D4).
+
+    Unlike a merely heuristic-weak key, a structurally degenerate key
+    (audit_overridable=False) is not authorized by the flag: it goes to
+    rejected_admin_key_refs with a resolved_admin_key_rejected warning,
+    never resolved_admin_key_forced.
+    """
+    admin = make_admin_key(
+        "ADMIN1",
+        audit_ok=False,
+        audit_overridable=False,
+        audit_summary="small_order: known bad point",
+    )
+    template2 = template.model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+        allow_weak_admin_key=True,
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.desired_admin_keys == ()
+    assert plan.key_plan.desired_admin_key_refs == ()
+    assert plan.key_plan.rejected_admin_key_refs == ("ADMIN1_pub",)
+
+    codes = [w.code for w in plan.warnings if w.code.startswith("resolved_admin_key")]
+    assert codes == ["resolved_admin_key_rejected"]
+    rejection = next(w for w in plan.warnings if w.code == "resolved_admin_key_rejected")
+    assert "ADMIN1_pub" in rejection.message
+    assert "cannot override" in rejection.message
+
+
+def test_allow_weak_admin_key_forces_the_overridable_key_but_not_the_non_overridable_one(
+    make_live, template, make_admin_key
+) -> None:
+    """A mixed set under the flag: BLOCKLIST-only is forced, SMALL_ORDER-shaped stays refused."""
+    overridable = make_admin_key("BLOCKLISTED", audit_ok=False, audit_overridable=True)
+    non_overridable = make_admin_key("DEGENERATE", audit_ok=False, audit_overridable=False)
+    good = make_admin_key("GOOD", audit_ok=True)
+    template2 = template.model_copy(update={"admin_nodes": ("BLOCKLISTED", "DEGENERATE", "GOOD")})
+    live = make_live(template2, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(overridable, non_overridable, good),
+        allow_weak_admin_key=True,
+    )
+    plan = build_plan(inputs)
+
+    assert set(plan.key_plan.desired_admin_key_refs) == {"BLOCKLISTED_pub", "GOOD_pub"}
+    assert plan.key_plan.rejected_admin_key_refs == ("DEGENERATE_pub",)
+
+    forced = [w for w in plan.warnings if w.code == "resolved_admin_key_forced"]
+    assert len(forced) == 1
+    assert "BLOCKLISTED_pub" in forced[0].message
+
+    rejected = [w for w in plan.warnings if w.code == "resolved_admin_key_rejected"]
+    assert len(rejected) == 1
+    assert "DEGENERATE_pub" in rejected[0].message
+
+
 # ---------------------------------------------------------------------------
 # is_managed refusals.
 # ---------------------------------------------------------------------------

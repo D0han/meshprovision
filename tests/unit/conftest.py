@@ -178,6 +178,7 @@ def _build_admin_key(
     audit_ok: bool = True,
     private_mismatch: bool = False,
     audit_summary: str = "",
+    audit_overridable: bool = True,
 ) -> ResolvedAdminKey:
     """Build a :class:`ResolvedAdminKey` for tests.
 
@@ -190,6 +191,9 @@ def _build_admin_key(
         private_mismatch: Whether a private counterpart row exists but
             does not derive this public key.
         audit_summary: Human-readable summary of the audit result.
+        audit_overridable: Whether ``--allow-weak-admin-key`` could ever
+            authorize this key despite a failed audit. Meaningless when
+            ``audit_ok`` is ``True``.
 
     Returns:
         The constructed :class:`ResolvedAdminKey`.
@@ -204,6 +208,7 @@ def _build_admin_key(
         fingerprint=redact.fingerprint(resolved_public),
         audit_summary=audit_summary,
         private_mismatch=private_mismatch,
+        audit_overridable=audit_overridable,
     )
 
 

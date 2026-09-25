@@ -362,7 +362,10 @@ def admin_import(
             authorized under another (non-``observed-*``) ref, from
             ``--allow-alias``.
         allow_weak: Whether to allow a key that fails the weak-key audit
-            to be registered anyway, from ``--allow-weak``.
+            to be registered anyway, from ``--allow-weak``. Never
+            overrides an all-zero or small-order finding (see
+            :data:`~meshprovision.crypto.weakkeys.NON_OVERRIDABLE_CHECKS`)
+            -- those are refused regardless.
         dry_run: Whether to run every validation/audit/duplicate check
             and report the outcome without writing anything, from
             ``--dry-run``. Matches ``mesh provision``/``mesh adopt``/
@@ -380,7 +383,9 @@ def admin_import(
             different material and ``--overwrite`` was not passed.
         WeakKeyError: If a key fails the weak-key audit and
             ``--allow-weak`` was not passed, or duplicates another
-            registered key and ``--allow-alias`` was not passed.
+            registered key and ``--allow-alias`` was not passed, or the
+            audit's finding is all-zero or small-order (never overridable,
+            regardless of ``--allow-weak``).
     """
     registered: list[dict[str, object]] = []
     skipped: list[dict[str, object]] = []
@@ -409,8 +414,14 @@ def admin_import(
                     )
 
             audit = weakkeys.audit_public_key(material, key_ref=key_ref, known_bad=known_bad)
-            if audit.compromised and not allow_weak:
-                audit.raise_if_compromised()
+            if audit.compromised and (not allow_weak or not audit.overridable):
+                hint: str | None = None
+                if allow_weak and not audit.overridable:
+                    hint = (
+                        "This key is all-zero or a degenerate small-order curve point; "
+                        "no flag can override this refusal."
+                    )
+                audit.raise_if_compromised(hint=hint)
             elif audit.findings:
                 for line in audit.summary().splitlines():
                     ctx.warn(line)
