@@ -714,7 +714,19 @@ def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
     try:
         doc = yaml.safe_load(text)
     except yaml.YAMLError as exc:
-        raise BackupParseError(f"{source}: invalid YAML: {exc}", source=source) from exc
+        # str(exc) calls MarkedYAMLError.get_snippet(), which quotes the
+        # offending source line -- if that line is `privateKey: base64:...`,
+        # the snippet echoes a fragment of the key into the error message.
+        # Build the message from the structured problem/mark fields instead,
+        # which carry no source text, and raise `from None` so the original
+        # exception (and its snippet) never reaches a DEBUG traceback either.
+        problem = getattr(exc, "problem", None) or type(exc).__name__
+        context = getattr(exc, "context", None)
+        detail = f"{context}; {problem}" if context else problem
+        mark = getattr(exc, "problem_mark", None)
+        if mark is not None:
+            detail = f"{detail} (line {mark.line + 1}, column {mark.column + 1})"
+        raise BackupParseError(f"{source}: invalid YAML: {detail}", source=source) from None
     if not isinstance(doc, dict):
         raise BackupParseError(
             f"{source}: expected a YAML mapping at the top level.", source=source

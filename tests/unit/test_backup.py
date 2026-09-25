@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import base64
 import json
+import traceback
+from typing import TYPE_CHECKING
 
 import pytest
+import yaml
 from meshtastic.protobuf import clientonly_pb2, config_pb2
 
 from meshprovision.datasources.base import SOURCE_LORANET
@@ -14,7 +17,22 @@ from meshprovision.errors import BackupParseError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import backup
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from meshprovision.crypto.keys import KeyPair
+
 pytestmark = pytest.mark.unit
+
+
+def _windows(token: str, size: int = 8) -> list[str]:
+    """Every contiguous ``size``-char substring of ``token``.
+
+    Used to catch a partial key leak through truncation or line-wrapping,
+    not just a leak of the whole token. 8 chars of base64 is 48 bits, so a
+    coincidental match is negligible.
+    """
+    return [token[i : i + size] for i in range(max(1, len(token) - size + 1))]
 
 
 def _make_cfg_bytes(
@@ -256,6 +274,64 @@ def test_parse_profile_yaml_rejects_non_mapping() -> None:
 def test_parse_profile_yaml_rejects_invalid_yaml() -> None:
     with pytest.raises(BackupParseError):
         backup.parse_profile_yaml("owner: [unterminated", source="bad.yaml")
+
+
+@pytest.mark.parametrize(
+    "make_text",
+    [
+        pytest.param(
+            lambda key: f'owner: test\nconfig:\n  security:\n    privateKey: "base64:{key}\n',
+            id="unclosed_quote",
+        ),
+        pytest.param(
+            lambda key: f"owner: test\nconfig:\n  security:\n    privateKey: base64:{key}\t\n",
+            id="trailing_tab",
+        ),
+        pytest.param(
+            lambda key: (
+                "owner: test\nconfig:\n  security:\n    privateKey: base64:"
+                f"{key[:20]}\n\t{key[20:]}\n"
+            ),
+            id="tab_indent_after_key",
+        ),
+    ],
+)
+def test_parse_profile_yaml_invalid_yaml_error_never_echoes_key_material(
+    make_text: Callable[[str], str], keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """Round 37 aspect 2 S7 / aspect 5 T12.
+
+    ``MarkedYAMLError.__str__`` calls ``get_snippet()``, which quotes the offending
+    source line. When a malformed backup's syntax error lands on or near a
+    ``privateKey:`` line, that snippet echoes a fragment of the key -- reproduced
+    here with an unclosed quote, a stray tab right after the key, and a
+    tab-indented continuation line right after the key. The fix must build the
+    message from ``problem``/``context``/``problem_mark`` only, never ``str(exc)``,
+    and must raise ``from None`` so the original exception (and its snippet) never
+    reaches a DEBUG traceback either.
+    """
+    key = base64.b64encode(keypair_factory().private.reveal()).decode()
+    text = make_text(key)
+
+    with pytest.raises(yaml.YAMLError) as yaml_excinfo:
+        yaml.safe_load(text)
+    mark = yaml_excinfo.value.problem_mark
+    assert mark is not None
+
+    with pytest.raises(BackupParseError) as excinfo:
+        backup.parse_profile_yaml(text, source="bad.yaml")
+
+    err = excinfo.value
+    message = str(err)
+    rendered_traceback = "".join(traceback.format_exception(err))
+
+    for window in _windows(key):
+        assert window not in message
+        assert window not in rendered_traceback
+
+    assert f"line {mark.line + 1}, column {mark.column + 1}" in message
+    assert err.__cause__ is None
+    assert err.__suppress_context__ is True
 
 
 def test_parse_profile_yaml_rejects_invalid_config_shape() -> None:
