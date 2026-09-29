@@ -204,8 +204,12 @@ def test_structural_assertions_formulas_validations_freeze(tmp_path: Path, keypa
     assert "VerticalSplitPosition" in settings and ">1<" in settings
 
     assert "MPTextFormat" in styles
-    assert "MPText" in styles or "MPText" in content
-    assert "MPHeader" in styles or "MPHeader" in content
+    # MPText/MPHeader are deterministically emitted as common cell styles
+    # (write_database's _add_common_styles adds them to doc.styles, i.e.
+    # styles.xml); they also appear in content.xml, but only as references
+    # by name (e.g. default-cell-style-name), not as the style definition.
+    assert "MPText" in styles
+    assert "MPHeader" in styles
     assert "default-cell-style-name" in content
     assert "MPText" in content
 

@@ -104,7 +104,7 @@ def test_multi_port_non_interactive_is_a_hard_error(
     result = invoke(runner, ["provision", "--yes", "--dry-run"], env)
 
     assert result.exit_code == 5
-    assert "selection" in result.stderr.lower() or "required" in result.stderr.lower()
+    assert "a selection is required" in result.stderr.lower()
 
 
 def test_forced_interface_serial_with_two_ports_is_a_hard_error_never_a_prompt(

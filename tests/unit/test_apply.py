@@ -1125,7 +1125,7 @@ def test_apply_plan_an_unmappable_enum_value_fails_its_section_not_the_whole_run
     assert outcome.ok is False
     lora_result = next(r for r in outcome.results if r.section == "lora")
     assert lora_result.status == WriteStatus.FAILED
-    assert "modem_preset" in lora_result.message or "NOT_A_PRESET" in lora_result.message
+    assert "modem_preset" in lora_result.message and "NOT_A_PRESET" in lora_result.message
 
     # The device section, processed before the lora failure, was genuinely
     # written and still reaches the verify pass.

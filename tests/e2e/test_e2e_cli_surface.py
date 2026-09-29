@@ -99,7 +99,7 @@ def test_provision_without_yes_or_interactive_refuses_non_interactively(
 
     assert result.exit_code == 5
     assert "non-interactive" in result.stderr
-    assert "confirmation" in result.stderr.lower() or "required" in result.stderr.lower()
+    assert "confirmation required but this run is non-interactive" in result.stderr.lower()
     assert db_fingerprint(db_path) == before
 
 
