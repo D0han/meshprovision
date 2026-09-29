@@ -684,7 +684,8 @@ def handle_cli_errors(func: Callable[P, R]) -> Callable[P, R | None]:
       ``mesh status --watch`` converts Ctrl-C into the last observed
       fleet's exit code, because stopping a monitor loop is the expected
       way to end it, not an abnormal interruption.
-    - ``OSError``: prints ``f"{type(exc).__name__}: {exc}"`` and exits
+    - ``OSError``: prints ``f"{type(exc).__name__}: {exc}"``, logs the
+      full traceback at DEBUG, and exits
       :attr:`~meshprovision.errors.ExitCode.ERROR`.
 
     Deliberately does not catch ``SystemExit`` (or
@@ -717,6 +718,7 @@ def handle_cli_errors(func: Callable[P, R]) -> Callable[P, R | None]:
             raise SystemExit(int(ExitCode.INTERRUPTED)) from None
         except OSError as exc:
             _emit_error(f"{type(exc).__name__}: {exc}")
+            _logger.debug("command failed", exc_info=True)
             raise SystemExit(int(ExitCode.ERROR)) from None
 
     return _wrapper

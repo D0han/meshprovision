@@ -186,6 +186,37 @@ def test_keyboard_interrupt_prints_interrupted_and_exits_interrupted(
     assert captured.out == ""
 
 
+def test_os_error_logs_traceback_at_debug_and_exits_error(
+    capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """``OSError`` is reported on stderr and its traceback logged at DEBUG.
+
+    Matches the ``MeshprovisionError`` arm: the operator-facing message
+    stays terse, but ``-vv`` now recovers the full traceback instead of
+    losing it.
+    """
+
+    @handle_cli_errors
+    def _command() -> None:
+        raise PermissionError("denied")
+
+    with (
+        caplog.at_level(logging.DEBUG, logger="meshprovision.cli.common"),
+        pytest.raises(SystemExit) as excinfo,
+    ):
+        _command()
+
+    assert excinfo.value.code == int(ExitCode.ERROR)
+    captured = capsys.readouterr()
+    assert "PermissionError: denied" in captured.err
+    assert captured.out == ""
+
+    debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+    assert len(debug_records) == 1
+    assert debug_records[0].exc_info is not None
+    assert debug_records[0].exc_info[0] is PermissionError
+
+
 def _raise_with_secret_local() -> None:
     """Raise from a frame holding a local that ``show_locals=True`` would print.
 
