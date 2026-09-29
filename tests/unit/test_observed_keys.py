@@ -1,12 +1,11 @@
-"""Unit tests for :mod:`meshprovision.provisioning.observed_keys`."""
+"""Unit tests for :mod:`meshprovision.db.observed_keys`."""
 
 from __future__ import annotations
 
 import pytest
 
 from meshprovision.crypto.keys import KeyPair
-from meshprovision.db import schema
-from meshprovision.provisioning import observed_keys
+from meshprovision.db import observed_keys, schema
 
 pytestmark = pytest.mark.unit
 

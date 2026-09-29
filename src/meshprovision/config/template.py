@@ -68,8 +68,6 @@ __all__ = [
     "TelemetrySection",
     "TemplateConfig",
     "TemplateWarning",
-    "admin_private_key_ref",
-    "admin_public_key_ref",
     "check_capacity_utilization",
     "ensure_capacity_available",
     "load_template",
@@ -392,30 +390,6 @@ def _validate_alphabet(alphabet: str) -> None:
             "name_suffix_alphabet must not contain '{' or '}'.",
             field="name_suffix_alphabet",
         )
-
-
-def admin_public_key_ref(ref: str) -> str:
-    """Build the Keys-sheet reference for an admin node's public key.
-
-    Args:
-        ref: The admin node reference, as it appears in ``admin_nodes``.
-
-    Returns:
-        ``f"{ref}_pub"``.
-    """
-    return f"{ref}_pub"
-
-
-def admin_private_key_ref(ref: str) -> str:
-    """Build the Keys-sheet reference for an admin node's private key.
-
-    Args:
-        ref: The admin node reference, as it appears in ``admin_nodes``.
-
-    Returns:
-        ``f"{ref}_priv"``.
-    """
-    return f"{ref}_priv"
 
 
 def check_capacity_utilization(
@@ -1037,9 +1011,11 @@ class TemplateConfig(BaseModel):
         """Build the Keys-sheet public-key references for every admin node.
 
         Returns:
-            ``tuple(admin_public_key_ref(r) for r in admin_nodes)``.
+            ``tuple(f"{r}_pub" for r in admin_nodes)`` -- equivalent to
+            ``schema.ref_for(r, KeyType.ADMIN_PUBLIC)``, inlined rather than
+            imported so this module keeps no dependency on :mod:`meshprovision.db`.
         """
-        return tuple(admin_public_key_ref(ref) for ref in self.admin_nodes)
+        return tuple(f"{ref}_pub" for ref in self.admin_nodes)
 
     def collect_warnings(self) -> tuple[TemplateWarning, ...]:
         """Compute every non-fatal finding about this template.

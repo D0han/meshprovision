@@ -49,7 +49,7 @@ from meshprovision.cli.common import (
 from meshprovision.cli.progress import heartbeat
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto.redact import SecretBytes, fingerprint
-from meshprovision.db import pending_keys
+from meshprovision.db import pending_keys, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import (
@@ -693,7 +693,7 @@ def _register_admin_alias(
         material = db.keys.keypair_for(node_id.hex)
         public_material = material.public
         private_material = material.private
-        existing_public = db.keys.find(f"{node_id.hex}_pub")
+        existing_public = db.keys.find(schema.ref_for(node_id.hex, KeyType.ADMIN_PUBLIC))
         alias_origin = existing_public.origin if existing_public is not None else None
 
     if public_material is None:
@@ -766,7 +766,7 @@ def _capture_proven_private_key(
     """
     if live_private_key is None:
         return False
-    pub_record = db.keys.find(f"{node_id.hex}_pub")
+    pub_record = db.keys.find(schema.ref_for(node_id.hex, KeyType.ADMIN_PUBLIC))
     if pub_record is None:
         return False
     try:
@@ -807,7 +807,7 @@ def _capture_proven_private_key(
                 continue
         except KeyMaterialError:
             continue
-        if db.keys.find(f"{alias_ref}_priv") is None:
+        if db.keys.find(schema.ref_for(alias_ref, KeyType.ADMIN_PRIVATE)) is None:
             continue
         db.keys.upsert(
             KeyRecord.from_material(
@@ -1037,7 +1037,11 @@ def _finalize_admin_key_rotation_error(
             f"with `mesh admin import --overwrite {live.node_id.hex}=<public key>` and "
             "re-run `mesh provision`."
         )
-        others = ", ".join(ref for ref in exc.admin_refs if ref != f"{live.node_id.hex}_pub")
+        others = ", ".join(
+            ref
+            for ref in exc.admin_refs
+            if ref != schema.ref_for(live.node_id.hex, KeyType.ADMIN_PUBLIC)
+        )
         if others:
             hint = f"{hint} Also re-import: {others}."
     elif "CVE-2025-52464" in exc.reason:
@@ -1166,7 +1170,7 @@ def run_provision(
     admin_keys = resolve_admin_keys(db.keys, template, known_bad=known_bad)
 
     db_public_key: bytes | None = None
-    db_key_record = db.keys.find(f"{live.node_id.hex}_pub")
+    db_key_record = db.keys.find(schema.ref_for(live.node_id.hex, KeyType.ADMIN_PUBLIC))
     if db_key_record is not None:
         db_public_key = db_key_record.material()
 
@@ -1255,7 +1259,7 @@ def run_provision(
         raise _finalize_admin_key_rotation_error(exc, live, pending_path=pending_path) from exc
 
     if opts.admin_ref is not None and opts.admin_ref != change_plan.node_id.hex:
-        existing_alias_pub = db.keys.find(f"{opts.admin_ref}_pub")
+        existing_alias_pub = db.keys.find(schema.ref_for(opts.admin_ref, KeyType.ADMIN_PUBLIC))
         if existing_alias_pub is not None and alias_would_rotate_admin_key(
             existing_alias_public_key=existing_alias_pub.material(),
             plan_regenerates=change_plan.key_plan.regenerate,
@@ -1268,7 +1272,7 @@ def run_provision(
                     f"{opts.admin_ref!r} already names a different admin key; refusing to "
                     "re-point it.",
                     reason="alias",
-                    admin_refs=(f"{opts.admin_ref}_pub",),
+                    admin_refs=(schema.ref_for(opts.admin_ref, KeyType.ADMIN_PUBLIC),),
                 ),
                 live,
                 pending_path=pending_path,

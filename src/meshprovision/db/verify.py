@@ -28,13 +28,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from meshprovision.config.template import admin_public_key_ref
 from meshprovision.crypto import redact, weakkeys
+from meshprovision.db import observed_keys, schema
 from meshprovision.db.ods import IntegrityWarningKind
 from meshprovision.db.schema import KeyType
 from meshprovision.errors import ExitCode, KeyMaterialError, WeakKeySeverity
 from meshprovision.nodeid import NodeId
-from meshprovision.provisioning import observed_keys
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -256,7 +255,7 @@ def verify_database(
     CRITICAL alarm, since the shared-admin-key shape alone proves
     nothing about device cloning. :func:`_check_duplicate_observed_refs`
     looks at this by ref rather than by material: any ``observed-*`` ref
-    (see :mod:`meshprovision.provisioning.observed_keys`) appearing in
+    (see :mod:`meshprovision.db.observed_keys`) appearing in
     more than one node's ``authorized_admin_keys`` is content-addressed,
     so the *same* key observed on several devices resolves to one shared
     ``Keys`` row every one of them authorizes, not several rows holding
@@ -392,7 +391,7 @@ def _check_template_refs(keys: KeyRepository, template: TemplateConfig | None) -
         return []
     problems: list[DbProblem] = []
     for ref in template.admin_nodes:
-        key_ref = admin_public_key_ref(ref)
+        key_ref = schema.ref_for(ref, KeyType.ADMIN_PUBLIC)
         if keys.find(key_ref) is None:
             problems.append(
                 DbProblem(
@@ -454,7 +453,7 @@ def _check_admin_key_mismatch(keys: KeyRepository) -> list[DbProblem]:
     problems: list[DbProblem] = []
     for record in keys.of_type(KeyType.ADMIN_PRIVATE):
         admin_ref = record.key_ref.removesuffix("_priv")
-        if keys.find(admin_public_key_ref(admin_ref)) is None:
+        if keys.find(schema.ref_for(admin_ref, KeyType.ADMIN_PUBLIC)) is None:
             continue
         if keys.private_key_mismatch(admin_ref):
             problems.append(
@@ -470,8 +469,9 @@ def _check_admin_key_mismatch(keys: KeyRepository) -> list[DbProblem]:
                     severity=ProblemSeverity.CRITICAL,
                     message=(
                         f"{record.key_ref} does not derive "
-                        f"{admin_public_key_ref(admin_ref)}; the pair is inconsistent "
-                        "(corruption or a partial restore -- firmware issue #7449)."
+                        f"{schema.ref_for(admin_ref, KeyType.ADMIN_PUBLIC)}; the pair is "
+                        "inconsistent (corruption or a partial restore -- firmware issue "
+                        "#7449)."
                     ),
                     sheet="Keys",
                     ref=record.key_ref,
@@ -563,7 +563,7 @@ def _check_duplicate_keys(keys: KeyRepository) -> list[DbProblem]:
 def _check_duplicate_observed_refs(nodes: NodeRepository) -> list[DbProblem]:
     """Detect an ``observed-*`` admin-key ref authorized on more than one node.
 
-    Under the current scheme (see :mod:`meshprovision.provisioning.
+    Under the current scheme (see :mod:`meshprovision.db.
     observed_keys`/:mod:`meshprovision.provisioning.key_registry`), the
     same admin key observed on several devices resolves to the *same*
     content-addressed ``Keys`` sheet row every one of them authorizes --

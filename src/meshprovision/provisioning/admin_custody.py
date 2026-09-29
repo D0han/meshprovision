@@ -41,8 +41,8 @@ from typing import TYPE_CHECKING, Final
 from rich import box
 from rich.table import Table
 
-from meshprovision.config.template import admin_public_key_ref
 from meshprovision.crypto import weakkeys
+from meshprovision.db import schema
 from meshprovision.db.schema import KeyType
 from meshprovision.errors import WeakKeySeverity
 from meshprovision.nodeid import NodeId
@@ -196,7 +196,7 @@ def collect_admins(
 
     provisional: list[AdminSummary] = []
     for ref in refs:
-        key_ref = admin_public_key_ref(ref)
+        key_ref = schema.ref_for(ref, KeyType.ADMIN_PUBLIC)
         record = keys.find(key_ref)
         audit = (
             weakkeys.audit_public_key(

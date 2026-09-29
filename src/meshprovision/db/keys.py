@@ -26,7 +26,6 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, SecretStr, field_validator, model_validator
 
-from meshprovision.config.template import admin_private_key_ref, admin_public_key_ref
 from meshprovision.crypto import redact
 from meshprovision.crypto.keys import KeyPair, decode_key, encode_key, public_key_matches
 from meshprovision.crypto.redact import SecretBytes
@@ -414,19 +413,20 @@ class KeyRepository:
                 template's ``admin_nodes``), not a ``key_ref``.
 
         Returns:
-            ``True`` if ``admin_private_key_ref(admin_ref)`` resolves to a
-            row whose material derives ``admin_public_key_ref(admin_ref)``'s
-            material. ``False`` if the private row is absent, or present
-            but does not correspond (a copy-paste or half-finished-rotation
-            error). When no public row exists there is nothing to verify
-            against and mere presence is reported. Malformed material
-            reads as ``False``, never raises.
+            ``True`` if ``schema.ref_for(admin_ref, KeyType.ADMIN_PRIVATE)``
+            resolves to a row whose material derives
+            ``schema.ref_for(admin_ref, KeyType.ADMIN_PUBLIC)``'s material.
+            ``False`` if the private row is absent, or present but does not
+            correspond (a copy-paste or half-finished-rotation error). When
+            no public row exists there is nothing to verify against and
+            mere presence is reported. Malformed material reads as
+            ``False``, never raises.
         """
         try:
-            private = self.find(admin_private_key_ref(admin_ref))
+            private = self.find(schema.ref_for(admin_ref, KeyType.ADMIN_PRIVATE))
             if private is None:
                 return False
-            public = self.find(admin_public_key_ref(admin_ref))
+            public = self.find(schema.ref_for(admin_ref, KeyType.ADMIN_PUBLIC))
             if public is None:
                 return True
             return public_key_matches(private.secret(), public.material())
@@ -445,9 +445,9 @@ class KeyRepository:
             into the spreadsheet" case, as distinct from the private key
             simply being absent.
         """
-        return self.find(admin_private_key_ref(admin_ref)) is not None and not self.has_private(
-            admin_ref
-        )
+        return self.find(
+            schema.ref_for(admin_ref, KeyType.ADMIN_PRIVATE)
+        ) is not None and not self.has_private(admin_ref)
 
     def resolve_admin_refs(self, refs: Sequence[str]) -> tuple[KeyRecord, ...]:
         """Resolve a sequence of admin node references to their public-key rows.
@@ -467,7 +467,7 @@ class KeyRepository:
         """
         resolved: list[KeyRecord] = []
         for ref in refs:
-            pub_ref = admin_public_key_ref(ref)
+            pub_ref = schema.ref_for(ref, KeyType.ADMIN_PUBLIC)
             record = self.find(pub_ref)
             if record is None:
                 raise AdminRefUnresolvedError(

@@ -39,7 +39,7 @@ from meshprovision.cli.provision import (
 )
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import redact, weakkeys
-from meshprovision.db import schema
+from meshprovision.db import observed_keys, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import (
@@ -49,7 +49,7 @@ from meshprovision.errors import (
     WeakKeyError,
     WeakKeySeverity,
 )
-from meshprovision.provisioning import connection, observed_keys
+from meshprovision.provisioning import connection
 from meshprovision.provisioning.admin_custody import build_admin_table, collect_admins
 from meshprovision.provisioning.key_registry import adopt_canonical_ref
 
@@ -78,10 +78,10 @@ def _validate_admin_ref(ref: str) -> None:
             :data:`meshprovision.db.schema.REF_PATTERN`, ends in
             ``_pub``, ``_priv``, or ``_psk`` (mirroring the template
             validator's own rule for ``admin_nodes`` entries), or starts
-            with :data:`~meshprovision.provisioning.observed_keys.
+            with :data:`~meshprovision.db.observed_keys.
             OBSERVED_PREFIX` -- that namespace is reserved for the
             synthetic refs ``mesh adopt`` mints for a not-yet-recognized
-            admin key (see :mod:`meshprovision.provisioning.
+            admin key (see :mod:`meshprovision.db.
             observed_keys`), so a human-chosen ref can never collide with
             one.
     """

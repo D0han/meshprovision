@@ -49,7 +49,8 @@ from meshprovision.cli.provision import (
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.datasources.loranet import LoranetSource
-from meshprovision.db.schema import ManagementMode
+from meshprovision.db import observed_keys, schema
+from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import (
     AdminKeyRotationRefusedError,
     AdoptionRefusedError,
@@ -61,7 +62,7 @@ from meshprovision.errors import (
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning import backup as backup_mod
-from meshprovision.provisioning import connection, detect, observed_keys
+from meshprovision.provisioning import connection, detect
 from meshprovision.provisioning.pipeline import adopt_would_rotate_admin_key, node_key_admin_refs
 
 if TYPE_CHECKING:
@@ -235,8 +236,8 @@ def _key_overwrite_warnings(
         existing row, or when the existing and new material agree.
     """
     checks: tuple[tuple[str, bytes | None], ...] = (
-        (f"{node_id_hex}_pub", node_public),
-        (f"{node_id_hex}_priv", node_private),
+        (schema.ref_for(node_id_hex, KeyType.ADMIN_PUBLIC), node_public),
+        (schema.ref_for(node_id_hex, KeyType.ADMIN_PRIVATE), node_private),
     )
     if channel is not None:
         checks = (*checks, (f"{node_id_hex}_psk", channel.psk))
@@ -271,7 +272,7 @@ def _render_admin_key_lines(
 
     Unless ``--dry-run``, ``adopt()``'s write phase files every
     *unregistered* one of these keys under a synthetic ``observed-*`` ref
-    (see :mod:`meshprovision.provisioning.observed_keys`) so it always
+    (see :mod:`meshprovision.db.observed_keys`) so it always
     resolves to a real ``Keys`` sheet row -- these lines describe that,
     and give the operator the ``mesh admin import`` command that renames
     the synthetic ref to a real one once the key's true owner is known.
@@ -671,7 +672,7 @@ def _refuse_admin_key_rotation(
     if not admin_refs:
         return
 
-    own_pub_record = db_keys.find(f"{live.node_id.hex}_pub")
+    own_pub_record = db_keys.find(schema.ref_for(live.node_id.hex, KeyType.ADMIN_PUBLIC))
     if own_pub_record is None:  # pragma: no cover - node_key_admin_refs already checked this
         return
     db_public_key = own_pub_record.material()
@@ -680,7 +681,9 @@ def _refuse_admin_key_rotation(
 
     if not adopt_would_rotate_admin_key(
         db_public_key=db_public_key,
-        db_has_private_key=db_keys.find(f"{live.node_id.hex}_priv") is not None,
+        db_has_private_key=(
+            db_keys.find(schema.ref_for(live.node_id.hex, KeyType.ADMIN_PRIVATE)) is not None
+        ),
         live_public_key=live_public_key,
         live_private_key=live_private_key,
     ):
@@ -698,7 +701,9 @@ def _refuse_admin_key_rotation(
         f"with `mesh admin import --overwrite {live.node_id.hex}=<public key>` and "
         "re-run `mesh adopt`."
     )
-    others = ", ".join(ref for ref in admin_refs if ref != f"{live.node_id.hex}_pub")
+    others = ", ".join(
+        ref for ref in admin_refs if ref != schema.ref_for(live.node_id.hex, KeyType.ADMIN_PUBLIC)
+    )
     if others:
         hint = f"{hint} Also re-import: {others}."
 

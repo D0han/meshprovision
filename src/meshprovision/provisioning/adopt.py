@@ -49,6 +49,7 @@ from typing import TYPE_CHECKING
 from meshprovision import enums
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto import redact, weakkeys
+from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import BLE_PIN_LENGTH, KeyOrigin, KeyType, ManagementMode
@@ -349,9 +350,11 @@ class AdoptionReport:
             lines.append("no fixed BLE PIN captured; enrolling this node will set a new one")
 
         if self.own_public_key_captured:
-            lines.append(f"own public key will be recorded as {self.node_id.hex}_pub")
+            pub_ref = schema.ref_for(self.node_id.hex, KeyType.ADMIN_PUBLIC)
+            lines.append(f"own public key will be recorded as {pub_ref}")
         if self.own_private_key_captured:
-            lines.append(f"own private key will be recorded as {self.node_id.hex}_priv")
+            priv_ref = schema.ref_for(self.node_id.hex, KeyType.ADMIN_PRIVATE)
+            lines.append(f"own private key will be recorded as {priv_ref}")
         if self.channel_name_to_record is not None:
             lines.append(
                 f"channel {self.channel_name_to_record!r} PSK will be recorded as "

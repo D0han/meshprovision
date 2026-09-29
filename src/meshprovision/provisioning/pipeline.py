@@ -26,10 +26,11 @@ from typing import TYPE_CHECKING, Final
 
 from meshprovision.crypto import redact, weakkeys
 from meshprovision.crypto.keys import public_key_matches
+from meshprovision.db import schema
+from meshprovision.db.observed_keys import is_observed_ref
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import KeyMaterialError, NamespaceExhaustedError, WeakKeySeverity
 from meshprovision.provisioning import detect
-from meshprovision.provisioning.observed_keys import is_observed_ref
 from meshprovision.provisioning.plan_admin_keys import ResolvedAdminKey
 
 if TYPE_CHECKING:
@@ -72,7 +73,7 @@ def _ref_sort_key(ref: str) -> tuple[bool, bool, str]:
         before a node-id-shaped one (``"deadbe01_pub"``), and both before a
         synthetic ``mesh adopt``-minted ref
         (``"observed-ab12cd34_pub"``, see
-        :mod:`meshprovision.provisioning.observed_keys`) -- so once an
+        :mod:`meshprovision.db.observed_keys`) -- so once an
         observed key is later registered under a real ref (``mesh admin
         import``) or turns out to be one of the fleet's own node keys, the
         real ref wins automatically over the synthetic one every caller
@@ -143,7 +144,7 @@ def node_key_admin_refs(
         way. Empty when there is no ``<hex>_pub`` row for this node, or
         when the row exists but backs no admin ref at all.
     """
-    own_pub = keys.find(f"{node_id.hex}_pub")
+    own_pub = keys.find(schema.ref_for(node_id.hex, KeyType.ADMIN_PUBLIC))
     if own_pub is None:
         return ()
     material = own_pub.material()
@@ -463,13 +464,13 @@ def is_host_generated_key(keys: KeyRepository, live: detect.LiveConfig) -> bool:
     if live_public is None or live_private is None:  # pragma: no cover - has_*_key guarantees this
         return False
 
-    pub_record = keys.find(f"{live.node_id.hex}_pub")
+    pub_record = keys.find(schema.ref_for(live.node_id.hex, KeyType.ADMIN_PUBLIC))
     if pub_record is None or pub_record.origin is not KeyOrigin.GENERATED:
         return False
     if not hmac.compare_digest(pub_record.material(), live_public):
         return False
 
-    priv_record = keys.find(f"{live.node_id.hex}_priv")
+    priv_record = keys.find(schema.ref_for(live.node_id.hex, KeyType.ADMIN_PRIVATE))
     if priv_record is None:
         return False
     return hmac.compare_digest(priv_record.material(), redact.reveal(live_private))
@@ -512,7 +513,7 @@ def audit_node_key(
             public=public,
             private=security.private_key,
             node_id=live.node_id.display,
-            key_ref=f"{live.node_id.hex}_pub",
+            key_ref=schema.ref_for(live.node_id.hex, KeyType.ADMIN_PUBLIC),
             firmware_version=live.firmware_version,
             known_bad=known_bad,
         )

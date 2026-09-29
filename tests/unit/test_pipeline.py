@@ -12,11 +12,11 @@ from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
+from meshprovision.db.observed_keys import observed_key_ref, observed_owner
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
-from meshprovision.provisioning.observed_keys import observed_key_ref, observed_owner
 from meshprovision.provisioning.pipeline import (
     allocate_names,
     audit_live_admin_keys,

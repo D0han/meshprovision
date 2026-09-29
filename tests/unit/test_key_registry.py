@@ -15,12 +15,12 @@ import pytest
 from pydantic import SecretStr
 
 from meshprovision.crypto.keys import encode_key
+from meshprovision.db import observed_keys
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import DbIntegrityError
-from meshprovision.provisioning import observed_keys
 from meshprovision.provisioning.key_registry import adopt_canonical_ref, register_observed_key
 
 if TYPE_CHECKING:

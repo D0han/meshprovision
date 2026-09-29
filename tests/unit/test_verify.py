@@ -19,6 +19,7 @@ from meshprovision.config.template import load_template_text
 from meshprovision.crypto.keys import encode_key
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
+from meshprovision.db.observed_keys import observed_key_ref
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.db.verify import (
@@ -34,7 +35,6 @@ from meshprovision.db.verify import (
     _check_weak_keys,
     verify_database,
 )
-from meshprovision.provisioning.observed_keys import observed_key_ref
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence

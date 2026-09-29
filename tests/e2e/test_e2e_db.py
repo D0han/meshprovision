@@ -16,8 +16,8 @@ from meshprovision.db import atomic_writer, ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.locking import lock_path_for
 from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.observed_keys import observed_key_ref
 from meshprovision.db.schema import KeyOrigin, KeyType
-from meshprovision.provisioning.observed_keys import observed_key_ref
 from tests.e2e.conftest import invoke
 
 if TYPE_CHECKING:

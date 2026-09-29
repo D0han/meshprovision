@@ -3,7 +3,7 @@
 Two repository-aware operations that together let ``mesh adopt`` give
 every admin key a device reports a real ``Keys`` sheet row, instead of
 stashing raw material on ``Nodes.unregistered_admin_keys`` (see
-:mod:`meshprovision.provisioning.observed_keys` for why the minted ref is
+:mod:`meshprovision.db.observed_keys` for why the minted ref is
 content-addressed, and :mod:`meshprovision.provisioning.adopt` for how
 this module's two functions are wired into the report -> record
 pipeline):
@@ -34,11 +34,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from meshprovision.db import schema
+from meshprovision.db import observed_keys, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import DbIntegrityError, KeyMaterialError
-from meshprovision.provisioning import observed_keys, pipeline
+from meshprovision.provisioning import pipeline
 
 if TYPE_CHECKING:
     from datetime import datetime

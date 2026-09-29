@@ -19,9 +19,9 @@ from meshprovision.crypto.keys import encode_key
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.observed_keys import observed_key_ref
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import ExitCode
-from meshprovision.provisioning.observed_keys import observed_key_ref
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
