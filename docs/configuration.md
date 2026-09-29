@@ -8,7 +8,7 @@ Part of the meshprovision docs — see the [README](../README.md).
 |---|---|---|
 | `MESHPROVISION_DB_PATH` | `data/nodes_db.ods` | ODS node database (relative paths resolve against the CWD) |
 | `MESHPROVISION_TEMPLATE_PATH` | `config/template.yaml` | Provisioning template |
-| `MESHPROVISION_CACHE_DIR` | platformdirs user cache | HTTP TTL disk cache directory |
+| `MESHPROVISION_CACHE_DIR` | platformdirs user cache | HTTP TTL disk cache directory. Safe to delete at any time while no `mesh` command is running. |
 | `MESHPROVISION_CACHE_TTL` | `300` | Cache time-to-live, seconds |
 | `MESHPROVISION_CONTACT` | (none — REQUIRED) | Your contact address, sent in the `User-Agent` to lorastats.pl |
 | `MESHPROVISION_LOG_LEVEL` | `WARNING` | `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` |
