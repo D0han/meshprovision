@@ -43,7 +43,7 @@ from meshtastic.protobuf import localonly_pb2
 from meshprovision.cli.main import cli
 from meshprovision.datasources.loranet import LORANET_NODES_URL
 from meshprovision.datasources.lorastats import LORASTATS_BASE_URL, LORASTATS_NODES_PATH
-from meshprovision.db import ods
+from meshprovision.db import ods_write
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import ConnectionFailedError
@@ -631,12 +631,12 @@ def seed_db(db_path: Path) -> Callable[..., Path]:
 
     Returns:
         A ``seed(nodes=(), keys=()) -> Path`` function that writes the
-        given records (via ``ods.write_database(..., backup=False)``) and
+        given records (via ``ods_write.write_database(..., backup=False)``) and
         returns ``db_path``.
     """
 
     def _seed(nodes: Sequence[NodeRecord] = (), keys: Sequence[KeyRecord] = ()) -> Path:
-        ods.write_database(
+        ods_write.write_database(
             db_path,
             nodes=[record.to_row() for record in nodes],
             keys=[record.to_row() for record in keys],

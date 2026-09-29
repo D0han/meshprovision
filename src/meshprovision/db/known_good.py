@@ -340,7 +340,7 @@ def refresh_known_good(
     failure is logged at ``WARNING`` and swallowed.
 
     ``content`` and ``source_stat`` must come from the exact same read of
-    ``target`` that was validated (see :func:`meshprovision.db.ods.
+    ``target`` that was validated (see :func:`meshprovision.db.ods_read.
     _read_db_file`), not from a fresh open of ``target`` here. Re-opening
     the path at this point is exactly the TOCTOU this closes: a write
     landing between validation and this call would otherwise publish
@@ -374,7 +374,7 @@ def refresh_known_good(
         content: The exact bytes that were read and validated from
             ``target``. Written to the known-good copy as-is.
         source_stat: The ``stat`` result from the same read that produced
-            ``content`` (see :func:`meshprovision.db.ods._read_db_file`,
+            ``content`` (see :func:`meshprovision.db.ods_read._read_db_file`,
             which uses ``fstat`` on the read fd so this describes exactly
             the inode ``content`` came from).
         backup_dir: Directory to store the known-good copy under.

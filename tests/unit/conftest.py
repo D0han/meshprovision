@@ -283,7 +283,7 @@ def libreoffice_round_trip(path: Path) -> None:
       cell's *computed* value.
     - On any cell carrying an ``office:annotation`` (a Calc comment --
       every header cell has one, holding its column description, see
-      :func:`meshprovision.db.ods._build_header_row`), moves the
+      :func:`meshprovision.db.ods_write._build_header_row`), moves the
       annotation ahead of the cell's own ``text:p`` and adds a
       ``<dc:date>`` child to it.
 

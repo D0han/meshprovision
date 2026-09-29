@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.crypto.keys import generate_keypair
-from meshprovision.db import atomic_writer, ods
+from meshprovision.db import atomic_writer, ods, ods_write
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.locking import lock_path_for
 from meshprovision.db.nodes import NodeRecord
@@ -139,7 +139,7 @@ def test_db_verify_finds_blocklist_next_to_a_db_path_outside_the_cwd(
     blocked_admin = KeyRecord.from_material(
         "deadbe01", KeyType.ADMIN_PUBLIC, kp.public, origin=KeyOrigin.CAPTURED
     )
-    ods.write_database(
+    ods_write.write_database(
         custom_db_path,
         nodes=[node.to_row()],
         keys=[blocked_admin.to_row()],

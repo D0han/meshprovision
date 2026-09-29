@@ -48,7 +48,7 @@ import pytest  # noqa: E402
 import yaml  # noqa: E402
 
 from meshprovision.crypto.keys import KeyPair, generate_keypair  # noqa: E402
-from meshprovision.db import ods  # noqa: E402
+from meshprovision.db import ods_write  # noqa: E402
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 """Absolute path to the repository root (the parent of ``tests/``)."""
@@ -170,7 +170,7 @@ def empty_ods(tmp_path: Path) -> Path:
         Path to the created ``nodes_db.ods`` file.
     """
     path = tmp_path / "nodes_db.ods"
-    ods.create_empty(path, backup=False)
+    ods_write.create_empty(path, backup=False)
     return path
 
 

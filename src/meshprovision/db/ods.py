@@ -1,142 +1,58 @@
-"""Low-level odfpy read/write layer for the ``Nodes``/``Keys`` ODS database.
+"""Validation, recomputation, and session layer for the ``Nodes``/``Keys`` ODS database.
 
-This module is the only place in the project that touches ``odfpy``
-directly. It builds the real spreadsheet -- formulas, content-validation
-dropdowns, a frozen header row via ``settings.xml`` view settings, a bold
-header style, column widths, and a forced-text number style so LibreOffice
-never silently re-types a hex node id as a float -- and reads it back
-defensively, treating every cell as an explicit string. Schema knowledge
-(column order, validation rules, formula templates) lives in
-:mod:`meshprovision.db.schema`; this module only knows ODF mechanics.
-
-Everything here was verified empirically against the installed ``odfpy``
-1.4.1: a prototype document with formulas, ``table:content-validation``,
-a forced-``Text`` number style and a freeze-pane was built, saved,
-unzipped, and read back successfully before this module was written. Every
-attribute name used below (``valuetype``, ``stringvalue``, ``formula``,
-``contentvalidationname``, ``allowemptycell``, ``basecelladdress``,
-``displaylist``, ``columnwidth``, ``defaultcellstylename``, ``stylename``,
-``datastylename``, ``fontweight``, ``backgroundcolor``) was confirmed
-against odfpy's own attribute-name conversion for the corresponding
-``table:*``/``style:*`` grammar, not guessed. The list-validity condition
-grammar (``of:cell-content-is-in-list(...)``) is documented and verified
-in :mod:`meshprovision.db.schema`.
-
-Two independent load-order requirements of the ODF format matter here:
-
-- ``<table:content-validations>`` must be the first child of
-  ``<office:spreadsheet>`` -- it is added to ``doc.spreadsheet`` before
-  any ``<table:table>``.
-- ``odfpy``'s ``OpenDocumentSpreadsheet.save()`` appends ``.ods`` to a
-  bare name without a suffix, so writing is done via
-  ``doc.write(fileobj)`` inside :func:`meshprovision.db.atomic_writer.atomic_write`,
-  never via ``.save()``.
+Reading an ODS file's raw sheet contents is
+:mod:`meshprovision.db.ods_read`'s job; building and writing one is
+:mod:`meshprovision.db.ods_write`'s. This module sits between them: it
+validates and coerces :mod:`~meshprovision.db.ods_read`'s raw
+``DatabaseData`` into a :class:`LoadedDatabase`
+(:func:`load_database`/:func:`parse_database`), and :class:`OdsDatabase`
+ties a load/modify/save cycle together, calling into
+:mod:`~meshprovision.db.ods_write` on :meth:`OdsDatabase.save`.
 
 **Rows are always sorted**, via :func:`meshprovision.db.sorting.sorted_rows`
 -- on load (:func:`load_database`), after every in-memory mutation
-(:meth:`OdsDatabase.replace`), and on write (:func:`build_document`). This
-means row order is no longer a hand-editable property of the file: a
-sheet's rows always come back in the same canonical order regardless of
-insertion history or how a human last arranged them.
+(:meth:`OdsDatabase.replace`), and on write
+(:func:`meshprovision.db.ods_write.build_document`). This means row order
+is no longer a hand-editable property of the file: a sheet's rows always
+come back in the same canonical order regardless of insertion history or
+how a human last arranged them.
 """
 
 from __future__ import annotations
 
 import contextlib
-import io
 import logging
-import os
 import time
-import xml.parsers.expat
-import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, Final
+from typing import Final
 
-from odf import config as odf_config
-from odf import number as odf_number
-from odf import office as odf_office
-from odf import opendocument, teletype
-from odf import style as odf_style
-from odf import table as odf_table
-from odf import text as odf_text
-from odf.element import Node
-from odf.opendocument import OpenDocumentSpreadsheet
-
-from meshprovision.db import cell_validation, header_diff, locking, schema, sorting
-from meshprovision.db.atomic_writer import DEFAULT_RETENTION, atomic_write
+from meshprovision.db import (
+    cell_validation,
+    header_diff,
+    locking,
+    ods_read,
+    ods_write,
+    schema,
+    sorting,
+)
+from meshprovision.db.atomic_writer import DEFAULT_RETENTION
 from meshprovision.db.known_good import refresh_known_good
-from meshprovision.errors import DbIntegrityError, DbReadError, DuplicateNodeError, SchemaError
+from meshprovision.errors import DbIntegrityError, DuplicateNodeError, SchemaError
 
 __all__ = [
-    "HEADER_CELL_STYLE_NAME",
-    "MAX_BLANK_ROWS",
-    "MAX_COLUMNS",
-    "MAX_ROW_REPEAT",
-    "TEXT_CELL_STYLE_NAME",
-    "TEXT_DATA_STYLE_NAME",
-    "CellValue",
-    "DatabaseData",
     "IntegrityWarning",
     "IntegrityWarningKind",
     "LoadedDatabase",
     "OdsDatabase",
-    "SheetData",
-    "build_document",
-    "create_empty",
     "load_database",
     "parse_database",
-    "read_raw",
     "verify",
-    "write_database",
 ]
 
 _logger = logging.getLogger(__name__)
-
-TEXT_DATA_STYLE_NAME: Final[str] = "MPTextFormat"
-"""Name of the ``number:text-style`` that forces a cell to display as text."""
-
-TEXT_CELL_STYLE_NAME: Final[str] = "MPText"
-"""Name of the ``style:style`` (family ``table-cell``) applied to every data cell."""
-
-HEADER_CELL_STYLE_NAME: Final[str] = "MPHeader"
-"""Name of the ``style:style`` applied to header-row cells: bold, shaded."""
-
-MAX_COLUMNS: Final[int] = 256
-"""Upper bound on columns read per row, guarding against a runaway repeat count."""
-
-MAX_BLANK_ROWS: Final[int] = 64
-"""Maximum consecutive blank data rows read before stopping."""
-
-MAX_ROW_REPEAT: Final[int] = 1024
-"""Above this ``table:number-rows-repeated`` count, a blank row is treated as
-LibreOffice's giant trailing filler row and read stops immediately."""
-
-_HEADER_BG_COLOR: Final[str] = "#e6e6e6"
-
-_FREEZE_HEADER_ITEMS: Final[tuple[tuple[str, str, str], ...]] = (
-    ("CursorPositionX", "int", "0"),
-    ("CursorPositionY", "int", "1"),
-    ("HorizontalSplitMode", "short", "0"),
-    ("VerticalSplitMode", "short", "2"),
-    ("HorizontalSplitPosition", "int", "0"),
-    ("VerticalSplitPosition", "int", "1"),
-    ("ActiveSplitRange", "short", "2"),
-    ("PositionLeft", "int", "0"),
-    ("PositionRight", "int", "0"),
-    ("PositionTop", "int", "0"),
-    ("PositionBottom", "int", "1"),
-)
-"""``config:config-item`` name/type/text triples that freeze row 1 in Calc.
-
-``VerticalSplitMode=2`` is FREEZE (``1`` would be a plain movable split);
-``VerticalSplitPosition=1`` freezes exactly the header row.
-"""
-
-_TABLE_CELL_QNAME: Final[tuple[str, str]] = (odf_table.TABLENS, "table-cell")
-_COVERED_CELL_QNAME: Final[tuple[str, str]] = (odf_table.TABLENS, "covered-table-cell")
 
 _TEXT_LIKE_KINDS: Final[frozenset[schema.ColumnKind]] = frozenset(
     {
@@ -151,69 +67,6 @@ _TEXT_LIKE_KINDS: Final[frozenset[schema.ColumnKind]] = frozenset(
 _COERCED_VALUE_TYPES: Final[frozenset[str]] = frozenset(
     {"float", "percentage", "currency", "date", "time"}
 )
-
-
-@dataclass(frozen=True, slots=True)
-class CellValue:
-    """One cell's raw, defensively-extracted content.
-
-    Attributes:
-        text: The cell's display text -- from ``office:string-value`` when
-            the cell is explicitly typed as a string, otherwise from the
-            extracted paragraph text.
-        formula: The cell's ``table:formula`` attribute, when present.
-        value_type: The cell's ``table:value-type`` attribute, when
-            present (for example ``"string"``, ``"float"``, ``"date"``).
-        paragraph_text: The cell's own extracted paragraph text (see
-            :func:`_cell_own_text`), always populated regardless of
-            :attr:`value_type` -- unlike :attr:`text`, this is exactly
-            what a human sees on screen for the cell, and is what a
-            ``ColumnKind.TEXT`` column's caller (:func:`_row_values`)
-            prefers instead of the ``office:string-value``-cached
-            :attr:`text`: XML attribute-value normalization silently
-            turns a literal tab in ``office:string-value`` into a space
-            on the next parse, a corruption the paragraph's own
-            ``text:tab`` run does not suffer. Not preferred generically
-            for every column, because a formula-bearing column (for
-            example ``key_ref``) must keep reading its cached *result*
-            text, never a stale on-screen paragraph.
-    """
-
-    text: str
-    formula: str | None = None
-    value_type: str | None = None
-    paragraph_text: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class SheetData:
-    """One sheet's raw header and data rows.
-
-    Attributes:
-        name: The sheet name.
-        header: The header row's cell texts, in column order.
-        rows: The data rows (header excluded), each a tuple of
-            :class:`CellValue` in column order.
-        first_data_row: The 1-based ODS row number of ``rows[0]``.
-    """
-
-    name: str
-    header: tuple[str, ...]
-    rows: tuple[tuple[CellValue, ...], ...]
-    first_data_row: int = 2
-
-
-@dataclass(frozen=True, slots=True)
-class DatabaseData:
-    """The raw contents of every sheet in one ODS file.
-
-    Attributes:
-        path: Path to the ODS file that was read.
-        sheets: Every sheet found, keyed by sheet name.
-    """
-
-    path: Path
-    sheets: Mapping[str, SheetData]
 
 
 class IntegrityWarningKind(StrEnum):
@@ -285,318 +138,6 @@ class LoadedDatabase:
     warnings: tuple[IntegrityWarning, ...]
 
 
-# ---------------------------------------------------------------------------
-# Reading.
-# ---------------------------------------------------------------------------
-
-
-def _int_attr(elem: Any, name: str, *, default: int) -> int:
-    """Read an integer-valued ODF attribute, tolerating absence/garbage.
-
-    Args:
-        elem: The odfpy element to read from.
-        name: The attribute's Python-side (no-hyphen) name.
-        default: Value to use when the attribute is absent or unparsable.
-
-    Returns:
-        The parsed integer, or ``default``.
-    """
-    raw = elem.getAttribute(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return default
-
-
-_PARAGRAPH_QNAMES: Final[frozenset[tuple[str, str]]] = frozenset(
-    {(odf_text.TEXTNS, "p"), (odf_text.TEXTNS, "h")}
-)
-"""``text:p``/``text:h`` -- the only children of a cell that hold its own text.
-
-A cell can also carry an ``office:annotation`` (a Calc comment) and, once
-LibreOffice has touched the file, ``draw:*`` shapes anchoring that
-comment's on-screen box. Neither is part of the cell's value, so
-:func:`_cell_own_text` walks only these direct children instead of
-recursing into the whole cell.
-"""
-
-
-def _cell_own_text(cell_elem: Any) -> str:
-    r"""Extract a cell's own text, ignoring any attached comment.
-
-    ``teletype.extractText`` recurses into *every* descendant, comment
-    included -- harmless for a file this project wrote (whose header
-    cells carry their column description as an ``office:annotation``,
-    see :func:`_build_header_row`) only because ``_extract_cell`` prefers
-    the cached ``office:string-value`` and never reaches this function
-    for that cell. LibreOffice, on saving the file back, drops that
-    cached ``office:string-value`` (it uses ``calcext:value-type``
-    instead) and reorders the annotation ahead of the text paragraph, so
-    a plain "open, resize a column, save" round-trip through Calc used
-    to make every touched cell's fallback path read as
-    ``annotation-text + own-text`` -- for a header cell, the column's
-    entire description prepended to its name. Reading only the cell's
-    direct ``text:p``/``text:h`` children (still run through
-    ``teletype.extractText`` each, since that is what correctly unwraps
-    ``text:s``/``text:tab``/``text:line-break`` runs *within* one
-    paragraph) fixes both the header and a hand-added comment on a data
-    cell silently corrupting that cell's value.
-
-    Args:
-        cell_elem: The odfpy ``TableCell`` element.
-
-    Returns:
-        The cell's own paragraphs, joined with ``"\\n"`` (a cell written
-        as several ``text:p`` children is a multi-line value).
-    """
-    paragraphs = [
-        teletype.extractText(child)
-        for child in cell_elem.childNodes
-        if getattr(child, "nodeType", None) == Node.ELEMENT_NODE
-        and child.qname in _PARAGRAPH_QNAMES
-    ]
-    return "\n".join(paragraphs)
-
-
-def _extract_cell(cell_elem: Any) -> CellValue:
-    """Defensively extract one ``table:table-cell``'s content.
-
-    Prefers the cached ``office:string-value`` when the cell is
-    explicitly typed as a string; otherwise falls back to the cell's own
-    extracted paragraph text (see :func:`_cell_own_text`), which is what
-    a numeric/date-typed cell (one LibreOffice may have coerced) still
-    yields.
-
-    Args:
-        cell_elem: The odfpy ``TableCell`` element.
-
-    Returns:
-        The extracted :class:`CellValue`.
-    """
-    value_type: str | None = cell_elem.getAttribute("valuetype")
-    formula: str | None = cell_elem.getAttribute("formula")
-    string_value: str | None = cell_elem.getAttribute("stringvalue")
-    own_text = _cell_own_text(cell_elem)
-    text = string_value if value_type == "string" and string_value is not None else own_text
-    return CellValue(text=text, formula=formula, value_type=value_type, paragraph_text=own_text)
-
-
-def _read_row_cells(row_elem: Any) -> tuple[CellValue, ...]:
-    """Read one row's cells, in document order, expanding column repeats.
-
-    Iterates the row's direct children so ``table:table-cell`` and
-    ``table:covered-table-cell`` elements are read in the interleaved
-    order they actually appear, capped at :data:`MAX_COLUMNS` total.
-
-    Args:
-        row_elem: The odfpy ``TableRow`` element.
-
-    Returns:
-        The row's cells, in column order.
-    """
-    cells: list[CellValue] = []
-    for child in row_elem.childNodes:
-        if len(cells) >= MAX_COLUMNS:
-            break
-        if getattr(child, "nodeType", None) != Node.ELEMENT_NODE:
-            continue
-        qname = child.qname
-        if qname == _COVERED_CELL_QNAME:
-            repeat = _int_attr(child, "numbercolumnsrepeated", default=1)
-            cells.extend(CellValue(text="") for _ in range(min(repeat, MAX_COLUMNS - len(cells))))
-        elif qname == _TABLE_CELL_QNAME:
-            cell_value = _extract_cell(child)
-            repeat = _int_attr(child, "numbercolumnsrepeated", default=1)
-            cells.extend(cell_value for _ in range(min(repeat, MAX_COLUMNS - len(cells))))
-    return tuple(cells)
-
-
-def _has_data_below(row_elems: Sequence[Any], index: int) -> bool:
-    """Whether any row after ``row_elems[index]`` holds a non-blank cell.
-
-    Args:
-        row_elems: The sheet's raw ``table:table-row`` elements.
-        index: Index, within ``row_elems``, of the row just processed --
-            the rows checked start at ``index + 1``.
-
-    Returns:
-        ``True`` if any remaining row has at least one non-blank cell.
-    """
-    return any(
-        not all(not cell.text.strip() for cell in _read_row_cells(remaining))
-        for remaining in row_elems[index + 1 :]
-    )
-
-
-def _gap_error(name: str, ods_row: int) -> DbIntegrityError:
-    """Build the "blank-row gap with real data still below it" error.
-
-    Args:
-        name: The sheet's name.
-        ods_row: The 1-based ODS row number where the blank-row gap
-            starts.
-
-    Returns:
-        The constructed :class:`DbIntegrityError`, not yet raised.
-    """
-    return DbIntegrityError(
-        f"{name} sheet has a run of more than {MAX_BLANK_ROWS} consecutive "
-        f"blank rows starting at row {ods_row}, with real data still below "
-        "it; stopped reading there rather than risk silently dropping it.",
-        sheet=name,
-        cell=f"{name}.A{ods_row}",
-        hint=(
-            "Open the file in LibreOffice Calc and delete the blank row "
-            "block (Select rows -> Delete Rows, not just Delete Contents), "
-            "then re-run mesh db verify."
-        ),
-    )
-
-
-def _read_sheet(name: str, table_elem: Any) -> SheetData:
-    """Read one ``table:table`` element into a :class:`SheetData`.
-
-    Args:
-        name: The sheet's name.
-        table_elem: The odfpy ``Table`` element.
-
-    Returns:
-        The sheet's header and data rows.
-
-    Raises:
-        DbIntegrityError: If a run of more than :data:`MAX_BLANK_ROWS`
-            consecutive blank rows is hit with non-blank rows still
-            following it below -- whether that run is encoded as many
-            separate blank row elements or as one element with a large
-            ``table:number-rows-repeated`` count (including one above
-            :data:`MAX_ROW_REPEAT`) -- see :data:`MAX_BLANK_ROWS`'s own
-            docstring for why this can never be silently truncated.
-    """
-    row_elems = table_elem.getElementsByType(odf_table.TableRow)
-    if not row_elems:
-        return SheetData(name=name, header=(), rows=())
-
-    header = tuple(cell.text for cell in _read_row_cells(row_elems[0]))
-
-    data_rows: list[tuple[CellValue, ...]] = []
-    consecutive_blank = 0
-    for index, row_elem in enumerate(row_elems[1:], start=1):
-        cells = _read_row_cells(row_elem)
-        is_blank = all(not cell.text.strip() for cell in cells)
-        repeat = _int_attr(row_elem, "numberrowsrepeated", default=1)
-
-        if is_blank and repeat > MAX_ROW_REPEAT:
-            if _has_data_below(row_elems, index):
-                raise _gap_error(name, len(data_rows) + 2)
-            # LibreOffice's giant trailing filler row: treat as end-of-data.
-            break
-
-        count = min(repeat, MAX_ROW_REPEAT)
-        exhausted = False
-        for _ in range(count):
-            if is_blank:
-                consecutive_blank += 1
-                if consecutive_blank > MAX_BLANK_ROWS:
-                    exhausted = True
-                    break
-            else:
-                consecutive_blank = 0
-            data_rows.append(cells)
-        if exhausted:
-            # A blank-row gap this long is exactly what an ordinary Calc
-            # edit (delete a block of rows' contents, or insert rows to
-            # make room) produces -- LibreOffice writes it as a single
-            # <table:table-row table:number-rows-repeated="N"> element,
-            # and real data can genuinely still follow it below. A gap
-            # with nothing real below it (a trailing block of deleted
-            # rows, which this project's own sorted writes always push to
-            # the front, but a hand-edit could still leave trailing) is
-            # harmless to stop at, same as before -- so only refuse when
-            # something non-blank is actually waiting past the gap.
-            if _has_data_below(row_elems, index):
-                raise _gap_error(name, len(data_rows) + 2)  # +1 header, +1 for 1-indexing
-            break
-
-    return SheetData(name=name, header=header, rows=tuple(data_rows))
-
-
-def _read_db_file(path: Path) -> tuple[bytes, os.stat_result]:
-    """Read a database file's bytes and stat in one shot, off the same fd.
-
-    Using ``fstat`` on the fd the bytes were read from means the stat
-    describes exactly the inode whose content was read -- not whatever
-    happens to be at ``path`` a moment later, which is what closes the
-    validate-then-known-good-refresh race this exists for (see
-    :func:`load_database`).
-
-    Args:
-        path: Path to the ``.ods`` file.
-
-    Returns:
-        The file's raw bytes and its ``fstat`` result at read time.
-
-    Raises:
-        DbReadError: If ``path`` cannot be opened or read (permissions,
-            I/O) -- distinct from a file that reads fine but is not
-            valid ODF content, which :func:`read_raw` reports instead.
-    """
-    try:
-        with path.open("rb") as fh:
-            stat_result = os.fstat(fh.fileno())
-            data = fh.read()
-    except OSError as exc:
-        raise DbReadError(
-            f"Could not read {path}: {exc.strerror or exc}",
-            hint=(
-                "Check the file's owner and permissions (a `sudo mesh …` run leaves it "
-                "root-owned: `sudo chown $USER <path>`). The file's content was not examined."
-            ),
-        ) from exc
-    return data, stat_result
-
-
-def read_raw(path: Path, *, data: bytes | None = None) -> DatabaseData:
-    """Read an ODS file's raw sheet contents, with no schema validation.
-
-    Args:
-        path: Path to the ``.ods`` file. Used to name it in any error,
-            and to load from disk when ``data`` is not given.
-        data: The file's bytes, already read -- when given, parsed
-            directly instead of re-opening ``path``. Used by
-            :func:`load_database` so the bytes that are validated are
-            exactly the bytes read once via :func:`_read_db_file`.
-
-    Returns:
-        The raw contents of every sheet found.
-
-    Raises:
-        SchemaError: If ``path``/``data`` cannot be parsed as an ODF
-            spreadsheet.
-    """
-    try:
-        doc = opendocument.load(io.BytesIO(data) if data is not None else str(path))
-    except (
-        OSError,
-        zipfile.BadZipFile,
-        xml.parsers.expat.ExpatError,
-        ValueError,
-        TypeError,
-        KeyError,
-        AttributeError,
-    ) as exc:
-        raise SchemaError(f"{path} is not a readable ODF spreadsheet: {exc}") from exc
-
-    sheets: dict[str, SheetData] = {}
-    for table_elem in doc.spreadsheet.getElementsByType(odf_table.Table):
-        sheet_name: str | None = table_elem.getAttribute("name")
-        if sheet_name is None:
-            continue
-        sheets[sheet_name] = _read_sheet(sheet_name, table_elem)
-    return DatabaseData(path=path, sheets=sheets)
-
-
 def _tolerated_headers(sheet_spec: schema.SheetSpec) -> tuple[tuple[str, ...], ...]:
     """Build every header shape :func:`_check_header` accepts for one sheet.
 
@@ -620,7 +161,7 @@ def _tolerated_headers(sheet_spec: schema.SheetSpec) -> tuple[tuple[str, ...], .
     return tuple(variants)
 
 
-def _check_header(sheet_data: SheetData, sheet_spec: schema.SheetSpec) -> None:
+def _check_header(sheet_data: ods_read.SheetData, sheet_spec: schema.SheetSpec) -> None:
     """Confirm a sheet's header row matches its expected column order.
 
     Each cell is stripped before comparing, so incidental leading/
@@ -653,7 +194,7 @@ def _check_header(sheet_data: SheetData, sheet_spec: schema.SheetSpec) -> None:
     raise SchemaError(message, sheet=sheet_spec.name, hint=hint)
 
 
-def _check_headers(raw: DatabaseData) -> None:
+def _check_headers(raw: ods_read.DatabaseData) -> None:
     """Confirm every present sheet's header matches its schema, in one pass.
 
     Checking both sheets before loading either row means a database with
@@ -691,7 +232,7 @@ def _check_headers(raw: DatabaseData) -> None:
 
 
 def _row_values(
-    sheet_spec: schema.SheetSpec, cells: tuple[CellValue, ...], ods_row: int
+    sheet_spec: schema.SheetSpec, cells: tuple[ods_read.CellValue, ...], ods_row: int
 ) -> tuple[dict[str, str], list[IntegrityWarning]]:
     """Build a ``{column_name: text}`` map for one row, flagging likely coercion.
 
@@ -710,7 +251,7 @@ def _row_values(
     values: dict[str, str] = {}
     coercions: list[IntegrityWarning] = []
     for index, col in enumerate(sheet_spec.columns):
-        cell = cells[index] if index < len(cells) else CellValue(text="")
+        cell = cells[index] if index < len(cells) else ods_read.CellValue(text="")
         if col.kind in _TEXT_LIKE_KINDS and cell.value_type in _COERCED_VALUE_TYPES:
             coercions.append(
                 IntegrityWarning(
@@ -779,7 +320,7 @@ def _apply_recompute(
 
 
 def _load_sheet_rows(
-    sheet_data: SheetData,
+    sheet_data: ods_read.SheetData,
     sheet_spec: schema.SheetSpec,
     warnings: list[IntegrityWarning],
 ) -> tuple[Mapping[str, str], ...]:
@@ -892,7 +433,7 @@ def parse_database(data: bytes, *, source: Path) -> LoadedDatabase:
         DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
     """
     started = time.monotonic()
-    raw = read_raw(source, data=data)
+    raw = ods_read.read_raw(source, data=data)
     for sheet_name in schema.SHEET_NAMES:
         if sheet_name not in raw.sheets:
             raise SchemaError(
@@ -949,13 +490,13 @@ def load_database(path: Path) -> LoadedDatabase:
     -- every successful load, not just a write, since a load having
     reached this point is itself proof the file is currently valid. The
     copy is written from the exact bytes read and validated here, via
-    :func:`_read_db_file`, never by re-opening ``path`` afterwards -- so
-    a write landing between validation and the refresh can never publish
-    unvalidated content as "known-good". Never fails the load: a refresh
-    failure (full disk, read-only backup directory) is logged and
-    swallowed, not raised.
+    :func:`meshprovision.db.ods_read._read_db_file`, never by re-opening
+    ``path`` afterwards -- so a write landing between validation and the
+    refresh can never publish unvalidated content as "known-good". Never
+    fails the load: a refresh failure (full disk, read-only backup
+    directory) is logged and swallowed, not raised.
     """
-    data, stat_result = _read_db_file(path)
+    data, stat_result = ods_read._read_db_file(path)
     loaded = parse_database(data, source=path)
     refresh_known_good(path, content=data, source_stat=stat_result)
     return loaded
@@ -978,299 +519,6 @@ def verify(path: Path) -> tuple[IntegrityWarning, ...]:
         DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
     """
     return load_database(path).warnings
-
-
-# ---------------------------------------------------------------------------
-# Writing.
-# ---------------------------------------------------------------------------
-
-
-def _add_common_styles(doc: OpenDocumentSpreadsheet) -> None:
-    """Add the shared text-forcing number style and cell styles to ``doc.styles``.
-
-    Args:
-        doc: The document being built.
-    """
-    data_style = odf_number.TextStyle(name=TEXT_DATA_STYLE_NAME)
-    data_style.addElement(odf_number.TextContent())
-    doc.styles.addElement(data_style)
-
-    doc.styles.addElement(
-        odf_style.Style(
-            name=TEXT_CELL_STYLE_NAME, family="table-cell", datastylename=TEXT_DATA_STYLE_NAME
-        )
-    )
-
-    header_style = odf_style.Style(
-        name=HEADER_CELL_STYLE_NAME, family="table-cell", datastylename=TEXT_DATA_STYLE_NAME
-    )
-    header_style.addElement(odf_style.TextProperties(fontweight="bold"))
-    header_style.addElement(odf_style.TableCellProperties(backgroundcolor=_HEADER_BG_COLOR))
-    doc.styles.addElement(header_style)
-
-
-def _add_column_width_styles(doc: OpenDocumentSpreadsheet) -> dict[str, str]:
-    """Add one automatic ``table-column`` style per distinct column width.
-
-    Args:
-        doc: The document being built.
-
-    Returns:
-        A map from ODF width string (e.g. ``"1.0in"``) to the automatic
-        style name created for it.
-    """
-    style_names: dict[str, str] = {}
-    for sheet_spec in schema.SHEET_SPECS.values():
-        for col in sheet_spec.columns:
-            if col.width in style_names:
-                continue
-            style_name = f"mpco{len(style_names)}"
-            style_names[col.width] = style_name
-            col_style = odf_style.Style(name=style_name, family="table-column")
-            col_style.addElement(odf_style.TableColumnProperties(columnwidth=col.width))
-            doc.automaticstyles.addElement(col_style)
-    return style_names
-
-
-def _add_content_validations(doc: OpenDocumentSpreadsheet) -> None:
-    """Add one ``table:content-validation`` per dropdown column.
-
-    Must run before any ``table:table`` is added to ``doc.spreadsheet``:
-    ODF requires ``table:content-validations`` to be the first child of
-    ``office:spreadsheet``.
-
-    Args:
-        doc: The document being built.
-    """
-    validations = odf_table.ContentValidations()
-    for sheet_spec in schema.SHEET_SPECS.values():
-        for col in sheet_spec.columns:
-            if col.validation_name is None:
-                continue
-            values = schema.allowed_values(col) or ()
-            letter = sheet_spec.letter(col.name)
-            validations.addElement(
-                odf_table.ContentValidation(
-                    name=col.validation_name,
-                    condition=schema.validation_condition(values),
-                    allowemptycell="true",
-                    basecelladdress=f"{sheet_spec.name}.{letter}2",
-                    displaylist="unsorted",
-                )
-            )
-    doc.spreadsheet.addElement(validations)
-
-
-def _build_header_row(sheet_spec: schema.SheetSpec) -> Any:
-    """Build the header ``table:table-row`` for one sheet.
-
-    Each header cell carries its column name as text plus its
-    description as an ``office:annotation``, so the header stays both
-    readable and unambiguous.
-
-    Args:
-        sheet_spec: The sheet's column layout.
-
-    Returns:
-        The built ``TableRow`` element.
-    """
-    row_elem = odf_table.TableRow()
-    for col in sheet_spec.columns:
-        cell = odf_table.TableCell(
-            valuetype="string", stringvalue=col.name, stylename=HEADER_CELL_STYLE_NAME
-        )
-        cell.addElement(odf_text.P(text=col.name))
-        annotation = odf_office.Annotation()
-        annotation.addElement(odf_text.P(text=col.description))
-        cell.addElement(annotation)
-        row_elem.addElement(cell)
-    return row_elem
-
-
-def _build_data_cell(
-    sheet_spec: schema.SheetSpec, col: schema.ColumnSpec, value: str, ods_row: int
-) -> Any:
-    """Build one data ``table:table-cell``.
-
-    Args:
-        sheet_spec: The sheet the cell belongs to.
-        col: The cell's column.
-        value: The cell's value (already validated/normalized).
-        ods_row: The cell's 1-based ODS row number.
-
-    Returns:
-        The built ``TableCell`` element, carrying a formula and/or a
-        content-validation reference when the column has one.
-    """
-    if value:
-        cell = odf_table.TableCell(valuetype="string", stringvalue=value)
-        cell.addElement(odf_text.P(text=value))
-    else:
-        cell = odf_table.TableCell()
-    formula = schema.formula_for(sheet_spec, col.name, ods_row)
-    if formula is not None:
-        cell.setAttribute("formula", formula)
-    if col.validation_name is not None:
-        cell.setAttribute("contentvalidationname", col.validation_name)
-    return cell
-
-
-def _build_data_row(sheet_spec: schema.SheetSpec, row: Mapping[str, str], ods_row: int) -> Any:
-    """Build one data ``table:table-row``.
-
-    Args:
-        sheet_spec: The sheet the row belongs to.
-        row: The row's ``{column_name: value}`` map.
-        ods_row: The row's 1-based ODS row number.
-
-    Returns:
-        The built ``TableRow`` element.
-    """
-    row_elem = odf_table.TableRow()
-    for col in sheet_spec.columns:
-        row_elem.addElement(_build_data_cell(sheet_spec, col, row.get(col.name, ""), ods_row))
-    return row_elem
-
-
-def _build_table(
-    sheet_spec: schema.SheetSpec,
-    rows: Sequence[Mapping[str, str]],
-    width_styles: Mapping[str, str],
-) -> Any:
-    """Build one full ``table:table`` element.
-
-    Args:
-        sheet_spec: The sheet's column layout.
-        rows: The sheet's data rows, in write order.
-        width_styles: Map from ODF width string to automatic style name,
-            from :func:`_add_column_width_styles`.
-
-    Returns:
-        The built ``Table`` element.
-    """
-    table_elem = odf_table.Table(name=sheet_spec.name)
-    for col in sheet_spec.columns:
-        table_elem.addElement(
-            odf_table.TableColumn(
-                stylename=width_styles[col.width], defaultcellstylename=TEXT_CELL_STYLE_NAME
-            )
-        )
-    table_elem.addElement(_build_header_row(sheet_spec))
-    for index, row in enumerate(rows):
-        table_elem.addElement(_build_data_row(sheet_spec, row, ods_row=index + 2))
-    return table_elem
-
-
-def _add_view_settings(doc: OpenDocumentSpreadsheet) -> None:
-    """Add ``settings.xml`` view settings that freeze row 1 on every sheet.
-
-    Args:
-        doc: The document being built.
-    """
-    view_id = odf_config.ConfigItem(name="ViewId", type="string")
-    view_id.addText("view1")
-
-    entry = odf_config.ConfigItemMapEntry()
-    entry.addElement(view_id)
-
-    tables_map = odf_config.ConfigItemMapNamed(name="Tables")
-    for sheet_name in schema.SHEET_NAMES:
-        table_entry = odf_config.ConfigItemMapEntry(name=sheet_name)
-        for item_name, item_type, item_text in _FREEZE_HEADER_ITEMS:
-            item = odf_config.ConfigItem(name=item_name, type=item_type)
-            item.addText(item_text)
-            table_entry.addElement(item)
-        tables_map.addElement(table_entry)
-    entry.addElement(tables_map)
-
-    active_table = odf_config.ConfigItem(name="ActiveTable", type="string")
-    active_table.addText(schema.NODES_SHEET)
-    entry.addElement(active_table)
-
-    views = odf_config.ConfigItemMapIndexed(name="Views")
-    views.addElement(entry)
-
-    view_settings = odf_config.ConfigItemSet(name="ooo:view-settings")
-    view_settings.addElement(views)
-    doc.settings.addElement(view_settings)
-
-
-def build_document(
-    *, nodes: Sequence[Mapping[str, str]], keys: Sequence[Mapping[str, str]]
-) -> OpenDocumentSpreadsheet:
-    """Build a complete, in-memory ODS document from row data.
-
-    Args:
-        nodes: The ``Nodes`` sheet's rows -- written out sorted into
-            their canonical order (see :mod:`meshprovision.db.sorting`)
-            regardless of the order passed in.
-        keys: The ``Keys`` sheet's rows -- likewise sorted.
-
-    Returns:
-        The built document, ready to be serialized via ``doc.write(fileobj)``.
-    """
-    doc = OpenDocumentSpreadsheet()
-    _add_common_styles(doc)
-    width_styles = _add_column_width_styles(doc)
-    _add_content_validations(doc)  # Must precede every <table:table> below.
-
-    row_data: Mapping[str, Sequence[Mapping[str, str]]] = {
-        schema.NODES_SHEET: sorting.sorted_rows(schema.NODES_SHEET, nodes),
-        schema.KEYS_SHEET: sorting.sorted_rows(schema.KEYS_SHEET, keys),
-    }
-    for sheet_name in schema.SHEET_NAMES:
-        sheet_spec = schema.SHEET_SPECS[sheet_name]
-        doc.spreadsheet.addElement(_build_table(sheet_spec, row_data[sheet_name], width_styles))
-
-    _add_view_settings(doc)
-    return doc
-
-
-def write_database(
-    path: Path,
-    *,
-    nodes: Sequence[Mapping[str, str]],
-    keys: Sequence[Mapping[str, str]],
-    backup: bool = True,
-    backup_dir: Path | None = None,
-    retention: int = DEFAULT_RETENTION,
-) -> None:
-    """Build and atomically write a complete ODS database.
-
-    Args:
-        path: Path to write the ``.ods`` file to.
-        nodes: The ``Nodes`` sheet's rows -- written sorted into their
-            canonical order (see :mod:`meshprovision.db.sorting`)
-            regardless of the order passed in.
-        keys: The ``Keys`` sheet's rows -- likewise sorted.
-        backup: Whether to back up the current file at ``path`` before
-            replacing it.
-        backup_dir: Directory to store the backup under, when ``backup``
-            is true.
-        retention: Number of backups to retain, when ``backup`` is true.
-
-    Raises:
-        AtomicWriteError: If the write or backup fails.
-    """
-    doc = build_document(nodes=nodes, keys=keys)
-    with (
-        atomic_write(path, backup=backup, backup_dir=backup_dir, retention=retention) as tmp,
-        tmp.open("wb") as fh,
-    ):
-        doc.write(fh)
-
-
-def create_empty(path: Path, *, backup: bool = False) -> None:
-    """Write a brand-new, empty (header-only) ODS database.
-
-    Args:
-        path: Path to write the ``.ods`` file to.
-        backup: Whether to back up any existing file at ``path`` first.
-
-    Raises:
-        AtomicWriteError: If the write or backup fails.
-    """
-    write_database(path, nodes=(), keys=(), backup=backup)
 
 
 class OdsDatabase:
@@ -1490,7 +738,7 @@ class OdsDatabase:
             _logger.debug("save() called on a clean database; nothing to write.")
             return
         started = time.monotonic()
-        write_database(
+        ods_write.write_database(
             self._path,
             nodes=self._rows.get(schema.NODES_SHEET, ()),
             keys=self._rows.get(schema.KEYS_SHEET, ()),
@@ -1530,7 +778,7 @@ class OdsDatabase:
         """
         if path.exists() and not overwrite:
             raise SchemaError(f"{path} already exists; pass overwrite=True to replace it")
-        create_empty(path, backup=False)
+        ods_write.create_empty(path, backup=False)
         instance = cls(path, backup_dir=backup_dir)
         instance.load(force=True)
         return instance

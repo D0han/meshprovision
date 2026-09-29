@@ -21,7 +21,7 @@ def _refresh(target: Path, *, backup_dir: Path | None = None) -> BackupInfo | No
     """Call ``refresh_known_good`` with content/source_stat read fresh from ``target``.
 
     Matches how the real caller (``ods.load_database``, via
-    ``ods._read_db_file``) supplies them -- from one read of ``target``,
+    ``ods_read._read_db_file``) supplies them -- from one read of ``target``,
     not from ``target`` alone -- for tests whose scenario is just
     "``target`` currently holds this content".
     """

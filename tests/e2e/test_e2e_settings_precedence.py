@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from meshprovision.db import ods
+from meshprovision.db import ods_write
 from tests.e2e.conftest import invoke
 
 if TYPE_CHECKING:
@@ -112,7 +112,7 @@ def test_db_path_and_template_path_flags_beat_conflicting_env_vars(
     ``--json`` echo of the resolved path.
     """
     flagged_db_path = tmp_path / "flagged.ods"
-    ods.write_database(flagged_db_path, nodes=[], keys=[], backup=False)
+    ods_write.write_database(flagged_db_path, nodes=[], keys=[], backup=False)
     flagged_template_path = write_template(path=tmp_path / "flagged-template.yaml")
 
     result = invoke(

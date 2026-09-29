@@ -18,7 +18,7 @@ The three first-run artifacts, and how each is created:
   key rows for illustration. Creating it is left to
   :meth:`~meshprovision.cli.common.CliContext.open_database`
   (``must_exist=False``), which already builds a schema-correct empty
-  database via :func:`meshprovision.db.ods.create_empty` -- so this
+  database via :func:`meshprovision.db.ods_write.create_empty` -- so this
   module does not need to import the database layer at all.
 
 Every write here refuses to overwrite an existing file: :func:`write_new_file`

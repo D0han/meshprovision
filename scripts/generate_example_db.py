@@ -60,7 +60,7 @@ _ensure_package_importable()
 from pydantic import SecretStr  # noqa: E402
 
 from meshprovision.crypto.keys import decode_key, encode_key  # noqa: E402
-from meshprovision.db import ods  # noqa: E402
+from meshprovision.db import ods_write  # noqa: E402
 from meshprovision.db.keys import KeyRecord  # noqa: E402
 from meshprovision.db.nodes import NodeRecord  # noqa: E402
 from meshprovision.db.schema import FirmwareType, KeyOrigin, KeyType, ManagementMode  # noqa: E402
@@ -226,7 +226,7 @@ def generate(path: Path = EXAMPLE_DB_PATH) -> Path:
         AtomicWriteError: If the write fails.
     """
     nodes, keys = build_records()
-    ods.write_database(
+    ods_write.write_database(
         path,
         nodes=[record.to_row() for record in nodes],
         keys=[record.to_row() for record in keys],

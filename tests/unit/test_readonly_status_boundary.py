@@ -21,6 +21,8 @@ _CLI_STATUS_FORBIDDEN = frozenset(
         "known_good",
         "pending_keys",
         "open_database",
+        "ods_write",
+        "write_database",
         "meshprovision.provisioning.apply",
         "meshprovision.provisioning.repair",
     }
@@ -32,6 +34,7 @@ _REPORT_FORBIDDEN_ATTRS = frozenset({"save", "replace", "upsert", "delete"})
 _REPORT_FORBIDDEN_MODULES = (
     "meshprovision.db.atomic_writer",
     "meshprovision.db.known_good",
+    "meshprovision.db.ods_write",
     "meshprovision.db.pending_keys",
     "meshprovision.provisioning.apply",
     "meshprovision.provisioning.repair",
@@ -75,14 +78,24 @@ def test_status_report_never_calls_a_write_operation() -> None:
 
 
 def test_status_report_never_imports_a_write_capable_module() -> None:
+    """Also catches ``from meshprovision.db import ods_write`` (module import).
+
+    ``node.module`` alone is ``"meshprovision.db"`` for that form -- it
+    never mentions ``ods_write`` -- so a plain ``.startswith`` check on
+    ``node.module`` would silently pass it. Each imported name is
+    resolved to its own dotted path (``node.module`` + ``.`` + the
+    name) and checked too, matching the module-qualified-import style
+    this project actually uses for cross-module access.
+    """
     tree = ast.parse((SRC / "status" / "report.py").read_text(encoding="utf-8"))
-    offenders = sorted(
-        {
-            node.module
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
-            and node.module is not None
-            and node.module.startswith(_REPORT_FORBIDDEN_MODULES)
-        }
-    )
-    assert offenders == [], f"status/report.py must not import: {offenders}"
+    offenders: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom) or node.module is None:
+            continue
+        if node.module.startswith(_REPORT_FORBIDDEN_MODULES):
+            offenders.add(node.module)
+        for alias in node.names:
+            full_name = f"{node.module}.{alias.name}"
+            if full_name.startswith(_REPORT_FORBIDDEN_MODULES):
+                offenders.add(full_name)
+    assert sorted(offenders) == [], f"status/report.py must not import: {sorted(offenders)}"

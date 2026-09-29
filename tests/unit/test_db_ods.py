@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from meshprovision.crypto.keys import encode_key
-from meshprovision.db import atomic_writer, cell_validation, ods, schema
+from meshprovision.db import atomic_writer, cell_validation, ods, ods_read, ods_write, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.known_good import KnownGoodProvenance, known_good_info, known_good_status
 from meshprovision.db.nodes import NodeRecord
@@ -61,7 +61,7 @@ def _sample_records(keypair) -> tuple[NodeRecord, KeyRecord, KeyRecord]:
 def test_round_trip_write_then_read(tmp_path: Path, keypair) -> None:
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -82,7 +82,7 @@ def test_round_trip_management_mode(tmp_path: Path, keypair, mode: ManagementMod
     node, pub, priv = _sample_records(keypair)
     node = node.with_updates(management=mode)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -98,7 +98,7 @@ def test_round_trip_archived_at(tmp_path: Path, keypair) -> None:
     archived_ts = datetime(2026, 3, 1, tzinfo=UTC)
     node = node.with_updates(archived_at=archived_ts)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -113,7 +113,7 @@ def test_round_trip_archived_at(tmp_path: Path, keypair) -> None:
 def test_round_trip_archived_at_empty_cell_is_not_archived(tmp_path: Path, keypair) -> None:
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -129,7 +129,7 @@ def test_round_trip_unregistered_admin_keys(tmp_path: Path, keypair, keypair_fac
     node, pub, priv = _sample_records(keypair)
     node = node.with_updates(unregistered_admin_keys=unregistered)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -161,11 +161,11 @@ def test_recompute_key_ref_returns_empty_string_for_an_unknown_key_type() -> Non
 def test_structural_assertions_formulas_validations_freeze(tmp_path: Path, keypair) -> None:
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
-    raw = ods.read_raw(path)
+    raw = ods_read.read_raw(path)
     assert raw.sheets["Nodes"].header == schema.NODES_SHEET_SPEC.column_names()
     assert raw.sheets["Keys"].header == schema.KEYS_SHEET_SPEC.column_names()
 
@@ -224,7 +224,7 @@ def test_operator_hand_edit_is_read_back_exactly(tmp_path: Path, keypair, reques
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -249,7 +249,7 @@ def test_stale_cached_formula_private_key_ref(tmp_path: Path, keypair) -> None:
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -275,7 +275,7 @@ def test_stale_cached_formula_keys_key_ref(tmp_path: Path, keypair) -> None:
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -296,7 +296,7 @@ def test_stale_cached_formula_main_chipset(tmp_path: Path, keypair) -> None:
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -317,7 +317,7 @@ def test_hex_node_id_looking_like_scientific_notation_survives(tmp_path: Path, k
     node = NodeRecord(node_id="12345e78")
     pub, priv = KeyRecord.for_keypair("12345e78", keypair, origin=KeyOrigin.CAPTURED)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -330,7 +330,7 @@ def test_coerced_text_cell_warns_instead_of_raising(tmp_path: Path, keypair) -> 
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -364,7 +364,7 @@ def test_blank_trailing_row_with_coerced_cell_produces_no_warnings(tmp_path: Pat
     node, pub, priv = _sample_records(keypair)
     blank_row = {col.name: "" for col in schema.SHEET_SPECS["Nodes"].columns}
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path,
         nodes=[node.to_row(), blank_row],
         keys=[pub.to_row(), priv.to_row()],
@@ -401,7 +401,7 @@ def test_libreoffice_saved_header_still_loads(tmp_path: Path, keypair) -> None:
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
     before = ods.load_database(path)
@@ -431,7 +431,7 @@ def test_libreoffice_comment_on_data_cell_does_not_leak_into_its_value(
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -462,7 +462,7 @@ def test_libreoffice_multi_paragraph_cell_reads_back_with_newline(tmp_path: Path
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -508,7 +508,7 @@ def test_string_value_fast_path_still_preferred_for_non_text_columns(
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -549,7 +549,7 @@ def test_text_column_prefers_paragraph_text_over_cached_string_value(
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -607,7 +607,7 @@ def _write_raw_row(
     if key_overrides:
         key_rows[0].update(key_overrides)
     path = tmp_path / "db.ods"
-    ods.write_database(path, nodes=[row], keys=key_rows, backup=False)
+    ods_write.write_database(path, nodes=[row], keys=key_rows, backup=False)
     return path
 
 
@@ -749,7 +749,7 @@ def test_missing_required_key_column_raises(tmp_path: Path, keypair, column: str
     row[column] = ""
     node = NodeRecord(node_id="deadbe01")
     path = tmp_path / "db.ods"
-    ods.write_database(path, nodes=[node.to_row()], keys=[row, priv.to_row()], backup=False)
+    ods_write.write_database(path, nodes=[node.to_row()], keys=[row, priv.to_row()], backup=False)
     with pytest.raises(DbValidationError):
         ods.load_database(path)
 
@@ -772,7 +772,7 @@ def test_duplicate_node_id_raises(tmp_path: Path, keypair) -> None:
     node1 = NodeRecord(node_id="deadbe01", short_name="AAAA")
     node2 = NodeRecord(node_id="deadbe01", short_name="BBBB")
     path = tmp_path / "db.ods"
-    ods.write_database(path, nodes=[node1.to_row(), node2.to_row()], keys=[], backup=False)
+    ods_write.write_database(path, nodes=[node1.to_row(), node2.to_row()], keys=[], backup=False)
     with pytest.raises(DuplicateNodeError):
         ods.load_database(path)
 
@@ -829,7 +829,7 @@ def test_repeated_non_blank_row_triggers_duplicate_node_id_error(tmp_path: Path,
     """
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
     _set_row_repeat(path, "Nodes", ods_row=2, repeat=2)
@@ -856,7 +856,7 @@ def test_repeated_non_blank_row_keeps_later_row_numbers_accurate(tmp_path: Path,
     node_a = NodeRecord(node_id="deadbe01", short_name="AAAA")
     node_b = NodeRecord(node_id="deadbe02", short_name="BBBB")
     path = tmp_path / "db.ods"
-    ods.write_database(path, nodes=[node_a.to_row(), node_b.to_row()], keys=[], backup=False)
+    ods_write.write_database(path, nodes=[node_a.to_row(), node_b.to_row()], keys=[], backup=False)
 
     edit_ods_cell(path, "Nodes", "role", 3, "NOT_A_ROLE")
     _set_row_repeat(path, "Nodes", ods_row=2, repeat=3)
@@ -869,7 +869,7 @@ def test_repeated_non_blank_row_keeps_later_row_numbers_accurate(tmp_path: Path,
 def test_duplicate_key_ref_raises(tmp_path: Path, keypair) -> None:
     pub, _priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path,
         nodes=[NodeRecord(node_id="deadbe01").to_row()],
         keys=[pub.to_row(), pub.to_row()],
@@ -884,7 +884,7 @@ def test_check_header_hint_names_missing_trailing_column(tmp_path: Path, keypair
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
     edit_ods_cell(path, "Nodes", "archived_at", 1, "")
@@ -900,7 +900,7 @@ def test_check_header_hint_names_renamed_column(tmp_path: Path, keypair) -> None
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
     edit_ods_cell(path, "Nodes", "role", 1, "not_a_real_column")
@@ -918,7 +918,7 @@ def test_check_header_reports_both_sheets_when_both_are_mangled(tmp_path: Path, 
 
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
     edit_ods_cell(path, "Nodes", "role", 1, "not_a_real_column")
@@ -980,7 +980,7 @@ def test_legacy_keys_sheet_without_origin_column_loads_with_origin_none(
     """
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
     _drop_trailing_keys_cells(path)
@@ -992,8 +992,8 @@ def test_legacy_keys_sheet_without_origin_column_loads_with_origin_none(
     records = [KeyRecord.from_row(row) for row in keys_rows]
     assert all(record.origin is None for record in records)
 
-    ods.write_database(path, nodes=db.rows("Nodes"), keys=db.rows("Keys"), backup=False)
-    migrated = ods.read_raw(path)
+    ods_write.write_database(path, nodes=db.rows("Nodes"), keys=db.rows("Keys"), backup=False)
+    migrated = ods_read.read_raw(path)
     assert migrated.sheets["Keys"].header[-1] == "origin"
 
 
@@ -1005,10 +1005,10 @@ def test_check_headers_skips_a_sheet_missing_entirely() -> None:
     API today -- covered directly here so it stays correct if that
     ordering ever changes.
     """
-    raw = ods.DatabaseData(
+    raw = ods_read.DatabaseData(
         path=Path("unused"),
         sheets={
-            "Nodes": ods.SheetData(
+            "Nodes": ods_read.SheetData(
                 name="Nodes", header=schema.NODES_SHEET_SPEC.column_names(), rows=()
             )
         },
@@ -1034,7 +1034,7 @@ def test_read_raw_on_text_file_raises_schema_error(tmp_path: Path) -> None:
     path = tmp_path / "notods.txt"
     path.write_text("hello world")
     with pytest.raises(SchemaError):
-        ods.read_raw(path)
+        ods_read.read_raw(path)
 
 
 # ---------------------------------------------------------------------------
@@ -1045,7 +1045,7 @@ def test_read_raw_on_text_file_raises_schema_error(tmp_path: Path) -> None:
 def test_ods_database_load_loaded_rows(tmp_path: Path, keypair) -> None:
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -1057,7 +1057,7 @@ def test_ods_database_load_loaded_rows(tmp_path: Path, keypair) -> None:
 
 
 def test_ods_database_rows_bogus_sheet_raises(tmp_path: Path) -> None:
-    ods.create_empty(tmp_path / "db.ods", backup=False)
+    ods_write.create_empty(tmp_path / "db.ods", backup=False)
     db = ods.OdsDatabase(tmp_path / "db.ods")
     with pytest.raises(SchemaError):
         db.rows("Bogus")
@@ -1130,7 +1130,7 @@ def test_ods_database_context_manager_unlocks_on_exit(tmp_path: Path) -> None:
     completely untested.
     """
     path = tmp_path / "db.ods"
-    ods.create_empty(path, backup=False)
+    ods_write.create_empty(path, backup=False)
     db = ods.OdsDatabase(path)
     db.lock()
 
@@ -1144,7 +1144,7 @@ def test_ods_database_context_manager_unlocks_on_exit(tmp_path: Path) -> None:
 def test_ods_database_lock_is_idempotent(tmp_path: Path) -> None:
     """Calling `lock()` twice on the same instance must not raise or double-acquire."""
     path = tmp_path / "db.ods"
-    ods.create_empty(path, backup=False)
+    ods_write.create_empty(path, backup=False)
     db = ods.OdsDatabase(path)
     db.lock()
     db.lock()
@@ -1168,15 +1168,15 @@ def _blank_run_row_elements(encoding: str) -> list[Any]:
     from odf import table as odf_table
 
     if encoding == "separate_65":
-        return [odf_table.TableRow() for _ in range(ods.MAX_BLANK_ROWS + 1)]
+        return [odf_table.TableRow() for _ in range(ods_read.MAX_BLANK_ROWS + 1)]
     if encoding == "separate_64":
-        return [odf_table.TableRow() for _ in range(ods.MAX_BLANK_ROWS)]
+        return [odf_table.TableRow() for _ in range(ods_read.MAX_BLANK_ROWS)]
     if encoding == "single_64":
-        return [odf_table.TableRow(numberrowsrepeated=ods.MAX_BLANK_ROWS)]
+        return [odf_table.TableRow(numberrowsrepeated=ods_read.MAX_BLANK_ROWS)]
     if encoding == "single_65":
-        return [odf_table.TableRow(numberrowsrepeated=ods.MAX_BLANK_ROWS + 1)]
+        return [odf_table.TableRow(numberrowsrepeated=ods_read.MAX_BLANK_ROWS + 1)]
     if encoding == "single_1024":
-        return [odf_table.TableRow(numberrowsrepeated=ods.MAX_ROW_REPEAT)]
+        return [odf_table.TableRow(numberrowsrepeated=ods_read.MAX_ROW_REPEAT)]
     if encoding == "single_2000":
         return [odf_table.TableRow(numberrowsrepeated=2000)]
     if encoding == "single_1048000":
@@ -1219,7 +1219,7 @@ def _write_nodes_with_blank_run(
     nodes = [node.to_row()]
     if trailing_node is not None:
         nodes.append(trailing_node.to_row())
-    ods.write_database(path, nodes=nodes, keys=[pub.to_row(), priv.to_row()], backup=False)
+    ods_write.write_database(path, nodes=nodes, keys=[pub.to_row(), priv.to_row()], backup=False)
 
     doc = opendocument.load(str(path))
     nodes_table = next(
@@ -1249,7 +1249,7 @@ def test_read_raw_blank_run_layouts(
 
     Regression test for Round 37 aspect 1 finding #3: a blank run
     encoded as a *single* ``table:table-row`` element whose
-    ``table:number-rows-repeated`` exceeds :data:`ods.MAX_ROW_REPEAT`
+    ``table:number-rows-repeated`` exceeds :data:`ods_read.MAX_ROW_REPEAT`
     (the giant-trailing-filler heuristic) used to ``break`` out of
     ``_read_sheet`` immediately, without ever checking whether real data
     still followed -- unlike the accumulation path
@@ -1276,10 +1276,10 @@ def test_read_raw_blank_run_layouts(
 
     if data_below:
         with pytest.raises(DbIntegrityError, match="Nodes sheet has a run of more than"):
-            ods.read_raw(path)
+            ods_read.read_raw(path)
         return
 
-    raw = ods.read_raw(path)
+    raw = ods_read.read_raw(path)
     node_id_idx = schema.NODES_SHEET_SPEC.column_index("node_id")
     assert raw.sheets["Nodes"].rows[0][node_id_idx].text == node.node_id
 
@@ -1302,7 +1302,7 @@ def test_read_raw_blank_run_at_exactly_max_blank_rows_reads_cleanly(
         path, node=node, trailing_node=trailing_node, pub=pub, priv=priv, encoding=encoding
     )
 
-    raw = ods.read_raw(path)
+    raw = ods_read.read_raw(path)
 
     node_id_idx = schema.NODES_SHEET_SPEC.column_index("node_id")
     assert raw.sheets["Nodes"].rows[0][node_id_idx].text == node.node_id
@@ -1323,7 +1323,7 @@ def test_module_level_verify_returns_the_same_warnings_as_load(tmp_path: Path, k
 
     path = tmp_path / "db.ods"
     node, pub, priv = _sample_records(keypair)
-    ods.write_database(path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()])
+    ods_write.write_database(path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()])
     edit_ods_cell(path, "Nodes", "private_key_ref", 2, "WRONG_ref")
 
     warnings = ods.verify(path)
@@ -1473,13 +1473,13 @@ def test_load_database_known_good_reflects_validated_bytes_not_a_later_write(
     that window -- for example a concurrent ``db restore``, which writes
     first and validates second by design -- could publish unvalidated
     bytes as the "known-good" safety copy. Reading the file exactly once
-    (``ods._read_db_file``) and threading those bytes through both
+    (``ods_read._read_db_file``) and threading those bytes through both
     validation and the refresh closes the window. This monkeypatches the
     last integrity check to race such a write in immediately behind it.
     """
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
     validated_bytes = path.read_bytes()
@@ -1516,7 +1516,7 @@ def test_load_database_known_good_fast_path_leaves_an_unchanged_copy_untouched(
 ) -> None:
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
 
@@ -1538,7 +1538,7 @@ def test_load_database_unreadable_file_raises_db_read_error(tmp_path: Path, keyp
         pytest.skip("root bypasses file permission checks")
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
-    ods.write_database(
+    ods_write.write_database(
         path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
     )
     path.chmod(0o000)

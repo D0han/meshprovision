@@ -17,7 +17,7 @@ import pytest
 
 from meshprovision.crypto import weakkeys
 from meshprovision.crypto.keys import KeyPair
-from meshprovision.db import ods, pending_keys
+from meshprovision.db import ods, ods_write, pending_keys
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
@@ -324,7 +324,7 @@ def test_provision_reports_a_failed_database_save_as_divergence(
     def _raise(*args: object, **kwargs: object) -> None:
         raise OSError(28, "No space left on device")
 
-    monkeypatch.setattr(ods, "write_database", _raise)
+    monkeypatch.setattr(ods_write, "write_database", _raise)
 
     result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
 
@@ -1226,7 +1226,7 @@ def test_provision_captures_a_proven_private_key_for_an_ordinary_node(
 
     # Simulate a node whose private key was never captured -- e.g. one
     # `mesh adopt` enrolled while the device hid its private key.
-    ods.write_database(db_path, nodes=[node_row], keys=[pub_only.to_row()], backup=False)
+    ods_write.write_database(db_path, nodes=[node_row], keys=[pub_only.to_row()], backup=False)
 
     second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
     assert second.exit_code == 0

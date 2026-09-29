@@ -1183,8 +1183,7 @@ class CliContext:
         failure is left alone -- neither is about bad file content, so
         a known-good copy isn't the relevant remedy.
         """
-        from meshprovision.db import ods as ods_module
-        from meshprovision.db import schema
+        from meshprovision.db import ods_write, schema
         from meshprovision.db.keys import KeyRepository
         from meshprovision.db.known_good import (
             KnownGoodProvenance,
@@ -1229,7 +1228,7 @@ class CliContext:
                     ),
                 )
             else:
-                ods_module.create_empty(path, backup=False)
+                ods_write.create_empty(path, backup=False)
                 db.load(force=True)
         except DbError as exc:
             if not isinstance(exc, (DbReadError, AtomicWriteError)):
