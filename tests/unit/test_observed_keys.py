@@ -120,3 +120,20 @@ def test_is_observed_ref_true_without_a_known_suffix(keypair: KeyPair) -> None:
 
     # Assert
     assert observed_keys.is_observed_ref(owner)
+
+
+@pytest.mark.parametrize(
+    ("ref", "expected"),
+    [
+        ("ADMIN1", None),
+        ("x_pub", observed_keys.RefProblem.RESERVED_SUFFIX),
+        ("x_priv", observed_keys.RefProblem.RESERVED_SUFFIX),
+        ("x_psk", observed_keys.RefProblem.RESERVED_SUFFIX),
+        ("-bad", observed_keys.RefProblem.BAD_SHAPE),
+        ("observed-ab12cd34", observed_keys.RefProblem.OBSERVED_PREFIX),
+    ],
+)
+def test_owner_ref_problem(ref: str, expected: observed_keys.RefProblem | None) -> None:
+    """owner_ref_problem checks shape, then suffix, then the observed prefix."""
+    # Act / Assert
+    assert observed_keys.owner_ref_problem(ref) is expected

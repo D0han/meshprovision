@@ -25,6 +25,7 @@ that belongs to :mod:`meshprovision.provisioning.key_registry`.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Final
 
 from meshprovision.crypto import redact
@@ -34,10 +35,12 @@ from meshprovision.db.schema import KeyType
 __all__ = [
     "OBSERVED_DIGEST_CHARS",
     "OBSERVED_PREFIX",
+    "RefProblem",
     "is_observed_owner",
     "is_observed_ref",
     "observed_key_ref",
     "observed_owner",
+    "owner_ref_problem",
 ]
 
 OBSERVED_PREFIX: Final[str] = "observed-"
@@ -121,3 +124,48 @@ def is_observed_ref(key_ref: str) -> bool:
         if key_ref.endswith(suffix):
             return is_observed_owner(key_ref[: -len(suffix)])
     return is_observed_owner(key_ref)
+
+
+class RefProblem(StrEnum):
+    """Why a candidate owner_node_id/admin reference is not usable.
+
+    One member per distinct rejection reason, so a caller (the CLI's
+    ``mesh admin import``/``bootstrap --ref``, or the template loader's
+    ``admin_nodes``) can word its own message and hint instead of parsing
+    a shared string. See :func:`owner_ref_problem`.
+    """
+
+    BAD_SHAPE = "bad_shape"
+    RESERVED_SUFFIX = "reserved_suffix"
+    OBSERVED_PREFIX = "observed_prefix"
+
+
+def owner_ref_problem(ref: str) -> RefProblem | None:
+    """Check whether ``ref`` is usable as an owner_node_id/admin reference.
+
+    The single source of truth for the shape/suffix/prefix rules that
+    ``cli.admin._validate_admin_ref`` and ``config.template.
+    TemplateConfig._check_consistency`` each enforce on their own
+    ``admin_nodes``-shaped input -- previously two separate
+    implementations that had drifted (the template loader never checked
+    the reserved-prefix condition, so a template naming an
+    ``observed-*`` ref loaded successfully today).
+
+    Args:
+        ref: The candidate owner or admin reference, already stripped.
+
+    Returns:
+        The first applicable :class:`RefProblem`, checked in this order:
+        bad shape (fails :data:`~meshprovision.db.schema.REF_PATTERN`),
+        a reserved key-type suffix (any of
+        :data:`~meshprovision.db.schema.KEY_REF_SUFFIXES`), or the
+        reserved :data:`OBSERVED_PREFIX`. ``None`` if ``ref`` has none of
+        these problems.
+    """
+    if not schema.REF_PATTERN.match(ref):
+        return RefProblem.BAD_SHAPE
+    if ref.endswith(tuple(schema.KEY_REF_SUFFIXES.values())):
+        return RefProblem.RESERVED_SUFFIX
+    if is_observed_owner(ref):
+        return RefProblem.OBSERVED_PREFIX
+    return None

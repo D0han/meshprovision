@@ -85,17 +85,18 @@ def _validate_admin_ref(ref: str) -> None:
             observed_keys`), so a human-chosen ref can never collide with
             one.
     """
-    if not schema.REF_PATTERN.match(ref):
+    problem = observed_keys.owner_ref_problem(ref)
+    if problem is observed_keys.RefProblem.BAD_SHAPE:
         raise SettingsError(
             f"{ref!r} is not a valid admin reference.",
             hint="Use 1-64 characters from [A-Za-z0-9._-], starting with an alphanumeric.",
         )
-    if ref.endswith(("_pub", "_priv", "_psk")):
+    if problem is observed_keys.RefProblem.RESERVED_SUFFIX:
         raise SettingsError(
             f"Admin reference {ref!r} must not end in '_pub', '_priv', or '_psk'.",
             hint="meshprovision appends these suffixes itself when resolving Keys sheet rows.",
         )
-    if observed_keys.is_observed_owner(ref):
+    if problem is observed_keys.RefProblem.OBSERVED_PREFIX:
         raise SettingsError(
             f"Admin reference {ref!r} must not start with {observed_keys.OBSERVED_PREFIX!r}.",
             hint=(

@@ -30,7 +30,6 @@ in separate ``except`` clauses, re-raising the latter untouched.
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +40,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from meshprovision.config.settings import format_validation_error
+from meshprovision.db.observed_keys import OBSERVED_PREFIX, RefProblem, owner_ref_problem
 from meshprovision.enums import region_table, role_table
 from meshprovision.errors import (
     MAX_ADMIN_KEYS,
@@ -119,7 +119,6 @@ KNOWN_MODULE_OPTIONS: Final[frozenset[str]] = frozenset(
 set is not an error -- firmware adds modules over time -- but produces a
 :class:`TemplateWarning`."""
 
-_ADMIN_REF_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _KEY_MATERIAL_KEYS: Final[frozenset[str]] = frozenset(
     {"private_key", "public_key", "admin_key", "adminKey"}
 )
@@ -923,20 +922,30 @@ class TemplateConfig(BaseModel):
                 limit=MAX_ADMIN_KEYS,
             )
         for ref in self.admin_nodes:
-            if not _ADMIN_REF_PATTERN.match(ref):
+            problem = owner_ref_problem(ref)
+            if problem is RefProblem.BAD_SHAPE:
                 raise TemplateValidationError(
                     f"admin_nodes entry {ref!r} is not a valid node reference "
                     "(expected 1-64 characters from [A-Za-z0-9._-], starting with "
                     "an alphanumeric).",
                     field="admin_nodes",
                 )
-            if ref.endswith(("_pub", "_priv", "_psk")):
+            if problem is RefProblem.RESERVED_SUFFIX:
                 raise TemplateValidationError(
                     f"admin_nodes entry {ref!r} must not end in '_pub', '_priv', or '_psk'.",
                     field="admin_nodes",
                     hint=(
                         "admin_nodes holds node references; meshprovision appends "
                         "these suffixes itself when it looks up the Keys sheet."
+                    ),
+                )
+            if problem is RefProblem.OBSERVED_PREFIX:
+                raise TemplateValidationError(
+                    f"admin_nodes entry {ref!r} must not start with {OBSERVED_PREFIX!r}.",
+                    field="admin_nodes",
+                    hint=(
+                        "Give the key a real name with `mesh admin import --ref <NAME>` "
+                        "(or `mesh admin bootstrap --ref <NAME>`) and list that name here."
                     ),
                 )
 

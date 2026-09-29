@@ -247,6 +247,24 @@ def test_admin_nodes_entry_invalid_shape_raises() -> None:
         TemplateConfig(admin_nodes=["1bad ref"])
 
 
+def test_admin_nodes_entry_with_observed_prefix_raises() -> None:
+    """A template must not name a mesh adopt-minted observed-* ref.
+
+    Previously this loaded fine and only broke later, confusingly, once
+    `mesh admin import` deleted the observed-* row -- see db.observed_keys
+    .owner_ref_problem.
+    """
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig(admin_nodes=["observed-ab12cd34"])
+    assert exc_info.value.field == "admin_nodes"
+    assert "observed-" in str(exc_info.value)
+
+
+def test_admin_nodes_entry_that_merely_starts_with_pre_observed_loads() -> None:
+    """Only a leading observed- is reserved; the substring elsewhere is fine."""
+    TemplateConfig(admin_nodes=["pre-observed"])
+
+
 def test_admin_channel_enabled_true_raises() -> None:
     with pytest.raises(TemplateValidationError):
         TemplateConfig(security={"admin_channel_enabled": True})
