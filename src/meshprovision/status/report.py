@@ -231,16 +231,6 @@ class StatusReport:
         return MappingProxyType(counts)
 
     @property
-    def unobserved(self) -> tuple[MergedNode, ...]:
-        """Nodes that are in the database but were found by no source.
-
-        Returns:
-            Every node with ``in_database`` true and ``observed`` false,
-            in report order.
-        """
-        return tuple(node for node in self.nodes if node.in_database and not node.observed)
-
-    @property
     def has_offline(self) -> bool:
         """Whether any reported node is classified offline.
 

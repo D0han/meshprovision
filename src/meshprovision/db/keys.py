@@ -478,23 +478,6 @@ class KeyRepository:
             resolved.append(record)
         return tuple(resolved)
 
-    def admin_key_bytes(self, refs: Sequence[str]) -> tuple[bytes, ...]:
-        """Resolve admin node references directly to raw public-key bytes.
-
-        Args:
-            refs: Admin node references, as accepted by
-                :meth:`resolve_admin_refs`.
-
-        Returns:
-            The raw public-key bytes, ready for
-            ``security.adminKey``, one per entry in ``refs``, in order.
-
-        Raises:
-            AdminRefUnresolvedError: If any reference does not resolve to
-                a row in the ``Keys`` sheet.
-        """
-        return tuple(record.material() for record in self.resolve_admin_refs(refs))
-
     def public_key_map(self) -> dict[str, bytes]:
         """Build the ``{key_ref: raw public key}`` map for the weak-key audit.
 

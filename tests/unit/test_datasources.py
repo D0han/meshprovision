@@ -35,7 +35,6 @@ from meshprovision.datasources.models import (
 from meshprovision.enums import role_table
 from meshprovision.errors import (
     ExitCode,
-    HttpError,
     InvalidResponseError,
     MissingContactError,
     SettingsError,
@@ -592,24 +591,6 @@ def test_lorastats_json_object_instead_of_array_raises(tmp_path: Path) -> None:
         source.fetch_node("deadbe01")
 
 
-@respx.mock
-def test_lorastats_node_status_maps_statuses(tmp_path: Path) -> None:
-    from meshprovision.datasources.lorastats import LORASTATS_STATUS_PATH
-
-    url = f"{LORASTATS_BASE_URL}{LORASTATS_STATUS_PATH.format(node='deadbe01')}"
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
-
-    respx.get(url).mock(return_value=httpx.Response(200, text="ok"))
-    assert source.node_status("deadbe01") is True
-
-    respx.get(url).mock(return_value=httpx.Response(500))
-    assert source.node_status("deadbe01", force_refresh=True) is False
-
-    respx.get(url).mock(return_value=httpx.Response(404))
-    assert source.node_status("deadbe01", force_refresh=True) is None
-
-
 def test_match_record_skips_a_non_dict_record_without_crashing() -> None:
     """A non-dict entry in the records list must be skipped, counted, and not crash.
 
@@ -641,26 +622,6 @@ def test_match_record_skips_an_unparsable_node_id_without_crashing() -> None:
 
     assert record == {"NodeId": "deadbe01"}
     assert skipped == 1
-
-
-@respx.mock
-def test_lorastats_node_status_reraises_on_an_unmapped_status(tmp_path: Path) -> None:
-    """A status code that isn't 404/500 must propagate, not silently map to a bool.
-
-    Regression guard: node_status's bare `raise` for any status besides
-    the two explicitly mapped ones had no test -- only 200/500/404 were
-    covered, so a mutation swallowing every other status into a boolean
-    default would have gone unnoticed.
-    """
-    from meshprovision.datasources.lorastats import LORASTATS_STATUS_PATH
-
-    url = f"{LORASTATS_BASE_URL}{LORASTATS_STATUS_PATH.format(node='deadbe01')}"
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
-
-    respx.get(url).mock(return_value=httpx.Response(403))
-    with pytest.raises(HttpError):
-        source.node_status("deadbe01", force_refresh=True)
 
 
 # ---------------------------------------------------------------------------

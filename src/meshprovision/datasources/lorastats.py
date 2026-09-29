@@ -42,7 +42,7 @@ from meshprovision.datasources.models import (
     parse_iso8601,
 )
 from meshprovision.enums import hw_model_table, role_table
-from meshprovision.errors import HttpError, MissingContactError, NodeIdError, SettingsError
+from meshprovision.errors import MissingContactError, NodeIdError, SettingsError
 from meshprovision.nodeid import NodeId, NodeIdLike
 
 if TYPE_CHECKING:
@@ -82,9 +82,6 @@ REGION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 only -- lorastats.pl does not validate the region segment server-side, so
 this pattern can catch a malformed value but can never catch a
 mistyped-but-well-formed one."""
-
-_HTTP_NOT_FOUND: Final[int] = 404
-_HTTP_SERVER_ERROR: Final[int] = 500
 
 
 class LorastatsSource(BaseHTTPDataSource):
@@ -267,47 +264,6 @@ class LorastatsSource(BaseHTTPDataSource):
         self._last_fetch_skipped = skipped
         self._last_fetch_field_coercions = tracker.failures
         return None
-
-    def node_status(self, node_id: NodeIdLike, *, force_refresh: bool | None = None) -> bool | None:
-        """Check a node's health via the ``/Node/{id}/Status`` endpoint.
-
-        Opt-in and off by default: this endpoint returns ``text/plain``,
-        not JSON, so it bypasses :meth:`get_json` entirely and inspects
-        only whether the request raised. Because
-        :class:`~meshprovision.cache.http.CachedHTTPClient` retries a
-        5xx response
-        :data:`~meshprovision.cache.http.DEFAULT_MAX_RETRIES` times
-        before raising, checking an unhealthy node costs several
-        requests -- callers on a budget should call this sparingly.
-
-        Args:
-            node_id: The node id to check, in any form
-                :meth:`NodeId.parse` accepts.
-            force_refresh: Whether to bypass the HTTP cache read.
-
-        Returns:
-            ``True`` when the endpoint returns HTTP 200 (healthy),
-            ``False`` when it returns HTTP 500 (unhealthy, per
-            lorastats.pl's own documented contract), or ``None`` when it
-            returns HTTP 404 (unknown node).
-
-        Raises:
-            meshprovision.errors.NodeIdError: If ``node_id`` cannot be
-                parsed.
-            meshprovision.errors.HttpError: If the request fails with
-                any other status code, or for a non-HTTP reason.
-        """
-        nid = NodeId.parse(node_id)
-        url = f"{self._base_url}{LORASTATS_STATUS_PATH.format(node=nid.hex)}"
-        try:
-            self._client.get(url, source=self.name, force_refresh=force_refresh)
-        except HttpError as exc:
-            if exc.status_code == _HTTP_NOT_FOUND:
-                return None
-            if exc.status_code == _HTTP_SERVER_ERROR:
-                return False
-            raise
-        return True
 
 
 def _match_record(records: list[Any], nid: NodeId) -> tuple[Mapping[str, Any] | None, int]:

@@ -548,7 +548,7 @@ def test_status_report_counts_zero_fill_every_availability() -> None:
     assert counts[Availability.ONLINE] == 0
 
 
-def test_status_report_unobserved_has_offline_degraded() -> None:
+def test_status_report_has_offline_degraded() -> None:
     record = NodeRecord(node_id="deadbe01")
     obs = _obs(SOURCE_LORANET, last_seen=NOW - timedelta(days=3))
     report = build_report(
@@ -557,7 +557,6 @@ def test_status_report_unobserved_has_offline_degraded() -> None:
         node_ids=[NID],
         now=NOW,
     )
-    assert report.unobserved == ()
     assert report.has_offline is True
     assert report.degraded is True
 

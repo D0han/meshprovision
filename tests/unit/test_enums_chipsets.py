@@ -49,12 +49,9 @@ def test_to_value_digit_string_resolves_like_int() -> None:
     assert table.to_value(str(value)) == value
 
 
-def test_enum_table_values_and_contains_value() -> None:
+def test_enum_table_values() -> None:
     table = enums.role_table()
     assert table.values() == tuple(sorted(table.value_to_name))
-    known_value = table.values()[0]
-    assert table.contains_value(known_value) is True
-    assert table.contains_value(999999) is False
 
 
 @pytest.mark.parametrize("table_fn", [enums.role_table, enums.hw_model_table, enums.region_table])

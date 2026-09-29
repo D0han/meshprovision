@@ -30,7 +30,7 @@ in separate ``except`` clauses, re-raising the latter untouched.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -281,18 +281,6 @@ class PatternSpec:
         for digit in digits:
             value = value * base + digit
         return value
-
-    def iter_names(self, start: int = 0) -> Iterator[str]:
-        """Iterate every name this pattern can render, from ``start``.
-
-        Args:
-            start: Index to begin iterating from.
-
-        Yields:
-            Each rendered name, in ascending index order.
-        """
-        for index in range(start, self.capacity):
-            yield self.render(index)
 
     @classmethod
     def compile(cls, pattern: str, alphabet: str, *, field: str) -> PatternSpec:

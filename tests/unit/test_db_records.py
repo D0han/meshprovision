@@ -356,19 +356,6 @@ def test_resolve_admin_refs_unknown_ref_hint_mentions_both_bootstrap_commands(
     assert "mesh admin import" in hint
 
 
-def test_admin_key_bytes_ordering(keys: KeyRepository, keypair_factory, db: OdsDatabase) -> None:
-    kp1 = keypair_factory()
-    kp2 = keypair_factory()
-    pub1, _ = KeyRecord.for_keypair("ADMIN1", kp1, origin=KeyOrigin.IMPORTED)
-    pub2, _ = KeyRecord.for_keypair("ADMIN2", kp2, origin=KeyOrigin.IMPORTED)
-    keys.upsert(pub1)
-    keys.upsert(pub2)
-    db.save()
-
-    result = keys.admin_key_bytes(["ADMIN2", "ADMIN1"])
-    assert result == (kp2.public, kp1.public)
-
-
 def test_public_key_map(keys: KeyRepository, keypair_factory, db: OdsDatabase) -> None:
     kp = keypair_factory()
     pub, priv = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)

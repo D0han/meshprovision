@@ -263,17 +263,6 @@ class EnumTable:
         """
         return self.normalize(name) in self.name_to_value
 
-    def contains_value(self, value: int) -> bool:
-        """Check whether ``value`` is a known numeric value.
-
-        Args:
-            value: A candidate numeric value.
-
-        Returns:
-            ``True`` if ``value`` is in this table.
-        """
-        return value in self.value_to_name
-
     def normalize(self, name: str) -> str:
         """Canonicalize a name string. Pure string operation; never raises.
 

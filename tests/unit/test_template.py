@@ -109,12 +109,6 @@ def test_pattern_spec_parse_index_none_for_non_matching(bad_name: str) -> None:
     assert spec.parse_index(bad_name) is None
 
 
-def test_pattern_spec_iter_names_count() -> None:
-    spec = PatternSpec.compile("MT{n}{n}", BASE36_ALPHABET, field="short_name_pattern")
-    names = list(spec.iter_names(start=1294))
-    assert len(names) == 2
-
-
 def test_pattern_spec_literal_braces() -> None:
     spec = PatternSpec.compile("a{{b}}{n}", BASE36_ALPHABET, field="short_name_pattern")
     assert spec.slot_count == 1
