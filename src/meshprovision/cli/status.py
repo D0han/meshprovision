@@ -25,7 +25,8 @@ from typing import TYPE_CHECKING
 
 import click
 
-from meshprovision.cli.common import CONTEXT_SETTINGS, MeshCommand, handle_cli_errors, pass_cli
+from meshprovision.cli.common import CONTEXT_SETTINGS, handle_cli_errors, pass_cli
+from meshprovision.cli.help_format import MeshCommand
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.lorastats import DEFAULT_REGIONS
 from meshprovision.errors import DbError, ExitCode, SettingsError, exit_code_for

@@ -1,12 +1,10 @@
-"""Shared CLI plumbing for every ``mesh`` subcommand.
+"""Shared CLI runtime plumbing for every ``mesh`` subcommand.
 
-This module owns the single structlog configuration for the whole
-process (:func:`configure_logging`), and installs
-:func:`meshprovision.crypto.redact.redact_processor` as the **last**
-processor before the renderer, exactly per that module's own contract --
-every other processor (including one that might flatten a nested
-structure into a string) runs before the redactor sees the event, so
-nothing skips the scrub.
+For the ``--help`` text customization (:class:`~meshprovision.cli.
+help_format.MeshCommand`/:class:`~meshprovision.cli.help_format.MeshGroup`),
+see :mod:`meshprovision.cli.help_format`. For the process-wide structlog
+configuration (:func:`~meshprovision.cli.logging_setup.configure_logging`),
+see :mod:`meshprovision.cli.logging_setup`.
 
 Every log line and every human-facing message this module prints goes to
 **STDERR**. That keeps STDOUT free for machine-readable output --
@@ -32,16 +30,13 @@ command module -- only downward, from the earlier layers.
 from __future__ import annotations
 
 import functools
-import inspect
 import json
 import logging
-import re
 import sys
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, ParamSpec, TypeVar
 
 import click
-import structlog
 from rich.console import Console
 
 from meshprovision.config import template as template_module
@@ -63,7 +58,6 @@ from meshprovision.termsafe import terminal_safe
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from pathlib import Path
-    from typing import TextIO
 
     from meshprovision.cache.http import CachedHTTPClient
     from meshprovision.config.template import TemplateConfig
@@ -74,20 +68,12 @@ if TYPE_CHECKING:
 __all__ = [
     "CONTEXT_SETTINGS",
     "DEFAULT_JSON_INDENT",
-    "HELP_REQUESTED_KEY",
-    "LOG_LEVELS",
     "CliContext",
     "DbSession",
-    "MeshCommand",
-    "MeshGroup",
     "build_settings",
-    "clean_help_text",
-    "configure_logging",
     "echo_json",
     "handle_cli_errors",
-    "help_requested",
     "pass_cli",
-    "resolve_log_level",
     "resolve_non_interactive",
 ]
 
@@ -102,472 +88,8 @@ CONTEXT_SETTINGS: Final[dict[str, Any]] = {
 DEFAULT_JSON_INDENT: Final[int] = 2
 """Default indent width for :func:`echo_json`."""
 
-LOG_LEVELS: Final[tuple[str, ...]] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
-"""The logging verbosities accepted by ``--log-level``."""
-
-HELP_REQUESTED_KEY: Final[str] = "meshprovision.cli.help_requested"
-"""``click.Context.meta`` key set by :class:`MeshGroup` when any ``-h``/
-``--help`` flag appears anywhere in the invocation -- checked by
-``cli.main`` to skip the first-run setup offer on a help-only run, even
-one several subcommand levels deep (``mesh db verify --help`` runs the
-``mesh`` and ``db`` group callbacks before ``verify``'s own ``--help``
-handling ever gets a chance to exit)."""
-
-_GOOGLE_SECTIONS: Final[tuple[str, ...]] = (
-    "Args",
-    "Arguments",
-    "Attributes",
-    "Example",
-    "Examples",
-    "Note",
-    "Notes",
-    "Raises",
-    "Returns",
-    "See Also",
-    "Todo",
-    "Warning",
-    "Warnings",
-    "Warns",
-    "Yields",
-)
-"""Google-style docstring section headers :func:`clean_help_text` truncates at."""
-
-_SECTION_RE: Final[re.Pattern[str]] = re.compile(
-    rf"^(?:{'|'.join(_GOOGLE_SECTIONS)}):[ \t]*$", re.MULTILINE
-)
-"""Matches a *whole line* that is exactly one Google section header.
-
-Anchored so a sentence like ``"Note: this is slow."`` -- prose, not a
-section -- is never mistaken for a truncation point.
-"""
-
-_ROLE_RE: Final[re.Pattern[str]] = re.compile(
-    r":(?:py:)?(?P<role>[a-zA-Z]+):`(?P<target>[^`]+)`", re.DOTALL
-)
-"""Matches a Sphinx cross-reference role, e.g. ``:class:`~a.b.C``` --
-including one whose target wraps across multiple docstring lines."""
-
-_LITERAL_RE: Final[re.Pattern[str]] = re.compile(r"``(?P<body>[^`]+)``", re.DOTALL)
-"""Matches an rST inline literal, e.g. ``` ``--strict`` ```."""
-
-_FULL_PATH_ROLES: Final[frozenset[str]] = frozenset({"mod"})
-"""Roles whose target stays fully dotted (a module path is only useful whole)."""
-
-
-def _shorten_role(match: re.Match[str]) -> str:
-    """Reduce a Sphinx role match to its bare, readable target.
-
-    Args:
-        match: A match of :data:`_ROLE_RE`.
-
-    Returns:
-        The role's target with a leading ``~`` and internal line-wrap
-        whitespace stripped, collapsed to its last dotted segment --
-        unless the role is in :data:`_FULL_PATH_ROLES`, which keeps the
-        full dotted path.
-    """
-    role = match.group("role")
-    target = "".join(match.group("target").split()).lstrip("~")
-    if role in _FULL_PATH_ROLES:
-        return target
-    return target.rsplit(".", maxsplit=1)[-1]
-
-
-def _flatten_literal(match: re.Match[str]) -> str:
-    """Collapse a (possibly line-wrapped) inline literal's body to one line.
-
-    Args:
-        match: A match of :data:`_LITERAL_RE`.
-
-    Returns:
-        The literal's body with internal whitespace collapsed.
-    """
-    return " ".join(match.group("body").split())
-
-
-def clean_help_text(docstring: str | None) -> str | None:
-    """Trim a Google-style docstring down to its operator-facing prose.
-
-    Click renders a command's raw docstring verbatim as ``--help`` text,
-    which turns every ``Args:``/``Raises:`` developer section -- plus
-    any Sphinx cross-reference roles and inline literals inside it --
-    into confusing run-on prose. This cuts the docstring at the first
-    such section header and de-rSTs what remains, leaving paragraph
-    breaks intact.
-
-    Args:
-        docstring: The raw docstring, or ``None``.
-
-    Returns:
-        ``None`` if ``docstring`` is ``None``; otherwise the cleaned,
-        operator-facing text.
-    """
-    if docstring is None:
-        return None
-    text = inspect.cleandoc(docstring)
-    section = _SECTION_RE.search(text)
-    if section is not None:
-        text = text[: section.start()].rstrip()
-    text = _ROLE_RE.sub(_shorten_role, text)
-    text = _LITERAL_RE.sub(_flatten_literal, text)
-    return text.replace("`", "").strip()
-
-
-def _mentions_help(args: Sequence[str], help_option_names: Sequence[str]) -> bool:
-    """Return whether any token in ``args`` is exactly a help flag.
-
-    A quoted option *value* that happens to equal ``--help`` is
-    misdetected as a help request too -- harmless here, since the only
-    effect is suppressing the first-run setup offer for that one run.
-
-    Args:
-        args: The raw, unparsed argument tokens.
-        help_option_names: The configured help flag spellings, e.g.
-            ``["-h", "--help"]``.
-
-    Returns:
-        ``True`` if any token in ``args`` exactly matches a help flag.
-    """
-    return any(arg in help_option_names for arg in args)
-
-
-def help_requested(ctx: click.Context) -> bool:
-    """Report whether this invocation asked for help anywhere in its args.
-
-    Args:
-        ctx: Any click context belonging to the current invocation --
-            :attr:`click.Context.meta` is shared by the whole context
-            chain, so a child context sees what :class:`MeshGroup` set
-            on the root.
-
-    Returns:
-        ``True`` if :class:`MeshGroup` recorded a help flag while
-        parsing this invocation's arguments.
-    """
-    return bool(ctx.meta.get(HELP_REQUESTED_KEY, False))
-
-
-class MeshCommand(click.Command):
-    """A :class:`click.Command` whose ``--help`` text is operator-facing.
-
-    Runs the raw docstring through :func:`clean_help_text` once, at
-    construction time -- covering both ``format_help_text`` and
-    ``get_short_help_str``, which both read ``self.help`` directly, with
-    a single change. ``Command.__doc__`` (used by Sphinx/pydoc, and set
-    separately by click's ``@command`` decorator) is left untouched, so
-    the full developer docstring is still available to tooling that
-    reads it directly.
-    """
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        """Construct the command, then clean :attr:`help` in place.
-
-        Args:
-            *args: Forwarded to :class:`click.Command`.
-            **kwargs: Forwarded to :class:`click.Command`.
-        """
-        super().__init__(*args, **kwargs)
-        if self.help is not None:
-            self.help = clean_help_text(self.help)
-
-
-class MeshGroup(MeshCommand, click.Group):
-    """A :class:`click.Group` that mints :class:`MeshCommand`/:class:`MeshGroup`.
-
-    Setting ``command_class``/``group_class`` here means every
-    ``@group.command()``/``@group.group()`` registered under a
-    ``MeshGroup`` gets the cleaned-help behavior automatically, with no
-    ``cls=`` at the subcommand site -- only the handful of top-level
-    ``@click.group``/``@click.command`` decorators need it explicitly.
-    """
-
-    command_class = MeshCommand
-    group_class = type  # click's sentinel: "reuse this group's own class"
-
-    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
-        """Record a help-only invocation in ``ctx.meta`` before parsing.
-
-        A root ``MeshGroup`` sees the *full* remaining argument list
-        here, before any subcommand's own eager ``--help`` handling has
-        had a chance to run -- ``Group.invoke`` runs every ancestor
-        group's callback before recursing into the next level (verified
-        against installed click 8.4.2), so by the time ``mesh db
-        verify --help`` would reach ``verify``'s own help handling, both
-        the ``mesh`` and ``db`` callbacks have already executed. Setting
-        :data:`HELP_REQUESTED_KEY` here, first, is what lets
-        ``cli.main`` skip the first-run setup offer for that run.
-
-        Args:
-            ctx: This group's freshly built context.
-            args: The raw arguments remaining for this group to parse.
-
-        Returns:
-            Whatever :meth:`click.Group.parse_args` returns.
-        """
-        if _mentions_help(args, ctx.help_option_names):
-            ctx.meta[HELP_REQUESTED_KEY] = True
-        return super().parse_args(ctx, args)
-
-
-_LIBRARY_STAGES: Final[tuple[tuple[str, ...], ...]] = (
-    ("meshtastic", "httpx"),
-    ("bleak", "httpcore", "urllib3"),
-)
-"""Third-party loggers held back until ``-v`` reaches their stage.
-
-Stage ``i`` (0-indexed) is released once ``--verbose``'s count is at least
-``i + 2`` -- i.e. the *second* ``-v`` (``-vv``) releases stage 0
-(``meshtastic``/``httpx``), and the *third* (``-vvv``) releases stage 1
-(``bleak``/``httpcore``/``urllib3``). Before release, stage 0 tracks the
-root level with a WARNING floor (``max(numeric_level, WARNING)`` -- the
-same pre-``-v`` behavior this project has always had: an explicit
-``--log-level error`` quiets these two further, but nothing quiets them
-below WARNING); stage 1 is pinned to exactly WARNING regardless of the
-root level, matching its pre-``-v`` behavior. Release itself is the new
-capability this stage table exists for -- previously nothing could ever
-make these *louder* than WARNING (the old ``max(numeric_level,
-WARNING)`` floor could only ever raise the effective minimum, never
-lower it), so ``--log-level debug`` alone could never surface library
-detail no matter how loud requested; ``-vv``/``-vvv`` now can.
-"""
-
 _ERR_CONSOLE: Final[Console] = Console(stderr=True)
 """Module-level stderr console used by :func:`_emit_error`."""
-
-
-class _LibrarySecretFilter(logging.Filter):
-    """Withholds ``meshtastic`` library records that may carry secret material.
-
-    Installed on the **handler** in :func:`configure_logging`, deliberately
-    not on the ``meshtastic`` logger itself: a filter attached to a
-    logger only runs for records emitted directly on that logger, never
-    for records emitted on its children (``meshtastic.mesh_interface``,
-    ``meshtastic.stream_interface``, ...) -- and those child loggers are
-    exactly the ones the installed ``meshtastic`` library uses to print
-    raw protobuf text (private keys rendered as octal escapes) and raw
-    serialized frames (a Python ``bytes`` repr) at ``-vv``/``-vvv``. A
-    handler-level filter sees every record the handler emits, regardless
-    of which logger in the hierarchy produced it.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        """Rewrite a risky ``meshtastic`` record's message in place; never drop it.
-
-        Args:
-            record: The candidate log record.
-
-        Returns:
-            Always ``True``. The operator still sees that library
-            traffic happened, at the withheld record's original level
-            and logger name -- only the risky content is replaced.
-        """
-        if record.name == "meshtastic" or record.name.startswith("meshtastic."):
-            message = record.getMessage()
-            if redact.library_record_may_leak(message):
-                record.msg = (
-                    f"[{record.name}: {len(message)}-char record withheld; "
-                    "may contain key material]"
-                )
-                record.args = ()
-        return True
-
-
-def _build_shared_processors() -> list[structlog.typing.Processor]:
-    """Build the processor chain shared by structlog- and stdlib-originated events.
-
-    Deliberately omits ``structlog.stdlib.add_logger_name``'s sibling
-    ``structlog.processors.UnicodeDecoder`` -- decoding raw ``bytes``
-    values into ``str`` before :func:`meshprovision.crypto.redact.
-    redact_processor` runs would let key-shaped bytes slip past the
-    byte-aware half of that scrubber.
-
-    Returns:
-        The processor list to use as both ``structlog.configure``'s
-        ``processors`` prefix and ``ProcessorFormatter``'s
-        ``foreign_pre_chain``.
-    """
-    return [
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.add_logger_name,
-        structlog.processors.TimeStamper(fmt="iso", utc=True),
-        structlog.processors.StackInfoRenderer(),
-    ]
-
-
-def _resolve_colors(colors: bool | None) -> bool:
-    """Resolve whether the console renderer should emit ANSI colors.
-
-    Args:
-        colors: An explicit override, or ``None`` to auto-detect from
-            whether stderr is a TTY.
-
-    Returns:
-        ``colors`` unchanged when given; otherwise ``sys.stderr.isatty()``,
-        defaulting to ``False`` if that check itself fails.
-    """
-    if colors is not None:
-        return colors
-    try:
-        return sys.stderr.isatty()
-    except (AttributeError, OSError, ValueError):
-        return False
-
-
-def _stage_third_party_loggers(numeric_level: int, verbosity: int) -> None:
-    """Floor noisy third-party loggers at WARNING until ``-v`` releases them.
-
-    Each :data:`_LIBRARY_STAGES` entry is held back until ``verbosity``
-    reaches that stage's threshold, at which point it is set to
-    ``NOTSET`` so it inherits the root logger's own level instead --
-    ``--log-level warning -vvv`` therefore still means WARNING, while
-    plain ``-vvv`` (root at DEBUG, via :func:`resolve_log_level`) lets it
-    through at DEBUG. Before release, stage 0 (``meshtastic``/``httpx``)
-    is floored at ``max(numeric_level, WARNING)`` -- quietable below
-    WARNING by an explicit ``--log-level``, never raisable above it
-    without ``-vv`` -- and stage 1 (``bleak``/``httpcore``/``urllib3``)
-    is pinned to exactly WARNING.
-
-    Args:
-        numeric_level: The resolved numeric level for the root logger.
-        verbosity: The ``-v``/``--verbose`` count.
-    """
-    for index, names in enumerate(_LIBRARY_STAGES):
-        released = verbosity >= index + 2
-        for name in names:
-            if released:
-                level = logging.NOTSET
-            elif index == 0:
-                level = max(numeric_level, logging.WARNING)
-            else:
-                level = logging.WARNING
-            logging.getLogger(name).setLevel(level)
-
-
-def resolve_log_level(log_level: str | None, verbose: int) -> str | None:
-    """Resolve the effective ``--log-level`` value from the flag and ``-v`` count.
-
-    An explicit ``--log-level`` always wins, preserving the existing
-    flag > environment > ``.env`` precedence (:func:`build_settings`
-    layers whatever this returns the same way it already layered
-    ``log_level``). Otherwise, ``-v`` raises this project's own loggers
-    to ``INFO`` and ``-vv``/``-vvv`` to ``DEBUG`` (the extra count
-    beyond 2 has no further effect here -- it instead releases
-    third-party loggers, via :func:`_stage_third_party_loggers`); with
-    no flag and no ``-v`` at all, ``None`` is returned so the
-    environment/``.env``/default (``WARNING``) layers decide.
-
-    Args:
-        log_level: The raw ``--log-level`` value, or ``None``.
-        verbose: The ``-v``/``--verbose`` count.
-
-    Returns:
-        ``log_level`` unchanged when given; otherwise ``"INFO"`` if
-        ``verbose == 1``, ``"DEBUG"`` if ``verbose >= 2``; otherwise
-        ``None``.
-    """
-    if log_level is not None:
-        return log_level
-    if verbose >= 2:
-        return "DEBUG"
-    if verbose == 1:
-        return "INFO"
-    return None
-
-
-def configure_logging(
-    level: str,
-    *,
-    stream: TextIO | None = None,
-    colors: bool | None = None,
-    verbosity: int = 0,
-) -> None:
-    """Configure the process-wide structlog + stdlib logging pipeline.
-
-    The single place structlog is configured. Every earlier-layer module
-    logs through stdlib ``logging.getLogger(__name__)``, so stdlib
-    records are routed through the same ``structlog.stdlib.
-    ProcessorFormatter`` chain as structlog-native events -- including
-    :func:`meshprovision.crypto.redact.redact_processor`, which runs
-    first in the formatter's ``processors`` list so it is the last thing
-    to touch the event dict before ``remove_processors_meta``/render.
-
-    ``exception_formatter=structlog.dev.plain_traceback`` is passed to
-    the renderer deliberately: ``ConsoleRenderer``'s own default is a
-    ``RichTracebackFormatter(show_locals=True)``, which would print local
-    variables -- i.e. potentially raw key material -- into the log on any
-    traceback.
-
-    :class:`_LibrarySecretFilter` is attached to the handler here too, so
-    that at ``-vv``/``-vvv`` (see ``verbosity`` below) the released
-    ``meshtastic`` library's own DEBUG logging -- which prints raw
-    protobuf text and frame bytes, a shape ``redact_processor``'s
-    base64/hex scrubbing does not catch -- never reaches the renderer
-    unredacted.
-
-    Idempotent: calling this twice never duplicates handlers, since the
-    root logger's existing handlers are removed first.
-
-    Args:
-        level: The logging verbosity. Must be one of :data:`LOG_LEVELS`.
-        stream: The stream to attach the handler to. Defaults to
-            ``sys.stderr``.
-        colors: Whether to emit ANSI colors. ``None`` auto-detects from
-            whether the target stream is a TTY.
-        verbosity: The ``-v``/``--verbose`` count, staged through
-            :func:`_stage_third_party_loggers`: ``0``/``1`` leave every
-            name in :data:`_LIBRARY_STAGES` at WARNING; ``2`` releases
-            ``meshtastic``/``httpx``; ``3`` also releases
-            ``bleak``/``httpcore``/``urllib3``. This only governs the
-            third-party loggers -- ``level`` itself (typically resolved
-            by :func:`resolve_log_level`, one rung ahead: ``-v`` ->
-            INFO, ``-vv``/``-vvv`` -> DEBUG) is what raises this
-            project's own loggers above the ``WARNING`` default.
-
-    Raises:
-        SchemaError: If ``level`` is not one of :data:`LOG_LEVELS`.
-    """
-    normalized = level.strip().upper()
-    if normalized not in LOG_LEVELS:
-        raise SchemaError(
-            f"Unknown log level: {level!r}",
-            hint=f"Choose one of: {', '.join(LOG_LEVELS)}.",
-        )
-    numeric_level = logging.getLevelNamesMapping()[normalized]
-
-    shared = _build_shared_processors()
-    renderer = structlog.dev.ConsoleRenderer(
-        colors=_resolve_colors(colors),
-        exception_formatter=structlog.dev.plain_traceback,
-        sort_keys=True,
-    )
-    formatter = structlog.stdlib.ProcessorFormatter(
-        foreign_pre_chain=shared,
-        processors=[
-            redact.redact_processor,
-            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
-            renderer,
-        ],
-    )
-
-    handler = logging.StreamHandler(stream if stream is not None else sys.stderr)
-    handler.setFormatter(formatter)
-    # On the handler, not the "meshtastic" logger: see _LibrarySecretFilter.
-    handler.addFilter(_LibrarySecretFilter())
-
-    root = logging.getLogger()
-    for existing in list(root.handlers):
-        root.removeHandler(existing)
-    root.addHandler(handler)
-    root.setLevel(numeric_level)
-
-    structlog.configure(
-        processors=[*shared, structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        wrapper_class=structlog.stdlib.BoundLogger,
-        cache_logger_on_first_use=False,
-    )
-
-    _stage_third_party_loggers(numeric_level, verbosity)
 
 
 def resolve_non_interactive(flag: bool | None) -> bool:

@@ -53,11 +53,11 @@ from rich.table import Table
 
 from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
-    MeshGroup,
     echo_json,
     handle_cli_errors,
     pass_cli,
 )
+from meshprovision.cli.help_format import MeshGroup
 from meshprovision.db import atomic_writer, locking, ods, schema
 from meshprovision.db.known_good import (
     KnownGoodProvenance,

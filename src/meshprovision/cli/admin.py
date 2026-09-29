@@ -23,11 +23,11 @@ import click
 
 from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
-    MeshGroup,
     echo_json,
     handle_cli_errors,
     pass_cli,
 )
+from meshprovision.cli.help_format import MeshGroup
 from meshprovision.cli.provision import (
     ProvisionOptions,
     TransportOptions,

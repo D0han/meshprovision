@@ -1275,7 +1275,7 @@ def test_adopt_debug_logs_are_hidden_by_default_and_shown_with_verbose(
 
     ``-vv`` rather than a single ``-v``: the ladder is staged so ``-v``
     alone only reaches ``INFO`` (see
-    :func:`~meshprovision.cli.common.resolve_log_level`); ``DEBUG``
+    :func:`~meshprovision.cli.logging_setup.resolve_log_level`); ``DEBUG``
     needs a second ``-v``.
     """
     bus.use(FakeMeshInterface("deadbe01"))

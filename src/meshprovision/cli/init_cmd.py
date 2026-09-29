@@ -23,11 +23,11 @@ import click
 
 from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
-    MeshCommand,
     echo_json,
     handle_cli_errors,
     pass_cli,
 )
+from meshprovision.cli.help_format import MeshCommand
 from meshprovision.cli.setup import (
     SetupItem,
     SetupStatus,
@@ -252,7 +252,7 @@ def maybe_offer_setup(ctx: CliContext, *, click_ctx: click.Context) -> SetupOutc
         ``mesh init`` itself, or already complete); otherwise the
         :class:`SetupOutcome`.
     """
-    from meshprovision.cli.common import help_requested
+    from meshprovision.cli.help_format import help_requested
 
     status = inspect_setup(ctx.settings, env_file=ctx.env_file)
     if not should_offer_setup(

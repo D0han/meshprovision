@@ -30,17 +30,15 @@ from meshprovision.cli.admin import admin
 from meshprovision.cli.adopt import adopt
 from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
-    LOG_LEVELS,
     CliContext,
-    MeshGroup,
     build_settings,
-    configure_logging,
     handle_cli_errors,
-    resolve_log_level,
     resolve_non_interactive,
 )
 from meshprovision.cli.db_cmd import db
+from meshprovision.cli.help_format import MeshGroup
 from meshprovision.cli.init_cmd import init, maybe_offer_setup
+from meshprovision.cli.logging_setup import LOG_LEVELS, configure_logging, resolve_log_level
 from meshprovision.cli.provision import provision
 from meshprovision.cli.status import status
 from meshprovision.cli.template_cmd import template
@@ -142,12 +140,12 @@ def cli(
             pass_cli`.
         log_level: Logging verbosity override, from ``--log-level``.
             Wins over ``verbose`` when both are given -- see
-            :func:`~meshprovision.cli.common.resolve_log_level`.
+            :func:`~meshprovision.cli.logging_setup.resolve_log_level`.
         verbose: The ``-v``/``--verbose`` count. With no explicit
             ``--log-level``, a count of 1 raises this project's own
             loggers to ``INFO``, 2 or 3 to ``DEBUG``; a count of 2 or 3
             additionally unmutes third-party loggers -- see
-            :func:`~meshprovision.cli.common.configure_logging`.
+            :func:`~meshprovision.cli.logging_setup.configure_logging`.
         db_path: ODS database path override, from ``--db-path``.
         template_path: Provisioning template path override, from
             ``--template-path``.

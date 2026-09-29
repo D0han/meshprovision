@@ -12,7 +12,7 @@ digest string instead.
 :func:`redact_processor` is a ``structlog`` processor that applies this
 policy to an entire log event. It must be installed as the **last**
 processor before the renderer in the application's structlog
-configuration (see ``cli/common.py``), so that every other processor's
+configuration (see ``cli/logging_setup.py``), so that every other processor's
 output (including any that flatten nested structures into strings) still
 passes through this one before anything is written out.
 

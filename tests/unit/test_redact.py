@@ -9,7 +9,7 @@ import re
 import pytest
 import structlog
 
-from meshprovision.cli.common import configure_logging
+from meshprovision.cli.logging_setup import configure_logging
 from meshprovision.crypto.redact import (
     REDACTED,
     SAFE_KEY_NAMES,

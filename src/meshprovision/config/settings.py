@@ -118,7 +118,7 @@ class Settings(BaseModel):
             Defaults to ``"WARNING"`` -- a plain run stays quiet on
             stderr; ``-v`` raises this project's own loggers to
             ``INFO``, ``-vv``/``-vvv`` to ``DEBUG`` (see
-            :func:`~meshprovision.cli.common.resolve_log_level`).
+            :func:`~meshprovision.cli.logging_setup.resolve_log_level`).
     """
 
     model_config = ConfigDict(

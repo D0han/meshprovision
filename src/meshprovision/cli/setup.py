@@ -250,7 +250,7 @@ def should_offer_setup(
             keep today's exact error-and-hint behavior instead.
         help_requested: Whether a ``-h``/``--help`` flag appeared
             anywhere in this invocation (see
-            :func:`meshprovision.cli.common.help_requested`).
+            :func:`meshprovision.cli.help_format.help_requested`).
         invoked_subcommand: ``click.Context.invoked_subcommand`` -- the
             name of the subcommand about to run, or ``None``.
 

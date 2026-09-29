@@ -18,11 +18,11 @@ from rich.console import Console
 from meshprovision.cli.common import (
     CliContext,
     build_settings,
-    configure_logging,
     echo_json,
     handle_cli_errors,
     resolve_non_interactive,
 )
+from meshprovision.cli.logging_setup import configure_logging
 from meshprovision.config.settings import DEFAULT_CACHE_TTL, Settings
 from meshprovision.errors import ExitCode, SchemaError
 

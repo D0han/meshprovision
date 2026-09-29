@@ -41,11 +41,11 @@ import click
 
 from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
-    MeshCommand,
     echo_json,
     handle_cli_errors,
     pass_cli,
 )
+from meshprovision.cli.help_format import MeshCommand
 from meshprovision.cli.progress import heartbeat
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto.redact import SecretBytes, fingerprint

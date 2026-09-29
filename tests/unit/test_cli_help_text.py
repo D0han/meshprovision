@@ -1,4 +1,4 @@
-"""Tests for the operator-facing ``--help`` rendering in ``meshprovision.cli.common``.
+"""Tests for the operator-facing ``--help`` rendering in ``meshprovision.cli.help_format``.
 
 Covers :func:`clean_help_text` in isolation, :class:`MeshCommand`/
 :class:`MeshGroup` wiring, and a standing regression guard that walks
@@ -11,8 +11,8 @@ from __future__ import annotations
 import click
 import pytest
 
-from meshprovision.cli.common import (
-    CONTEXT_SETTINGS,
+from meshprovision.cli.common import CONTEXT_SETTINGS
+from meshprovision.cli.help_format import (
     HELP_REQUESTED_KEY,
     MeshCommand,
     MeshGroup,

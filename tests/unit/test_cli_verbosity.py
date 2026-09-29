@@ -14,7 +14,7 @@ import structlog
 from google.protobuf.text_format import text_encoding
 from meshtastic.protobuf import admin_pb2, localonly_pb2, mesh_pb2
 
-from meshprovision.cli.common import configure_logging, resolve_log_level
+from meshprovision.cli.logging_setup import configure_logging, resolve_log_level
 from meshprovision.crypto.keys import KeyPair, generate_keypair
 
 pytestmark = pytest.mark.unit

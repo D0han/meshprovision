@@ -34,7 +34,7 @@ def test_log_level_flag_beats_environ_beats_dotenv_through_the_real_cli(
 ) -> None:
     """All three layers set to different values; the CLI flag must win.
 
-    ``configure_logging`` (``cli/common.py``) sets the root logger's
+    ``configure_logging`` (``cli/logging_setup.py``) sets the root logger's
     level as its one observable side effect, which is checked directly
     here rather than scraped from log output -- ``CliRunner`` invokes
     in-process, so the real root logger is the one just configured.
