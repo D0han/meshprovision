@@ -65,7 +65,7 @@ from odf import text as odf_text
 from odf.element import Node
 from odf.opendocument import OpenDocumentSpreadsheet
 
-from meshprovision.db import header_diff, locking, schema, sorting
+from meshprovision.db import cell_validation, header_diff, locking, schema, sorting
 from meshprovision.db.atomic_writer import DEFAULT_RETENTION, atomic_write
 from meshprovision.db.known_good import refresh_known_good
 from meshprovision.errors import DbIntegrityError, DbReadError, DuplicateNodeError, SchemaError
@@ -809,7 +809,7 @@ def _load_sheet_rows(
         for coercion in coercions:
             warnings.append(coercion)
             _logger.warning("%s", coercion.message())
-        validated = schema.validate_row(sheet_spec, ods_row, raw_values)
+        validated = cell_validation.validate_row(sheet_spec, ods_row, raw_values)
         records.append(_apply_recompute(sheet_spec, validated, ods_row, warnings))
         ods_row += 1
     return tuple(records)

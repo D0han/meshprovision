@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from meshprovision.crypto.keys import encode_key
-from meshprovision.db import atomic_writer, ods, schema
+from meshprovision.db import atomic_writer, cell_validation, ods, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.known_good import KnownGoodProvenance, known_good_info, known_good_status
 from meshprovision.db.nodes import NodeRecord
@@ -631,10 +631,10 @@ def test_invalid_literal_allowed_enum_raises_db_validation_error(
 ) -> None:
     """Reject an unrecognized value in a literal-``allowed``-set ENUM column.
 
-    `_validate_enum`'s ``spec.allowed`` (non-``enum_table``) branch, used by
-    ``management``/``firmware_type``/``key_type``, must reject an
-    unrecognized value exactly like the ``enum_table`` branch already
-    tested by ``test_invalid_role_raises_db_validation_error`` does.
+    ``cell_validation._validate_enum``'s ``spec.allowed`` (non-``enum_table``)
+    branch, used by ``management``/``firmware_type``/``key_type``, must
+    reject an unrecognized value exactly like the ``enum_table`` branch
+    already tested by ``test_invalid_role_raises_db_validation_error`` does.
     """
     from tests.unit.conftest import edit_ods_cell
 
@@ -1414,10 +1414,11 @@ def test_float_bounds_are_inclusive_at_the_exact_boundary(column: str, value: st
     """``min_value``/``max_value`` are documented as inclusive bounds.
 
     Every other range test uses a value well outside the range, which a
-    ``>``-to-``>=`` flip in ``_check_range`` would still reject correctly.
+    ``>``-to-``>=`` flip in ``cell_validation._check_range`` would still
+    reject correctly.
     """
     spec = schema.NODES_SHEET_SPEC.column(column)
-    assert schema.validate_cell(sheet="Nodes", row=2, spec=spec, value=value) == value
+    assert cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value=value) == value
 
 
 @pytest.mark.parametrize(
@@ -1432,7 +1433,7 @@ def test_float_bounds_are_inclusive_at_the_exact_boundary(column: str, value: st
 def test_float_bounds_reject_just_past_the_boundary(column: str, value: str) -> None:
     spec = schema.NODES_SHEET_SPEC.column(column)
     with pytest.raises(DbValidationError) as exc_info:
-        schema.validate_cell(sheet="Nodes", row=2, spec=spec, value=value)
+        cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value=value)
     assert exc_info.value.column == column
 
 
@@ -1445,14 +1446,14 @@ def test_base64_key_list_dedupes_after_canonicalization(keypair) -> None:
     """
     encoded = encode_key(keypair.public)
     spec = schema.NODES_SHEET_SPEC.column("unregistered_admin_keys")
-    result = schema.validate_cell(
+    result = cell_validation.validate_cell(
         sheet="Nodes", row=2, spec=spec, value=f"{encoded};base64:{encoded};{encoded}"
     )
     assert result == encoded
 
 
 def test_validate_row_fills_every_column() -> None:
-    result = schema.validate_row(schema.NODES_SHEET_SPEC, 2, {"node_id": "deadbe01"})
+    result = cell_validation.validate_row(schema.NODES_SHEET_SPEC, 2, {"node_id": "deadbe01"})
     assert set(result) == set(schema.NODES_SHEET_SPEC.column_names())
 
 
