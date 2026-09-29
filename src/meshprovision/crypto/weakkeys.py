@@ -436,14 +436,51 @@ def is_vulnerable_firmware(version: str | tuple[int, int, int] | None) -> bool:
     return FIRMWARE_VULNERABLE_MIN <= version < FIRMWARE_FIXED_MIN
 
 
-def default_known_bad_keys_path() -> Path | None:
+def _known_bad_keys_candidates(*, db_path: Path | None = None) -> list[Path]:
+    """Build the ordered, non-env candidate list, without checking existence.
+
+    Args:
+        db_path: The configured database path, when known. Its parent
+            directory is tried first among these candidates.
+
+    Returns:
+        The candidates in search order: DB-sibling (if ``db_path`` is
+        given), package, repo root (if resolvable), then cwd.
+    """
+    candidates: list[Path] = []
+    if db_path is not None:
+        candidates.append(db_path.parent / "known_bad_keys.txt")
+
+    module_parents = Path(__file__).resolve().parents
+    package_root = module_parents[1]
+    repo_root_candidate = module_parents[3] if len(module_parents) > 3 else None
+    candidates.append(package_root / "data" / "known_bad_keys.txt")
+    if repo_root_candidate is not None:
+        candidates.append(repo_root_candidate / "data" / "known_bad_keys.txt")
+    candidates.append(Path.cwd() / "data" / "known_bad_keys.txt")
+    return candidates
+
+
+def default_known_bad_keys_path(*, db_path: Path | None = None) -> Path | None:
     """Resolve the default location of the on-disk key blocklist.
 
     Tries, in order: the path in :data:`KNOWN_BAD_KEYS_ENV` (if set);
+    ``db_path.parent/known_bad_keys.txt`` (if ``db_path`` is given -- the
+    database's own directory is stable regardless of the caller's
+    current working directory, unlike the ``./data`` fallback below);
     ``<package>/data/known_bad_keys.txt`` (in case the file is ever
     vendored into the installed package); ``<repo root>/data/known_bad_keys.txt``
     (a checkout run from source); ``./data/known_bad_keys.txt`` relative
     to the current working directory.
+
+    The package candidate is deliberately searched *after* the DB
+    sibling: a bundled copy must never take priority over an operator's
+    own file, or it would permanently hide the operator's additions.
+
+    Args:
+        db_path: The configured database path, when known. Passed
+            through from :meth:`~meshprovision.cli.common.CliContext.
+            known_bad_keys`.
 
     Returns:
         The first candidate path that exists, or ``None`` if none does
@@ -465,15 +502,7 @@ def default_known_bad_keys_path() -> Path | None:
             ),
         )
 
-    module_parents = Path(__file__).resolve().parents
-    package_root = module_parents[1]
-    repo_root_candidate = module_parents[3] if len(module_parents) > 3 else None
-    candidates = [package_root / "data" / "known_bad_keys.txt"]
-    if repo_root_candidate is not None:
-        candidates.append(repo_root_candidate / "data" / "known_bad_keys.txt")
-    candidates.append(Path.cwd() / "data" / "known_bad_keys.txt")
-
-    for candidate in candidates:
+    for candidate in _known_bad_keys_candidates(db_path=db_path):
         if candidate.exists():
             return candidate
     return None
@@ -508,7 +537,9 @@ def parse_known_bad_keys(text: str, *, source: str = "<string>") -> tuple[bytes,
     return tuple(seen)
 
 
-def load_known_bad_keys(path: Path | None = None) -> frozenset[bytes]:
+def load_known_bad_keys(
+    path: Path | None = None, *, db_path: Path | None = None
+) -> frozenset[bytes]:
     """Load the effective known-bad-keys blocklist.
 
     Always includes :data:`SMALL_ORDER_POINTS`, whether or not an
@@ -520,6 +551,11 @@ def load_known_bad_keys(path: Path | None = None) -> frozenset[bytes]:
     Args:
         path: An explicit blocklist path. When ``None``, resolved via
             :func:`default_known_bad_keys_path`.
+        db_path: The configured database path, passed through to
+            :func:`default_known_bad_keys_path` when ``path`` is
+            ``None``, so an installed ``mesh`` run finds a blocklist
+            file next to its database regardless of the current
+            working directory. Ignored when ``path`` is given.
 
     Returns:
         The union of :data:`SMALL_ORDER_POINTS` and everything parsed
@@ -532,11 +568,15 @@ def load_known_bad_keys(path: Path | None = None) -> frozenset[bytes]:
         SettingsError: If :data:`KNOWN_BAD_KEYS_ENV` is set to a path that
             does not exist (propagated from :func:`default_known_bad_keys_path`).
     """
-    resolved = path if path is not None else default_known_bad_keys_path()
+    resolved = path if path is not None else default_known_bad_keys_path(db_path=db_path)
     if resolved is None or not resolved.exists():
-        _logger.debug(
-            "no known-bad-keys blocklist file found; using only the %d built-in small-order points",
+        searched = ", ".join(str(c) for c in _known_bad_keys_candidates(db_path=db_path))
+        _logger.info(
+            "no known_bad_keys.txt found (looked in: %s); using only the %d built-in "
+            "small-order points; set %s to use a custom blocklist",
+            searched,
             len(SMALL_ORDER_POINTS),
+            KNOWN_BAD_KEYS_ENV,
         )
         return frozenset(SMALL_ORDER_POINTS)
 

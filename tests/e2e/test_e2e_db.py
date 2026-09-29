@@ -118,6 +118,46 @@ def test_db_verify_all_zero_admin_key_exits_six(
     assert any("all_zero" in p["message"] for p in weak_key_problems)
 
 
+def test_db_verify_finds_blocklist_next_to_a_db_path_outside_the_cwd(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    """The DB-sibling blocklist candidate is used regardless of the CLI's cwd.
+
+    ``--db-path``/``MESHPROVISION_DB_PATH`` here points well outside the
+    autouse-chdir'd cwd, with no ``./data/known_bad_keys.txt`` anywhere
+    near it -- only a blocklist sitting next to the database itself. On
+    revert (no ``db_path`` plumbing through ``CliContext.known_bad_keys``),
+    this entry is never found and the run reports "Database OK." instead.
+    """
+    project = tmp_path / "elsewhere" / "data"
+    project.mkdir(parents=True)
+    custom_db_path = project / "nodes_db.ods"
+    kp = generate_keypair()
+    (project / "known_bad_keys.txt").write_text(f"{kp.public_b64}\n")
+
+    node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
+    blocked_admin = KeyRecord.from_material(
+        "deadbe01", KeyType.ADMIN_PUBLIC, kp.public, origin=KeyOrigin.CAPTURED
+    )
+    ods.write_database(
+        custom_db_path,
+        nodes=[node.to_row()],
+        keys=[blocked_admin.to_row()],
+        backup=False,
+    )
+
+    custom_env = dict(env)
+    custom_env["MESHPROVISION_DB_PATH"] = str(custom_db_path)
+
+    result = invoke(runner, ["db", "verify", "--json"], custom_env)
+
+    assert result.exit_code == 6
+    document = json.loads(result.stdout)
+    weak_key_problems = [p for p in document["problems"] if p["kind"] == "weak_key"]
+    assert weak_key_problems
+    assert any("blocklist" in p["message"] for p in weak_key_problems)
+
+
 def test_db_verify_unresolved_admin_ref_exits_four(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:

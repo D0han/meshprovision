@@ -459,3 +459,45 @@ class TestCliContextWithSettings:
         assert updated.env_file == original.env_file
         assert updated.out is original.out
         assert updated.err is original.err
+
+
+class TestCliContextKnownBadKeys:
+    """``known_bad_keys()`` is the single call site every ``mesh`` subcommand should use."""
+
+    def test_finds_a_blocklist_file_next_to_the_configured_db(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """The DB-sibling candidate is used even when run from an unrelated cwd."""
+        from meshprovision.crypto.keys import generate_keypair
+        from meshprovision.crypto.weakkeys import KNOWN_BAD_KEYS_ENV
+
+        monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
+        project = tmp_path / "project" / "data"
+        project.mkdir(parents=True)
+        db_path = project / "nodes_db.ods"
+        kp = generate_keypair()
+        (project / "known_bad_keys.txt").write_text(f"{kp.public_b64}\n")
+
+        elsewhere = tmp_path / "elsewhere"
+        elsewhere.mkdir()
+        monkeypatch.chdir(elsewhere)
+
+        ctx = CliContext.build(
+            settings=Settings(db_path=db_path), non_interactive=True, force_refresh=False
+        )
+
+        assert kp.public in ctx.known_bad_keys()
+
+    def test_still_includes_the_built_in_small_order_points_when_no_file_is_found(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        from meshprovision.crypto.weakkeys import KNOWN_BAD_KEYS_ENV, SMALL_ORDER_POINTS
+
+        monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
+        db_path = tmp_path / "nowhere" / "nodes_db.ods"  # no sibling file exists
+
+        ctx = CliContext.build(
+            settings=Settings(db_path=db_path), non_interactive=True, force_refresh=False
+        )
+
+        assert set(SMALL_ORDER_POINTS) <= ctx.known_bad_keys()

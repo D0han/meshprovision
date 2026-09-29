@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -737,6 +738,96 @@ def test_default_known_bad_keys_path_falls_back_to_repo_root_candidate(
 
     monkeypatch.setattr(Path, "exists", fake_exists)
     assert default_known_bad_keys_path() == repo_candidate
+
+
+def test_default_known_bad_keys_path_db_sibling_found_from_unrelated_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The DB-sibling candidate is found regardless of the caller's cwd.
+
+    Reproduces the reported gap: an installed ``mesh`` run with
+    ``--db-path`` pointing elsewhere used to only find
+    ``data/known_bad_keys.txt`` when it happened to live under the
+    current working directory. On revert (no ``db_path`` plumbing), this
+    candidate is never tried and the file is not found.
+    """
+    monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
+    project = tmp_path / "project" / "data"
+    project.mkdir(parents=True)
+    db_path = project / "nodes_db.ods"
+    sibling = project / "known_bad_keys.txt"
+    kp = generate_keypair()
+    sibling.write_text(f"{kp.public_b64}\n")
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    assert default_known_bad_keys_path(db_path=db_path) == sibling
+    assert kp.public in load_known_bad_keys(db_path=db_path)
+
+
+def test_default_known_bad_keys_path_env_beats_db_sibling(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    project = tmp_path / "data"
+    project.mkdir()
+    db_path = project / "nodes_db.ods"
+    sibling = project / "known_bad_keys.txt"
+    sibling.write_text("# sibling, should be shadowed\n")
+
+    override = tmp_path / "override.txt"
+    override.write_text("# the env override wins\n")
+    monkeypatch.setenv(KNOWN_BAD_KEYS_ENV, str(override))
+
+    assert default_known_bad_keys_path(db_path=db_path) == override
+
+
+def test_default_known_bad_keys_path_db_sibling_missing_falls_through_to_cwd(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A db_path with no sibling blocklist still falls through to the later candidates."""
+    monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
+    package_candidate, repo_candidate, cwd_candidate = _candidate_paths()
+    db_path = tmp_path / "data" / "nodes_db.ods"  # no sibling file created
+    real_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self == cwd_candidate:
+            return True
+        if self in (package_candidate, repo_candidate, db_path.parent / "known_bad_keys.txt"):
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    assert default_known_bad_keys_path(db_path=db_path) == cwd_candidate
+
+
+def test_load_known_bad_keys_absence_logs_at_info_with_searched_paths(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Absence is now logged at INFO (not DEBUG), naming every path tried."""
+    monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
+    package_candidate, repo_candidate, cwd_candidate = _candidate_paths()
+    real_exists = Path.exists
+
+    def fake_exists(self: Path) -> bool:
+        if self in (package_candidate, repo_candidate, cwd_candidate):
+            return False
+        return real_exists(self)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+
+    with caplog.at_level(logging.INFO, logger="meshprovision.crypto.weakkeys"):
+        result = load_known_bad_keys()
+
+    assert result == frozenset(SMALL_ORDER_POINTS)
+    messages = [r.getMessage() for r in caplog.records if "known_bad_keys.txt" in r.getMessage()]
+    assert len(messages) == 1
+    assert str(package_candidate) in messages[0]
+    assert str(cwd_candidate) in messages[0]
+    assert repo_candidate is None or str(repo_candidate) in messages[0]
+    assert KNOWN_BAD_KEYS_ENV in messages[0]
 
 
 def test_audit_result_api(keypair_factory) -> None:

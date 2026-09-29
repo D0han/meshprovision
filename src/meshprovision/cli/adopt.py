@@ -870,7 +870,7 @@ def adopt(
     template = ctx.load_template()
 
     with ctx.open_database(for_write=not dry_run) as db:
-        known_bad = weakkeys.load_known_bad_keys()
+        known_bad = ctx.known_bad_keys()
         channel: backup_mod.ChannelInfo | None = None
         fixed_position: backup_mod.FixedPosition | None = None
         extra_warnings: tuple[str, ...] = ()

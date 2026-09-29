@@ -79,7 +79,17 @@ mesh = "meshprovision.cli.main:cli"
 packages = ["src/meshprovision"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "config", "scripts", "docs", "README.md", "CHANGELOG.md", "LICENSE"]
+include = [
+  "src",
+  "tests",
+  "config",
+  "scripts",
+  "docs",
+  "data/known_bad_keys.txt",
+  "README.md",
+  "CHANGELOG.md",
+  "LICENSE",
+]
 
 [tool.ruff]
 line-length = 100

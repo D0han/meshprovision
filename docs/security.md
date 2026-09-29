@@ -205,8 +205,20 @@ python scripts/update_known_bad_keys.py --source new_keys.txt --comment "provena
 ```
 
 (also supports `--dry-run` and `--check`). Public keys only — never feed
-it private key material. Override the file's location with
-`MESHPROVISION_KNOWN_BAD_KEYS`.
+it private key material.
+
+**Search order.** The file is looked for, in order: the path in
+`MESHPROVISION_KNOWN_BAD_KEYS` (if set — an unresolvable override path is
+an error, not a silent fall-through); next to the configured database
+(`<db_path's directory>/known_bad_keys.txt`, so a `--db-path`/
+`MESHPROVISION_DB_PATH` pointed anywhere still finds an operator's own
+list regardless of the current working directory); the installed
+package's own `data/` (only if the file is ever vendored there);
+`<repo root>/data/` (a checkout run from source); `./data/` relative to
+the current working directory. Only the first candidate that exists is
+used — the rest are not merged in. If none is found, this is logged at
+INFO (not an error): the audit still runs against the 7 built-in
+small-order points.
 
 ## Secret hygiene
 

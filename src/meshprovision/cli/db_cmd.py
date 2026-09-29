@@ -58,7 +58,6 @@ from meshprovision.cli.common import (
     handle_cli_errors,
     pass_cli,
 )
-from meshprovision.crypto import weakkeys
 from meshprovision.db import atomic_writer, locking, ods, schema
 from meshprovision.db.known_good import (
     KnownGoodProvenance,
@@ -138,7 +137,7 @@ def db_verify(ctx: CliContext, *, strict: bool, json_output: bool) -> None:
             template = None
             template_error = exc.user_message
 
-        known_bad = weakkeys.load_known_bad_keys()
+        known_bad = ctx.known_bad_keys()
         report = verify_database(
             path=db_session.path,
             warnings=db_session.db.warnings,

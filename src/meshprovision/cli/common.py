@@ -46,7 +46,7 @@ from rich.console import Console
 
 from meshprovision.config import template as template_module
 from meshprovision.config.settings import Settings, load_settings
-from meshprovision.crypto import redact
+from meshprovision.crypto import redact, weakkeys
 from meshprovision.errors import (
     AmbiguousDeviceError,
     AtomicWriteError,
@@ -1078,6 +1078,31 @@ class CliContext:
         for warning in template.collect_warnings():
             self.warn(warning.message)
         return template
+
+    def known_bad_keys(self) -> frozenset[bytes]:
+        """Load the effective known-bad-keys blocklist for this run.
+
+        Passes :attr:`settings`'s ``db_path`` through to
+        :func:`~meshprovision.crypto.weakkeys.load_known_bad_keys`, so an
+        installed ``mesh`` run finds an operator-maintained blocklist
+        file next to the database it was pointed at
+        (``--db-path``/``MESHPROVISION_DB_PATH``), regardless of the
+        current working directory. The single call site every ``mesh``
+        subcommand should use instead of calling
+        :func:`~meshprovision.crypto.weakkeys.load_known_bad_keys`
+        directly.
+
+        Returns:
+            The effective blocklist; see
+            :func:`~meshprovision.crypto.weakkeys.load_known_bad_keys`.
+
+        Raises:
+            KeyMaterialError: If the resolved file exists but could not
+                be read, or contains a malformed entry.
+            SettingsError: If ``MESHPROVISION_KNOWN_BAD_KEYS`` is set to
+                a path that does not exist.
+        """
+        return weakkeys.load_known_bad_keys(db_path=self.settings.db_path)
 
     def open_database(self, *, must_exist: bool = True, for_write: bool = False) -> DbSession:
         """Open (and load) the configured ODS database.

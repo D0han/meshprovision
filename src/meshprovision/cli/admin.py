@@ -311,7 +311,7 @@ def admin_bootstrap(
 
     template = ctx.load_template()
     with ctx.open_database(for_write=not dry_run) as db:
-        known_bad = weakkeys.load_known_bad_keys()
+        known_bad = ctx.known_bad_keys()
 
         backend = resolve_backend(ctx, transport_opts)
         with device_session(ctx, backend, no_reconnect=no_reconnect) as session:
@@ -472,7 +472,7 @@ def admin_import(
     skipped: list[dict[str, object]] = []
 
     with ctx.open_database(for_write=not dry_run) as db:
-        known_bad = weakkeys.load_known_bad_keys()
+        known_bad = ctx.known_bad_keys()
 
         for raw in assignments:
             ref, b64 = parse_assignment(raw)
@@ -596,7 +596,7 @@ def admin_list(ctx: CliContext, *, json_output: bool) -> None:
     """
     with ctx.open_database() as db:
         template = ctx.load_template()
-        known_bad = weakkeys.load_known_bad_keys()
+        known_bad = ctx.known_bad_keys()
         summaries = collect_admins(db.nodes, db.keys, template, known_bad=known_bad)
 
     if json_output:

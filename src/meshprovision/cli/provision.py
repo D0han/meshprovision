@@ -48,7 +48,6 @@ from meshprovision.cli.common import (
 )
 from meshprovision.cli.progress import heartbeat
 from meshprovision.crypto import keys as crypto_keys
-from meshprovision.crypto import weakkeys
 from meshprovision.crypto.redact import SecretBytes, fingerprint
 from meshprovision.db import pending_keys
 from meshprovision.db.keys import KeyRecord
@@ -1150,7 +1149,7 @@ def run_provision(
             node_id=live.node_id.display,
         )
 
-    known_bad = weakkeys.load_known_bad_keys()
+    known_bad = ctx.known_bad_keys()
 
     rejected = audit_live_admin_keys(live, known_bad=known_bad)
 
