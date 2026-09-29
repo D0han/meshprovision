@@ -227,6 +227,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fetched; `--json` carries the same information, in UTC, as a new
   `data_as_of` object alongside `cache`.
 
+- `mesh admin import --force` split into three independent flags:
+  `--overwrite` (replace an existing Keys-sheet row), `--allow-alias`
+  (re-point an admin ref already authorized on a different node), and
+  `--allow-weak` (accept a key the weak-key audit flags, when the audit's
+  hard blocklist doesn't already refuse it outright). The old single
+  `--force` no longer exists; a script or alias using it needs updating.
+- A template's `admin_nodes` list is now validated the same way `mesh
+  admin import`'s own `--ref` argument always was: an entry that isn't a
+  valid node reference, ends in a reserved suffix (`_pub`/`_priv`/`_psk`),
+  or starts with the reserved `observed-` prefix now fails template load
+  with an actionable hint, instead of loading successfully and only
+  failing later -- confusingly, well after the fact -- the next time `mesh
+  admin import` or a provision run touches that entry.
+- Loading an empty, comments-only, or otherwise blank-after-parsing
+  template file now raises immediately instead of silently applying every
+  default as if the file had never been read.
+- `mesh admin import`/`bootstrap`/`mesh adopt` now refuse to rewrite an
+  admin key that is already authorized on another live, non-archived
+  node ("admin-bearing") unless the operator explicitly re-points it;
+  previously `mesh adopt --yes` alone (no `--force` needed) could silently
+  replace such a key's Keys-sheet rows out from under the node that
+  depends on it, and `mesh admin bootstrap --ref` could re-point an
+  existing admin alias onto an unrelated device with no confirmation
+  prompt naming the collision.
+
 ### Fixed
 
 - `mesh adopt`'s `adopted_record()` unconditionally overwrote `hw_model`
@@ -523,6 +548,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   connect failure already produces. Both exception types are now caught
   alongside the others.
 
+- A row's data past a blank-cell gap inside a giant ODS `table:number-rows-repeated`
+  block could be silently dropped on load instead of raising, and a
+  sheet with an implausibly large repeated-non-blank-row count (a sign of
+  a corrupted or hand-mangled file) now fails to load with a clear error
+  instead of being accepted and potentially exhausting memory.
+- `mesh db restore` now validates the candidate backup file before
+  overwriting the live database with it, instead of only discovering a
+  malformed backup after the live file is already gone.
+- `mesh status --watch` now tolerates up to 3 consecutive transient
+  database read failures (a concurrent `mesh db restore`, a brief
+  `EACCES` while permissions are being fixed) before giving up, keeping
+  the last successfully-loaded report on screen and retrying, rather
+  than exiting on the very first hiccup; the non-`--watch` single-shot
+  path is unaffected and still fails immediately as before.
+- A device reporting a `loranet.pl` `seenBy` topic value that couldn't be
+  parsed as a timestamp is now counted and surfaced through the same
+  field-coercion warning mechanism used elsewhere, instead of the field
+  being silently dropped with no visible signal that data was lost.
+- Fixed a case where `httpx.RequestError` subclasses other than the ones
+  already handled (redirect loops, response-decoding errors) could
+  escape a cached HTTP request as a raw, unredacted traceback instead of
+  the project's normal wrapped/retried error handling.
+- `mesh adopt` now also audits a live device's *own* reported keypair for
+  weak-key findings, not only a `--from-backup` profile's recorded
+  keypair, closing a gap where adopting a device directly could miss a
+  compromised key `--from-backup` would have caught.
+- CLI commands now log a full traceback at `DEBUG` (visible under `-vv`)
+  for an unhandled `OSError`, matching the detail already logged for the
+  project's own error types -- a permissions/disk-full/IO failure was
+  previously reported to the operator with only a one-line message and no
+  way to get more detail even with verbose logging enabled.
+- The weak-key blocklist (`known_bad_keys.txt`) is now also searched next
+  to the configured database file, in addition to the package/repo/CWD
+  locations already searched. An installed (non-`-e`) `mesh` run invoked
+  from any directory other than one happening to contain a `data/`
+  subfolder previously could not find an operator-maintained blocklist
+  file at all; its absence is now logged at `INFO` (previously `DEBUG`)
+  with every location that was searched.
+
 ### Security
 
 - **`mesh status`'s rendered table and `mesh admin list`'s table no longer
@@ -605,3 +669,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unknowingly send dummy or third-party contact details to lorastats.pl.
 - Secret hygiene is enforced by three independent layers: `.gitignore`, a
   `detect-secrets` pre-commit hook, and `tests/unit/test_no_tracked_secrets.py`.
+- **Closed a case where a host-generated (non-factory) key could be
+  treated as already-provisioned and left alone indefinitely instead of
+  converging toward the template's desired state**, the round's original
+  high-severity finding -- `host_generated` detection and its downstream
+  convergence behavior are now covered end to end.
+- `mesh provision --allow-weak-admin-key` and equivalent admin-key paths
+  now hard-refuse an `ALL_ZERO`/`SMALL_ORDER` (small-subgroup) key
+  outright; these two specific findings can no longer be overridden by
+  any flag, since no legitimate key can ever have this shape.
+- A node whose admin key is already relied on by another live,
+  non-archived node ("admin-bearing") can no longer have that key
+  silently rotated out from under the dependent node by `mesh adopt`,
+  `mesh admin import --overwrite`, or `mesh admin bootstrap --ref`
+  re-pointing an existing alias -- each now hard-refuses (or, for
+  `bootstrap --ref`, clearly reports the collision) instead of only
+  emitting a warning line.
+- A node's private key material is now only ever recorded in the database
+  when the corresponding public key has been read back and cryptographically
+  proven to match it, closing a path where a database entry could claim a
+  private key that doesn't actually pair with the device's real public key.
+- `mesh provision`/`admin bootstrap` now verify the connected device's
+  identity (its reported node id) against the database record before
+  reconnecting to confirm a write, refusing to proceed if the device that
+  answered isn't the one originally connected to -- guards against a
+  swapped or renumbered device silently receiving a write meant for
+  another node.
+- A crash or kill between generating a new keypair and persisting it to
+  the database previously risked losing the private key with no recovery
+  path; a write-ahead pending-keypair file now lets an interrupted
+  provision recover the key on the next run instead of orphaning it.
+- `-vv`/`-vvv` verbose logging now withholds the raw secret arguments
+  (admin keys, PSKs) that the `meshtastic` library itself logs at its own
+  DEBUG level, instead of passing that library's log lines through
+  unfiltered once verbosity was raised enough to unmute it.
+- A malformed backup/profile YAML file's parse error no longer echoes the
+  offending source line back to the terminal, which could otherwise leak
+  a partially-typed secret value sitting on that line.
+- Every place a device-reported or file-sourced string reaches a real
+  terminal (node names, error messages built from untrusted input) is now
+  passed through a control-character/bidi-override escaper before
+  printing, closing a path where a maliciously crafted name could embed
+  a terminal escape sequence (a clipboard write, a spoofed hyperlink, a
+  cursor-repositioning sequence) that would otherwise reach the operator's
+  real terminal verbatim.
+- `atomic_write`/`lock_path_for` now resolve symlinks before comparing or
+  locking paths, and the known-good safety copy's refresh now reads and
+  validates the same bytes it just wrote (closing a read-after-write
+  TOCTOU gap) rather than trusting a second, potentially-differing read.
+- A crash partway through creating a new file (`mesh init`'s
+  `write_new_file`, the known-good safety copy) can no longer leave a
+  clobbered or partially-written file in its place; both now go through
+  the same crash-safe `link_no_clobber` primitive.
