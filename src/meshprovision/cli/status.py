@@ -28,7 +28,7 @@ import click
 from meshprovision.cli.common import CONTEXT_SETTINGS, MeshCommand, handle_cli_errors, pass_cli
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.lorastats import DEFAULT_REGIONS
-from meshprovision.errors import ExitCode, SettingsError
+from meshprovision.errors import DbError, ExitCode, SettingsError, exit_code_for
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
 from meshprovision.status.merge import (
@@ -47,6 +47,17 @@ __all__ = ["status"]
 
 _MIN_WATCH_POLL_SECONDS = 5.0
 """Floor applied to the default watch-poll interval when no ``--interval`` is given."""
+
+_WATCH_MAX_CONSECUTIVE_DB_FAILURES = 3
+"""How many consecutive per-poll :class:`~meshprovision.errors.DbError`\\ s
+``--watch`` tolerates before giving up and exiting.
+
+A single poll's database reload can fail transiently (a concurrent
+``mesh db restore``, a non-atomic external save, a brief ``EACCES`` while
+file ownership is being fixed) without the long-running monitor itself
+being broken. A run of consecutive failures, though, means the database
+is not coming back, and the monitor should stop rather than poll forever
+in silence."""
 
 
 def _build_options(
@@ -244,6 +255,13 @@ def status(
             ordered.
         MissingContactError: If ``MESHPROVISION_CONTACT`` is unset and
             lorastats is one of the resolved sources.
+        meshprovision.errors.DbError: If the database cannot be loaded.
+            The single-shot path (no ``--watch``) raises this immediately
+            and strictly. ``--watch`` instead tolerates it per poll,
+            keeping the last successfully-loaded report on screen and
+            retrying, and only re-raises (still via this path) after
+            :data:`_WATCH_MAX_CONSECUTIVE_DB_FAILURES` consecutive
+            failures.
         SystemExit: With the degraded exit code, when the run (or the
             last poll, for ``--watch``) is degraded.
     """
@@ -272,9 +290,25 @@ def status(
             else max(ctx.settings.cache_ttl, _MIN_WATCH_POLL_SECONDS)
         )
         last_report: StatusReport | None = None
+        last_db_error: DbError | None = None
+        consecutive_db_failures = 0
         try:
             while True:
-                last_report = _run_once(ctx, options, client)
+                try:
+                    last_report = _run_once(ctx, options, client)
+                except DbError as exc:
+                    last_db_error = exc
+                    consecutive_db_failures += 1
+                    ctx.error(
+                        f"Poll failed: {exc.user_message} "
+                        f"(keeping the last report; retrying in {poll}s)"
+                    )
+                    if consecutive_db_failures >= _WATCH_MAX_CONSECUTIVE_DB_FAILURES:
+                        raise
+                    time.sleep(poll)
+                    continue
+                consecutive_db_failures = 0
+                last_db_error = None
                 _emit(ctx, last_report, json_output=json_output)
                 ctx.info(
                     f"cache: {last_report.cache_hits} hit(s), {last_report.cache_misses} "
@@ -283,9 +317,12 @@ def status(
                 time.sleep(poll)
         except KeyboardInterrupt:
             ctx.info("Stopped.")
-            code = (
-                last_report.exit_code(fail_on_offline=fail_on_offline)
-                if last_report is not None
-                else int(ExitCode.OK)
-            )
+            if last_db_error is not None:
+                code = exit_code_for(last_db_error)
+            else:
+                code = (
+                    last_report.exit_code(fail_on_offline=fail_on_offline)
+                    if last_report is not None
+                    else int(ExitCode.OK)
+                )
             raise SystemExit(code) from None
