@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from meshprovision.config.template import BASE36_ALPHABET, PatternSpec
 from meshprovision.crypto import redact
 from meshprovision.crypto.keys import encode_key
 from meshprovision.db import schema
@@ -24,6 +23,7 @@ from meshprovision.errors import (
     NamespaceExhaustedError,
     NodeNotFoundError,
 )
+from meshprovision.name_pattern import BASE36_ALPHABET, PatternSpec
 
 pytestmark = pytest.mark.unit
 

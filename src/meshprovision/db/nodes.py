@@ -36,12 +36,6 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from meshprovision import chipsets
-from meshprovision.config.template import (
-    PatternSpec,
-    TemplateWarning,
-    check_capacity_utilization,
-    ensure_capacity_available,
-)
 from meshprovision.crypto.keys import decode_key, encode_key
 from meshprovision.db import schema
 from meshprovision.db.keys import KeyRepository
@@ -49,6 +43,12 @@ from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import BLE_PIN_LENGTH, FirmwareType, KeyType, ManagementMode
 from meshprovision.enums import hw_model_table, region_table, role_table
 from meshprovision.errors import NamespaceExhaustedError, NodeNotFoundError
+from meshprovision.name_pattern import (
+    PatternSpec,
+    TemplateWarning,
+    check_capacity_utilization,
+    ensure_capacity_available,
+)
 from meshprovision.nodeid import NodeId, NodeIdLike
 
 __all__ = [
@@ -717,7 +717,7 @@ class NodeRepository:
         no unarchive command, so treating an archived name as
         permanently reserved would leak a slot out of the pattern's
         namespace (and its finite capacity, see
-        :func:`~meshprovision.config.template.ensure_capacity_available`)
+        :func:`~meshprovision.name_pattern.ensure_capacity_available`)
         for good every time a node is retired.
 
         Returns:
@@ -760,13 +760,13 @@ class NodeRepository:
                 (selects :meth:`used_long_names`) rather than
                 ``short_name_pattern`` (:meth:`used_short_names`, the
                 default). The caller already knows which one it compiled
-                -- :attr:`~meshprovision.config.template.PatternSpec.field`
+                -- :attr:`~meshprovision.name_pattern.PatternSpec.field`
                 exists only to make error messages actionable and is
                 deliberately not inferred from here.
             start: Index to begin searching from.
             warn_at: Utilization ratio at or above which a warning is
                 logged. Defaults to
-                :data:`~meshprovision.config.template.DEFAULT_WARN_UTILIZATION`
+                :data:`~meshprovision.name_pattern.DEFAULT_WARN_UTILIZATION`
                 when ``None``.
 
         Returns:

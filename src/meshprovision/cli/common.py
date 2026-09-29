@@ -1061,7 +1061,7 @@ class CliContext:
         Returns:
             The validated :class:`~meshprovision.config.template.
             TemplateConfig`. Every
-            :class:`~meshprovision.config.template.TemplateWarning` the
+            :class:`~meshprovision.name_pattern.TemplateWarning` the
             template raises is printed through :meth:`warn` first, so a
             template problem is surfaced the same way a database
             integrity warning is -- always on stderr, regardless of

@@ -7,12 +7,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision.config.template import (
-    BASE36_ALPHABET,
-    LONG_NAME_MAX_BYTES,
-    PatternSpec,
     TemplateConfig,
-    check_capacity_utilization,
-    ensure_capacity_available,
     load_template,
     load_template_text,
 )
@@ -22,6 +17,13 @@ from meshprovision.errors import (
     NamePatternError,
     NamespaceExhaustedError,
     TemplateValidationError,
+)
+from meshprovision.name_pattern import (
+    BASE36_ALPHABET,
+    LONG_NAME_MAX_BYTES,
+    PatternSpec,
+    check_capacity_utilization,
+    ensure_capacity_available,
 )
 
 pytestmark = pytest.mark.unit

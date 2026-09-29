@@ -57,8 +57,8 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Any, Final
 
-from meshprovision.config.template import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.errors import AdminKeyRotationRefusedError, LockdownRefusedError
+from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, _plan_admin_key_material
 from meshprovision.provisioning.plan_types import (
