@@ -912,7 +912,7 @@ def test_apply_outcome_uncertain_and_failures() -> None:
     assert outcome.uncertain is True
     assert outcome.ok is False
     assert outcome.may_update_database is False
-    assert outcome.exit_code != 0
+    assert outcome.exit_code == int(ExitCode.PROVISIONING)
     assert outcome.failures() == (bad_result,)
 
 

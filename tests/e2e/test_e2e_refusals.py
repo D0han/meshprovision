@@ -149,7 +149,7 @@ def test_transactional_write_failure_drop_security_keys(
 
     result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == ExitCode.PROVISIONING
     assert "UNCERTAIN" in result.stderr
     assert "the database was NOT updated" in result.stderr
     assert db_fingerprint(db_path) == before
@@ -210,7 +210,7 @@ def test_post_reconnect_verify_read_failure_leaves_the_database_untouched(
 
     result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == ExitCode.PROVISIONING
     assert "UNCERTAIN" in result.stderr
     assert "the database was NOT updated" in result.stderr
     assert db_fingerprint(db_path) == before

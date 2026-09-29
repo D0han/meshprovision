@@ -962,7 +962,7 @@ def test_db_forget_unknown_node_id_fails(
 
     result = invoke(runner, ["db", "forget", "deadbe01", "--yes"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == 3
     assert "not found" in result.stderr
 
 

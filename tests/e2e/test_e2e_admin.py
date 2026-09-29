@@ -565,7 +565,7 @@ def test_admin_bootstrap_uncertain_outcome_skips_reporting_and_exits_nonzero(
         runner, ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"], env
     )
 
-    assert result.exit_code != 0
+    assert result.exit_code == ExitCode.PROVISIONING
     assert "UNCERTAIN" in result.stderr
     assert "Authorized on" not in result.stderr
     assert "pending:" not in result.stderr
@@ -720,7 +720,7 @@ def test_admin_import_dry_run_still_refuses_a_weak_key(
 
     result = invoke(runner, ["admin", "import", f"ADMIN9={bad_b64}", "--dry-run"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == ExitCode.CRYPTO
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     assert loaded.keys == ()
 
@@ -937,7 +937,7 @@ def test_admin_import_allow_weak_still_refuses_a_small_order_key(
     small_order_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[2]).decode("ascii")
     result = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--allow-weak"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == ExitCode.CRYPTO
     assert "no flag" in result.stderr.lower() or "cannot override" in result.stderr.lower()
 
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
@@ -955,7 +955,7 @@ def test_admin_import_allow_weak_authorizes_a_blocklist_file_only_key(
     env["MESHPROVISION_KNOWN_BAD_KEYS"] = str(blocklist_path)
 
     refused = invoke(runner, ["admin", "import", f"ADMIN9={kp.public_b64}"], env)
-    assert refused.exit_code != 0
+    assert refused.exit_code == ExitCode.CRYPTO
 
     result = invoke(runner, ["admin", "import", f"ADMIN9={kp.public_b64}", "--allow-weak"], env)
     assert result.exit_code == 0
@@ -1043,7 +1043,7 @@ def test_admin_import_dry_run_catches_an_intra_batch_duplicate(
         env,
     )
 
-    assert dry_run_result.exit_code != 0
+    assert dry_run_result.exit_code == ExitCode.CRYPTO
     assert "already registered as ADMIN_A_pub" in dry_run_result.stderr
 
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))

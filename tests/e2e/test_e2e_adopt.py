@@ -358,7 +358,7 @@ def test_refuses_a_template_managed_node_without_force(
 
     result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == ExitCode.PROVISIONING
     assert db_fingerprint(db_path) == before
     assert "--force" in result.stderr
 
@@ -381,7 +381,7 @@ def test_refuses_an_archived_node_even_with_force(
 
     result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--force"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == ExitCode.PROVISIONING
     assert db_fingerprint(db_path) == before
     assert "archived" in result.stderr.lower()
 
@@ -1674,14 +1674,14 @@ def test_from_backup_conflicts_with_a_transport_flag(
 
     result = invoke(runner, ["adopt", "--from-backup", str(cfg), "--port", "/dev/ttyFAKE0"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "--from-backup cannot be combined" in result.stderr
 
 
 def test_node_id_without_from_backup_is_rejected(runner: CliRunner, env: dict[str, str]) -> None:
     result = invoke(runner, ["adopt", "--node-id", "!a0cb5cc4"], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "--node-id only applies together with --from-backup" in result.stderr
 
 
@@ -2137,7 +2137,7 @@ def test_from_backup_two_profile_files_is_rejected(
 
     result = invoke(runner, ["adopt", "--from-backup", str(cfg1), "--from-backup", str(cfg2)], env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == 2
     assert "two profile files" in result.stderr
 
 

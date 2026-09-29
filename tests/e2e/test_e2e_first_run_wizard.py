@@ -81,7 +81,7 @@ def test_declining_the_wizard_falls_through_to_the_original_error(
 ) -> None:
     result = invoke(runner, ["--interactive", "db", "verify"], _BARE_ENV, input="n\n")
 
-    assert result.exit_code != 0
+    assert result.exit_code == 4
     assert not (tmp_path / ".env").exists()
     assert not (tmp_path / "config" / "template.yaml").exists()
     assert not (tmp_path / "data" / "nodes_db.ods").exists()
