@@ -429,6 +429,80 @@ def test_refresh_known_good_fast_path_requires_a_matching_sidecar_source(tmp_pat
     assert status.recorded_source == str(target.resolve())
 
 
+def test_refresh_known_good_heals_a_copy_left_mid_refresh_by_a_kill(tmp_path: Path) -> None:
+    """Regression for Round 38 aspect 3 Batch 1 (C38-3).
+
+    A process killed between replacing the known-good copy and writing
+    its sidecar leaves the copy's content and the sidecar's recorded
+    hash disagreeing. The old fast path matched on mtime/size/source
+    alone and never re-checked the hash, so this CONTENT_MISMATCH state
+    persisted forever. The fast path must now re-verify the hash and
+    heal it on the very next refresh.
+    """
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    _refresh(target, backup_dir=backup_dir)
+
+    # Simulate the kill: a new copy lands (matching target's current
+    # mtime/size), but the sidecar still records the old content's hash.
+    target.write_bytes(b"v1-newer-same-length")
+    copy_path = backup_dir / "nodes_db.known-good.ods"
+    shutil.copy2(target, copy_path)
+    os.utime(copy_path, ns=(target.stat().st_atime_ns, target.stat().st_mtime_ns))
+
+    status_before = known_good.known_good_status(target, backup_dir=backup_dir)
+    assert status_before is not None
+    assert status_before.provenance is known_good.KnownGoodProvenance.CONTENT_MISMATCH
+
+    _refresh(target, backup_dir=backup_dir)
+
+    status_after = known_good.known_good_status(target, backup_dir=backup_dir)
+    assert status_after is not None
+    assert status_after.provenance is known_good.KnownGoodProvenance.VERIFIED
+    sidecar_payload = json.loads((backup_dir / "nodes_db.known-good.json").read_bytes())
+    assert sidecar_payload["sha256"] == hashlib.sha256(target.read_bytes()).hexdigest()
+
+
+def test_refresh_known_good_heals_a_copy_torn_by_interleaved_readers(tmp_path: Path) -> None:
+    """Regression for Round 38 aspect 3 Batch 1 (C38-3).
+
+    Two unlocked readers refreshing concurrently can interleave their
+    copy-replace and sidecar-write steps, leaving the copy holding one
+    version's content while the sidecar records a different version's
+    hash. This must self-heal on the next refresh instead of staying
+    stuck as CONTENT_MISMATCH.
+    """
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"version-one")
+    backup_dir = tmp_path / "backups"
+    _refresh(target, backup_dir=backup_dir)
+
+    # Reader B's copy (version-two) lands, matching target's current
+    # mtime/size, but reader A's sidecar (version-one's hash) wins the
+    # write race and is what's actually on disk afterward.
+    target.write_bytes(b"version-two-content")
+    copy_path = backup_dir / "nodes_db.known-good.ods"
+    shutil.copy2(target, copy_path)
+    os.utime(copy_path, ns=(target.stat().st_atime_ns, target.stat().st_mtime_ns))
+    sidecar = backup_dir / "nodes_db.known-good.json"
+    stale = json.loads(sidecar.read_bytes())
+    stale["sha256"] = hashlib.sha256(b"version-one").hexdigest()
+    sidecar.write_bytes(json.dumps(stale).encode())
+
+    status_before = known_good.known_good_status(target, backup_dir=backup_dir)
+    assert status_before is not None
+    assert status_before.provenance is known_good.KnownGoodProvenance.CONTENT_MISMATCH
+
+    _refresh(target, backup_dir=backup_dir)
+
+    status_after = known_good.known_good_status(target, backup_dir=backup_dir)
+    assert status_after is not None
+    assert status_after.provenance is known_good.KnownGoodProvenance.VERIFIED
+    sidecar_payload = json.loads(sidecar.read_bytes())
+    assert sidecar_payload["sha256"] == hashlib.sha256(b"version-two-content").hexdigest()
+
+
 def test_known_good_path_differs_for_two_same_named_databases_in_different_directories(
     tmp_path: Path,
 ) -> None:

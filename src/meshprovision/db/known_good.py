@@ -363,11 +363,19 @@ def refresh_known_good(
 
     The fast path additionally requires the sidecar (see
     :func:`known_good_status`) to already name this exact resolved
-    ``target`` as its source. Without that, a known-good copy left by an
-    older meshprovision (no sidecar yet) whose ``(mtime_ns, size)``
+    ``target`` as its source, and its recorded ``sha256`` to already match
+    ``content``'s hash. Without the source check, a known-good copy left
+    by an older meshprovision (no sidecar yet) whose ``(mtime_ns, size)``
     happens to match would never gain one -- this makes sure a first
     load after upgrading still writes it, healing the legacy copy into
     a verifiable one, at the cost of one extra recopy that one time.
+    Without the hash check, a copy left mid-refresh -- killed between
+    replacing the copy and writing its sidecar, or torn by two unlocked
+    readers refreshing concurrently -- could have its
+    :attr:`KnownGoodProvenance.CONTENT_MISMATCH` state persist forever,
+    since the fast path would keep matching on mtime/size/source alone
+    and never re-verify; requiring the hash to already agree makes the
+    fast path self-heal that state on the very next load instead.
 
     Args:
         target: The file to refresh a known-good copy of.
@@ -393,13 +401,18 @@ def refresh_known_good(
     except OSError:
         current_source = str(target)
     tmp_destination: Path | None = None
+    digest = hashlib.sha256(content).hexdigest()
     try:
         target_identity = (source_stat.st_mtime_ns, source_stat.st_size)
         if destination.is_file():
             dest_stat = destination.stat()
             if (dest_stat.st_mtime_ns, dest_stat.st_size) == target_identity:
                 sidecar = _read_sidecar(sidecar_path)
-                if sidecar is not None and sidecar.get("source") == current_source:
+                if (
+                    sidecar is not None
+                    and sidecar.get("source") == current_source
+                    and sidecar.get("sha256") == digest
+                ):
                     return known_good_info(target, backup_dir=backup_dir)
 
         resolved_dir.mkdir(parents=True, exist_ok=True)
@@ -413,7 +426,6 @@ def refresh_known_good(
         with os.fdopen(fd, "wb") as fh:
             fh.write(content)
         os.utime(tmp_destination, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
-        digest = hashlib.sha256(content).hexdigest()
         tmp_destination.replace(destination)
         tmp_destination = None
         _write_sidecar(sidecar_path, source=current_source, sha256_hex=digest)
