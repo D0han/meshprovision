@@ -66,6 +66,38 @@ def test_load_pending_is_none_when_absent(tmp_path: Path) -> None:
     assert pending_keys.load_pending(tmp_path / "nodes_db.ods", _NODE) is None
 
 
+def test_load_pending_is_none_and_warns_when_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    db_path = tmp_path / "nodes_db.ods"
+    path = pending_keys.pending_key_path(db_path, _NODE)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b"irrelevant")
+
+    def _raise_permission_error(self: Path) -> bytes:
+        raise PermissionError("Permission denied")
+
+    monkeypatch.setattr(Path, "read_bytes", _raise_permission_error)
+
+    with caplog.at_level("WARNING"):
+        assert pending_keys.load_pending(db_path, _NODE) is None
+    assert "Could not read pending keypair" in caplog.text
+    assert str(path) in caplog.text
+
+
+def test_load_pending_is_none_and_warns_when_path_is_a_directory(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    db_path = tmp_path / "nodes_db.ods"
+    path = pending_keys.pending_key_path(db_path, _NODE)
+    path.mkdir(parents=True)
+
+    with caplog.at_level("WARNING"):
+        assert pending_keys.load_pending(db_path, _NODE) is None
+    assert "Could not read pending keypair" in caplog.text
+    assert str(path) in caplog.text
+
+
 def test_load_pending_is_none_and_warns_on_malformed_json(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:

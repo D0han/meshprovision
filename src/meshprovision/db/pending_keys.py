@@ -141,11 +141,13 @@ def write_pending(db_path: Path, node_id: NodeId, keypair: KeyPair, *, now: date
 def load_pending(db_path: Path, node_id: NodeId) -> PendingKeypair | None:
     """Load a node's pending keypair, if one is on disk and well-formed.
 
-    Never raises: a missing file is the ordinary "nothing pending" case,
-    and anything else wrong with the file (malformed JSON, an
-    unrecognized format, a wrong-length key) is logged at ``WARNING`` and
-    treated the same as "nothing pending" rather than propagated -- a
-    damaged sidecar must never block an ordinary provisioning run.
+    Never raises: a missing file is the ordinary "nothing pending" case
+    and is silent. Anything else wrong (an unreadable file -- permission
+    denied, an I/O error, a directory at that path -- or a readable but
+    malformed one: bad JSON, an unrecognized format, a wrong-length key)
+    is logged at ``WARNING`` and treated the same as "nothing pending"
+    rather than propagated -- a damaged or inaccessible sidecar must
+    never block an ordinary provisioning run.
 
     Args:
         db_path: The database's own path.
@@ -157,7 +159,10 @@ def load_pending(db_path: Path, node_id: NodeId) -> PendingKeypair | None:
     path = pending_key_path(db_path, node_id)
     try:
         raw = path.read_bytes()
-    except OSError:
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        _logger.warning("Could not read pending keypair at %s: %s", path, exc)
         return None
 
     try:
