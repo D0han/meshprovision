@@ -655,14 +655,15 @@ class CachedHTTPClient:
                 in error messages to identify the calling datasource.
 
         Returns:
-            The cached or freshly fetched response.
+            The cached or freshly fetched response. If the fetched
+            response cannot be written to the cache, a WARNING is
+            logged and the response is still returned uncached.
 
         Raises:
             SettingsError: If the resolved ``ttl`` is negative.
             HttpError: If the request fails and cannot be served from a
                 fresh cache entry.
             RateLimitError: If the server responds with HTTP 429.
-            CacheError: If the fetched response cannot be written to disk.
         """
         return self.request(
             "GET",
@@ -707,14 +708,15 @@ class CachedHTTPClient:
                 in error messages to identify the calling datasource.
 
         Returns:
-            The cached or freshly fetched response.
+            The cached or freshly fetched response. If the fetched
+            response cannot be written to the cache, a WARNING is
+            logged and the response is still returned uncached.
 
         Raises:
             SettingsError: If the resolved ``ttl`` is negative.
             HttpError: If the request fails and cannot be served from a
                 fresh cache entry.
             RateLimitError: If the server responds with HTTP 429.
-            CacheError: If the fetched response cannot be written to disk.
         """
         effective_ttl = self._ttl if ttl is None else ttl
         if effective_ttl < 0:
@@ -738,8 +740,12 @@ class CachedHTTPClient:
         response = self._fetch_with_retry(
             method, url, params=params, headers=merged_headers, source=source, cache_key_value=key
         )
-        self._write_entry(path, response)
-        self._stats = replace(self._stats, writes=self._stats.writes + 1)
+        try:
+            self._write_entry(path, response)
+        except CacheError as exc:
+            _logger.warning("%s; returning the fetched response uncached", exc.user_message)
+        else:
+            self._stats = replace(self._stats, writes=self._stats.writes + 1)
         return replace(response, from_cache=False)
 
     def close(self) -> None:
@@ -856,7 +862,6 @@ class CachedHTTPClient:
                 run re-downloads the full dataset.
         """
         self._chmod_cache_root()
-        path.parent.mkdir(parents=True, exist_ok=True)
 
         entry = {
             "version": CACHE_ENTRY_VERSION,
@@ -871,6 +876,7 @@ class CachedHTTPClient:
         }
         tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
         try:
+            path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_bytes(json.dumps(entry).encode("utf-8"))
             tmp.replace(path)
         except OSError as exc:

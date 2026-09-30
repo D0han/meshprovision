@@ -18,6 +18,7 @@ from meshprovision.cache.http import (
     DEFAULT_BACKOFF_MAX,
     DEFAULT_MAX_RETRIES,
     CachedHTTPClient,
+    CachedResponse,
     cache_key,
     resolve_ttl,
 )
@@ -571,8 +572,8 @@ def test_cache_root_is_owner_only_after_the_first_write(tmp_path: Path) -> None:
 
 
 @respx.mock
-def test_write_failure_raises_cache_error_and_removes_the_temp_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_write_failure_returns_the_response_uncached_and_logs_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
     now = [0.0]
@@ -583,24 +584,43 @@ def test_write_failure_raises_cache_error_and_removes_the_temp_file(
 
     monkeypatch.setattr(Path, "replace", _fail_replace)
 
-    with pytest.raises(CacheError) as excinfo:
-        client.get(URL)
+    with caplog.at_level("WARNING"):
+        response = client.get(URL)
+
+    assert response.status_code == 200
+    assert response.from_cache is False
+    assert "No space left on device" in caplog.text
+    assert "MESHPROVISION_CACHE_DIR" in caplog.text
 
     path = client.path_for_key(cache_key("GET", URL))
+    assert not path.exists()
+    assert list(path.parent.glob(f"{path.name}.tmp-*")) == []
+    assert client.stats.writes == 0
+
+    # `_write_entry`'s own contract is unchanged: called directly, it still
+    # raises `CacheError` with `__cause__` set to the underlying `OSError`.
+    fetched = CachedResponse(
+        status_code=200,
+        headers={},
+        content=b'{"a": 1}',
+        url=URL,
+        method="GET",
+        fetched_at=now[0],
+        cache_key=cache_key("GET", URL),
+        from_cache=False,
+    )
+    with pytest.raises(CacheError) as excinfo:
+        client._write_entry(path, fetched)
     assert excinfo.value.path == str(path)
     assert "No space left on device" in str(excinfo.value)
     assert excinfo.value.hint is not None
     assert "MESHPROVISION_CACHE_DIR" in excinfo.value.hint
     assert isinstance(excinfo.value.__cause__, OSError)
 
-    assert not path.exists()
-    assert list(path.parent.glob(f"{path.name}.tmp-*")) == []
-    assert client.stats.writes == 0
-
 
 @respx.mock
-def test_write_failure_before_the_temp_file_exists_still_raises_cache_error(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_write_failure_before_the_temp_file_exists_still_returns_uncached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
     now = [0.0]
@@ -611,14 +631,41 @@ def test_write_failure_before_the_temp_file_exists_still_raises_cache_error(
 
     monkeypatch.setattr(Path, "write_bytes", _fail_write_bytes)
 
-    with pytest.raises(CacheError) as excinfo:
-        client.get(URL)
+    with caplog.at_level("WARNING"):
+        response = client.get(URL)
+
+    assert response.status_code == 200
+    assert response.from_cache is False
+    assert "Permission denied" in caplog.text
+    assert client.stats.writes == 0
 
     path = client.path_for_key(cache_key("GET", URL))
-    assert excinfo.value.path == str(path)
-    assert "Permission denied" in str(excinfo.value)
     assert not path.exists()
     assert list(path.parent.glob(f"{path.name}.tmp-*")) == []
+
+
+@respx.mock
+def test_write_failure_from_a_missing_shard_directory_still_returns_uncached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    def _fail_mkdir(
+        self: Path, mode: int = 0o777, parents: bool = False, exist_ok: bool = False
+    ) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "mkdir", _fail_mkdir)
+
+    with caplog.at_level("WARNING"):
+        response = client.get(URL)
+
+    assert response.status_code == 200
+    assert response.from_cache is False
+    assert "Permission denied" in caplog.text
+    assert client.stats.writes == 0
 
 
 # ---------------------------------------------------------------------------
