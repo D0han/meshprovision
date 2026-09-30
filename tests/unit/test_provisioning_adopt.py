@@ -11,10 +11,10 @@ import pytest
 
 from meshprovision.config.template import load_template_text
 from meshprovision.crypto.keys import encode_key
-from meshprovision.db.keys import KeyRepository
+from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyOrigin, ManagementMode
+from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.provisioning.adopt import (
     adopted_record,
     build_adoption_report,
@@ -949,3 +949,110 @@ def test_persist_adoption_writes_own_keypair_as_captured(
     priv = keys.get(f"{live.node_id.hex}_priv")
     assert pub.origin is KeyOrigin.CAPTURED
     assert priv.origin is KeyOrigin.CAPTURED
+
+
+def test_persist_adoption_mismatched_private_key_writes_public_only(
+    make_live, template, keys: KeyRepository, nodes: NodeRepository, keypair_factory
+) -> None:
+    """An unproven device-reported private key must never reach the ``Keys`` sheet.
+
+    ``build_adoption_report`` only sets ``own_private_key_captured`` when
+    the device's reported private key actually derives its reported
+    public key -- see :func:`~meshprovision.crypto.keys.public_key_matches`.
+    A mismatched pair (e.g. an impostor replaying a real public key
+    alongside key material of its own) must record the public half only,
+    exactly like round 37's rule (C37-3) that a private key is only ever
+    recorded with proof.
+    """
+    genuine = keypair_factory()
+    mismatched_private = keypair_factory().private
+    security = dataclasses.replace(make_security(keypair=genuine), private_key=mismatched_private)
+    live = make_live(template, security=security)
+
+    report = build_adoption_report(
+        live,
+        existing=None,
+        public_keys=keys.public_key_map(),
+        template=template,
+        known_bad=frozenset(),
+    )
+
+    assert report.own_public_key_captured is True
+    assert report.own_private_key_captured is False
+    assert any("does not derive its public key" in warning for warning in report.warnings)
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    persist_adoption(report, live, nodes=nodes, keys=keys, channel=None, now=now)
+
+    pub = keys.get(f"{live.node_id.hex}_pub")
+    assert pub.origin is KeyOrigin.CAPTURED
+    assert keys.find(f"{live.node_id.hex}_priv") is None
+
+
+def test_persist_adoption_matching_keypair_still_writes_private(
+    make_live, template, keys: KeyRepository, nodes: NodeRepository, keypair
+) -> None:
+    """A genuinely matching keypair is unaffected -- no regression on the normal case."""
+    live = make_live(template, security=make_security(keypair=keypair))
+
+    report = build_adoption_report(
+        live,
+        existing=None,
+        public_keys=keys.public_key_map(),
+        template=template,
+        known_bad=frozenset(),
+    )
+
+    assert report.own_private_key_captured is True
+    assert not any("does not derive its public key" in warning for warning in report.warnings)
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    persist_adoption(report, live, nodes=nodes, keys=keys, channel=None, now=now)
+
+    assert keys.get(f"{live.node_id.hex}_priv").origin is KeyOrigin.CAPTURED
+
+
+def test_persist_adoption_admin_bearing_public_only_row_rejects_mismatched_private_key(
+    make_live, template, keys: KeyRepository, nodes: NodeRepository, keypair_factory
+) -> None:
+    """An admin-bearing node whose row is public-only must stay that way against a bad claim.
+
+    This is exactly the state round 37's documented same-device recovery
+    (``mesh admin import --overwrite X=...``) leaves an admin node in: a
+    ``Keys`` sheet row holding only ``X_pub``. A device claiming to be
+    ``X`` and reporting ``X``'s (public) key alongside a private key that
+    does not derive it must not get that private key recorded -- doing so
+    would otherwise let an impostor pin an unproven ``_priv`` row onto the
+    fleet's admin identity.
+    """
+    genuine = keypair_factory()
+    node_id_hex = "deadbe01"
+    keys.upsert(
+        KeyRecord.from_material(
+            node_id_hex,
+            KeyType.ADMIN_PUBLIC,
+            genuine.public,
+            origin=KeyOrigin.CAPTURED,
+            created_ts=datetime(2025, 1, 1, tzinfo=UTC),
+        )
+    )
+    nodes.upsert(NodeRecord(node_id=node_id_hex, management=ManagementMode.TEMPLATE))
+
+    mismatched_private = keypair_factory().private
+    security = dataclasses.replace(make_security(keypair=genuine), private_key=mismatched_private)
+    live = make_live(template, node_id=node_id_hex, security=security)
+
+    report = build_adoption_report(
+        live,
+        existing=nodes.get(node_id_hex),
+        public_keys=keys.public_key_map(),
+        template=template,
+        known_bad=frozenset(),
+    )
+    assert report.own_private_key_captured is False
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    persist_adoption(report, live, nodes=nodes, keys=keys, channel=None, now=now)
+
+    assert keys.find(f"{node_id_hex}_priv") is None
+    assert keys.get(f"{node_id_hex}_pub").material() == genuine.public

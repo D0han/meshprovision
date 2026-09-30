@@ -270,10 +270,14 @@ class AdoptionReport:
             key material itself, which is already public information
             anyway, just whether the write will happen.
         own_private_key_captured: Whether the device reports its own
-            private key, so adopting will write a ``<node_id>_priv`` row.
-            A live device normally never exposes this (only a
-            ``--from-backup`` ``.cfg``/``.yaml`` does), so this is
-            ordinarily ``False`` for a device adopt.
+            private key *and* it cryptographically derives the reported
+            public key, so adopting will write a ``<node_id>_priv`` row.
+            A live device normally never exposes a private key at all
+            (only a ``--from-backup`` ``.cfg``/``.yaml`` does), so this is
+            ordinarily ``False`` for a device adopt. A reported private
+            key that does not derive the reported public key leaves this
+            ``False`` too -- see :attr:`warnings` -- and only the public
+            half is recorded.
         channel_name_to_record: The channel name a
             ``--from-backup``-decoded 32-byte AES256 PSK will be recorded
             under (a ``<node_id>_psk`` row), or ``None`` when no channel
@@ -526,6 +530,21 @@ def build_adoption_report(
                     "without a role value rather than guessing."
                 )
 
+    own_private_key_captured = False
+    if live.security.has_private_key:
+        node_private = live.security.private_key
+        node_public = live.security.public_key
+        if node_private is not None and node_public is not None:
+            try:
+                own_private_key_captured = crypto_keys.public_key_matches(node_private, node_public)
+            except KeyMaterialError:
+                own_private_key_captured = False
+        if not own_private_key_captured:
+            warnings.append(
+                "device-reported private key does not derive its public key; "
+                "recording public key only"
+            )
+
     return AdoptionReport(
         node_id=live.node_id,
         state=state,
@@ -542,7 +561,7 @@ def build_adoption_report(
         ble_pin=capture_ble_pin(live),
         warnings=tuple(warnings),
         own_public_key_captured=live.security.has_public_key,
-        own_private_key_captured=live.security.has_private_key,
+        own_private_key_captured=own_private_key_captured,
     )
 
 
@@ -745,15 +764,16 @@ def persist_adoption(
     # The node's own keypair, so public_key_ref/private_key_ref
     # actually resolve (see NodeRecord.public_key_ref/private_key_ref)
     # -- mirrors what mesh provision records via KeyRecord.for_keypair,
-    # public half always, private half only when the device exposes
-    # it. Registered *before* the observed-admin-key loop below, so a
-    # device that also lists its own key on security.adminKey
-    # resolves that entry to this real ref rather than minting a
-    # fresh observed one for it.
+    # public half always, private half only when report.own_private_key_captured
+    # (the device exposes one and it was proven to derive the reported
+    # public key -- see build_adoption_report). Registered *before* the
+    # observed-admin-key loop below, so a device that also lists its own
+    # key on security.adminKey resolves that entry to this real ref
+    # rather than minting a fresh observed one for it.
     node_public = live.security.public_key
     node_private = live.security.private_key
     if live.security.has_public_key and node_public is not None:
-        if live.security.has_private_key and node_private is not None:
+        if report.own_private_key_captured and node_private is not None:
             pair = crypto_keys.KeyPair(private=node_private, public=node_public)
             pub_record, priv_record = KeyRecord.for_keypair(
                 node_id_hex, pair, origin=KeyOrigin.CAPTURED, created_ts=now
