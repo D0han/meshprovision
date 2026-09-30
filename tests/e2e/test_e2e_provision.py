@@ -1398,3 +1398,49 @@ def test_generated_origin_with_mismatched_private_key_still_regenerates(
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     rows = {row["key_ref"]: row for row in loaded.keys}
     assert KeyRecord.from_row(rows["deadbe01_pub"]).origin is KeyOrigin.GENERATED
+
+
+def test_cross_fleet_duplicate_on_a_non_admin_node_regenerates_not_refuses(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """S38-1: a cross-fleet duplicate on a plain (non-admin) node regenerates cleanly.
+
+    ``deadbe01`` and ``cccc0002`` are both ordinary ``TEMPLATE`` nodes that
+    already share a public key on file -- the CVE-2025-52464 vendor-cloning
+    signature -- but neither is named in ``admin_nodes`` or authorized
+    anywhere. Re-provisioning ``deadbe01`` (which still reports its
+    recorded key -- no drift, no impostor) now runs the cross-fleet
+    duplicate check for the first time and regenerates its key, unlike the
+    admin-bearing case, which refuses outright: there is no admin ref on
+    file for this key, so there is nothing to protect by refusing.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    shared_kp = keypair_factory()
+    seed_db(
+        nodes=[
+            NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE),
+            NodeRecord(node_id="cccc0002", management=ManagementMode.TEMPLATE),
+        ],
+        keys=[
+            *KeyRecord.for_keypair("deadbe01", shared_kp, origin=KeyOrigin.GENERATED),
+            *KeyRecord.for_keypair("cccc0002", shared_kp, origin=KeyOrigin.GENERATED),
+        ],
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = shared_kp.public
+    iface.localNode.localConfig.security.private_key = shared_kp.private.reveal()
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert bytes(iface.security.public_key) != shared_kp.public
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["deadbe01_pub"]).material() != shared_kp.public
+    assert KeyRecord.from_row(rows["cccc0002_pub"]).material() == shared_kp.public

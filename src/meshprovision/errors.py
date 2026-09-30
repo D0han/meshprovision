@@ -1271,15 +1271,20 @@ class AdminKeyRotationRefusedError(AdminKeyError):
             :func:`~meshprovision.provisioning.plan._plan_node_keypair`
             would have used (``"forced"``, ``"factory_key_presumed_compromised"``,
             ``"missing_key_material"``, or the caller's own
-            ``node_key_reason``/``"weak_key_audit"``).
+            ``node_key_reason``/``"weak_key_audit"`` -- which is
+            :data:`~meshprovision.crypto.weakkeys.DUPLICATE_KEY_REASON`
+            when the cross-fleet duplicate check is what compromised the
+            key).
         admin_refs: The ``Keys`` sheet references (``"<hex>_pub"``,
             ``"ADMIN1_pub"``, ...) whose material this node's recorded key
             currently backs.
         reported_fingerprint: A redacted fingerprint of the device's
-            reported public key, for the ``"adopt"``/``"capture"`` reasons
-            -- never raw key material. ``None`` until the CLI layer fills
-            it in, and always ``None`` for a regenerate reason (there is no
-            device report to fingerprint).
+            reported public key, for the ``"adopt"``/``"capture"``/
+            :data:`~meshprovision.crypto.weakkeys.DUPLICATE_KEY_REASON`
+            reasons -- never raw key material. ``None`` until the CLI
+            layer fills it in, and always ``None`` for every other
+            regenerate reason (there is no device report to fingerprint
+            beyond what those three already redact).
     """
 
     def __init__(

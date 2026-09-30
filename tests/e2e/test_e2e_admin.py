@@ -526,10 +526,23 @@ def test_clone_of_an_existing_admin_key_is_refused_even_with_its_own_ref(
     ``aaaa0001`` is seeded with its own keypair K, and ``ADMIN1`` is
     registered as an alias of that same K. A DIFFERENT device
     (``deadbe01``) then reports K too -- either a genuine key clone or an
-    impostor. The first-capture branch (Round 38 batch 1) must still
-    refuse this: even passing ``--ref ADMIN1`` only exempts ``ADMIN1_pub``
+    impostor. Even passing ``--ref ADMIN1`` only exempts ``ADMIN1_pub``
     itself, never ``aaaa0001_pub``, which is the ref that actually
     matches.
+
+    Caught earlier than the first-capture branch (Round 38 batch 1) once
+    the cross-fleet duplicate audit (Round 38 batch 13) is wired into
+    ``mesh provision``: ``deadbe01``'s live key matches ``aaaa0001``'s
+    *canonical* recorded row, so ``audit_node_key`` flags it CRITICAL
+    before ``_plan_node_keypair`` ever reaches the ``db_public_key is
+    None`` (first-capture) branch -- ``ADMIN1_pub`` itself is never a
+    candidate for the duplicate audit (its owner, ``"ADMIN1"``, is not a
+    canonical node id), but ``aaaa0001_pub`` is. The refusal therefore
+    carries the generic "key would change" message and the duplicate-key
+    hint, not the first-capture "has no recorded key" one -- the admin_refs
+    set (still the union with the 1b identity-conflict check) is
+    unaffected, so ``expected_ref`` still names ``aaaa0001_pub`` either
+    way.
     """
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN1"]))
     shared_kp = keypair_factory()
@@ -552,8 +565,10 @@ def test_clone_of_an_existing_admin_key_is_refused_even_with_its_own_ref(
     result = invoke(runner, cli_args, env)
 
     assert result.exit_code == ExitCode.PROVISIONING
-    assert "has no recorded key" in result.stderr
-    assert "CVE-2025-52464" in result.stderr
+    assert "key would change while it backs authorized admin key(s)" in result.stderr
+    assert "is shared with another node already on file" in result.stderr
+    assert "CVE-2025-52464 vendor key-cloning failure mode" in result.stderr
+    assert "Duplicate (cloned) keys" in result.stderr
     assert expected_ref in result.stderr
     assert not _BASE64_KEY_RE.search(result.stderr)
     assert iface.localNode.written_sections == []
@@ -595,6 +610,84 @@ def test_admin_bootstrap_new_ref_on_a_different_node_still_succeeds(
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     rows = {row["key_ref"]: row for row in loaded.keys}
     assert "ADMIN2_pub" in rows
+
+
+def test_admin_bootstrap_alias_of_its_own_node_is_never_a_false_duplicate(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """S38-1: a node's own ``--ref`` label alias must never trip its own duplicate check.
+
+    ``mesh admin bootstrap --ref ADMIN1`` deliberately files one node's
+    key under both ``aaaa0001_pub`` and ``ADMIN1_pub`` -- by material
+    alone, that is indistinguishable from a genuine cross-fleet clone.
+    :func:`~meshprovision.provisioning.pipeline.duplicate_candidate_keys`
+    must exclude ``ADMIN1_pub`` (its owner, ``"ADMIN1"``, is not a
+    canonical node id) as well as ``aaaa0001_pub`` itself, so a plain
+    ``mesh provision`` re-run against the same node afterwards never
+    trips a false CRITICAL duplicate finding against its own alias.
+    """
+    bus.use(FakeMeshInterface("aaaa0001"))
+    bootstrap = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+    assert bootstrap.exit_code == 0
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN1"]))
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "duplicate" not in result.stderr
+    assert "COMPROMISED" not in result.stderr
+
+
+def test_clone_of_a_self_ref_admin_node_is_refused_with_the_duplicate_hint(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """A clone of a *self-ref* admin (no ``--ref`` label alias) is refused too.
+
+    Distinct from :func:`test_clone_of_an_existing_admin_key_is_refused_even_with_its_own_ref`'s
+    scenario: ``template.admin_nodes`` names ``aaaa0001`` directly (the
+    node's own hex id), with no separate ``ADMIN1``-style label ever
+    created. ``duplicate_candidate_keys`` still includes ``aaaa0001_pub``
+    (it is a genuinely different, canonical, node than ``deadbe01``), so
+    the duplicate audit still fires and the admin-bearing refusal still
+    applies -- proving the fix does not depend on a label alias being
+    present.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["aaaa0001"]))
+    shared_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="aaaa0001", management=ManagementMode.TEMPLATE)],
+        keys=list(KeyRecord.for_keypair("aaaa0001", shared_kp, origin=KeyOrigin.GENERATED)),
+    )
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    iface = bus.use(
+        FakeMeshInterface("deadbe01", short_name="XR7", long_name="Someone Elses Radio")
+    )
+    iface.localNode.localConfig.security.public_key = shared_kp.public
+    iface.localNode.localConfig.security.private_key = shared_kp.private.reveal()
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "is shared with another node already on file" in result.stderr
+    assert "CVE-2025-52464 vendor key-cloning failure mode" in result.stderr
+    assert "aaaa0001_pub" in result.stderr
+    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert iface.localNode.written_sections == []
+    assert db_fingerprint(db_path) == before
 
 
 def test_admin_bootstrap_pending_message_for_its_own_ref_names_ref_first_then_node(

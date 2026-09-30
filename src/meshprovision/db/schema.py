@@ -53,6 +53,7 @@ from typing import Final
 
 from meshprovision import chipsets, enums
 from meshprovision.errors import SchemaError
+from meshprovision.nodeid import NodeId
 
 __all__ = [
     "BLE_PIN_LENGTH",
@@ -78,6 +79,7 @@ __all__ = [
     "column_letter",
     "format_ref_list",
     "formula_for",
+    "is_canonical_node_owner",
     "normalize_ref_list",
     "parse_timestamp",
     "recompute_derived",
@@ -847,6 +849,33 @@ def ref_for(owner: str, key_type: KeyType) -> str:
         ``f"{owner}{suffix}"``, using :data:`KEY_REF_SUFFIXES`.
     """
     return f"{owner}{KEY_REF_SUFFIXES[key_type]}"
+
+
+def is_canonical_node_owner(owner: str) -> bool:
+    """Check whether a ``Keys``/``Nodes`` sheet owner names a real node id.
+
+    ``NodeId.try_parse()`` alone is too permissive for this: it also
+    accepts a 1-7 character all-hex string (meant for lorastats/
+    human-typed shortcuts elsewhere), which a short hex-looking template
+    label (``"cafe"``, ``"face"``) could satisfy by coincidence.
+    :func:`ref_for` only ever files a device's own key under its
+    *canonical* :attr:`NodeId.hex` form -- always exactly 8 lowercase hex
+    digits, zero-padded -- so the round-trip check here (parses, AND the
+    parse's own canonical form equals the string as-is) is what actually
+    proves "this owner IS a node id," not merely "looks hex-shaped." This
+    also excludes a template ``admin_nodes`` label and an
+    :mod:`meshprovision.db.observed_keys` synthetic ``observed-*`` ref,
+    neither of which round-trips.
+
+    Args:
+        owner: An ``owner_node_id`` value from either sheet.
+
+    Returns:
+        ``True`` only when ``owner`` is exactly its own canonical
+        node-id form.
+    """
+    parsed = NodeId.try_parse(owner)
+    return parsed is not None and parsed.hex == owner
 
 
 def normalize_ref_list(raw: str) -> tuple[str, ...]:

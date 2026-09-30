@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.config.template import TemplateConfig, load_template_text
+from meshprovision.crypto import weakkeys
 from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
@@ -21,6 +22,7 @@ from meshprovision.provisioning.pipeline import (
     allocate_names,
     audit_live_admin_keys,
     audit_node_key,
+    duplicate_candidate_keys,
     is_host_generated_key,
     match_admin_key_refs,
     node_key_admin_refs,
@@ -29,6 +31,7 @@ from meshprovision.provisioning.pipeline import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from meshprovision.crypto.keys import KeyPair
@@ -286,6 +289,24 @@ def test_audit_node_key_accepts_a_clean_device_keypair(keypair: KeyPair) -> None
     )
 
     assert audit_node_key(live, known_bad=frozenset()) == (False, "")
+
+
+def test_audit_node_key_flags_a_cross_fleet_duplicate(keypair: KeyPair) -> None:
+    """``known_public_keys`` wires a genuine cross-fleet clone into the CVE-2025-52464 audit.
+
+    This is the S38-1 fix itself: before ``known_public_keys`` was ever
+    threaded through, this exact call shape reported clean.
+    """
+    live = _live_with_security(
+        detect.LiveSecurity(public_key=keypair.public, private_key=keypair.private)
+    )
+
+    compromised, reason = audit_node_key(
+        live, known_bad=frozenset(), known_public_keys={"cccc0001_pub": keypair.public}
+    )
+
+    assert compromised is True
+    assert reason == weakkeys.DUPLICATE_KEY_REASON
 
 
 def test_audit_node_key_logs_a_warning_severity_finding(
@@ -826,6 +847,43 @@ def test_node_key_admin_refs_excludes_another_nodes_own_clone(
         template=_template_with_admin(),
     )
     assert refs == ()
+
+
+def test_duplicate_candidate_keys_excludes_own_ref_label_and_observed_refs(
+    keys: KeyRepository, keypair: KeyPair, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """The comparison set excludes this node's own ref, a label alias, and an observed-* ref.
+
+    None of those three round-trips through
+    :func:`~meshprovision.db.schema.is_canonical_node_owner`, so including
+    them would produce a false CRITICAL "duplicate" finding on every
+    ``mesh admin bootstrap --ref``/``mesh adopt`` run. A genuine other
+    node's canonical ref is the only thing that belongs in the result.
+    """
+    pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
+    keys.upsert(pub)
+    keys.upsert(priv)
+    keys.upsert(
+        KeyRecord.from_material(
+            "ADMIN1", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
+    keys.upsert(
+        KeyRecord.from_material(
+            observed_owner(keypair.public),
+            KeyType.ADMIN_PUBLIC,
+            keypair.public,
+            origin=KeyOrigin.CAPTURED,
+        )
+    )
+    other = keypair_factory()
+    other_pub, other_priv = KeyRecord.for_keypair("cccc0001", other, origin=KeyOrigin.GENERATED)
+    keys.upsert(other_pub)
+    keys.upsert(other_priv)
+
+    candidates = duplicate_candidate_keys(keys, NodeId.from_hex("deadbe01"))
+
+    assert candidates == {"cccc0001_pub": other.public}
 
 
 def test_node_key_admin_refs_ignores_an_archived_nodes_authorization(

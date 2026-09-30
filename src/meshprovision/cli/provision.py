@@ -49,6 +49,7 @@ from meshprovision.cli.help_format import MeshCommand
 from meshprovision.cli.progress import heartbeat
 from meshprovision.crypto import keys as crypto_keys
 from meshprovision.crypto.redact import SecretBytes, fingerprint
+from meshprovision.crypto.weakkeys import DUPLICATE_KEY_REASON
 from meshprovision.db import pending_keys, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
@@ -70,6 +71,7 @@ from meshprovision.provisioning.pipeline import (
     allocate_names,
     audit_live_admin_keys,
     audit_node_key,
+    duplicate_candidate_keys,
     is_host_generated_key,
     match_admin_key_refs,
     node_key_admin_refs,
@@ -1023,7 +1025,8 @@ def _finalize_admin_key_rotation_error(
     Returns:
         A new :class:`AdminKeyRotationRefusedError` carrying the same
         ``reason``/``admin_refs`` plus a filled-in ``hint`` and, for the
-        ``"adopt"``/``"capture"`` reasons, ``reported_fingerprint``.
+        ``"adopt"``/``"capture"``/:data:`~meshprovision.crypto.weakkeys.
+        DUPLICATE_KEY_REASON` reasons, ``reported_fingerprint``.
     """
     if exc.reason == "adopt":
         live_public = live.security.public_key
@@ -1044,6 +1047,21 @@ def _finalize_admin_key_rotation_error(
         )
         if others:
             hint = f"{hint} Also re-import: {others}."
+    elif exc.reason == DUPLICATE_KEY_REASON:
+        # Checked by exact match, and before the generic CVE-2025-52464
+        # branch below: DUPLICATE_KEY_REASON's own text also contains
+        # that substring (it IS a CVE-2025-52464 finding), so the
+        # substring check would otherwise mis-catch it and hand out the
+        # wrong "upgrade firmware" hint for what is actually a cloned key.
+        live_public = live.security.public_key
+        reported_fingerprint = fingerprint(live_public) if live_public is not None else "<unknown>"
+        hint = (
+            f"The connected device's key (fingerprint {reported_fingerprint}) is shared "
+            f"with another node already on file: {', '.join(exc.admin_refs)}. This is the "
+            "CVE-2025-52464 vendor key-cloning failure mode -- compare the fingerprint "
+            'with the one the device itself shows, and see the "Duplicate (cloned) keys" '
+            "section of docs/security.md."
+        )
     elif exc.reason == "capture":
         live_public = live.security.public_key
         reported_fingerprint = fingerprint(live_public) if live_public is not None else "<unknown>"
@@ -1210,7 +1228,10 @@ def run_provision(
 
     host_generated = is_host_generated_key(db.keys, live) or pending_matches
     node_key_compromised, node_key_reason = audit_node_key(
-        live, known_bad=known_bad, host_generated=host_generated
+        live,
+        known_bad=known_bad,
+        known_public_keys=duplicate_candidate_keys(db.keys, live.node_id),
+        host_generated=host_generated,
     )
 
     desired_short, desired_long = allocate_names(

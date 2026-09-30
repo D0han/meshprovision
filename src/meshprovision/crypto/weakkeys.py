@@ -66,6 +66,7 @@ from meshprovision.crypto.redact import SecretBytes, fingerprint, reveal
 from meshprovision.errors import KeyMaterialError, SettingsError, WeakKeyError, WeakKeySeverity
 
 __all__ = [
+    "DUPLICATE_KEY_REASON",
     "FIRMWARE_FIXED_MIN",
     "FIRMWARE_VULNERABLE_MIN",
     "KNOWN_BAD_KEYS_ENV",
@@ -212,6 +213,20 @@ class WeakKeyCheck(StrEnum):
     FIRMWARE_WINDOW = "firmware_window"
     DUPLICATE = "duplicate"
 
+
+DUPLICATE_KEY_REASON: Final[str] = (
+    "public key is shared with another node in this fleet -- the CVE-2025-52464 vendor "
+    "key-cloning failure mode"
+)
+"""The exact :attr:`WeakKeyFinding.reason` text :func:`audit_node`'s cross-fleet
+duplicate check produces.
+
+Exported so a caller can tell this finding apart from every other CRITICAL
+reason by exact match -- notably
+:func:`~meshprovision.cli.provision._finalize_admin_key_rotation_error`, which
+must not fall through to its generic ``"CVE-2025-52464" in exc.reason`` branch
+for this one, even though this reason also happens to contain that substring.
+"""
 
 NON_OVERRIDABLE_CHECKS: Final[frozenset[WeakKeyCheck]] = frozenset(
     {WeakKeyCheck.ALL_ZERO, WeakKeyCheck.SMALL_ORDER}
@@ -1124,7 +1139,14 @@ def audit_node(
             :func:`find_duplicate_public_keys` plus
             :mod:`meshprovision.db.verify`'s owner-based
             alias-vs-clone classification (the canonical-hex round-trip
-            check on the owner ref) instead of this parameter.
+            check on the owner ref, via
+            :func:`~meshprovision.db.schema.is_canonical_node_owner`)
+            instead of this parameter. This is exactly what
+            :func:`~meshprovision.provisioning.pipeline.duplicate_candidate_keys`
+            pre-filters before :func:`~meshprovision.provisioning.pipeline.
+            audit_node_key` passes it in: it already excludes every alias,
+            ``observed-*`` ref, and the node's own ref, so the mapping
+            ``audit_node_key`` supplies here is always alias-safe.
         known_bad: An explicit blocklist. When ``None``, loaded once via
             :func:`load_known_bad_keys`.
         check_clamping: Passed through to the private-key audit path.
@@ -1236,10 +1258,7 @@ def audit_node(
                 WeakKeyFinding(
                     check=WeakKeyCheck.DUPLICATE,
                     severity=WeakKeySeverity.CRITICAL,
-                    reason=(
-                        "public key is shared with another node in this fleet -- the "
-                        "CVE-2025-52464 vendor key-cloning failure mode"
-                    ),
+                    reason=DUPLICATE_KEY_REASON,
                     detail=f"matching_refs={', '.join(matches)}",
                     fingerprint=result.fingerprint,
                     node_id=node_id,

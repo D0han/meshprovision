@@ -125,7 +125,7 @@ regeneration:
 | `all_zero`, `small_order`, `repeated_byte`, `monotonic`, `low_entropy`, `unclamped` | Structural checks on the key bytes |
 | `consistency` | Recompute the public key from the private key and compare with what the device reports; a mismatch means corruption or a partial restore |
 | `firmware_window` | A node reporting firmware in `[2.5.0, 2.6.11)` is treated as **presumptively compromised** regardless of the key's contents — unless the key is confirmed host-generated (see below) |
-| `duplicate` | The public key matches another key in your own `Keys` sheet; two of your nodes sharing a public key is the vendor-cloning bug; reported CRITICAL |
+| `duplicate` | The public key matches another *node's* recorded key elsewhere in your `Keys` sheet; two of your nodes sharing a public key is the vendor-cloning bug; reported CRITICAL. Runs during `mesh provision` (see below) as well as `mesh db verify` |
 | `blocklist` | The key appears in `data/known_bad_keys.txt` |
 
 ### What `data/known_bad_keys.txt` does and does NOT cover
@@ -156,6 +156,22 @@ an honest short one.
 Your effective controls against CVE-2025-52464 are therefore the
 firmware-version window check and cross-node duplicate detection across
 your own `Keys` sheet — **not** this file.
+
+### Duplicate (cloned) keys
+
+`mesh provision` now runs the cross-fleet duplicate check on every run,
+not only at `mesh db verify` time: the device's reported public key is
+compared against every *other* node's recorded `<hex>_pub` row (never
+this node's own row, and never a `mesh admin bootstrap --ref` label alias
+or a `mesh adopt`-minted `observed-*` ref — those are legitimate aliases
+of the *same* key, not a clone, and comparing against them would produce
+a false CRITICAL on every bootstrap). A match marks the node
+`COMPROMISED` and forces regeneration, exactly like any other finding in
+the table above — unless the matched ref is itself an authorized admin
+key, in which case `mesh provision` refuses outright (there is no flag
+that overrides this; see ["Rotating an admin node's
+key"](#rotating-an-admin-nodes-key)) rather than silently minting a new
+keypair for an admin-bearing node.
 
 ### The firmware-window check converges once meshprovision generates the key
 

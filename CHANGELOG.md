@@ -743,3 +743,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `write_new_file`, the known-good safety copy) can no longer leave a
   clobbered or partially-written file in its place; both now go through
   the same crash-safe `link_no_clobber` primitive.
+- `mesh provision` never ran the documented cross-fleet "duplicate"
+  (cloned-key) check: `audit_node_key` called `weakkeys.audit_node` with
+  no `known_public_keys`, so a device presenting an exact clone of
+  another node's keypair provisioned clean with zero warning -- the check
+  only ever ran after the fact, via `mesh db verify`. A new
+  `duplicate_candidate_keys` builds the comparison set (every other
+  node's canonical `<hex>_pub` row, excluding this node's own ref, any
+  `--ref` label alias, and any `mesh adopt`-minted `observed-*` ref) and
+  is now passed into `audit_node_key` on every run. A clone now
+  regenerates the node's key, or refuses outright (with a dedicated hint
+  naming the matching ref(s) and the reported fingerprint) when the
+  cloned material is itself an authorized admin key.
+- `_finalize_admin_key_rotation_error`'s `"CVE-2025-52464" in exc.reason`
+  substring check mis-caught the new duplicate-key refusal (whose own
+  reason text also contains that substring) and gave it the generic
+  "upgrade firmware" hint instead of the duplicate-specific one. Added a
+  dedicated branch, checked before the generic one, keyed on the exact
+  `weakkeys.DUPLICATE_KEY_REASON` value.

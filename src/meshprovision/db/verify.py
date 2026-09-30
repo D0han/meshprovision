@@ -33,7 +33,6 @@ from meshprovision.db import observed_keys, schema
 from meshprovision.db.ods import IntegrityWarningKind
 from meshprovision.db.schema import KeyType
 from meshprovision.errors import ExitCode, KeyMaterialError, WeakKeySeverity
-from meshprovision.nodeid import NodeId
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -499,19 +498,7 @@ def _check_duplicate_keys(keys: KeyRepository) -> list[DbProblem]:
         for member_ref in group:
             member = keys.find(member_ref)
             owner = member.owner_node_id if member is not None else member_ref
-            # NodeId.try_parse() alone is too permissive here: it also
-            # accepts 1-7 character all-hex strings (NodeId.parse's case
-            # (e), meant for lorastats/human-typed shortcuts elsewhere),
-            # so a short hex-looking template label like "cafe" or
-            # "face" would satisfy it and be wrongly counted as a real
-            # device. schema.ref_for() only ever files a device's own
-            # key under its *canonical* NodeId.hex form -- always
-            # exactly 8 lowercase hex digits, zero-padded -- so the
-            # round-trip check (parses, AND the parse's own canonical
-            # form equals the string as-is) is what actually proves
-            # "this owner IS a node id," not merely "looks hex-shaped."
-            parsed = NodeId.try_parse(owner)
-            if parsed is not None and parsed.hex == owner:
+            if schema.is_canonical_node_owner(owner):
                 node_owners.add(owner)
 
         rest = tuple(member_ref for member_ref in group if member_ref != group[0])
