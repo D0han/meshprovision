@@ -178,6 +178,23 @@ def test_audit_keypair_matching_is_ok(keypair_factory) -> None:
     assert result.ok is True
 
 
+def test_audit_keypair_flags_single_bit_public_key_mismatch(keypair_factory) -> None:
+    """A near-miss public key (one bit off) must still trip the #7449 check.
+
+    Guards against the consistency check comparing only a prefix of the
+    derived key instead of all 32 bytes -- the other mismatch tests here
+    only compare completely unrelated keypairs, which a prefix compare
+    would still catch.
+    """
+    kp: KeyPair = keypair_factory()
+    pub = bytearray(kp.public)
+    pub[31] ^= 0x01
+    result = audit_keypair(kp.private, bytes(pub), known_bad=frozenset())
+    assert [f.check for f in result.findings] == [WeakKeyCheck.CONSISTENCY]
+    assert result.findings[0].severity == "critical"
+    assert result.ok is False
+
+
 # ---------------------------------------------------------------------------
 # Firmware-version window.
 # ---------------------------------------------------------------------------
@@ -496,6 +513,41 @@ def test_low_entropy_severity_at_exact_hamming_boundary_is_still_warning() -> No
     assert len(set(at_max)) < MIN_DISTINCT_BYTES
     assert is_low_entropy(at_max) is True
     assert _low_entropy_finding(at_max).severity == "warning"
+
+
+def test_is_low_entropy_false_exactly_on_hamming_limits() -> None:
+    """A weight exactly on LOW_HAMMING_MIN/MAX is not itself abnormal.
+
+    Guards ``<``/``>`` vs ``<=``/``>=`` in ``is_low_entropy`` itself (not
+    just the severity check, which
+    test_low_entropy_severity_at_exact_hamming_boundary_is_still_warning
+    already pins). Both fixtures use 8 distinct byte values, well above
+    MIN_DISTINCT_BYTES, so the distinct-byte-count clause can never fire
+    and the exact-limit weight comparison is isolated on its own.
+    """
+    at_min = bytes([1, 2, 4, 8, 16, 32, 64, 128]) * 4
+    assert hamming_weight(at_min) == LOW_HAMMING_MIN
+    assert len(set(at_min)) >= MIN_DISTINCT_BYTES
+    assert is_low_entropy(at_min) is False
+
+    at_max = bytes([0xFE, 0xFD, 0xFB, 0xF7, 0xEF, 0xDF, 0xBF, 0x7F]) * 4
+    assert hamming_weight(at_max) == LOW_HAMMING_MAX
+    assert len(set(at_max)) >= MIN_DISTINCT_BYTES
+    assert is_low_entropy(at_max) is False
+
+
+def test_is_low_entropy_false_at_exactly_min_distinct_bytes() -> None:
+    """A distinct-byte count exactly at MIN_DISTINCT_BYTES is not itself abnormal.
+
+    Guards ``<`` vs ``<=`` on the distinct-byte-count clause. The Hamming
+    weight sits comfortably between LOW_HAMMING_MIN and LOW_HAMMING_MAX,
+    so only the distinct-byte-count comparison is exercised.
+    """
+    raw = (bytes([0x0F, 0xF0, 0x33, 0xCC, 0x55]) * 7)[:32]
+    assert len(set(raw)) == MIN_DISTINCT_BYTES
+    weight = hamming_weight(raw)
+    assert LOW_HAMMING_MIN < weight < LOW_HAMMING_MAX
+    assert is_low_entropy(raw) is False
 
 
 def test_clamping_check_default_off_and_explicit_on(keypair_factory) -> None:
