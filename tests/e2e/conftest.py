@@ -698,6 +698,12 @@ def invoke(
     return runner.invoke(cli, list(args), env=dict(env), input=input, catch_exceptions=False)
 
 
+_LORANET_FILLER_KEY: Final[str] = NodeId.from_int(1).decimal
+"""A decimal key for no fleet test id, so an empty ``nodes`` fixture still
+gives the loranet dump a valid-looking shape (see
+:meth:`meshprovision.datasources.loranet.LoranetSource._check_dump_shape`)."""
+
+
 def _to_lorastats_record(hex_id: str, fields: Mapping[str, object]) -> dict[str, object]:
     """Derive a lorastats-shaped record from a loranet-shaped fixture entry.
 
@@ -762,9 +768,14 @@ def mock_sources() -> Callable[..., respx.MockRouter]:
         router = respx.MockRouter(assert_all_called=False)
         node_map = nodes or {}
 
-        dump = {
+        dump: dict[str, object] = {
             NodeId.from_hex(hex_id).decimal: dict(fields) for hex_id, fields in node_map.items()
         }
+        if not dump:
+            # An empty dump is rejected outright (see
+            # LoranetSource._check_dump_shape); a filler entry with no
+            # names keeps "no fleet nodes" fixtures behaving as before.
+            dump[_LORANET_FILLER_KEY] = {}
         router.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=dump))
 
         def _lorastats_handler(request: httpx.Request) -> httpx.Response:

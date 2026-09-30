@@ -631,7 +631,7 @@ def test_match_record_skips_an_unparsable_node_id_without_crashing() -> None:
 
 @respx.mock
 def test_loranet_raw_index_memoizes(tmp_path: Path) -> None:
-    route = respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    route = respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
     source = LoranetSource(client)
 
@@ -650,7 +650,7 @@ def test_loranet_raw_index_memo_short_circuits_before_get_json(tmp_path: Path, m
     exactly one network request. Spying on get_json -- the boundary the
     memo actually short-circuits -- is what makes the guard observable.
     """
-    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", ttl=10000
     )
@@ -711,7 +711,7 @@ def test_loranet_raw_index_force_refresh_returns_the_fresh_value_over_a_live_mem
 
 @respx.mock
 def test_loranet_invalidate_drops_memo(tmp_path: Path) -> None:
-    route = respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    route = respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", ttl=10000
     )
@@ -733,7 +733,7 @@ def test_loranet_last_fetch_data_as_of_is_none_before_any_fetch(tmp_path: Path) 
 def test_loranet_fetch_all_sets_last_fetch_data_as_of_to_the_network_fetch_time(
     tmp_path: Path,
 ) -> None:
-    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
     epoch = 1_700_000_000.0
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", clock=lambda: epoch
@@ -754,7 +754,7 @@ def test_loranet_raw_index_memo_preserves_the_original_fetch_time(tmp_path: Path
     of the fetch that actually produced the memoized data, an operator
     would be told the data is fresher than it really is.
     """
-    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
     clock_state = {"now": 1_700_000_000.0}
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache",
@@ -777,7 +777,7 @@ def test_loranet_raw_index_memo_preserves_the_original_fetch_time(tmp_path: Path
 def test_loranet_invalidate_then_force_refresh_advances_last_fetch_data_as_of(
     tmp_path: Path,
 ) -> None:
-    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
     clock_state = {"now": 1_700_000_000.0}
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache",
@@ -796,6 +796,69 @@ def test_loranet_invalidate_then_force_refresh_advances_last_fetch_data_as_of(
 
     assert source.last_fetch_data_as_of == datetime.fromtimestamp(1_700_000_900.0, tz=UTC)
     assert source.last_fetch_data_as_of != first
+
+
+@respx.mock
+def test_loranet_empty_dump_is_a_source_failure_that_degrades_the_report(tmp_path: Path) -> None:
+    """E38-3: an empty dump must never silently mark every node UNKNOWN.
+
+    Before the fix, ``{}`` passed ``require_json_object`` unchanged, so
+    every id simply came back absent -- no error, no warning, and a
+    healthy exit code despite the source having nothing to say.
+    """
+    nid = NodeId.from_hex("deadbe01")
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    with pytest.raises(InvalidResponseError, match="empty"):
+        source.raw_index()
+
+    collected = collect_observations([source], [nid])
+    assert [f.source for f in collected.failures] == [SOURCE_LORANET]
+    report = build_report(
+        records={},
+        observations_by_source=collected.observations,
+        node_ids=[nid],
+        failures=collected.failures,
+        now=datetime.now(tz=UTC),
+    )
+    assert report.exit_code() == ExitCode.STATUS_DEGRADED
+
+
+@respx.mock
+def test_loranet_hex_keyed_dump_is_a_source_failure(tmp_path: Path) -> None:
+    """E38-3: a dump re-keyed to hex (a format loranet doesn't use today) must also fail loud."""
+    nid = NodeId.from_hex("deadbe01")
+    respx.get(LORANET_NODES_URL).mock(
+        return_value=httpx.Response(200, json={"!deadbe01": {"shortName": "abcd"}})
+    )
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    with pytest.raises(InvalidResponseError, match="decimal node ids"):
+        source.raw_index()
+
+    collected = collect_observations([source], [nid])
+    assert [f.source for f in collected.failures] == [SOURCE_LORANET]
+
+
+@respx.mock
+def test_loranet_one_bad_key_among_good_ones_does_not_fail_the_source(tmp_path: Path) -> None:
+    """Guard against over-rejection: a single bad key must not sink an otherwise-fine dump."""
+    nid = NodeId.from_hex("deadbe01")
+    payload = {
+        "!deadbe02": {"shortName": "unparsable key, ignored"},
+        nid.decimal: {"shortName": "abcd"},
+    }
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    collected = collect_observations([source], [nid])
+
+    assert collected.failures == ()
+    assert collected.observations[SOURCE_LORANET][nid].short_name == "abcd"
 
 
 @respx.mock

@@ -32,7 +32,7 @@ from meshprovision.datasources.models import (
     parse_epoch,
 )
 from meshprovision.enums import EnumTable, hw_model_table, region_table, role_table
-from meshprovision.errors import EnumMappingError, NodeIdError
+from meshprovision.errors import EnumMappingError, InvalidResponseError, NodeIdError
 from meshprovision.nodeid import NodeId
 
 if TYPE_CHECKING:
@@ -105,8 +105,10 @@ class LoranetSource(BaseHTTPDataSource):
 
         Raises:
             meshprovision.errors.InvalidResponseError: If the response
-                does not parse as JSON, or parses as something other
-                than a JSON object.
+                does not parse as JSON, parses as something other than a
+                JSON object, is an empty object, or is non-empty but none
+                of its keys parse as a decimal node id (the dump format
+                may have changed).
             meshprovision.errors.HttpError: If the request itself fails.
         """
         if self._index is not None and not force_refresh:
@@ -120,6 +122,7 @@ class LoranetSource(BaseHTTPDataSource):
             return self._index
         payload = self.get_json(self._url, force_refresh=force_refresh)
         index = require_json_object(payload, url=self._url, source=self.name)
+        self._check_dump_shape(index, url=self._url, source=self.name)
         self._index = index
         self._index_fetched_at = self._last_fetch_data_as_of
         return index
@@ -221,6 +224,57 @@ class LoranetSource(BaseHTTPDataSource):
         self._last_fetch_skipped = skipped
         self._last_fetch_field_coercions = tracker.failures
         return result
+
+    @staticmethod
+    def _check_dump_shape(index: Mapping[str, Any], *, url: str, source: str) -> None:
+        """Reject a dump that is empty or whose keys aren't decimal node ids.
+
+        Called from :meth:`raw_index` after :func:`require_json_object`
+        succeeds but before the index is memoized, so a bad dump is never
+        cached -- a subsequent successful fetch (e.g. after the upstream
+        API recovers) is never blocked by a stale bad-shape memo.
+
+        Args:
+            index: The decoded dump, already known to be a JSON object.
+            url: The request URL, for the error message.
+            source: The short source name, for the error message.
+
+        Raises:
+            meshprovision.errors.InvalidResponseError: If ``index`` is
+                empty, or if none of its keys parse as a decimal node id.
+        """
+        if not index:
+            raise InvalidResponseError(
+                f"The loranet dump from {url} is empty", url=url, source=source
+            )
+        if not any(LoranetSource._is_decimal_key(key) for key in index):
+            first_key = next(iter(index))
+            raise InvalidResponseError(
+                f"None of the {len(index)} keys in the loranet dump are decimal "
+                f"node ids (e.g. {first_key!r}); the dump format may have changed",
+                url=url,
+                source=source,
+            )
+
+    @staticmethod
+    def _is_decimal_key(key: str) -> bool:
+        """Return whether ``key`` parses as a decimal node id.
+
+        Deliberately does not reuse :meth:`_parse_key`, to avoid logging
+        one DEBUG line per key when scanning a whole dump's keys.
+
+        Args:
+            key: The raw JSON object key.
+
+        Returns:
+            ``True`` if ``key`` parses via :meth:`NodeId.from_decimal`.
+        """
+        try:
+            NodeId.from_decimal(key)
+        except NodeIdError:
+            return False
+        else:
+            return True
 
     @staticmethod
     def _parse_key(key: str) -> NodeId | None:
