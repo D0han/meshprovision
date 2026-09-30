@@ -761,3 +761,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "upgrade firmware" hint instead of the duplicate-specific one. Added a
   dedicated branch, checked before the generic one, keyed on the exact
   `weakkeys.DUPLICATE_KEY_REASON` value.
+- `mesh adopt --from-backup`'s `resolve_node_id` key-match tier resolved a
+  `Keys` sheet owner via the permissive `NodeId.try_parse`, which also
+  accepts a 1-7 character all-hex string or an all-digit string -- shapes
+  a short hex- or decimal-looking template `admin_nodes` label can
+  satisfy by coincidence. A backup whose public key happened to match
+  such a label's row could resolve to a bogus node id instead of failing
+  closed. Now uses `schema.is_canonical_node_owner`'s round-trip check,
+  same as `db/verify.py`; when the backup's key matches more than one
+  distinct canonical owner (a cloned key), an explicit `--node-id`
+  overrides the tier outright, otherwise it raises `NodeIdentityError`
+  naming every matching owner, regardless of `--force`.

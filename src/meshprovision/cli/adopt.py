@@ -444,8 +444,19 @@ def resolve_node_id(
 
     1. ``--node-id`` -- an explicit operator assertion.
     2. A ``Keys`` sheet public-key match -- the backup's own public key
-       equals an already-registered, non-``observed-*`` ``<id>_pub``
-       row: a cryptographic binding to a node already in the database.
+       equals an already-registered ``ADMIN_PUBLIC`` row whose
+       ``owner_node_id`` is a *canonical* node id (per
+       :func:`~meshprovision.db.schema.is_canonical_node_owner`; this
+       excludes a short hex- or decimal-looking template ``admin_nodes``
+       label or ``observed-*`` ref that happens to also satisfy
+       :meth:`~meshprovision.nodeid.NodeId.try_parse`'s more permissive
+       shortcut forms): a cryptographic binding to a node already in the
+       database. When more than one distinct canonical owner's material
+       matches (a cloned key), this tier is ambiguous: an explicit
+       ``--node-id`` overrides it outright (it contributes nothing to
+       the decision); with no ``--node-id``, it raises
+       :class:`~meshprovision.errors.NodeIdentityError` naming every
+       matching owner as a candidate, regardless of ``force``.
     3. A paired node-db export's ``myNodeNum``.
     4. (Advisory only, via :func:`_suggest_node_ids`) A loranet
        long-name match -- never sufficient on its own; only ever
@@ -464,21 +475,39 @@ def resolve_node_id(
         The resolved :class:`~meshprovision.nodeid.NodeId`.
 
     Raises:
-        NodeIdentityError: If nothing above resolves a node id, or two
+        NodeIdentityError: If nothing above resolves a node id; if two
             of (1)-(3) resolve to different ids and ``force`` is
-            ``False``.
+            ``False``; or if the public-key tier matches more than one
+            distinct canonical owner and no ``--node-id`` was given
+            (not bypassable with ``force``, since that tier's own
+            evidence -- not a conflict between tiers -- is what is
+            ambiguous).
     """
     explicit = NodeId.parse(node_id_opt) if node_id_opt is not None else None
 
     pubkey_match: NodeId | None = None
     if bundle.public_key is not None:
-        for ref, material in db_keys.public_key_map().items():
-            if material != bundle.public_key:
-                continue
-            candidate = NodeId.try_parse(ref.removesuffix("_pub"))
-            if candidate is not None:
-                pubkey_match = candidate
-                break
+        canonical_owners = {
+            record.owner_node_id
+            for record in db_keys.of_type(KeyType.ADMIN_PUBLIC)
+            if record.material() == bundle.public_key
+            and schema.is_canonical_node_owner(record.owner_node_id)
+        }
+        if len(canonical_owners) == 1:
+            pubkey_match = NodeId.from_hex(next(iter(canonical_owners)))
+        elif len(canonical_owners) > 1 and explicit is None:
+            owners = tuple(NodeId.from_hex(owner) for owner in sorted(canonical_owners))
+            names = ", ".join(node_id.display for node_id in owners)
+            raise NodeIdentityError(
+                f"The backup's public key matches {len(owners)} different node(s) already "
+                f"registered in the database: {names}.",
+                candidates=tuple(node_id.display for node_id in owners),
+                hint=("This may indicate a cloned key; pass --node-id explicitly to disambiguate."),
+            )
+        # Else: either a unique canonical match (handled above), no match
+        # at all, or more than one canonical owner alongside an explicit
+        # --node-id -- in which case the explicit id wins outright and
+        # this tier's ambiguous evidence contributes nothing further.
 
     nodedb_id = bundle.nodedb_entry.node_id if bundle.nodedb_entry is not None else None
 
