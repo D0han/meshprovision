@@ -144,11 +144,15 @@ def test_is_factory_long_name() -> None:
 
 
 def test_live_config_from_protobufs_normalizes_enums_and_excludes_repeated_bytes() -> None:
+    from google.protobuf.message import Message
+
     local_config = localonly_pb2.LocalConfig()
     local_config.device.role = 2  # ROUTER
     local_config.lora.region = 3  # EU_868
-    local_config.security.public_key = bytes(range(32))
-    local_config.security.private_key = bytes(range(32))
+    pub = bytes(range(32))
+    priv = bytes(range(64, 96))
+    local_config.security.public_key = pub
+    local_config.security.private_key = priv
     local_config.security.admin_key.append(bytes(range(1, 33)))
 
     module_config = localonly_pb2.LocalModuleConfig()
@@ -159,14 +163,39 @@ def test_live_config_from_protobufs_normalizes_enums_and_excludes_repeated_bytes
     )
     assert live.value("device", "role") == "ROUTER"
     assert live.value("lora", "region") == "EU_868"
-    assert "network" not in live.sections or "ipv4_config" not in live.sections.get("network", {})
+
+    assert "security" not in live.sections
+    assert "ipv4_config" not in live.sections["network"]
+
+    for section_values in (*live.sections.values(), *live.module_sections.values()):
+        for value in section_values.values():
+            assert not isinstance(value, (bytes, bytearray, Message))
+
+    assert priv.hex() not in repr(live)
+    assert repr(priv) not in repr(live)
 
     assert live.module_enabled["telemetry"] is None
     assert live.module_enabled["mqtt"] is True
 
-    assert live.security.public_key == bytes(range(32))
+    assert live.security.public_key == pub
     assert live.security.private_key is not None
+    assert live.security.private_key.reveal() == priv
     assert live.security.admin_keys == (bytes(range(1, 33)),)
+
+
+def test_message_fields_skips_bytes_and_repeated_fields() -> None:
+    local_config = localonly_pb2.LocalConfig()
+    local_config.security.public_key = bytes(range(32))
+    local_config.security.private_key = bytes(range(64, 96))
+    local_config.security.admin_key.append(bytes(range(1, 33)))
+    local_config.security.is_managed = True
+
+    fields = detect._message_fields(local_config.security)
+
+    assert "private_key" not in fields
+    assert "public_key" not in fields
+    assert "admin_key" not in fields
+    assert fields["is_managed"] is True
 
 
 def test_live_config_from_protobufs_empty_security_keys_become_none() -> None:
