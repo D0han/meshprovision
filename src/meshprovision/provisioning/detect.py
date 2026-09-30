@@ -138,6 +138,8 @@ SECRET_FIELDS: Final[frozenset[tuple[str, str]]] = frozenset(
         ("security", "private_key"),
         ("security", "public_key"),
         ("security", "admin_key"),
+        ("network", "wifi_psk"),
+        ("mqtt", "password"),
     }
 )
 """``(section, field)`` pairs that must never be rendered unredacted."""
@@ -306,6 +308,14 @@ class LiveConfig:
             message with no ``enabled`` field at all (for example
             ``telemetry``), distinct from an ``enabled`` field that is
             simply ``False``.
+
+    :attr:`sections` and :attr:`module_sections` hold some plaintext
+    secrets (``network.wifi_psk``, ``mqtt.password``,
+    ``bluetooth.fixed_pin`` -- see :data:`SECRET_FIELDS`) alongside
+    ordinary diagnostics, so this class' ``repr`` is overridden to render
+    every :data:`SECRET_FIELDS` entry as ``"<redacted>"``. The field
+    values themselves are untouched -- use :meth:`value` or
+    :attr:`sections`/:attr:`module_sections` directly to read them.
     """
 
     node_id: NodeId
@@ -374,6 +384,54 @@ class LiveConfig:
         if section in MODULE_SECTIONS:
             return SectionKind.MODULE_CONFIG
         raise PlanConflictError(f"Unknown config section: {section!r}", field=section)
+
+    def __repr__(self) -> str:
+        """Return a repr that never exposes :data:`SECRET_FIELDS` values.
+
+        ``@dataclass`` leaves a class-supplied ``__repr__`` untouched, so
+        this override replaces the auto-generated one, which would
+        otherwise print ``sections``/``module_sections`` entries like
+        ``network.wifi_psk``, ``mqtt.password``, and
+        ``bluetooth.fixed_pin`` in plaintext. :attr:`security` is already
+        safe -- it delegates to :meth:`LiveSecurity.__repr__`.
+
+        Returns:
+            A redacted representation with every :data:`SECRET_FIELDS`
+            entry in :attr:`sections`/:attr:`module_sections` replaced by
+            the literal ``"<redacted>"``.
+        """
+        return (
+            f"LiveConfig(node_id={self.node_id!r}, short_name={self.short_name!r}, "
+            f"long_name={self.long_name!r}, hw_model={self.hw_model!r}, "
+            f"hw_model_raw={self.hw_model_raw!r}, role_raw={self.role_raw!r}, "
+            f"firmware_version={self.firmware_version!r}, security={self.security!r}, "
+            f"sections={_redacted_sections(self.sections)!r}, "
+            f"module_sections={_redacted_sections(self.module_sections)!r}, "
+            f"module_enabled={dict(self.module_enabled)!r})"
+        )
+
+
+def _redacted_sections(
+    mapping: Mapping[str, Mapping[str, object]],
+) -> dict[str, dict[str, object]]:
+    """Copy a ``{section: {field: value}}`` mapping, redacting secret fields.
+
+    Args:
+        mapping: A :attr:`LiveConfig.sections`- or
+            :attr:`LiveConfig.module_sections`-shaped mapping.
+
+    Returns:
+        A plain ``dict`` copy with every value whose ``(section, field)``
+        pair is in :data:`SECRET_FIELDS` replaced by the literal
+        ``"<redacted>"``.
+    """
+    return {
+        section: {
+            field_name: "<redacted>" if (section, field_name) in SECRET_FIELDS else value
+            for field_name, value in fields.items()
+        }
+        for section, fields in mapping.items()
+    }
 
 
 @dataclass(frozen=True, slots=True)

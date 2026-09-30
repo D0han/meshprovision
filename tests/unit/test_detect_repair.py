@@ -221,6 +221,48 @@ def test_live_security_repr_never_leaks_raw_bytes() -> None:
     assert bytes(range(32)).hex() not in text
 
 
+def test_live_config_repr_redacts_secret_fields() -> None:
+    local_config = localonly_pb2.LocalConfig()
+    local_config.network.wifi_psk = "hunter2secret"
+    local_config.bluetooth.fixed_pin = 654321
+    module_config = localonly_pb2.LocalModuleConfig()
+    module_config.mqtt.password = "mqttpw123"  # noqa: S105 -- fixture value, not a real credential
+
+    live = detect.live_config_from_protobufs(
+        local_config, module_config, node_id=NodeId.from_hex("deadbe01")
+    )
+    text = repr(live)
+
+    assert "hunter2secret" not in text
+    assert "654321" not in text
+    assert "mqttpw123" not in text
+    assert "<redacted>" in text
+
+    assert live.value("bluetooth", "fixed_pin") == 654321
+    assert live.value("network", "wifi_psk") == "hunter2secret"
+    assert live.value("mqtt", "password") == "mqttpw123"
+
+
+def test_secret_fields_name_real_protobuf_fields() -> None:
+    local_config = localonly_pb2.LocalConfig()
+    module_config = localonly_pb2.LocalModuleConfig()
+
+    config_field_names = {
+        (section, field.name)
+        for section in detect.CONFIG_SECTIONS
+        for field in getattr(local_config, section).DESCRIPTOR.fields
+    }
+    module_field_names = {
+        (section, field.name)
+        for section in detect.MODULE_SECTIONS
+        for field in getattr(module_config, section).DESCRIPTOR.fields
+    }
+    all_field_names = config_field_names | module_field_names
+
+    for pair in detect.SECRET_FIELDS:
+        assert pair in all_field_names, f"{pair} does not name a real protobuf field"
+
+
 def test_live_config_kind_of_unknown_raises() -> None:
     from meshprovision.provisioning.detect import LiveConfig
 
