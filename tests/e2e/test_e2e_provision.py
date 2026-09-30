@@ -700,6 +700,46 @@ def test_factory_node_is_not_flagged_as_possibly_belonging_to_someone_else(
     assert _CLI_FOREIGN_WARNING not in result.stderr
 
 
+def test_foreign_node_with_no_recorded_key_captures_its_reported_keypair(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """A FOREIGN node with no ``<hex>_pub`` row but a valid live keypair gets it captured.
+
+    Before the first-capture branch in ``_plan_node_keypair`` existed,
+    this fell through to the final no-op ``else``: the plan never
+    changed the key, and the database kept no identity baseline for
+    this node at all (Round 38 batch 1, the HIGH finding).
+    """
+    kp = keypair_factory()
+    iface = bus.use(
+        FakeMeshInterface("deadbe01", short_name="XR7", long_name="Someone Elses Radio")
+    )
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    first = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    loaded = ods.load_database(db_path)
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    pub = KeyRecord.from_row(rows["deadbe01_pub"])
+    priv = KeyRecord.from_row(rows["deadbe01_priv"])
+    assert pub.material() == kp.public
+    assert pub.origin is KeyOrigin.CAPTURED
+    assert priv.secret().reveal() == kp.private.reveal()
+    assert priv.origin is KeyOrigin.CAPTURED
+
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert second.exit_code == 0
+    assert "No changes needed." in second.stderr
+
+    loaded2 = ods.load_database(db_path)
+    rows2 = {row["key_ref"]: row for row in loaded2.keys}
+    assert rows2["deadbe01_pub"] == rows["deadbe01_pub"]
+    assert rows2["deadbe01_priv"] == rows["deadbe01_priv"]
+
+
 def test_zero_admin_keys_is_a_valid_outcome_never_repaired(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

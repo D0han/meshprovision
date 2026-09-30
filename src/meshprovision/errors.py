@@ -1262,7 +1262,9 @@ class AdminKeyRotationRefusedError(AdminKeyError):
 
     Attributes:
         reason: ``"adopt"`` when the device reports a different key than
-            recorded, ``"pending_key_recovered"`` when the device's key
+            recorded, ``"capture"`` when the node has no recorded key at
+            all and the device's reported key is already registered under
+            another ref, ``"pending_key_recovered"`` when the device's key
             matches a pending keypair from an earlier interrupted
             regenerate (see :mod:`meshprovision.db.pending_keys`),
             otherwise the same regenerate reason
@@ -1274,10 +1276,10 @@ class AdminKeyRotationRefusedError(AdminKeyError):
             ``"ADMIN1_pub"``, ...) whose material this node's recorded key
             currently backs.
         reported_fingerprint: A redacted fingerprint of the device's
-            reported public key, for the ``"adopt"`` reason -- never raw
-            key material. ``None`` until the CLI layer fills it in, and
-            always ``None`` for a regenerate reason (there is no device
-            report to fingerprint).
+            reported public key, for the ``"adopt"``/``"capture"`` reasons
+            -- never raw key material. ``None`` until the CLI layer fills
+            it in, and always ``None`` for a regenerate reason (there is no
+            device report to fingerprint).
     """
 
     def __init__(

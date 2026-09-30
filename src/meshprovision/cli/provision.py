@@ -1023,7 +1023,7 @@ def _finalize_admin_key_rotation_error(
     Returns:
         A new :class:`AdminKeyRotationRefusedError` carrying the same
         ``reason``/``admin_refs`` plus a filled-in ``hint`` and, for the
-        ``"adopt"`` reason, ``reported_fingerprint``.
+        ``"adopt"``/``"capture"`` reasons, ``reported_fingerprint``.
     """
     if exc.reason == "adopt":
         live_public = live.security.public_key
@@ -1044,6 +1044,17 @@ def _finalize_admin_key_rotation_error(
         )
         if others:
             hint = f"{hint} Also re-import: {others}."
+    elif exc.reason == "capture":
+        live_public = live.security.public_key
+        reported_fingerprint = fingerprint(live_public) if live_public is not None else "<unknown>"
+        hint = (
+            f"This node has no recorded key, and the key it reports (fingerprint "
+            f"{reported_fingerprint}) is already registered as {', '.join(exc.admin_refs)}. "
+            "If this device is that admin, re-run as `mesh admin bootstrap --ref <REF>` "
+            "naming it. Otherwise two devices may share one keypair (CVE-2025-52464 key "
+            "cloning) -- compare the fingerprint with the one the device itself shows, "
+            "and see docs/security.md."
+        )
     elif "CVE-2025-52464" in exc.reason:
         reported_fingerprint = None
         hint = (
@@ -1225,10 +1236,22 @@ def run_provision(
         own_material_refs = (
             match_admin_key_refs(db_public_key, public_key_map) if db_public_key is not None else ()
         )
+        # First capture under a named --ref: the operator explicitly named this
+        # alias, its recorded material is what matched (that's why it's about to
+        # be "adopted"), and node_key_compromised (run earlier in
+        # _plan_node_keypair) already proved the device holds the matching
+        # private key. Recording it as <hex>_pub rotates nothing, so this one
+        # ref is exempted from the identity-conflict set. Any OTHER matching ref
+        # -- including a clone of a different node's key -- still refuses.
+        exempt_refs = (
+            frozenset({schema.ref_for(opts.admin_ref, KeyType.ADMIN_PUBLIC)})
+            if db_public_key is None and opts.admin_ref is not None
+            else frozenset()
+        )
         identity_conflict_refs = tuple(
             ref
             for ref in match_admin_key_refs(live.security.public_key, public_key_map)
-            if ref not in own_material_refs
+            if ref not in own_material_refs and ref not in exempt_refs
         )
         admin_refs = tuple(sorted({*admin_refs, *identity_conflict_refs}))
 

@@ -41,7 +41,7 @@ def _empty_plan(make_live, template, keypair) -> ChangePlan:
         db_entry=record,
         state=detect.NodeState.PROVISIONED,
         admin_keys=(),
-        db_public_key=None,
+        db_public_key=keypair.public,
     )
     return build_plan(inputs)
 

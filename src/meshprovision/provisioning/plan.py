@@ -383,7 +383,9 @@ def _plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanW
             :func:`build_plan`, so it always precedes ``render_plan``,
             ``ctx.confirm``, ``--dry-run``'s output, the BLE PIN, and any
             device I/O -- nothing is ever written to the device or the
-            database on this path.
+            database on this path. When the node has no recorded key at all
+            (a first capture) and the live key is already registered
+            elsewhere, ``reason`` is ``"capture"`` rather than ``"adopt"``.
     """
     live_sec = inputs.live.security
     regenerate: bool
@@ -431,18 +433,31 @@ def _plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanW
                 field="public_key",
             ),
         )
+    elif inputs.db_public_key is None:
+        regenerate, reason, adopt, warnings = False, "", True, ()
     else:
         regenerate, reason, adopt, warnings = False, "", False, ()
 
+    first_capture = adopt and inputs.db_public_key is None and not inputs.pending_keypair_recovered
     if (regenerate or adopt) and inputs.node_key_admin_refs:
+        if first_capture:
+            message = (
+                f"{inputs.live.node_id.display} has no recorded key, and the key it reports "
+                f"is already registered as: {', '.join(inputs.node_key_admin_refs)}."
+            )
+        else:
+            message = (
+                f"{inputs.live.node_id.display}'s key would change while it backs authorized "
+                f"admin key(s): {', '.join(inputs.node_key_admin_refs)}."
+            )
         raise AdminKeyRotationRefusedError(
-            f"{inputs.live.node_id.display}'s key would change while it backs authorized "
-            f"admin key(s): {', '.join(inputs.node_key_admin_refs)}.",
+            message,
             # reason is already the right label for every branch above
             # (including "pending_key_recovered"), except the plain #7449
             # adopt branch, which leaves it "" -- fall back to "adopt" only
-            # there.
-            reason=reason or "adopt",
+            # there. The new first-capture branch also leaves it "" but
+            # needs its own distinct label.
+            reason="capture" if first_capture else (reason or "adopt"),
             admin_refs=inputs.node_key_admin_refs,
         )
 

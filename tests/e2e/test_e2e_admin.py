@@ -26,7 +26,7 @@ from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import ExitCode
-from tests.e2e.conftest import FakeMeshInterface, invoke
+from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -416,6 +416,148 @@ def test_admin_bootstrap_ref_re_running_on_the_same_device_is_a_no_op(
     after_rows = {row["key_ref"]: row for row in after.keys}
     assert KeyRecord.from_row(after_rows["ADMIN1_pub"]).material() == node_kp_public
     assert KeyRecord.from_row(after_rows["aaaa0001_pub"]).material() == node_kp_public
+
+
+def test_admin_bootstrap_ref_captures_the_keypair_of_a_node_with_no_recorded_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """``--ref`` on a FOREIGN node with no recorded key captures it, instead of skipping.
+
+    Before Round 38 batch 1, this fell through to
+    ``_plan_node_keypair``'s old no-op ``else``: ``_register_admin_alias``
+    then hit its ``keypair is None`` path with nothing in ``db.keys``,
+    warned "skipping", and exited 0 without ever registering the alias.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    kp = keypair_factory()
+    iface = bus.use(
+        FakeMeshInterface("deadbe01", short_name="XR7", long_name="Someone Elses Radio")
+    )
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert "skipping" not in result.stderr
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["ADMIN1_pub"]).material() == kp.public
+    assert KeyRecord.from_row(rows["ADMIN1_priv"]).secret().reveal() == kp.private.reveal()
+
+
+def test_admin_bootstrap_ref_exempts_its_own_previously_imported_material(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Guards the design step 2 ``--ref`` exemption: import, then bootstrap under it.
+
+    Without the exemption, this exact sequence -- ``admin import
+    ADMIN1=<pub>`` followed by ``admin bootstrap --ref ADMIN1`` on the
+    same device -- would exit 5: the live key (first capture, no
+    ``<hex>_pub`` row) would match ``ADMIN1_pub`` under the general
+    identity-conflict check and be refused with reason ``"capture"``.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    kp = keypair_factory()
+
+    imported = invoke(runner, ["admin", "import", f"ADMIN1={kp.public_b64}"], env)
+    assert imported.exit_code == 0
+
+    iface = bus.use(
+        FakeMeshInterface("deadbe01", short_name="XR7", long_name="Someone Elses Radio")
+    )
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["ADMIN1_pub"]).material() == kp.public
+    assert KeyRecord.from_row(rows["deadbe01_pub"]).material() == kp.public
+
+
+@pytest.mark.parametrize(
+    ("cli_args", "expected_ref"),
+    [
+        pytest.param(
+            ["provision", "--port", "/dev/ttyFAKE0", "--yes"],
+            "aaaa0001_pub",
+            id="plain_provision",
+        ),
+        pytest.param(
+            ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN1", "--yes"],
+            "aaaa0001_pub",
+            id="ref_bootstrap_other_ref_still_matches",
+        ),
+    ],
+)
+def test_clone_of_an_existing_admin_key_is_refused_even_with_its_own_ref(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+    cli_args: list[str],
+    expected_ref: str,
+) -> None:
+    """CVE-2025-52464 clone guard: a different device reporting an existing admin's key is refused.
+
+    ``aaaa0001`` is seeded with its own keypair K, and ``ADMIN1`` is
+    registered as an alias of that same K. A DIFFERENT device
+    (``deadbe01``) then reports K too -- either a genuine key clone or an
+    impostor. The first-capture branch (Round 38 batch 1) must still
+    refuse this: even passing ``--ref ADMIN1`` only exempts ``ADMIN1_pub``
+    itself, never ``aaaa0001_pub``, which is the ref that actually
+    matches.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["ADMIN1"]))
+    shared_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="aaaa0001", management=ManagementMode.TEMPLATE)],
+        keys=[
+            *KeyRecord.for_keypair("aaaa0001", shared_kp, origin=KeyOrigin.GENERATED),
+            *KeyRecord.for_keypair("ADMIN1", shared_kp, origin=KeyOrigin.GENERATED),
+        ],
+    )
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    iface = bus.use(
+        FakeMeshInterface("deadbe01", short_name="XR7", long_name="Someone Elses Radio")
+    )
+    iface.localNode.localConfig.security.public_key = shared_kp.public
+    iface.localNode.localConfig.security.private_key = shared_kp.private.reveal()
+
+    result = invoke(runner, cli_args, env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "has no recorded key" in result.stderr
+    assert "CVE-2025-52464" in result.stderr
+    assert expected_ref in result.stderr
+    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert iface.localNode.written_sections == []
+    assert db_fingerprint(db_path) == before
 
 
 def test_admin_bootstrap_new_ref_on_a_different_node_still_succeeds(

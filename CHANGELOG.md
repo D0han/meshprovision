@@ -262,6 +262,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A node with no recorded key (`db_public_key is None`) but a complete,
+  audit-clean live keypair fell through `_plan_node_keypair`'s branch
+  order into a final no-op `else`, so its keypair was never captured into
+  the database. Consequently `mesh admin bootstrap --ref ADMIN1` on such
+  a node warned "No public key material available to register alias
+  'ADMIN1'; skipping." and exited 0 without ever registering the alias.
+  Security-adjacent: with no identity baseline recorded, a later device
+  claiming the same node id with a different key would be accepted
+  without comment. Added a first-capture branch that adopts the device's
+  reported keypair (`origin=captured`) instead. A key already registered
+  under another ref is still refused (`reason="capture"`), unless that
+  ref is the one being bootstrapped with `--ref` -- the operator named it
+  explicitly, and reaching this branch already proves the device holds
+  the matching private key, so recording it rotates nothing.
 - `mesh adopt`'s `adopted_record()` unconditionally overwrote `hw_model`
   and `firmware_version` from the current report, unlike the "empty is no
   new information" guard `role`/`region` already had. Unreachable from a

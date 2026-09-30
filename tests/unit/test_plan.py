@@ -164,7 +164,7 @@ def test_already_correct_node_plan_is_empty(make_live, template, keypair) -> Non
         db_entry=record,
         state=detect.NodeState.PROVISIONED,
         admin_keys=(),
-        db_public_key=None,
+        db_public_key=keypair.public,
     )
     plan = build_plan(inputs)
 
@@ -1273,6 +1273,50 @@ def test_db_public_key_differs_adopts_device_key(
     assert not any(section.section == "security" for section in plan.sections)
     assert plan.key_plan.is_empty is False  # the run still has work to do
     assert plan.is_empty is False
+
+
+def test_no_recorded_key_captures_the_devices_keypair(make_live, template, keypair) -> None:
+    """A node with no recorded key and a valid live keypair gets it captured.
+
+    Before the first-capture branch existed, this fell through to the old
+    no-op ``else`` branch.
+    """
+    live = make_live(template, security=make_security(keypair=keypair))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FOREIGN,
+        db_public_key=None,
+    )
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.adopt_device_key is True
+    assert plan.key_plan.regenerate is False
+    assert plan.key_plan.regenerate_reason == ""
+    assert not any(section.section == "security" for section in plan.sections)
+    assert plan.key_plan.is_empty is False
+
+
+def test_first_capture_refuses_with_capture_reason_when_key_is_registered_elsewhere(
+    make_live, template, keypair
+) -> None:
+    live = make_live(template, security=make_security(keypair=keypair))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FOREIGN,
+        db_public_key=None,
+        node_key_admin_refs=("ADMIN1_pub",),
+    )
+
+    with pytest.raises(AdminKeyRotationRefusedError) as excinfo:
+        build_plan(inputs)
+
+    assert excinfo.value.reason == "capture"
+    assert excinfo.value.admin_refs == ("ADMIN1_pub",)
+    assert "has no recorded key" in excinfo.value.message
 
 
 # ---------------------------------------------------------------------------

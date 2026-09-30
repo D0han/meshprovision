@@ -67,6 +67,11 @@ Connects over Serial/BLE/TCP, classifies the node as `FACTORY` /
 `PROVISIONED` / `FOREIGN`, builds and prints an exact change plan, and
 (unless `--dry-run`) applies it and records the result.
 
+A node with no recorded key that reports a valid keypair has that
+keypair recorded (`origin=captured`), not regenerated; a key already
+registered under another ref is refused, unless that ref is the one
+being bootstrapped with `mesh admin bootstrap --ref`.
+
 **Transport selection priority:** `--port` > `--ble-address`/`--ble-scan`
 > `--host` > auto (serial first; exactly one port is auto-used, zero
 ports offers BLE then a TCP host prompt, several ports prompts).
