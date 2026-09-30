@@ -40,10 +40,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from meshprovision.config.settings import format_validation_error
 from meshprovision.db.observed_keys import OBSERVED_PREFIX, RefProblem, owner_ref_problem
-from meshprovision.enums import region_table, role_table
+from meshprovision.enums import (
+    EnumTable,
+    gps_mode_table,
+    modem_preset_table,
+    rebroadcast_mode_table,
+    region_table,
+    role_table,
+)
 from meshprovision.errors import (
     MAX_ADMIN_KEYS,
     AdminKeyCapacityError,
+    EnumMappingError,
     NameCapacityError,
     NamePatternError,
     TemplateValidationError,
@@ -146,6 +154,47 @@ def _normalize_str_tuple(value: object) -> tuple[str, ...]:
     return tuple(items)
 
 
+def _canonicalize_enum_field(value: object, *, table: EnumTable, field: str) -> object:
+    """Canonicalize a template enum field against its protobuf table.
+
+    Shared by the ``role``/``rebroadcast_mode``/``region``/``modem_preset``/
+    ``gps_mode`` validators: ``None`` passes through unchanged (these
+    fields are all optional except ``role``/``region``, which have string
+    defaults and are never ``None``). Any other value is resolved to its
+    canonical protobuf enum name via :meth:`EnumTable.to_name`, so a
+    lowercase or typo'd value either becomes the exact stored form
+    ``apply_field`` and ``values_equal`` expect, or is rejected here
+    instead of surfacing mid-``mesh provision``.
+
+    Args:
+        value: The raw field value, before pydantic's own type coercion.
+        table: The :class:`EnumTable` to validate ``value`` against.
+        field: Dotted ``"<section>.<field>"`` name, for the error.
+
+    Returns:
+        ``None``, or the canonical protobuf enum name.
+
+    Raises:
+        TemplateValidationError: If ``value`` is not ``None`` and does not
+            resolve to a known name in ``table``.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, int | str):
+        raise TemplateValidationError(
+            f"{field} must be a string or integer, got {value!r}.",
+            field=field,
+        )
+    try:
+        return table.to_name(value)
+    except EnumMappingError as exc:
+        known = ", ".join(table.names()[:8])
+        raise TemplateValidationError(
+            f"{field} {value!r} is not a known {table.name}. Known values include: {known}.",
+            field=field,
+        ) from exc
+
+
 class DeviceSection(BaseModel):
     """``config.device`` fields applied at provisioning time.
 
@@ -153,10 +202,11 @@ class DeviceSection(BaseModel):
     ``meshtastic.protobuf.config_pb2.Config.DeviceConfig`` message.
 
     Attributes:
-        role: Device role name, validated against
+        role: Device role name, validated and canonicalized against
             :func:`meshprovision.enums.role_table`.
-        rebroadcast_mode: Rebroadcast mode name, passed through
-            unvalidated; provisioning maps it to the protobuf enum.
+        rebroadcast_mode: Rebroadcast mode name, validated and
+            canonicalized against
+            :func:`meshprovision.enums.rebroadcast_mode_table`.
         node_info_broadcast_secs: Node-info broadcast interval, seconds.
         button_gpio: GPIO pin number for the user button, when overridden.
         buzzer_gpio: GPIO pin number for the buzzer, when overridden.
@@ -179,6 +229,34 @@ class DeviceSection(BaseModel):
     led_heartbeat_disabled: bool | None = None
     tzdef: str | None = None
 
+    @field_validator("role", mode="before")
+    @classmethod
+    def _canonicalize_role(cls, value: object) -> object:
+        """Canonicalize ``role`` against :func:`~meshprovision.enums.role_table`.
+
+        Args:
+            value: The raw field value.
+
+        Returns:
+            The canonical protobuf enum name.
+        """
+        return _canonicalize_enum_field(value, table=role_table(), field="device.role")
+
+    @field_validator("rebroadcast_mode", mode="before")
+    @classmethod
+    def _canonicalize_rebroadcast_mode(cls, value: object) -> object:
+        """Canonicalize ``rebroadcast_mode`` against its enum table.
+
+        Args:
+            value: The raw field value.
+
+        Returns:
+            ``None``, or the canonical protobuf enum name.
+        """
+        return _canonicalize_enum_field(
+            value, table=rebroadcast_mode_table(), field="device.rebroadcast_mode"
+        )
+
 
 class LoraSection(BaseModel):
     """``config.lora`` fields applied at provisioning time.
@@ -187,13 +265,15 @@ class LoraSection(BaseModel):
     ``meshtastic.protobuf.config_pb2.Config.LoRaConfig`` message.
 
     Attributes:
-        region: LoRa region name, validated against
+        region: LoRa region name, validated and canonicalized against
             :func:`meshprovision.enums.region_table`. Defaults to
             ``"EU_868"`` -- the Meshtastic ``RegionCode`` covering Poland;
             there is no ``"PL"`` region code in the protobuf.
         use_preset: Whether ``modem_preset`` governs the radio parameters
             (as opposed to manual bandwidth/spread-factor/coding-rate).
         modem_preset: Modem preset name, when ``use_preset`` is true.
+            Validated and canonicalized against
+            :func:`meshprovision.enums.modem_preset_table`.
         hop_limit: Maximum mesh hop count, 0-7.
         tx_enabled: Whether the radio is allowed to transmit.
         tx_power: Transmit power override, in dBm, when set.
@@ -223,6 +303,34 @@ class LoraSection(BaseModel):
     ignore_mqtt: bool | None = None
     config_ok_to_mqtt: bool | None = None
 
+    @field_validator("region", mode="before")
+    @classmethod
+    def _canonicalize_region(cls, value: object) -> object:
+        """Canonicalize ``region`` against :func:`~meshprovision.enums.region_table`.
+
+        Args:
+            value: The raw field value.
+
+        Returns:
+            The canonical protobuf enum name.
+        """
+        return _canonicalize_enum_field(value, table=region_table(), field="lora.region")
+
+    @field_validator("modem_preset", mode="before")
+    @classmethod
+    def _canonicalize_modem_preset(cls, value: object) -> object:
+        """Canonicalize ``modem_preset`` against its enum table.
+
+        Args:
+            value: The raw field value.
+
+        Returns:
+            ``None``, or the canonical protobuf enum name.
+        """
+        return _canonicalize_enum_field(
+            value, table=modem_preset_table(), field="lora.modem_preset"
+        )
+
 
 class PositionSection(BaseModel):
     """``config.position`` fields applied at provisioning time.
@@ -251,7 +359,9 @@ class PositionSection(BaseModel):
             a smart broadcast fires.
         broadcast_smart_minimum_interval_secs: Minimum time between smart
             broadcasts, seconds.
-        gps_mode: GPS mode name (enabled/disabled/not-present).
+        gps_mode: GPS mode name (enabled/disabled/not-present), validated
+            and canonicalized against
+            :func:`meshprovision.enums.gps_mode_table`.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -293,6 +403,19 @@ class PositionSection(BaseModel):
                         ),
                     )
         return data
+
+    @field_validator("gps_mode", mode="before")
+    @classmethod
+    def _canonicalize_gps_mode(cls, value: object) -> object:
+        """Canonicalize ``gps_mode`` against its enum table.
+
+        Args:
+            value: The raw field value.
+
+        Returns:
+            ``None``, or the canonical protobuf enum name.
+        """
+        return _canonicalize_enum_field(value, table=gps_mode_table(), field="position.gps_mode")
 
 
 class PowerSection(BaseModel):
@@ -525,9 +648,11 @@ class TemplateConfig(BaseModel):
         both enabled/disabled lists; both name patterns fit their
         firmware byte limits; the short-name capacity floor (only a hard
         error under ``name_capacity_strict``); ``admin_nodes`` count and
-        reference format; the admin-channel interlock; the
-        zero-admin-keys lockdown interlock; and that ``device.role``/
-        ``lora.region`` are known enum names.
+        reference format; the admin-channel interlock; and the
+        zero-admin-keys lockdown interlock. Enum-typed fields
+        (``device.role``, ``device.rebroadcast_mode``, ``lora.region``,
+        ``lora.modem_preset``, ``position.gps_mode``) are validated and
+        canonicalized earlier, per-field, rather than here.
 
         Returns:
             ``self``, unchanged -- this method only validates.
@@ -644,21 +769,6 @@ class TemplateConfig(BaseModel):
                 "nobody able to administer it.",
                 field="security.is_managed",
                 hint="Add 1-3 refs to admin_nodes, or set security.is_managed to false.",
-            )
-
-        if not role_table().contains_name(self.device.role):
-            known = ", ".join(role_table().names()[:8])
-            raise TemplateValidationError(
-                f"device.role {self.device.role!r} is not a known role. Known "
-                f"roles include: {known}.",
-                field="device.role",
-            )
-        if not region_table().contains_name(self.lora.region):
-            known = ", ".join(region_table().names()[:8])
-            raise TemplateValidationError(
-                f"lora.region {self.lora.region!r} is not a known region. Known "
-                f"regions include: {known}.",
-                field="lora.region",
             )
 
         return self

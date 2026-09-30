@@ -43,8 +43,11 @@ __all__ = [
     "EnumSource",
     "EnumTable",
     "enum_tables",
+    "gps_mode_table",
     "hw_model_table",
+    "modem_preset_table",
     "normalize_enum_name",
+    "rebroadcast_mode_table",
     "region_table",
     "role_table",
 ]
@@ -66,6 +69,18 @@ _HW_MODEL_PATHS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
 _REGION_PATHS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("meshtastic.protobuf.config_pb2", ("Config", "LoRaConfig", "RegionCode")),
     ("meshtastic.config_pb2", ("Config", "LoRaConfig", "RegionCode")),
+)
+_REBROADCAST_MODE_PATHS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("meshtastic.protobuf.config_pb2", ("Config", "DeviceConfig", "RebroadcastMode")),
+    ("meshtastic.config_pb2", ("Config", "DeviceConfig", "RebroadcastMode")),
+)
+_MODEM_PRESET_PATHS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("meshtastic.protobuf.config_pb2", ("Config", "LoRaConfig", "ModemPreset")),
+    ("meshtastic.config_pb2", ("Config", "LoRaConfig", "ModemPreset")),
+)
+_GPS_MODE_PATHS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("meshtastic.protobuf.config_pb2", ("Config", "PositionConfig", "GpsMode")),
+    ("meshtastic.config_pb2", ("Config", "PositionConfig", "GpsMode")),
 )
 
 # ---------------------------------------------------------------------------
@@ -197,6 +212,38 @@ _FALLBACK_HW_MODEL: Final[dict[str, int]] = {
     "TLORA_C6": 83,
     "XIAO_NRF52_KIT": 88,
     "PRIVATE_HW": 255,
+}
+
+_FALLBACK_REBROADCAST_MODE: Final[dict[str, int]] = {
+    "ALL": 0,
+    "ALL_SKIP_DECODING": 1,
+    "LOCAL_ONLY": 2,
+    "KNOWN_ONLY": 3,
+    "NONE": 4,
+    "CORE_PORTNUMS_ONLY": 5,
+}
+
+_FALLBACK_MODEM_PRESET: Final[dict[str, int]] = {
+    "LONG_FAST": 0,
+    "LONG_SLOW": 1,
+    "VERY_LONG_SLOW": 2,
+    "MEDIUM_SLOW": 3,
+    "MEDIUM_FAST": 4,
+    "SHORT_SLOW": 5,
+    "SHORT_FAST": 6,
+    "LONG_MODERATE": 7,
+    "SHORT_TURBO": 8,
+    "LONG_TURBO": 9,
+    "LITE_FAST": 10,
+    "LITE_SLOW": 11,
+    "NARROW_FAST": 12,
+    "NARROW_SLOW": 13,
+}
+
+_FALLBACK_GPS_MODE: Final[dict[str, int]] = {
+    "DISABLED": 0,
+    "ENABLED": 1,
+    "NOT_PRESENT": 2,
 }
 
 
@@ -520,6 +567,48 @@ def region_table() -> EnumTable:
         The :class:`EnumTable` for ``config.lora.region``.
     """
     return _build_table("region", _REGION_PATHS, _FALLBACK_REGION)
+
+
+@cache
+def rebroadcast_mode_table() -> EnumTable:
+    """Return the RebroadcastMode enum table, cached after first build.
+
+    Used only for template-load-time validation of
+    ``device.rebroadcast_mode`` -- deliberately not part of
+    :func:`enum_tables`, which drives the ODS dropdown lists.
+
+    Returns:
+        The :class:`EnumTable` for ``config.device.rebroadcast_mode``.
+    """
+    return _build_table("rebroadcast_mode", _REBROADCAST_MODE_PATHS, _FALLBACK_REBROADCAST_MODE)
+
+
+@cache
+def modem_preset_table() -> EnumTable:
+    """Return the ModemPreset enum table, cached after first build.
+
+    Used only for template-load-time validation of
+    ``lora.modem_preset`` -- deliberately not part of :func:`enum_tables`,
+    which drives the ODS dropdown lists.
+
+    Returns:
+        The :class:`EnumTable` for ``config.lora.modem_preset``.
+    """
+    return _build_table("modem_preset", _MODEM_PRESET_PATHS, _FALLBACK_MODEM_PRESET)
+
+
+@cache
+def gps_mode_table() -> EnumTable:
+    """Return the GpsMode enum table, cached after first build.
+
+    Used only for template-load-time validation of ``position.gps_mode``
+    -- deliberately not part of :func:`enum_tables`, which drives the ODS
+    dropdown lists.
+
+    Returns:
+        The :class:`EnumTable` for ``config.position.gps_mode``.
+    """
+    return _build_table("gps_mode", _GPS_MODE_PATHS, _FALLBACK_GPS_MODE)
 
 
 def enum_tables() -> Mapping[str, EnumTable]:

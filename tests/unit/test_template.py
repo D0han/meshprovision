@@ -290,6 +290,39 @@ def test_unknown_lora_region_raises() -> None:
         TemplateConfig(lora={"region": "NOT_A_REGION"})
 
 
+@pytest.mark.parametrize(
+    ("kwargs", "field"),
+    [
+        ({"device": {"role": "NOT_A_ROLE"}}, "device.role"),
+        ({"device": {"rebroadcast_mode": "NOT_A_MODE"}}, "device.rebroadcast_mode"),
+        ({"lora": {"region": "NOT_A_REGION"}}, "lora.region"),
+        ({"lora": {"modem_preset": "long_fsat"}}, "lora.modem_preset"),
+        ({"position": {"gps_mode": "NOT_A_MODE"}}, "position.gps_mode"),
+    ],
+)
+def test_unknown_enum_field_raises_naming_the_field(kwargs: dict, field: str) -> None:
+    """A typo'd enum-name field is rejected at template-load time, naming the field.
+
+    Covers all 5 enum-typed template fields, not just role/region --
+    rebroadcast_mode, modem_preset, and gps_mode previously passed
+    validation with a typo and only failed mid-``mesh provision``.
+    """
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig(**kwargs)
+    assert exc_info.value.field == field
+
+
+def test_enum_fields_are_canonicalized_to_upper_snake() -> None:
+    """A lowercase enum value is stored canonicalized, not passed through verbatim.
+
+    Without this, ``role: router`` would pass validation but then fail
+    ``apply_field``'s exact-match protobuf lookup at apply time, and
+    ``values_equal`` would never match it against the live ``"ROUTER"``.
+    """
+    cfg = TemplateConfig(device={"role": "router"})
+    assert cfg.device.role == "ROUTER"
+
+
 def test_position_fixed_field_rejected() -> None:
     """A template setting fixed_latitude/longitude/altitude is refused outright.
 
