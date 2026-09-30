@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -354,6 +355,78 @@ def test_duplicate_list_entries_fold_into_template_validation_error() -> None:
 
     with pytest.raises((TemplateValidationError, ValidationError)):
         TemplateConfig(admin_nodes=["A1", "A1"])
+
+
+_Outcome = TemplateConfig | TemplateValidationError
+_Check = Callable[[_Outcome], None]
+
+
+def _assert_raises_with_snippets(*snippets: str) -> _Check:
+    def check(outcome: _Outcome) -> None:
+        assert isinstance(outcome, TemplateValidationError)
+        message = str(outcome)
+        for snippet in snippets:
+            assert snippet in message
+
+    return check
+
+
+def _assert_admin_nodes_equal(expected: tuple[str, ...]) -> _Check:
+    def check(outcome: _Outcome) -> None:
+        assert isinstance(outcome, TemplateConfig)
+        assert outcome.admin_nodes == expected
+
+    return check
+
+
+def _assert_enabled_options_equal(expected: tuple[str, ...]) -> _Check:
+    def check(outcome: _Outcome) -> None:
+        assert isinstance(outcome, TemplateConfig)
+        assert outcome.enabled_options == expected
+
+    return check
+
+
+@pytest.mark.parametrize(
+    ("text", "check"),
+    [
+        (
+            "version: 1\nadmin_nodes: ADMIN1\n",
+            _assert_raises_with_snippets("must be a list of strings", "admin_nodes"),
+        ),
+        (
+            "version: 1\nadmin_nodes:\n  - 1\n",
+            _assert_raises_with_snippets("expected a string, got 1"),
+        ),
+        (
+            'version: 1\nadmin_nodes:\n  - "  ADMIN1  "\n  - ""\n  - "   "\n',
+            _assert_admin_nodes_equal(("ADMIN1",)),
+        ),
+        (
+            'version: 1\nenabled_options:\n  - "  MQTT "\n',
+            _assert_enabled_options_equal(("mqtt",)),
+        ),
+        (
+            'version: 1\nadmin_nodes:\n  - "ADMIN1"\n  - " ADMIN1 "\n',
+            _assert_raises_with_snippets("duplicate entries", "ADMIN1"),
+        ),
+    ],
+)
+def test_string_list_fields_normalize_and_reject(text: str, check: _Check) -> None:
+    """Exercise every branch of ``_normalize_str_tuple`` through ``load_template_text``.
+
+    Covers: a bare string (not a list) rejected outright; a non-string list
+    element rejected by repr; whitespace stripped and blank entries dropped;
+    strip happening before ``enabled_options`` is lowercased (not after,
+    which would leave stray whitespace); and a duplicate that only becomes
+    one once both entries are stripped.
+    """
+    try:
+        cfg = load_template_text(text, source="<test>")
+    except TemplateValidationError as exc:
+        check(exc)
+    else:
+        check(cfg)
 
 
 # ---------------------------------------------------------------------------
