@@ -66,7 +66,11 @@ nobody able to administer it.
 
 A node whose recorded key is also an authorized admin key (named in
 `admin_nodes`, or authorized on another node's `authorized_admin_keys`)
-can never have that key silently replaced. `mesh provision`/`mesh admin
+can never have that key silently replaced. Only a *template-managed*
+node's `authorized_admin_keys` counts as that evidence — an observed
+(adopted-but-not-enrolled) node's self-reported admin-key list is
+untrusted and does not make a key admin-bearing, so it cannot block
+remediation of it. `mesh provision`/`mesh admin
 bootstrap` refuse outright — with `AdminKeyRotationRefusedError` — the
 moment such a run would regenerate or adopt a new keypair for it, whether
 that regeneration was forced (`--force-regenerate-key`), triggered by a

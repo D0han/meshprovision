@@ -28,7 +28,7 @@ from meshprovision.crypto import redact, weakkeys
 from meshprovision.crypto.keys import public_key_matches
 from meshprovision.db import schema
 from meshprovision.db.observed_keys import is_observed_ref
-from meshprovision.db.schema import KeyOrigin, KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import KeyMaterialError, NamespaceExhaustedError, WeakKeySeverity
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import ResolvedAdminKey
@@ -128,6 +128,17 @@ def node_key_admin_refs(
     self-reported key -- the live value is exactly what an impostor
     controls.
 
+    A node's ``authorized_admin_keys`` only counts as admin-bearing
+    evidence when that node is ``ManagementMode.TEMPLATE`` -- i.e. it
+    reflects what ``mesh provision`` itself wrote to the device, under
+    operator control. An ``OBSERVED`` node's ``authorized_admin_keys`` is
+    untrusted, device-reported self-description (``mesh adopt`` records
+    whatever the connected device claims its own admin keys are, and
+    that claim is broadcast on the mesh for anyone to repeat), so it must
+    never be able to permanently pin another node's key as admin-bearing
+    and block its remediation (weak/CVE-key regeneration, a missing-key
+    capture). The template's own ``admin_nodes`` evidence is unaffected.
+
     Args:
         node_id: The node to check.
         keys: The already-open key repository.
@@ -138,19 +149,24 @@ def node_key_admin_refs(
         Every ``Keys`` sheet public-key reference whose material equals
         this node's ``<hex>_pub`` row and that actually functions as an
         admin ref -- named in ``template.admin_nodes``, or authorized on
-        at least one non-archived node's ``authorized_admin_keys``. This
-        excludes another node's own identity key merely for sharing the
-        same material (the clone/CVE-2025-52464 duplicate-key case) unless
-        that other node's ref is itself functioning as an admin the same
-        way. Empty when there is no ``<hex>_pub`` row for this node, or
-        when the row exists but backs no admin ref at all.
+        at least one non-archived, ``TEMPLATE``-managed node's
+        ``authorized_admin_keys``. This excludes another node's own
+        identity key merely for sharing the same material (the
+        clone/CVE-2025-52464 duplicate-key case) unless that other node's
+        ref is itself functioning as an admin the same way. Empty when
+        there is no ``<hex>_pub`` row for this node, or when the row
+        exists but backs no admin ref at all.
     """
     own_pub = keys.find(schema.ref_for(node_id.hex, KeyType.ADMIN_PUBLIC))
     if own_pub is None:
         return ()
     material = own_pub.material()
 
-    active_nodes = tuple(node for node in nodes.all() if not node.is_archived)
+    active_nodes = tuple(
+        node
+        for node in nodes.all()
+        if not node.is_archived and node.management is ManagementMode.TEMPLATE
+    )
     template_refs = frozenset(template.admin_nodes)
 
     refs = [

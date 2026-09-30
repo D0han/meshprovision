@@ -262,6 +262,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `node_key_admin_refs` counted `authorized_admin_keys` on any
+  non-archived node, including `OBSERVED` (adopted-but-not-enrolled)
+  rows, as evidence a key is admin-bearing. Since `mesh adopt` records
+  whatever a connected device self-reports as its own admin keys, and
+  an admin's public key is broadcast on the mesh, any device could claim
+  it and permanently pin that key's admin status — blocking every
+  remediation path (`--force-regenerate-key`, the weak-key audit, the
+  CVE-2025-52464 firmware window, a missing-key capture) for the node
+  that actually holds it, with no flag to override and no recourse short
+  of `mesh db forget`ing the adopted stranger node. Narrowed the
+  evidence to `TEMPLATE`-managed rows only — what `mesh provision`
+  itself wrote to a device, under operator control. `template.admin_nodes`
+  evidence and `admin_custody.collect_admins` (display-only, `mesh admin
+  list`) are unaffected.
 - A node with no recorded key (`db_public_key is None`) but a complete,
   audit-clean live keypair fell through `_plan_node_keypair`'s branch
   order into a final no-op `else`, so its keypair was never captured into

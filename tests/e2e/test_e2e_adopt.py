@@ -412,10 +412,23 @@ def _seed_canonicalized_admin_node(seed_db: Callable[..., Path], *, admin_kp: Ke
     ``admin_kp`` canonicalizes this observed ref to ``deadbe01_pub``,
     which is what makes ``deadbe01`` admin-bearing -- the standard
     brownfield flow the finding reproduces its probe scenario against.
+
+    ``aaaa0001`` is seeded ``TEMPLATE``-managed -- a genuine,
+    operator-controlled authorization, per S38-2 the only kind of
+    ``authorized_admin_keys`` evidence ``node_key_admin_refs`` now
+    honors. (An ``OBSERVED`` node's self-reported authorization no
+    longer pins admin status; covered separately in
+    ``tests/e2e/test_e2e_admin.py``.)
     """
     observed_ref = observed_key_ref(admin_kp.public)
     seed_db(
-        nodes=[NodeRecord(node_id="aaaa0001", authorized_admin_keys=(observed_ref,))],
+        nodes=[
+            NodeRecord(
+                node_id="aaaa0001",
+                management=ManagementMode.TEMPLATE,
+                authorized_admin_keys=(observed_ref,),
+            )
+        ],
         keys=[
             KeyRecord.from_material(
                 observed_ref.removesuffix("_pub"),

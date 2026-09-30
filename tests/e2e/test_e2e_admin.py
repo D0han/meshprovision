@@ -1694,3 +1694,106 @@ def test_impostor_reporting_an_unrelated_admins_public_key_is_refused(
     after = ods.load_database(db_path)
     assert after.nodes == before.nodes
     assert after.keys == before.keys
+
+
+def test_adopted_strangers_reported_admin_key_no_longer_pins_remediation(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """S38-2: an adopted stranger's self-reported admin key must not pin remediation.
+
+    ``deadbe01`` is a genuine, template-managed node with no admin
+    designation of its own. ``deadbe02`` -- an unrelated adopted
+    stranger, never enrolled -- self-reports ``deadbe01``'s public key
+    (broadcast on the mesh, so any device can repeat it) in its own
+    ``security.admin_key``. ``mesh adopt`` resolves that claim straight
+    to the existing ``deadbe01_pub`` ref, so before this fix
+    ``node_key_admin_refs`` treated ``deadbe02``'s ``OBSERVED`` row as
+    proof ``deadbe01`` is admin-bearing, permanently refusing every
+    remediation path for it. An untrusted, device-reported claim must
+    never have that power: ``--force-regenerate-key`` now succeeds.
+    """
+    deadbe01_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE)],
+        keys=list(KeyRecord.for_keypair("deadbe01", deadbe01_kp, origin=KeyOrigin.GENERATED)),
+    )
+
+    stranger = bus.use(FakeMeshInterface("deadbe02"))
+    stranger.localNode.localConfig.security.admin_key.append(deadbe01_kp.public)
+    adopt_result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert adopt_result.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    nodes_by_id = {row["node_id"]: NodeRecord.from_row(row) for row in loaded.nodes}
+    assert nodes_by_id["deadbe02"].management is ManagementMode.OBSERVED
+    assert nodes_by_id["deadbe02"].authorized_admin_keys == ("deadbe01_pub",)
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    result = invoke(
+        runner,
+        ["provision", "--port", "/dev/ttyFAKE0", "--force-regenerate-key", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert iface.localNode.written_sections != []
+
+    after = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    after_pub = next(row for row in after.keys if row["key_ref"] == "deadbe01_pub")
+    assert KeyRecord.from_row(after_pub).material() != deadbe01_kp.public
+
+
+def test_template_managed_authorization_still_refuses_regeneration(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Negative control for the fix above: a genuine TEMPLATE authorization still gates.
+
+    Same setup as the adopted-stranger scenario, but this time
+    ``deadbe01``'s key is *also* genuinely authorized by a
+    template-managed node (``cafe0001``), not just the observed
+    stranger's claim. The fix only narrows ``OBSERVED``-row evidence --
+    ``TEMPLATE``-row evidence must keep refusing exactly as before.
+    """
+    deadbe01_kp = keypair_factory()
+    seed_db(
+        nodes=[
+            NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE),
+            NodeRecord(
+                node_id="cafe0001",
+                management=ManagementMode.TEMPLATE,
+                authorized_admin_keys=("deadbe01_pub",),
+            ),
+        ],
+        keys=list(KeyRecord.for_keypair("deadbe01", deadbe01_kp, origin=KeyOrigin.GENERATED)),
+    )
+
+    stranger = bus.use(FakeMeshInterface("deadbe02"))
+    stranger.localNode.localConfig.security.admin_key.append(deadbe01_kp.public)
+    adopt_result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert adopt_result.exit_code == 0
+
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = ods.load_database(db_path)
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    result = invoke(
+        runner,
+        ["provision", "--port", "/dev/ttyFAKE0", "--force-regenerate-key", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "admin key" in result.stderr.lower()
+    assert iface.localNode.written_sections == []
+
+    after = ods.load_database(db_path)
+    assert after.nodes == before.nodes
+    assert after.keys == before.keys

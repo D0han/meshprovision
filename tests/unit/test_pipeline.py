@@ -15,7 +15,7 @@ from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.observed_keys import observed_key_ref, observed_owner
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyOrigin, KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.pipeline import (
@@ -777,7 +777,13 @@ def test_node_key_admin_refs_includes_an_aliased_admin_ref(
 def test_node_key_admin_refs_includes_an_observed_ref(
     admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository, keypair: KeyPair
 ) -> None:
-    """A ``mesh adopt``-minted ``observed-*`` ref with identical material is included."""
+    """A ``mesh adopt``-minted ``observed-*`` ref with identical material is included.
+
+    ``bbbb0001`` must be ``TEMPLATE``-managed for its
+    ``authorized_admin_keys`` to count -- an ``OBSERVED`` row's
+    self-reported authorization is untrusted evidence and is excluded
+    (S38-2).
+    """
     pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
     admin_refs_keys.upsert(pub)
     admin_refs_keys.upsert(priv)
@@ -789,7 +795,11 @@ def test_node_key_admin_refs_includes_an_observed_ref(
     )
     admin_refs_nodes.upsert(NodeRecord(node_id="deadbe01"))
     admin_refs_nodes.upsert(
-        NodeRecord(node_id="bbbb0001", authorized_admin_keys=(observed_key_ref(keypair.public),))
+        NodeRecord(
+            node_id="bbbb0001",
+            management=ManagementMode.TEMPLATE,
+            authorized_admin_keys=(observed_key_ref(keypair.public),),
+        )
     )
 
     refs = node_key_admin_refs(
@@ -804,12 +814,18 @@ def test_node_key_admin_refs_includes_an_observed_ref(
 def test_node_key_admin_refs_included_via_another_nodes_authorization(
     admin_refs_keys: KeyRepository, admin_refs_nodes: NodeRepository, keypair: KeyPair
 ) -> None:
-    """Empty template, but another node's ``authorized_admin_keys`` names this ref."""
+    """Empty template, but another TEMPLATE-managed node's ``authorized_admin_keys`` names it."""
     pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
     admin_refs_keys.upsert(pub)
     admin_refs_keys.upsert(priv)
     admin_refs_nodes.upsert(NodeRecord(node_id="deadbe01"))
-    admin_refs_nodes.upsert(NodeRecord(node_id="bbbb0001", authorized_admin_keys=("deadbe01_pub",)))
+    admin_refs_nodes.upsert(
+        NodeRecord(
+            node_id="bbbb0001",
+            management=ManagementMode.TEMPLATE,
+            authorized_admin_keys=("deadbe01_pub",),
+        )
+    )
 
     refs = node_key_admin_refs(
         NodeId.from_hex("deadbe01"),
