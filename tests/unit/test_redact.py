@@ -149,20 +149,37 @@ class TestRedactProcessor:
 
         Asserting only ``"<redacted" in ...`` would also pass for a
         degraded ``REDACTED`` constant, losing the ability to correlate
-        which secret a given log line touched.
+        which secret a given log line touched. Uses ``bytes`` here: a
+        ``str`` value under a sensitive key name (a PIN, a password) no
+        longer gets a fingerprint at all -- see
+        ``test_string_values_under_sensitive_keys_become_plain_redacted``.
         """
         for name in SENSITIVE_KEY_NAMES:
-            event = {name: "value123"}
+            event = {name: b"value123"}
             result = redact_processor(None, "info", event)
-            assert result[name] == redact("value123")
+            assert result[name] == redact(b"value123")
             assert result[name] != REDACTED
 
     def test_sensitive_key_suffixes_redacted(self) -> None:
         for suffix in SENSITIVE_KEY_SUFFIXES:
             key = f"custom{suffix}"
-            event = {key: "value123"}
+            event = {key: b"value123"}
             result = redact_processor(None, "info", event)
             assert re.fullmatch(r"<redacted:sha256:[0-9a-f]+>", str(result[key]))
+
+    def test_string_values_under_sensitive_keys_become_plain_redacted(self) -> None:
+        """A str value under a sensitive key gets a plain literal, not a fingerprint.
+
+        A short string (a BLE PIN, a password) has too little entropy for
+        a truncated hash to hide it, so it gets the plain ``REDACTED``
+        literal instead of a fingerprint -- unlike ``bytes``/``SecretBytes``
+        key material, which keeps the fingerprinted form (see
+        ``test_sensitive_key_names_redacted``).
+        """
+        event = {"ble_pin": "482913"}
+        result = redact_processor(None, "info", event)
+        assert result["ble_pin"] == REDACTED
+        assert "sha256" not in str(result["ble_pin"])
 
     def test_safe_key_names_pass_through(self) -> None:
         for name in SAFE_KEY_NAMES:

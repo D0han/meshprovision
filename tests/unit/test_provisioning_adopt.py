@@ -874,6 +874,18 @@ def test_ble_pin_never_appears_in_json_or_describe(make_live, template) -> None:
     assert "123456" not in "\n".join(lines)
 
 
+def test_ble_pin_never_appears_in_report_repr(make_live, template) -> None:
+    live = make_live(
+        template, section_overrides={"bluetooth": {"mode": "FIXED_PIN", "fixed_pin": 482913}}
+    )
+    report = build_adoption_report(
+        live, existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+    assert report.ble_pin == "482913"
+
+    assert "482913" not in repr(report)
+
+
 def test_describe_never_contains_base64_key_material(make_live, template, keypair_factory) -> None:
     key = keypair_factory().public
     live = make_live(template, security=make_security(admin_keys=(key,)))

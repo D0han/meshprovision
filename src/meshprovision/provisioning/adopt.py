@@ -42,7 +42,7 @@ was captured.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
@@ -304,7 +304,7 @@ class AdoptionReport:
     admin_keys: tuple[LiveAdminKey, ...]
     firmware_vulnerable: bool
     is_managed: bool
-    ble_pin: str | None
+    ble_pin: str | None = field(repr=False)
     warnings: tuple[str, ...]
     gps_lat: float | None = None
     gps_lon: float | None = None

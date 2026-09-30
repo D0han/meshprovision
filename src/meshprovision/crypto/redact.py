@@ -439,12 +439,16 @@ def _redact_event_value(value: object) -> object:
         value: The value to redact.
 
     Returns:
-        :func:`redact` of ``value`` when it is a type that carries secret
-        material directly; :data:`REDACTED` for anything else, since an
-        unexpected type under a sensitive key name is safest treated as
-        secret too.
+        :func:`redact` of ``value`` when it is ``bytes``, ``bytearray``,
+        or :class:`SecretBytes` -- real key material with enough entropy
+        that a truncated SHA-256 fingerprint does not meaningfully expose
+        it. :data:`REDACTED` for everything else, including ``str``: a
+        short string under a sensitive key (a 6-digit BLE PIN, a weak
+        password) does not have enough entropy for a hash to hide it --
+        the fingerprint alone is cheaply brute-forceable -- so it gets no
+        fingerprint at all, not even a redacted one.
     """
-    if isinstance(value, bytes | bytearray | str | SecretBytes):
+    if isinstance(value, bytes | bytearray | SecretBytes):
         return redact(value)
     return REDACTED
 
@@ -467,12 +471,15 @@ def redact_processor(
 
     Returns:
         A **new** mapping: every value under a sensitive key name is
-        replaced by :func:`redact`, every :class:`SecretBytes` value is
-        replaced by :func:`redact` regardless of its key name, and every
-        remaining string value is passed through :func:`scrub_text` and
-        then :func:`~meshprovision.termsafe.terminal_safe` (multi-line
-        log events are expected, so newlines are kept). The input
-        mapping is never mutated.
+        replaced per :func:`_redact_event_value` (a fingerprinted
+        :func:`redact` for ``bytes``/``bytearray``/:class:`SecretBytes`,
+        :data:`REDACTED` for everything else), every :class:`SecretBytes`
+        value is replaced by :func:`redact` regardless of its key name,
+        and every remaining string value is passed through
+        :func:`scrub_text` and then
+        :func:`~meshprovision.termsafe.terminal_safe` (multi-line log
+        events are expected, so newlines are kept). The input mapping is
+        never mutated.
     """
     del logger, method_name
     scrubbed: dict[str, Any] = {}
