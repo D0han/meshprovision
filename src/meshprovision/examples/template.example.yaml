@@ -68,9 +68,9 @@ position:
   position_broadcast_secs: 900
   position_broadcast_smart_enabled: true
   fixed_position: false
-  # fixed_latitude / fixed_longitude / fixed_altitude are honored here
-  # too, but are applied via the device's dedicated fixed-position API
-  # rather than as part of this config section.
+  # fixed_latitude / fixed_longitude / fixed_altitude are not accepted
+  # here -- meshprovision never applies them. Set them with the
+  # meshtastic CLI's own --setlat/--setlon/--setalt instead.
 
 power:
   is_power_saving: false

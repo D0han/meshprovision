@@ -251,6 +251,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   depends on it, and `mesh admin bootstrap --ref` could re-point an
   existing admin alias onto an unrelated device with no confirmation
   prompt naming the collision.
+- A template's `position.fixed_latitude`/`fixed_longitude`/`fixed_altitude`
+  are no longer accepted: meshprovision never actually applied them (they
+  are not `PositionConfig` fields, and setting them only flipped
+  `fixed_position` on the device without ever sending the coordinates), so
+  a template that sets any of the three now fails to load with an
+  actionable hint instead of loading and silently doing nothing with them.
+  Set them with the `meshtastic` CLI's own
+  `--setlat`/`--setlon`/`--setalt` instead.
 
 ### Fixed
 

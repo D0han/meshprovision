@@ -98,6 +98,10 @@ _KEY_MATERIAL_KEYS: Final[frozenset[str]] = frozenset(
     {"private_key", "public_key", "admin_key", "adminKey"}
 )
 
+_POSITION_FIXED_KEYS: Final[frozenset[str]] = frozenset(
+    {"fixed_latitude", "fixed_longitude", "fixed_altitude"}
+)
+
 
 def _normalize_str_tuple(value: object) -> tuple[str, ...]:
     """Coerce a before-validator input into a de-duplicated tuple of strings.
@@ -223,9 +227,16 @@ class LoraSection(BaseModel):
 class PositionSection(BaseModel):
     """``config.position`` fields applied at provisioning time.
 
-    Field names and types (except ``fixed_latitude``/``fixed_longitude``/
-    ``fixed_altitude``, see below) are drawn from the installed
+    Field names and types are drawn from the installed
     ``meshtastic.protobuf.config_pb2.Config.PositionConfig`` message.
+
+    ``fixed_latitude``/``fixed_longitude``/``fixed_altitude`` are not
+    accepted here: meshprovision never applies them (they are not
+    ``PositionConfig`` fields, and would need the device's separate
+    fixed-position API), so a template that sets any of the three is
+    rejected outright rather than silently doing nothing. Set them with
+    the ``meshtastic`` CLI's own ``--setlat``/``--setlon``/``--setalt``
+    instead.
 
     Attributes:
         position_broadcast_secs: Position broadcast interval, seconds.
@@ -241,13 +252,6 @@ class PositionSection(BaseModel):
         broadcast_smart_minimum_interval_secs: Minimum time between smart
             broadcasts, seconds.
         gps_mode: GPS mode name (enabled/disabled/not-present).
-        fixed_latitude: Fixed-position latitude, degrees. Not a
-            ``PositionConfig`` field -- applied via the device's
-            fixed-position API, not via ``config.position``.
-        fixed_longitude: Fixed-position longitude, degrees. Applied the
-            same way as ``fixed_latitude``.
-        fixed_altitude: Fixed-position altitude, meters. Applied the same
-            way as ``fixed_latitude``.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -260,9 +264,35 @@ class PositionSection(BaseModel):
     broadcast_smart_minimum_distance: int | None = Field(default=None, ge=0)
     broadcast_smart_minimum_interval_secs: int | None = Field(default=None, ge=0)
     gps_mode: str | None = None
-    fixed_latitude: float | None = Field(default=None, ge=-90.0, le=90.0)
-    fixed_longitude: float | None = Field(default=None, ge=-180.0, le=180.0)
-    fixed_altitude: int | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_fixed_position_fields(cls, data: object) -> object:
+        """Refuse a template that sets the unapplied fixed-position fields.
+
+        Args:
+            data: The raw input to this section, before field validation.
+
+        Returns:
+            ``data`` unchanged, when it contains none of the three keys.
+
+        Raises:
+            TemplateValidationError: If ``data`` is a mapping containing
+                ``fixed_latitude``, ``fixed_longitude``, or
+                ``fixed_altitude``.
+        """
+        if isinstance(data, Mapping):
+            for key in _POSITION_FIXED_KEYS:
+                if key in data:
+                    raise TemplateValidationError(
+                        f"position.{key} is not applied by meshprovision.",
+                        field="position.fixed_latitude",
+                        hint=(
+                            "not applied by meshprovision; set with `meshtastic "
+                            "--setlat/--setlon/--setalt` and remove from the template"
+                        ),
+                    )
+        return data
 
 
 class PowerSection(BaseModel):

@@ -111,10 +111,6 @@ invariant is enforced by :func:`~meshprovision.provisioning.apply.apply_plan`,
 which stops writing at the first section that fails, so nothing after it
 (``security`` or otherwise) is ever sent."""
 
-_POSITION_FIXED_FIELDS: Final[frozenset[str]] = frozenset(
-    {"fixed_latitude", "fixed_longitude", "fixed_altitude"}
-)
-
 _REBOOT_LORA_FIELDS: Final[frozenset[str]] = frozenset({"region", "modem_preset"})
 
 
@@ -201,14 +197,9 @@ def _diff_section(
     Returns:
         One :class:`FieldChange` per field whose template value differs
         from the live value, in the model's own field-declaration order.
-        For ``"position"``, the fixed-position fields in
-        :data:`_POSITION_FIXED_FIELDS` are skipped -- they are not
-        ``PositionConfig`` fields at all.
     """
     changes: list[FieldChange] = []
     for field_name, desired_value in model.model_dump(exclude_none=True).items():
-        if section_name == "position" and field_name in _POSITION_FIXED_FIELDS:
-            continue
         current_value = live.value(section_name, field_name)
         if not values_equal(current_value, desired_value):
             changes.append(

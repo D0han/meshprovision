@@ -33,8 +33,6 @@ from meshprovision.provisioning.plan_admin_keys import ResolvedAdminKey
 
 pytestmark = pytest.mark.unit
 
-_POSITION_FIXED_FIELDS = frozenset({"fixed_latitude", "fixed_longitude", "fixed_altitude"})
-
 
 def live_config_from_template(
     template: TemplateConfig,
@@ -77,11 +75,7 @@ def live_config_from_template(
     sections: dict[str, dict[str, object]] = {}
     for name in ("device", "position", "power", "lora"):
         model = getattr(template, name)
-        dumped = dict(model.model_dump(exclude_none=True))
-        if name == "position":
-            for field_name in _POSITION_FIXED_FIELDS:
-                dumped.pop(field_name, None)
-        sections[name] = dumped
+        sections[name] = dict(model.model_dump(exclude_none=True))
 
     module_sections: dict[str, dict[str, object]] = {
         "telemetry": dict(template.telemetry.model_dump(exclude_none=True))

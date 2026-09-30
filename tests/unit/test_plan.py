@@ -119,22 +119,20 @@ def test_non_reboot_lora_field_change_does_not_claim_reboot(make_live, template)
     assert not any(w.code == "region_change_reboots" for w in plan.warnings)
 
 
-def test_position_section_normal_field_is_diffed_fixed_field_is_not(make_live, template) -> None:
-    """_diff_section's fixed-position skip must apply only to the three fixed_* fields.
+def test_position_section_normal_field_is_diffed(make_live, template) -> None:
+    """A changed position field is diffed normally, with no field skipped.
 
-    An ``and``->``or`` mutant on ``section_name == "position" and
-    field_name in _POSITION_FIXED_FIELDS`` would skip EVERY position
-    field once the section is "position", silently making position
-    config (GPS interval, smart-broadcast settings, etc.) unwritable;
-    an ``in``->``not in`` mutant would invert which fields get skipped
-    instead. This test fails under either.
+    ``position.fixed_latitude``/``fixed_longitude``/``fixed_altitude`` no
+    longer exist on the template model at all (rejected at load time by
+    ``PositionSection``'s before-validator), so ``_diff_section`` has no
+    fixed-position skip left to exercise -- this only pins that an
+    ordinary position field still gets diffed.
     """
     template2 = template.model_copy(
         update={
             "position": template.position.model_copy(
                 update={
                     "position_broadcast_secs": 900,
-                    "fixed_latitude": 12.5,
                     "fixed_position": True,
                 }
             )
@@ -150,7 +148,6 @@ def test_position_section_normal_field_is_diffed_fixed_field_is_not(make_live, t
     assert position_section is not None
     fields = {c.field for c in position_section.changes}
     assert "position_broadcast_secs" in fields
-    assert "fixed_latitude" not in fields
 
 
 # ---------------------------------------------------------------------------

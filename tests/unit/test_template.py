@@ -290,6 +290,21 @@ def test_unknown_lora_region_raises() -> None:
         TemplateConfig(lora={"region": "NOT_A_REGION"})
 
 
+def test_position_fixed_field_rejected() -> None:
+    """A template setting fixed_latitude/longitude/altitude is refused outright.
+
+    meshprovision never applies these fields, so loading must fail loudly
+    instead of silently doing nothing with them.
+    """
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig(position={"fixed_latitude": 12.5})
+    assert exc_info.value.field == "position.fixed_latitude"
+    assert exc_info.value.hint is not None
+    assert "--setlat" in exc_info.value.hint
+    assert "--setlon" in exc_info.value.hint
+    assert "--setalt" in exc_info.value.hint
+
+
 def test_unknown_module_option_is_warning_not_error() -> None:
     cfg = TemplateConfig(enabled_options=["not_a_real_module"])
     warnings = cfg.collect_warnings()
