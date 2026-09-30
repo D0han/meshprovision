@@ -855,6 +855,10 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
                 decoded_public_key = base64.b64decode(raw_public_key, validate=True)
             except (binascii.Error, ValueError):
                 decoded_public_key = None
+                warnings.append(
+                    f"{source}: node {num_int:08x}'s publicKey is not valid base64; "
+                    "treating it as absent."
+                )
             if decoded_public_key is not None and len(decoded_public_key) == X25519_KEY_SIZE:
                 public_key = decoded_public_key
             elif decoded_public_key is not None:

@@ -399,6 +399,20 @@ def test_parse_nodedb_json_wrong_length_public_key_warns_and_is_absent() -> None
     assert "treating it as absent" in parsed.warnings[0]
 
 
+def test_parse_nodedb_json_invalid_base64_public_key_warns_and_is_absent() -> None:
+    """A publicKey that isn't valid base64 warns, matching the wrong-length case."""
+    payload = _nodedb_payload()
+    payload["nodes"][0]["publicKey"] = "AAAA!!!!not-base64"
+    parsed = backup.parse_nodedb_json(json.dumps(payload).encode(), source="nodedb.json")
+
+    entry = parsed.own_entry()
+    assert entry is not None
+    assert entry.public_key is None
+    assert len(parsed.warnings) == 1
+    assert "not valid base64" in parsed.warnings[0]
+    assert f"{payload['myNodeNum']:08x}" in parsed.warnings[0]
+
+
 def test_parse_nodedb_json_own_entry_none_when_my_node_num_absent() -> None:
     payload = _nodedb_payload()
     del payload["myNodeNum"]
