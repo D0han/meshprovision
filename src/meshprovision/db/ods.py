@@ -21,13 +21,15 @@ how a human last arranged them.
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import logging
+import os
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import Final, NoReturn
 
 from meshprovision.db import (
     cell_validation,
@@ -40,7 +42,12 @@ from meshprovision.db import (
 )
 from meshprovision.db.atomic_writer import DEFAULT_RETENTION
 from meshprovision.db.known_good import refresh_known_good
-from meshprovision.errors import DbIntegrityError, DuplicateNodeError, SchemaError
+from meshprovision.errors import (
+    DbConcurrentModificationError,
+    DbIntegrityError,
+    DuplicateNodeError,
+    SchemaError,
+)
 
 __all__ = [
     "IntegrityWarning",
@@ -465,6 +472,39 @@ def parse_database(data: bytes, *, source: Path) -> LoadedDatabase:
     return LoadedDatabase(path=source, nodes=nodes, keys=keys, warnings=tuple(warnings))
 
 
+def _read_and_parse(path: Path) -> tuple[LoadedDatabase, bytes, os.stat_result]:
+    """Read and validate an ODS database, handing back the raw bytes/stat too.
+
+    The shared read-then-validate step behind both :func:`load_database`
+    and :meth:`OdsDatabase.load`: each needs the exact bytes read (and
+    their stat) for its own purposes afterwards -- a known-good refresh
+    for the former, this session's on-disk-identity bookkeeping for the
+    latter -- so this reads the file exactly once and lets each caller
+    do its own thing with the result, rather than either re-reading
+    ``path`` a second time.
+
+    Args:
+        path: Path to the ``.ods`` file.
+
+    Returns:
+        The fully validated database, the exact bytes it was parsed
+        from, and their ``fstat`` result at read time (see
+        :func:`meshprovision.db.ods_read._read_db_file`).
+
+    Raises:
+        DbReadError: If the file cannot be opened or read (permissions, I/O).
+        SchemaError: If the file is not valid ODF content, is missing
+            the ``Nodes`` or ``Keys`` sheet, or either sheet's header
+            does not match its schema.
+        DbValidationError: If any cell fails validation.
+        DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
+        DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
+    """
+    data, stat_result = ods_read._read_db_file(path)
+    loaded = parse_database(data, source=path)
+    return loaded, data, stat_result
+
+
 def load_database(path: Path) -> LoadedDatabase:
     """Read, validate, and recompute an ODS database's full contents.
 
@@ -496,8 +536,7 @@ def load_database(path: Path) -> LoadedDatabase:
     fails the load: a refresh failure (full disk, read-only backup
     directory) is logged and swallowed, not raised.
     """
-    data, stat_result = ods_read._read_db_file(path)
-    loaded = parse_database(data, source=path)
+    loaded, data, stat_result = _read_and_parse(path)
     refresh_known_good(path, content=data, source_stat=stat_result)
     return loaded
 
@@ -538,6 +577,12 @@ class OdsDatabase:
     ``mesh`` process holding a write intent must call :meth:`lock`
     *before* :meth:`load` and hold it through :meth:`save` -- see
     :meth:`lock` and :meth:`save` for why the span matters.
+
+    Independently of :meth:`lock`, :meth:`save` also refuses to overwrite
+    a file that changed on disk since this session last read or wrote it
+    (see :meth:`save`) -- this catches an editor that does not honor
+    ``flock`` at all, such as LibreOffice Calc with the file open, which
+    :meth:`lock` cannot protect against.
     """
 
     def __init__(
@@ -558,6 +603,8 @@ class OdsDatabase:
         self._warnings: tuple[IntegrityWarning, ...] = ()
         self._rows: dict[str, tuple[Mapping[str, str], ...]] = {}
         self._lock_cm: contextlib.AbstractContextManager[None] | None = None
+        self._disk_identity: tuple[int, int, int, int] | None = None
+        self._disk_sha256: str | None = None
 
     @property
     def path(self) -> Path:
@@ -647,6 +694,11 @@ class OdsDatabase:
     def load(self, *, force: bool = False) -> None:
         """Load the database from disk, unless already loaded.
 
+        Also records this read's on-disk identity (device/inode/mtime/
+        size) and content hash, which :meth:`save` later compares the
+        file against to detect a concurrent external edit -- see
+        :meth:`save`.
+
         Args:
             force: When true, reload even if already loaded, discarding
                 any unsaved in-memory changes.
@@ -660,11 +712,24 @@ class OdsDatabase:
         """
         if self._loaded and not force:
             return
-        loaded = load_database(self._path)
+        loaded, data, stat_result = _read_and_parse(self._path)
+        # Calls refresh_known_good itself, rather than going through
+        # load_database(), so the file is read exactly once per load --
+        # load_database()'s own public signature returns only a
+        # LoadedDatabase, with no way to also hand back the bytes/stat
+        # this session needs for its own identity bookkeeping below.
+        refresh_known_good(self._path, content=data, source_stat=stat_result)
         self._rows = {schema.NODES_SHEET: loaded.nodes, schema.KEYS_SHEET: loaded.keys}
         self._warnings = loaded.warnings
         self._loaded = True
         self._is_dirty = False
+        self._disk_identity = (
+            stat_result.st_dev,
+            stat_result.st_ino,
+            stat_result.st_mtime_ns,
+            stat_result.st_size,
+        )
+        self._disk_sha256 = hashlib.sha256(data).hexdigest()
 
     def rows(self, sheet: str) -> tuple[Mapping[str, str], ...]:
         """Return one sheet's current in-memory rows, loading first if needed.
@@ -714,6 +779,56 @@ class OdsDatabase:
         """
         return self._is_dirty
 
+    def _raise_concurrent_modification(self) -> NoReturn:
+        """Raise :class:`DbConcurrentModificationError` for :attr:`_path`.
+
+        Raises:
+            DbConcurrentModificationError: Always.
+        """
+        raise DbConcurrentModificationError(
+            f"{self._path} changed on disk after mesh read it; nothing was written.",
+            path=str(self._path),
+            hint="Close/save it in LibreOffice, then re-run; your edit was kept.",
+        )
+
+    def _check_not_concurrently_modified(self) -> None:
+        """Refuse to proceed if the on-disk file no longer matches this session's own view.
+
+        Compares device/inode/mtime/size first -- cheap, and narrows the
+        race window to the time between this check and the write that
+        follows it down to milliseconds, though it can never close that
+        window entirely, since a concurrent writer (LibreOffice's own
+        save ignores ``flock`` entirely) is not itself blocked by this
+        check. A mismatch there alone is not necessarily a real edit --
+        a bare ``touch``, or some external tool that rewrites the file
+        in place via its own temp-then-rename (new inode, same bytes) --
+        so only a mismatch that *also* disagrees by content hash is
+        treated as a genuine concurrent modification.
+
+        Raises:
+            DbConcurrentModificationError: If the file changed (or is no
+                longer readable) since this session's own last load or
+                save.
+        """
+        try:
+            stat_result = self._path.stat()
+        except OSError:
+            self._raise_concurrent_modification()
+        current_identity = (
+            stat_result.st_dev,
+            stat_result.st_ino,
+            stat_result.st_mtime_ns,
+            stat_result.st_size,
+        )
+        if current_identity == self._disk_identity:
+            return
+        try:
+            current_bytes = self._path.read_bytes()
+        except OSError:
+            self._raise_concurrent_modification()
+        if hashlib.sha256(current_bytes).hexdigest() != self._disk_sha256:
+            self._raise_concurrent_modification()
+
     def save(self, *, backup: bool = True) -> None:
         """Write both sheets to disk atomically. A no-op when not dirty.
 
@@ -727,18 +842,36 @@ class OdsDatabase:
         does not have. :meth:`~meshprovision.cli.common.CliContext.
         open_database` does this for you.
 
+        Before writing, also refuses (see
+        :meth:`_check_not_concurrently_modified`) if the file on disk no
+        longer matches what this session's own last :meth:`load` or
+        :meth:`save` observed -- an editor that does not honor the write
+        lock at all, most notably LibreOffice Calc with the file open
+        (its own flock is advisory and LibreOffice ignores it), can still
+        save over this session's changes between its :meth:`load` and
+        this call. This check only narrows that race window to
+        milliseconds; it does not close it. A second :meth:`save` within
+        the same session (after this session's own first save updated
+        its recorded identity below) is never refused by its own prior
+        write.
+
         Args:
             backup: Whether to back up the current file before replacing
                 it.
 
         Raises:
+            DbConcurrentModificationError: If the file changed on disk
+                since this session last observed it. A subclass of
+                :class:`AtomicWriteError`.
             AtomicWriteError: If the write or backup fails.
         """
         if not self._is_dirty:
             _logger.debug("save() called on a clean database; nothing to write.")
             return
+        if self._disk_identity is not None:
+            self._check_not_concurrently_modified()
         started = time.monotonic()
-        ods_write.write_database(
+        written = ods_write.write_database(
             self._path,
             nodes=self._rows.get(schema.NODES_SHEET, ()),
             keys=self._rows.get(schema.KEYS_SHEET, ()),
@@ -747,6 +880,13 @@ class OdsDatabase:
             retention=self._retention,
         )
         self._is_dirty = False
+        self._disk_identity = (
+            written.stat.st_dev,
+            written.stat.st_ino,
+            written.stat.st_mtime_ns,
+            written.stat.st_size,
+        )
+        self._disk_sha256 = hashlib.sha256(written.data).hexdigest()
         _logger.debug(
             "Saved %s in %.2fs (backup=%s): %d node(s), %d key(s).",
             self._path,

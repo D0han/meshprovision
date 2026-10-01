@@ -17,6 +17,7 @@ from meshprovision.db.known_good import KnownGoodProvenance, known_good_info, kn
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import (
+    DbConcurrentModificationError,
     DbIntegrityError,
     DbReadError,
     DbValidationError,
@@ -1151,6 +1152,114 @@ def test_ods_database_lock_is_idempotent(tmp_path: Path) -> None:
 
     assert db._lock_cm is not None
     db.unlock()
+
+
+# ---------------------------------------------------------------------------
+# save() refuses a concurrent external edit (C38-1).
+# ---------------------------------------------------------------------------
+
+
+def test_ods_database_save_raises_on_concurrent_external_edit(tmp_path: Path) -> None:
+    """A genuine external content change between `load()` and `save()` is refused.
+
+    Simulates another process (e.g. LibreOffice, with the file open and
+    saved) rewriting the database after this session's own `create()`
+    (which loads it) but before this session's `save()`. The file on
+    disk must be left exactly as the external writer left it -- not
+    clobbered -- and no backup is taken, since the write never happens.
+    """
+    path = tmp_path / "db.ods"
+    db = ods.OdsDatabase.create(path)
+    db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+
+    external = ods_write.write_database(
+        path, nodes=[NodeRecord(node_id="ffff0002").to_row()], keys=[], backup=False
+    )
+
+    with pytest.raises(DbConcurrentModificationError) as exc_info:
+        db.save()
+
+    assert path.read_bytes() == external.data
+    assert exc_info.value.path == str(path)
+    assert exc_info.value.hint is not None
+    assert "LibreOffice" in exc_info.value.hint
+    # No *timestamped* backup is taken -- the refused write never reaches
+    # ods_write.write_database. The known-good safety copy a *load*
+    # independently refreshes (see known_good.refresh_known_good) lives
+    # under a different, non-timestamped name and is not what this
+    # guards against -- list_backups only ever matches the former.
+    assert atomic_writer.list_backups(path) == ()
+
+
+def test_ods_database_save_succeeds_after_a_touch_only_external_change(tmp_path: Path) -> None:
+    """A bare `touch` (same content, new mtime) between `load()` and `save()` is not a conflict."""
+    path = tmp_path / "db.ods"
+    db = ods.OdsDatabase.create(path)
+    db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+
+    stat_before = path.stat()
+    os.utime(path, (stat_before.st_atime + 10, stat_before.st_mtime + 10))
+    assert path.stat().st_mtime_ns != stat_before.st_mtime_ns
+
+    db.save()
+
+    assert db.dirty() is False
+    loaded = ods.load_database(path)
+    assert len(loaded.nodes) == 1
+    assert loaded.nodes[0]["node_id"] == "deadbe01"
+
+
+def test_ods_database_two_saves_in_one_session_both_succeed(tmp_path: Path) -> None:
+    """A session calling `save()` twice must not have its own second save refused.
+
+    Mirrors ``persist_result`` (``provisioning/apply.py``) followed by
+    ``_capture_proven_private_key``'s own ``db.db.save()``
+    (``cli/provision.py``) -- a single session legitimately saves twice
+    in one run, and the second save must not be a false-positive
+    conflict against the first save's own write.
+    """
+    path = tmp_path / "db.ods"
+    db = ods.OdsDatabase.create(path)
+
+    db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+    db.save()
+    assert db.dirty() is False
+
+    db.replace(
+        "Nodes",
+        [NodeRecord(node_id="deadbe01").to_row(), NodeRecord(node_id="ffff0002").to_row()],
+    )
+    db.save()  # must not raise DbConcurrentModificationError
+
+    loaded = ods.load_database(path)
+    assert {row["node_id"] for row in loaded.nodes} == {"deadbe01", "ffff0002"}
+
+
+def test_ods_database_save_succeeds_after_identical_content_replace_with_new_inode(
+    tmp_path: Path,
+) -> None:
+    """A new inode with byte-identical content is not a conflict.
+
+    Some external tools rewrite a file in place via their own
+    temp-then-rename, landing a new inode (and a new mtime) at the same
+    path without actually changing its bytes. That must not be mistaken
+    for a genuine edit: the content hash still matches.
+    """
+    path = tmp_path / "db.ods"
+    db = ods.OdsDatabase.create(path)
+    db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+
+    original_bytes = path.read_bytes()
+    replacement = path.with_name(f".{path.name}.replacement-tmp")
+    replacement.write_bytes(original_bytes)
+    replacement.replace(path)
+
+    db.save()  # must not raise despite the new inode/mtime
+
+    assert db.dirty() is False
+    loaded = ods.load_database(path)
+    assert len(loaded.nodes) == 1
+    assert loaded.nodes[0]["node_id"] == "deadbe01"
 
 
 def _blank_run_row_elements(encoding: str) -> list[Any]:

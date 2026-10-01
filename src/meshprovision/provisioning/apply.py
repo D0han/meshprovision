@@ -61,6 +61,7 @@ from meshprovision.db.schema import BLE_PIN_LENGTH, KeyOrigin
 from meshprovision.errors import (
     AtomicWriteError,
     ConnectionBackendError,
+    DbConcurrentModificationError,
     DetectionError,
     EnumMappingError,
     KeyMaterialError,
@@ -1187,8 +1188,15 @@ def persist_result(
     try:
         nodes.db.save()
     except (AtomicWriteError, OSError) as exc:
+        if isinstance(exc, DbConcurrentModificationError):
+            opening = (
+                "The database file changed on disk since mesh read it (close/save it in "
+                "LibreOffice first)"
+            )
+        else:
+            opening = "Fix the write problem (free space, permissions)"
         hint = (
-            "Fix the write problem (free space, permissions) and re-run "
+            f"{opening} and re-run "
             "`mesh provision` for this node: the next run re-reads the device's "
             "live configuration and rewrites the row. Because that row was never "
             "saved, a node `mesh adopt` first recorded is still marked observed -- "

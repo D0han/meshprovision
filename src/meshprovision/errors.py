@@ -42,6 +42,7 @@ __all__ = [
     "CryptoError",
     "DataSourceError",
     "DatabaseLockedError",
+    "DbConcurrentModificationError",
     "DbError",
     "DbIntegrityError",
     "DbReadError",
@@ -725,6 +726,21 @@ class AtomicWriteError(DbError):
         """
         super().__init__(message, hint=hint)
         self.path = path
+
+
+class DbConcurrentModificationError(AtomicWriteError):
+    """The database file changed on disk since this session last read or wrote it.
+
+    Raised by :meth:`meshprovision.db.ods.OdsDatabase.save` when the file
+    at :attr:`~AtomicWriteError.path` no longer matches what this
+    session's own last load or save observed -- distinct from the plain
+    :class:`AtomicWriteError` it subclasses, which is about the write
+    mechanics themselves failing (disk full, permissions), not about the
+    file having moved out from under this session. Detecting this only
+    narrows the race window between a concurrent external writer (for
+    example LibreOffice, whose own save ignores ``flock``) and this
+    session's save down to milliseconds; it does not close it.
+    """
 
 
 class DatabaseLockedError(DbError):

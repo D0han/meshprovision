@@ -4,10 +4,22 @@ Two ``OdsDatabase`` handles opened on the same path race exactly like two
 concurrent ``mesh`` processes would -- this is what ``flock``'s
 per-open-file-description semantics make possible inside a single pytest
 process (see ``meshprovision.db.locking``'s module docstring).
-``test_unlocked_sessions_still_lose_the_update`` pins the HIGH-severity
-bug *without* the lock; its sibling proves the locked path is safe. The
-unlocked baseline exists so the locked test cannot pass for a reason
-unrelated to the lock actually working.
+
+``test_unlocked_sessions_are_refused_by_the_concurrent_modification_check``
+pins what an *unlocked* pair of sessions gets today, since C38-1 added
+``OdsDatabase.save``'s own concurrent-modification check (see
+``meshprovision.db.ods.OdsDatabase._check_not_concurrently_modified``):
+that check compares file identity/content, not any lock, so it
+independently catches this exact single-process race too -- B's blind
+rewrite from its own stale snapshot is refused with
+``DbConcurrentModificationError`` instead of the HIGH-severity silent
+data loss this test used to pin (B's save used to discard A's row in
+both sheets outright). Its sibling proves the *locked* path still
+succeeds outright, which the concurrent-modification check alone cannot
+do -- a refused session still has to reload and retry by hand, whereas
+``lock()`` lets two genuinely concurrent writers both succeed without
+either one failing. The unlocked baseline exists so the locked test
+cannot pass for a reason unrelated to the lock actually working.
 """
 
 from __future__ import annotations
@@ -24,7 +36,7 @@ from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin
-from meshprovision.errors import DatabaseLockedError
+from meshprovision.errors import DatabaseLockedError, DbConcurrentModificationError
 
 pytestmark = pytest.mark.unit
 
@@ -35,29 +47,43 @@ def _upsert_node_and_key(db: OdsDatabase, node_id: str, keypair: KeyPair) -> Non
     KeyRepository(db).upsert(public_record)
 
 
-def test_unlocked_sessions_still_lose_the_update(empty_ods: Path, keypair: KeyPair) -> None:
+def test_unlocked_sessions_are_refused_by_the_concurrent_modification_check(
+    empty_ods: Path, keypair: KeyPair
+) -> None:
+    """Without the lock, B's stale save is refused rather than silently discarding A's row.
+
+    Before C38-1 added ``OdsDatabase.save``'s own concurrent-modification
+    check, B's whole-sheet rewrite from its own stale snapshot silently
+    discarded A's row in both sheets here -- the original HIGH-severity
+    bug the write lock exists to fix. B's save() now detects its own
+    snapshot is stale (A's save changed the file's content since B's
+    load()) and refuses outright instead, leaving A's row intact. A lock
+    is still what is needed for B's own change to actually succeed
+    without B having to reload and retry by hand -- see
+    ``test_two_locked_sessions_cannot_interleave_a_lost_update`` below.
+    """
     handle_a = OdsDatabase(empty_ods)
     handle_a.load()
     _upsert_node_and_key(handle_a, "deadbe01", keypair)
 
-    # B reads the pre-A-save state; nothing stops this without a lock.
+    # B reads the pre-A-save state; nothing about *locking* stops this.
     handle_b = OdsDatabase(empty_ods)
     handle_b.load()
 
     handle_a.save()
 
     _upsert_node_and_key(handle_b, "beefcafe", keypair)
-    handle_b.save()
+    with pytest.raises(DbConcurrentModificationError):
+        handle_b.save()
 
     final = OdsDatabase(empty_ods)
     final.load()
     node_ids = {row["node_id"] for row in final.rows(schema.NODES_SHEET)}
     key_refs = {row["key_ref"] for row in final.rows(schema.KEYS_SHEET)}
 
-    # B's whole-sheet rewrite from its own stale snapshot silently discards
-    # A's row in both sheets -- this is the bug the lock exists to fix.
-    assert node_ids == {"beefcafe"}
-    assert key_refs == {"beefcafe_pub"}
+    # A's row survives: B's refused save never reached the file.
+    assert node_ids == {"deadbe01"}
+    assert key_refs == {"deadbe01_pub"}
 
 
 def test_two_locked_sessions_cannot_interleave_a_lost_update(
@@ -90,12 +116,24 @@ def test_two_locked_sessions_cannot_interleave_a_lost_update(
     assert key_refs == {"deadbe01_pub", "beefcafe_pub"}
 
 
-def test_db_session_releases_the_lock_on_exit(empty_ods: Path) -> None:
+def test_db_session_releases_the_lock_on_exit(
+    empty_ods: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A LibreOffice lock-marker file present next to the database (e.g.
+    # someone has it open in Calc) must produce a warning on a for_write
+    # open -- best-effort, never blocking -- see
+    # CliContext._warn_if_libreoffice_lock_marker_present (C38-1).
+    resolved = empty_ods.resolve()
+    lock_marker = resolved.parent / f".~lock.{resolved.name}#"
+    lock_marker.write_text("")
+
     ctx = CliContext.build(
         settings=Settings(db_path=empty_ods), non_interactive=True, force_refresh=False
     )
     with ctx.open_database(for_write=True):
         pass
+
+    assert "LibreOffice" in capsys.readouterr().err
 
     # A second acquisition succeeding immediately proves DbSession.__exit__
     # actually released the lock -- an incomplete wiring here would hang

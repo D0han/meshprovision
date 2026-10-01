@@ -628,6 +628,36 @@ class CliContext:
         """
         return weakkeys.load_known_bad_keys(db_path=self.settings.db_path)
 
+    def _warn_if_libreoffice_lock_marker_present(self, path: Path) -> None:
+        """Warn if LibreOffice's own lock-marker file is present next to ``path``.
+
+        LibreOffice Calc creates a ``.~lock.<filename>#`` marker file in
+        the same directory as a document it has open, and removes it on
+        close -- distinct from, and unrelated to, ``mesh``'s own sidecar
+        write lock (see :func:`meshprovision.db.locking.lock_path_for`),
+        which LibreOffice neither takes nor honors. A marker's presence
+        does not block or even delay anything here: it is only a hint
+        that a save later in this run may be refused by
+        :meth:`~meshprovision.db.ods.OdsDatabase.save`'s own concurrent-
+        modification check if the file has unsaved changes open in Calc.
+        Best-effort: a path that cannot be resolved is silently skipped
+        rather than failing the caller's write.
+
+        Args:
+            path: The database path to check next to.
+        """
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError):
+            return
+        lock_marker = resolved.parent / f".~lock.{resolved.name}#"
+        if lock_marker.exists():
+            self.warn(
+                f"{resolved} appears to be open in LibreOffice (found {lock_marker.name}). "
+                "If it has unsaved changes there, a save by mesh later in this run may be "
+                "refused once it notices the file changed on disk."
+            )
+
     def open_database(self, *, must_exist: bool = True, for_write: bool = False) -> DbSession:
         """Open (and load) the configured ODS database.
 
@@ -661,7 +691,10 @@ class CliContext:
                 database. When ``True``, acquires the cross-process
                 write lock before the database is read at all, closing
                 the load-then-overwrite race a lock taken only around
-                ``save()`` would leave open.
+                ``save()`` would leave open. Also, once the lock is held,
+                best-effort warns (never blocks) if LibreOffice's own
+                lock-marker file is present next to the database -- see
+                :meth:`_warn_if_libreoffice_lock_marker_present`.
 
         Returns:
             A :class:`DbSession` bundling the open database and its two
@@ -738,6 +771,8 @@ class CliContext:
                         f"Failed to create directory {resolved.parent}: {exc}", path=str(path)
                     ) from exc
             db.lock()
+            if for_write:
+                self._warn_if_libreoffice_lock_marker_present(path)
         try:
             if path.is_file():
                 db.load()

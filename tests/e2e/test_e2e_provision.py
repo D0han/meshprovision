@@ -533,6 +533,59 @@ def test_keyboard_interrupt_during_apply_keeps_the_pending_keypair(
     assert loaded.nodes == ()
 
 
+def test_concurrent_external_edit_during_save_is_refused_and_keeps_the_pending_keypair(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C38-1: an external edit landing between mesh's load and its own save must not be clobbered.
+
+    Simulates someone editing (and saving) the database in LibreOffice
+    while a `mesh provision` run is still in flight -- the device write
+    itself succeeds, but `persist_result`'s own `save()` must detect the
+    file changed on disk since this run's `open_database` loaded it,
+    refuse to write, and surface the tailored concurrent-modification
+    hint. Because `persist_result` raises before
+    `pending_keys.clear_pending` runs, the pending keypair this run wrote
+    ahead of the device write must survive the failure, same as the
+    plain-``AtomicWriteError`` case in
+    ``test_keyboard_interrupt_during_apply_keeps_the_pending_keypair``.
+    """
+    dev = bus.use(FakeMeshInterface("deadbe01"))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+
+    original_apply_plan = apply_mod.apply_plan
+
+    def _apply_then_external_edit(*args: object, **kwargs: object) -> object:
+        outcome = original_apply_plan(*args, **kwargs)  # type: ignore[arg-type]
+        # The same injection point as the KeyboardInterrupt test above
+        # (between the device write apply_plan just confirmed and
+        # persist_result's own database save): a concurrent external
+        # writer -- e.g. LibreOffice, with the file open and saved --
+        # rewrites the database here.
+        ods_write.write_database(
+            db_path, nodes=[NodeRecord(node_id="ffff0002").to_row()], keys=[], backup=False
+        )
+        return outcome
+
+    monkeypatch.setattr(apply_mod, "apply_plan", _apply_then_external_edit)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.DB)
+    assert "changed on disk" in result.stderr
+    assert "LibreOffice" in result.stderr
+    assert dev.localNode.written_sections[-1] == "security"
+
+    pending_path = pending_keys.pending_key_path(db_path, dev.nid)
+    assert pending_path.is_file()
+    assert "recovers it automatically" in result.stderr
+
+    loaded = ods.load_database(db_path)
+    assert {row["node_id"] for row in loaded.nodes} == {"ffff0002"}
+
+    _assert_no_secrets(result.stdout)
+    _assert_no_secrets(result.stderr)
+
+
 def test_pending_keypair_write_ahead_failure_writes_nothing_to_the_device(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, monkeypatch: pytest.MonkeyPatch
 ) -> None:

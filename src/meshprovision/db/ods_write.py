@@ -40,7 +40,10 @@ in-memory mutation).
 
 from __future__ import annotations
 
+import io
+import os
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
@@ -59,6 +62,7 @@ __all__ = [
     "HEADER_CELL_STYLE_NAME",
     "TEXT_CELL_STYLE_NAME",
     "TEXT_DATA_STYLE_NAME",
+    "WrittenFile",
     "build_document",
     "create_empty",
     "write_database",
@@ -336,6 +340,23 @@ def build_document(
     return doc
 
 
+@dataclass(frozen=True, slots=True)
+class WrittenFile:
+    """The content and on-disk identity of a file :func:`write_database` just wrote.
+
+    Attributes:
+        data: The full serialized document bytes written to the target.
+        stat: The written file's ``stat`` result. Taken on the temp file
+            *before* :func:`~meshprovision.db.atomic_writer.atomic_write`'s
+            own rename -- still accurate for the target path afterwards,
+            since ``Path.replace()`` is a rename (same inode, same mtime)
+            rather than a copy.
+    """
+
+    data: bytes
+    stat: os.stat_result
+
+
 def write_database(
     path: Path,
     *,
@@ -344,7 +365,7 @@ def write_database(
     backup: bool = True,
     backup_dir: Path | None = None,
     retention: int = DEFAULT_RETENTION,
-) -> None:
+) -> WrittenFile:
     """Build and atomically write a complete ODS database.
 
     Args:
@@ -359,15 +380,25 @@ def write_database(
             is true.
         retention: Number of backups to retain, when ``backup`` is true.
 
+    Returns:
+        The exact bytes written and the written file's on-disk identity
+        -- see :class:`WrittenFile`. Used by
+        :meth:`meshprovision.db.ods.OdsDatabase.save` to record what this
+        session itself just wrote, so a later :meth:`~meshprovision.db.
+        ods.OdsDatabase.save` in the same session can tell its own prior
+        write apart from a genuine concurrent external edit.
+
     Raises:
         AtomicWriteError: If the write or backup fails.
     """
     doc = build_document(nodes=nodes, keys=keys)
-    with (
-        atomic_write(path, backup=backup, backup_dir=backup_dir, retention=retention) as tmp,
-        tmp.open("wb") as fh,
-    ):
-        doc.write(fh)
+    buf = io.BytesIO()
+    doc.write(buf)
+    data = buf.getvalue()
+    with atomic_write(path, backup=backup, backup_dir=backup_dir, retention=retention) as tmp:
+        tmp.write_bytes(data)
+        tmp_stat = tmp.stat()
+    return WrittenFile(data=data, stat=tmp_stat)
 
 
 def create_empty(path: Path, *, backup: bool = False) -> None:
