@@ -343,9 +343,19 @@ def admin_bootstrap(
                 ):
                     pending_pairs.add((other.ref, result.node_id.hex))
 
+            in_template_by_ref = {summary.ref: summary.in_template for summary in summaries}
+
+            def _pending_advice(ref: str) -> str:
+                if in_template_by_ref.get(ref, False):
+                    return "(run `mesh provision` with that device connected)"
+                return (
+                    f"({ref} is not in the template's admin_nodes: add it there first -- "
+                    "`mesh provision` only authorizes template admins, and revokes any "
+                    "other admin key from nodes it provisions)"
+                )
+
             pending_lines = tuple(
-                f"pending: authorize {ref}_pub on node {node_hex} "
-                "(run `mesh provision` with that device connected)"
+                f"pending: authorize {ref}_pub on node {node_hex} {_pending_advice(ref)}"
                 for ref, node_hex in sorted(pending_pairs)
             )
 

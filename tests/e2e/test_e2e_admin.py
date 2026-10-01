@@ -229,6 +229,73 @@ def test_admin_bootstrap_pending_message_names_the_right_ref_and_node_on_rotatio
     assert "pending: authorize ADMIN2_pub on node aaaa0001" not in result.stderr
 
 
+def test_admin_bootstrap_pending_message_warns_when_ref_is_not_in_template(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Pending advice for a ref outside the template must not suggest `mesh provision`.
+
+    Reuses the rotation scenario above (ADMIN1 is discoverable only via
+    ``collect_admins``'s extra_refs path, never added to this run's
+    template) specifically because it already produces a pending line
+    for a non-template ref: ``mesh provision`` only ever authorizes the
+    *current* template's admins, and actively revokes any other admin
+    key from nodes it provisions, so telling the operator to "run `mesh
+    provision`" to clear ADMIN1's pending status is actively wrong until
+    ADMIN1 is added to ``admin_nodes``. The old wording made no such
+    distinction; this asserts the corrected, ref-specific wording.
+    """
+    admin1_kp = keypair_factory()
+    admin2_kp = keypair_factory()
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="aaaa0001",
+                management=ManagementMode.TEMPLATE,
+                authorized_admin_keys=("ADMIN2_pub",),
+            ),
+            NodeRecord(
+                node_id="aaaa0002",
+                management=ManagementMode.TEMPLATE,
+                authorized_admin_keys=("ADMIN1_pub",),
+            ),
+            NodeRecord(node_id="aaaa0003", management=ManagementMode.TEMPLATE),
+        ],
+        keys=[
+            *KeyRecord.for_keypair("aaaa0001", admin1_kp, origin=KeyOrigin.CAPTURED),
+            *KeyRecord.for_keypair("ADMIN1", admin1_kp, origin=KeyOrigin.IMPORTED),
+            *KeyRecord.for_keypair("aaaa0003", admin2_kp, origin=KeyOrigin.CAPTURED),
+            *KeyRecord.for_keypair("ADMIN2", admin2_kp, origin=KeyOrigin.IMPORTED),
+        ],
+    )
+
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+    iface = bus.use(FakeMeshInterface("aaaa0003"))
+    iface.localNode.localConfig.security.public_key = admin2_kp.public
+    iface.localNode.localConfig.security.private_key = admin2_kp.private.reveal()
+    result = invoke(
+        runner,
+        ["admin", "bootstrap", "--port", "/dev/ttyFAKE0", "--ref", "ADMIN2", "--yes"],
+        env,
+    )
+    assert result.exit_code == 0
+
+    # rich wraps stderr at the terminal width, which can land mid-phrase --
+    # collapse whitespace before matching so the assertion is wrap-width-safe.
+    normalized_stderr = " ".join(result.stderr.split())
+    assert (
+        "pending: authorize ADMIN1_pub on node aaaa0003 "
+        "(ADMIN1 is not in the template's admin_nodes: add it there first -- "
+        "`mesh provision` only authorizes template admins, and revokes any "
+        "other admin key from nodes it provisions)"
+    ) in normalized_stderr
+    assert "(run `mesh provision` with that device connected)" not in normalized_stderr
+
+
 def test_admin_bootstrap_ref_aliases_the_existing_on_file_key_without_regenerating(
     runner: CliRunner,
     env: dict[str, str],
