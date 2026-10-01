@@ -62,6 +62,7 @@ if TYPE_CHECKING:
     from meshprovision.db.nodes import NodeRecord
 
 __all__ = [
+    "CHANNEL_SECTIONS",
     "CONFIG_SECTIONS",
     "FACTORY_LONG_NAME_PREFIX",
     "MODULE_SECTIONS",
@@ -89,17 +90,18 @@ _FACTORY_SHORT_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{4}$")
 
 
 class SectionKind(StrEnum):
-    """Which of a live device's two ``write*Config`` surfaces a section belongs to.
+    """Which of a live device's three write surfaces a section belongs to.
 
     The single source of truth for this classification, shared by
     :meth:`LiveConfig.kind_of` and
     :attr:`meshprovision.provisioning.plan.SectionChange.kind` -- both
-    used to describe exactly the same two-value outcome and previously
-    declared as independent, un-linked ``Literal`` types.
+    used to describe exactly the same outcome and previously declared as
+    independent, un-linked ``Literal`` types.
     """
 
     CONFIG = "config"
     MODULE_CONFIG = "module_config"
+    CHANNEL = "channel"
 
 
 CONFIG_SECTIONS: Final[tuple[str, ...]] = (
@@ -131,6 +133,11 @@ MODULE_SECTIONS: Final[tuple[str, ...]] = (
     "traffic_management",
 )
 """Exactly the ``LocalModuleConfig`` field names ``Node.writeConfig`` accepts."""
+
+CHANNEL_SECTIONS: Final[tuple[str, ...]] = ("default_channel",)
+"""Section names backed by ``iface.localNode.channels`` rather than
+``LocalConfig``/``LocalModuleConfig``, written through ``Node.writeChannel``
+rather than ``Node.writeConfig``."""
 
 SECRET_FIELDS: Final[frozenset[tuple[str, str]]] = frozenset(
     {
@@ -308,6 +315,15 @@ class LiveConfig:
             message with no ``enabled`` field at all (for example
             ``telemetry``), distinct from an ``enabled`` field that is
             simply ``False``.
+        default_channel: ``{"position_precision": int, "is_muted": bool}``
+            read from the primary (index-0) channel's ``ModuleSettings``,
+            when that channel exists and its role is not ``DISABLED``;
+            ``{}`` otherwise. Deliberately not folded into
+            :attr:`sections`/:attr:`module_sections` -- those are typed
+            strictly around :data:`CONFIG_SECTIONS`/:data:`MODULE_SECTIONS`,
+            and this is backed by a structurally different container
+            (``iface.localNode.channels``, not
+            ``LocalConfig``/``LocalModuleConfig``).
 
     :attr:`sections` and :attr:`module_sections` hold some plaintext
     secrets (``network.wifi_psk``, ``mqtt.password``,
@@ -333,6 +349,7 @@ class LiveConfig:
         default_factory=lambda: MappingProxyType({})
     )
     module_enabled: Mapping[str, bool | None] = field(default_factory=lambda: MappingProxyType({}))
+    default_channel: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
     def section(self, name: str) -> Mapping[str, object]:
         r"""Look up one section's fields, trying config then module config.
@@ -374,15 +391,19 @@ class LiveConfig:
         Returns:
             :attr:`SectionKind.CONFIG` for a name in
             :data:`CONFIG_SECTIONS`; :attr:`SectionKind.MODULE_CONFIG`
-            for a name in :data:`MODULE_SECTIONS`.
+            for a name in :data:`MODULE_SECTIONS`;
+            :attr:`SectionKind.CHANNEL` for a name in
+            :data:`CHANNEL_SECTIONS`.
 
         Raises:
-            PlanConflictError: If ``section`` is neither.
+            PlanConflictError: If ``section`` is none of the above.
         """
         if section in CONFIG_SECTIONS:
             return SectionKind.CONFIG
         if section in MODULE_SECTIONS:
             return SectionKind.MODULE_CONFIG
+        if section in CHANNEL_SECTIONS:
+            return SectionKind.CHANNEL
         raise PlanConflictError(f"Unknown config section: {section!r}", field=section)
 
     def __repr__(self) -> str:
@@ -407,7 +428,8 @@ class LiveConfig:
             f"firmware_version={self.firmware_version!r}, security={self.security!r}, "
             f"sections={_redacted_sections(self.sections)!r}, "
             f"module_sections={_redacted_sections(self.module_sections)!r}, "
-            f"module_enabled={dict(self.module_enabled)!r})"
+            f"module_enabled={dict(self.module_enabled)!r}, "
+            f"default_channel={dict(self.default_channel)!r})"
         )
 
 
@@ -568,6 +590,25 @@ def _message_fields(msg: Any) -> dict[str, object]:
     return result
 
 
+def _read_default_channel(iface: MeshInterface) -> Mapping[str, object]:
+    """Read the primary (index-0) channel's ``ModuleSettings``, if any.
+
+    Returns:
+        ``{}`` when channel 0 is absent or reports ``role == DISABLED``
+        -- treated as "nothing to diff" rather than surfacing
+        meaningless zero-value defaults as real device state. Otherwise,
+        the channel's ``ModuleSettings`` fields via :func:`_message_fields`
+        (both ``position_precision``/``is_muted`` are plain scalars, so
+        no special-casing is needed).
+    """
+    from meshtastic.protobuf import channel_pb2
+
+    channel = iface.localNode.getChannelByChannelIndex(0)
+    if channel is None or channel.role == channel_pb2.Channel.Role.DISABLED:
+        return MappingProxyType({})
+    return MappingProxyType(_message_fields(channel.settings.module_settings))
+
+
 def _has_enabled_field(msg: Any) -> bool:
     """Check whether a module-config message declares an ``enabled`` field.
 
@@ -592,6 +633,7 @@ def live_config_from_protobufs(
     hw_model_raw: str | None = None,
     role_raw: str | None = None,
     firmware_version: str = "",
+    default_channel: Mapping[str, object] = MappingProxyType({}),
 ) -> LiveConfig:
     """Build a :class:`LiveConfig` from already-read protobuf config messages.
 
@@ -609,6 +651,11 @@ def live_config_from_protobufs(
         role_raw: See :attr:`LiveConfig.role_raw`. ``None`` for a normal
             live-device read.
         firmware_version: Firmware version string.
+        default_channel: See :attr:`LiveConfig.default_channel`. The
+            actual channel read happens in the caller (mirrors how
+            ``hw_model``/``firmware_version`` are resolved by the caller
+            and threaded in) -- this function stays a pure "protobufs in,
+            :class:`LiveConfig` out" transform.
 
     Returns:
         The normalized, immutable :class:`LiveConfig`. Every mapping
@@ -652,6 +699,7 @@ def live_config_from_protobufs(
         sections=MappingProxyType(sections),
         module_sections=MappingProxyType(module_sections),
         module_enabled=MappingProxyType(module_enabled),
+        default_channel=MappingProxyType(dict(default_channel)),
     )
 
 
@@ -737,6 +785,7 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
             ) or ""
 
         firmware_version = getattr(iface.metadata, "firmware_version", "") or ""
+        default_channel = _read_default_channel(iface)
 
         live = live_config_from_protobufs(
             iface.localNode.localConfig,
@@ -747,6 +796,7 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
             hw_model=hw_model,
             hw_model_raw=hw_model_raw,
             firmware_version=firmware_version,
+            default_channel=default_channel,
         )
         _logger.debug(
             "Read live config from %s: hw_model=%s (raw=%s) firmware=%s",

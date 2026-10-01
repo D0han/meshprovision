@@ -99,9 +99,9 @@ unresolvable ref is an error naming the ref and pointing at
 `mesh admin bootstrap` / `mesh admin import`. Zero admins is a legitimate,
 deliberate configuration and is never "repaired" toward three.
 
-`device` (role: `CLIENT`), `lora`, `position`, `power`, `telemetry`, and
-`neighbor_info` blocks follow. Fields omitted from any of these blocks are
-left at the device's current value rather than reset.
+`device` (role: `CLIENT`), `lora`, `position`, `power`, `default_channel`,
+`telemetry`, and `neighbor_info` blocks follow. Fields omitted from any of
+these blocks are left at the device's current value rather than reset.
 
 ### Region: `EU_868`, not `PL`
 
@@ -133,3 +133,24 @@ Key material **never** goes in this file — a template containing
 safety gate described in [Security](security.md). `admin_channel_enabled`
 must stay `false` — the legacy admin channel is never used anywhere in
 this project.
+
+### Default channel
+
+```yaml
+default_channel:
+  position_precision: 12
+  is_muted: false
+```
+
+Scoped to the primary (index-0) channel only — meshprovision has no
+secondary-channel provisioning story. `position_precision` is the GPS
+position precision (in bits) shared in this channel's broadcasts; `0`
+disables position sharing on the channel entirely. `is_muted` mutes the
+channel's traffic (received but not relayed/notified).
+
+Unlike every other block above, this one is **not** part of
+`config`/`module_config`: a device's channels live in a separate
+protobuf container and are written through a different device mechanism
+(a channel write, not a config write). Its reboot behavior has not been
+verified against real firmware, so `mesh provision --dry-run` surfaces an
+explicit warning whenever this section would be written.

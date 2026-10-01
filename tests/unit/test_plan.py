@@ -70,7 +70,9 @@ def test_factory_node_plan(make_live, template) -> None:
     assert pin_change.to_json_dict()["desired"] == "<redacted>"
 
     section_names = [s.section for s in plan.sections]
-    expected_config_order = [s for s in SECTION_ORDER if s not in ("bluetooth", "security")]
+    expected_config_order = [
+        s for s in SECTION_ORDER if s not in ("bluetooth", "default_channel", "security")
+    ]
     present_config = [s for s in section_names if s in expected_config_order]
     assert present_config == [s for s in expected_config_order if s in section_names]
     assert section_names[-1] == "security"
@@ -1604,6 +1606,65 @@ def test_neighbor_info_section_is_diffed_like_telemetry(make_live, template) -> 
     assert neighbor_info_section.kind == detect.SectionKind.MODULE_CONFIG
     fields = {c.field for c in neighbor_info_section.changes}
     assert fields == {"enabled", "update_interval"}
+
+
+def test_default_channel_section_is_diffed(make_live, template) -> None:
+    template2 = template.model_copy(
+        update={
+            "default_channel": template.default_channel.model_copy(
+                update={"position_precision": 12, "is_muted": True}
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+
+    section = plan.section("default_channel")
+    assert section is not None
+    assert section.kind == detect.SectionKind.CHANNEL
+    fields = {c.field: c.desired for c in section.changes}
+    assert fields == {"position_precision": 12, "is_muted": True}
+    assert any(w.code == "default_channel_reboot_unknown" for w in plan.warnings)
+
+
+def test_default_channel_section_no_change_when_already_matching(make_live, template) -> None:
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+
+    assert plan.section("default_channel") is None
+    assert not any(w.code == "default_channel_reboot_unknown" for w in plan.warnings)
+
+
+def test_default_channel_section_sorts_before_security(make_live, make_admin_key, template) -> None:
+    admin = make_admin_key("ADMIN1", has_private=True, audit_ok=True)
+    template2 = template.model_copy(
+        update={
+            "admin_nodes": ("ADMIN1",),
+            "default_channel": template.default_channel.model_copy(
+                update={"position_precision": 12}
+            ),
+            "security": template.security.model_copy(update={"is_managed": True}),
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(admin,),
+        allow_lockdown=True,
+    )
+    plan = build_plan(inputs)
+
+    section_names = [s.section for s in plan.sections]
+    assert "default_channel" in section_names
+    assert section_names.index("default_channel") < section_names.index("security")
+    assert section_names[-1] == "security"
 
 
 def test_values_equal_bool_vs_int_and_float_tolerance() -> None:

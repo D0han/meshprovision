@@ -98,14 +98,16 @@ SECTION_ORDER: Final[tuple[str, ...]] = (
     "power",
     "lora",
     "bluetooth",
+    "default_channel",
     "security",
 )
 """The config-section write order. ``"security"`` is always last: writing
 ``is_managed=true`` can lock the node against any further write, so every
 other section must land first. Module sections are written after these
-(in sorted-name order) but before ``"security"`` -- :func:`build_plan`
-emits :attr:`~meshprovision.provisioning.plan_types.ChangePlan.sections`
-already in this final execution order, so
+(in sorted-name order) but before ``"default_channel"``, which lands
+immediately before ``"security"`` -- :func:`build_plan` emits
+:attr:`~meshprovision.provisioning.plan_types.ChangePlan.sections` already
+in this final execution order, so
 :mod:`meshprovision.provisioning.apply` just iterates it. This ordering
 invariant is enforced by :func:`~meshprovision.provisioning.apply.apply_plan`,
 which stops writing at the first section that fails, so nothing after it
@@ -364,6 +366,48 @@ def _plan_bluetooth_section(inputs: PlanInputs) -> SectionChange | None:
     return SectionChange(
         section="bluetooth", kind=live.kind_of("bluetooth"), changes=tuple(changes)
     )
+
+
+def _plan_default_channel_section(
+    inputs: PlanInputs,
+) -> tuple[SectionChange | None, tuple[PlanWarning, ...]]:
+    """Diff the primary channel's module settings (position_precision/is_muted).
+
+    Args:
+        inputs: The plan inputs.
+
+    Returns:
+        ``(None, ())`` when nothing differs; otherwise a
+        ``"default_channel"`` :class:`SectionChange` (kind
+        :attr:`~meshprovision.provisioning.detect.SectionKind.CHANNEL`)
+        plus one warning -- writing this section has not been verified
+        against real firmware as reboot-free, so the operator is told
+        explicitly.
+    """
+    live = inputs.live
+    template = inputs.template
+    changes = [
+        FieldChange(
+            section="default_channel",
+            field=name,
+            current=live.default_channel.get(name),
+            desired=desired,
+        )
+        for name, desired in template.default_channel.model_dump(exclude_none=True).items()
+        if not values_equal(live.default_channel.get(name), desired)
+    ]
+    if not changes:
+        return None, ()
+    section = SectionChange(
+        section="default_channel", kind=detect.SectionKind.CHANNEL, changes=tuple(changes)
+    )
+    warning = PlanWarning(
+        PlanWarningCode.DEFAULT_CHANNEL_REBOOT_UNKNOWN,
+        "Writing default_channel (the primary channel's module settings) has not been "
+        "verified against real firmware as reboot-free.",
+        section="default_channel",
+    )
+    return section, (warning,)
 
 
 def _plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanWarning, ...]]:
@@ -649,6 +693,7 @@ def _assemble_sections(
     config_sections: tuple[SectionChange, ...],
     module_sections: tuple[SectionChange, ...],
     bluetooth_section: SectionChange | None,
+    default_channel_section: SectionChange | None,
     security_section: SectionChange | None,
 ) -> tuple[SectionChange, ...]:
     """Combine every section into final execution order (step 10).
@@ -658,17 +703,21 @@ def _assemble_sections(
             sections, already in that order.
         module_sections: The module sections, already sorted by name.
         bluetooth_section: The Bluetooth section, or ``None``.
+        default_channel_section: The default-channel section, or ``None``.
         security_section: The security section, or ``None``.
 
     Returns:
         ``config_sections``, then ``bluetooth_section`` (its
         :data:`SECTION_ORDER` position, right after ``lora``), then
-        ``module_sections``, then ``security_section`` last.
+        ``module_sections``, then ``default_channel_section`` (last among
+        non-security entries), then ``security_section`` last.
     """
     ordered: list[SectionChange] = list(config_sections)
     if bluetooth_section is not None:
         ordered.append(bluetooth_section)
     ordered.extend(module_sections)
+    if default_channel_section is not None:
+        ordered.append(default_channel_section)
     if security_section is not None:
         ordered.append(security_section)
     return tuple(ordered)
@@ -712,6 +761,9 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
 
     bluetooth_section = _plan_bluetooth_section(inputs)
 
+    default_channel_section, default_channel_warnings = _plan_default_channel_section(inputs)
+    warnings.extend(default_channel_warnings)
+
     admin_plan = _plan_admin_key_material(inputs)
     warnings.extend(admin_plan.warnings)
 
@@ -754,7 +806,11 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         )
 
     sections = _assemble_sections(
-        config_sections, module_sections, bluetooth_section, security_section
+        config_sections,
+        module_sections,
+        bluetooth_section,
+        default_channel_section,
+        security_section,
     )
 
     return ChangePlan(

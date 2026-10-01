@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision.config.template import (
+    DefaultChannelSection,
     NeighborInfoSection,
     TelemetrySection,
     TemplateConfig,
@@ -245,6 +246,19 @@ def test_neighbor_info_section_fields() -> None:
         "update_interval": 14400,
         "transmit_over_lora": False,
     }
+
+
+def test_default_channel_section_round_trip() -> None:
+    section = DefaultChannelSection(position_precision=12, is_muted=True)
+    dumped = section.model_dump()
+    assert dumped == {"position_precision": 12, "is_muted": True}
+
+
+def test_default_channel_section_negative_position_precision_rejected() -> None:
+    with pytest.raises(TemplateValidationError):
+        load_template_text(
+            "version: 1\ndefault_channel:\n  position_precision: -1\n", source="<test>"
+        )
 
 
 # ---------------------------------------------------------------------------

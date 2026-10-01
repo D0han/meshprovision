@@ -43,6 +43,7 @@ class PlanWarningCode(StrEnum):
     LIVE_ADMIN_KEY_REVOKED = "live_admin_key_revoked"
     LIVE_ADMIN_KEY_REJECTED = "live_admin_key_rejected"
     PENDING_KEY_RECOVERED = "pending_key_recovered"
+    DEFAULT_CHANNEL_REBOOT_UNKNOWN = "default_channel_reboot_unknown"
 
 
 @dataclass(frozen=True, slots=True)

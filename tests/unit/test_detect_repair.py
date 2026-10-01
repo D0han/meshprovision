@@ -271,6 +271,21 @@ def test_live_config_kind_of_unknown_raises() -> None:
         live.kind_of("not_a_real_section")
     assert live.kind_of("device") == "config"
     assert live.kind_of("mqtt") == "module_config"
+    assert live.kind_of("default_channel") == detect.SectionKind.CHANNEL
+
+
+def test_live_config_from_protobufs_default_channel_passthrough() -> None:
+    from types import MappingProxyType
+
+    local_config = localonly_pb2.LocalConfig()
+    module_config = localonly_pb2.LocalModuleConfig()
+    live = detect.live_config_from_protobufs(
+        local_config,
+        module_config,
+        node_id=NodeId.from_hex("deadbe01"),
+        default_channel=MappingProxyType({"position_precision": 12, "is_muted": True}),
+    )
+    assert dict(live.default_channel) == {"position_precision": 12, "is_muted": True}
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +297,15 @@ class _FakeNode:
     def __init__(self) -> None:
         self.localConfig = localonly_pb2.LocalConfig()
         self.moduleConfig = localonly_pb2.LocalModuleConfig()
+        self.channels: list[object] = []
+
+    def getChannelByChannelIndex(  # noqa: N802 -- real method name
+        self,
+        channelIndex: int,  # noqa: N803 -- real method name
+    ) -> object | None:
+        if 0 <= channelIndex < len(self.channels):
+            return self.channels[channelIndex]
+        return None
 
 
 class _FakeIface:
@@ -367,6 +391,39 @@ def test_read_live_config_detection_error_when_nothing_reported() -> None:
     iface._info_fallback = None
     with pytest.raises(DetectionError):
         detect.read_live_config(iface)  # type: ignore[arg-type]
+
+
+def test_read_live_config_default_channel_absent_is_empty() -> None:
+    iface = _FakeIface()
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert dict(live.default_channel) == {}
+
+
+def test_read_live_config_default_channel_primary_is_read() -> None:
+    from meshtastic.protobuf import channel_pb2
+
+    iface = _FakeIface()
+    channel = channel_pb2.Channel()
+    channel.index = 0
+    channel.role = channel_pb2.Channel.Role.PRIMARY
+    channel.settings.module_settings.position_precision = 14
+    channel.settings.module_settings.is_muted = True
+    iface.localNode.channels = [channel]
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert dict(live.default_channel) == {"position_precision": 14, "is_muted": True}
+
+
+def test_read_live_config_default_channel_disabled_is_empty() -> None:
+    from meshtastic.protobuf import channel_pb2
+
+    iface = _FakeIface()
+    channel = channel_pb2.Channel()
+    channel.index = 0
+    channel.role = channel_pb2.Channel.Role.DISABLED
+    channel.settings.module_settings.position_precision = 14
+    iface.localNode.channels = [channel]
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert dict(live.default_channel) == {}
 
 
 # ---------------------------------------------------------------------------

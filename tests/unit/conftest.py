@@ -46,6 +46,7 @@ def live_config_from_template(
     security: LiveSecurity | None = None,
     section_overrides: Mapping[str, Mapping[str, object]] | None = None,
     module_enabled_overrides: Mapping[str, bool | None] | None = None,
+    default_channel_overrides: Mapping[str, object] | None = None,
 ) -> LiveConfig:
     """Build a :class:`LiveConfig` that is already correct against ``template``.
 
@@ -66,6 +67,11 @@ def live_config_from_template(
             section at a time (a plain ``dict.update``, not a deep merge).
         module_enabled_overrides: ``module_enabled`` overrides, applied
             last directly onto the computed mapping.
+        default_channel_overrides: ``default_channel`` overrides, applied
+            last directly onto the computed mapping (which defaults to
+            exactly ``template.default_channel``'s own non-``None``
+            fields, so a template that sets no default_channel fields
+            produces an empty, already-matching live default_channel).
 
     Returns:
         The constructed, immutable :class:`LiveConfig`.
@@ -97,6 +103,12 @@ def live_config_from_template(
     if module_enabled_overrides:
         module_enabled.update(module_enabled_overrides)
 
+    default_channel: dict[str, object] = dict(
+        template.default_channel.model_dump(exclude_none=True)
+    )
+    if default_channel_overrides:
+        default_channel.update(default_channel_overrides)
+
     frozen_sections = MappingProxyType(
         {name: MappingProxyType(dict(values)) for name, values in sections.items()}
     )
@@ -104,6 +116,7 @@ def live_config_from_template(
         {name: MappingProxyType(dict(values)) for name, values in module_sections.items()}
     )
     frozen_module_enabled = MappingProxyType(dict(module_enabled))
+    frozen_default_channel = MappingProxyType(dict(default_channel))
 
     return LiveConfig(
         node_id=NodeId.from_hex(node_id),
@@ -116,6 +129,7 @@ def live_config_from_template(
         sections=frozen_sections,
         module_sections=frozen_module_sections,
         module_enabled=frozen_module_enabled,
+        default_channel=frozen_default_channel,
     )
 
 

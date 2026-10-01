@@ -38,7 +38,7 @@ import httpx
 import pytest
 import respx
 from click.testing import CliRunner, Result
-from meshtastic.protobuf import localonly_pb2
+from meshtastic.protobuf import channel_pb2, localonly_pb2
 
 from meshprovision.cli.main import cli
 from meshprovision.datasources.loranet import LORANET_NODES_URL
@@ -71,6 +71,19 @@ FAKE_FIRMWARE: Final[str] = "2.7.11"
 """Default firmware version reported by every :class:`FakeMeshInterface`."""
 
 
+def _default_primary_channel() -> channel_pb2.Channel:
+    """Build a bare primary (index-0) channel, as a factory-default device reports.
+
+    Returns:
+        A :class:`channel_pb2.Channel` with ``index=0``,
+        ``role=PRIMARY``, and default (zero-valued) ``settings``.
+    """
+    ch = channel_pb2.Channel()
+    ch.index = 0
+    ch.role = channel_pb2.Channel.Role.PRIMARY
+    return ch
+
+
 class FakeNode:
     """The device's own persisted node state (``device.localNode``).
 
@@ -97,6 +110,7 @@ class FakeNode:
         self._iface = iface
         self.localConfig = localonly_pb2.LocalConfig()
         self.moduleConfig = localonly_pb2.LocalModuleConfig()
+        self.channels: list[channel_pb2.Channel] = [_default_primary_channel()]
         self.written_sections: list[str] = []
         self.transaction_calls: list[str] = []
         """Every beginSettingsTransaction()/commitSettingsTransaction() call
@@ -140,6 +154,55 @@ class FakeNode:
             if self._iface.fail_exc is not None:
                 raise self._iface.fail_exc(section)
             raise RuntimeError(f"simulated device write failure for section {section!r}")
+
+    def getChannelByChannelIndex(  # noqa: N802 -- matches Node's own spelling
+        self,
+        channelIndex: int,  # noqa: N803 -- matches Node's own spelling
+    ) -> channel_pb2.Channel | None:
+        """Return the channel at ``channelIndex``, or ``None`` if out of range.
+
+        Args:
+            channelIndex: The channel index to look up.
+
+        Returns:
+            The matching :class:`channel_pb2.Channel`, or ``None``.
+        """
+        if 0 <= channelIndex < len(self.channels):
+            return self.channels[channelIndex]
+        return None
+
+    def writeChannel(  # noqa: N802 -- matches Node's own spelling
+        self,
+        channelIndex: int,  # noqa: N803 -- matches Node's own spelling
+        adminIndex: int = 0,  # noqa: N803 -- matches Node's own spelling
+    ) -> None:
+        """Record a device-side channel write attempt, simulating a firmware failure.
+
+        Mirrors :meth:`writeConfig`'s simulated-failure semantics, but
+        always records under the literal section name ``"default_channel"``
+        -- so it slots into ``written_sections``/``transaction_calls``/
+        ``fail_sections`` identically to every other section name tests
+        already assert against.
+
+        Args:
+            channelIndex: The channel index being written (always ``0``
+                in practice -- meshprovision only ever writes the primary
+                channel).
+            adminIndex: Ignored; accepted for signature compatibility
+                with the real ``Node.writeChannel``.
+
+        Raises:
+            BaseException: If ``"default_channel"`` is listed in the
+                owning interface's ``fail_sections`` -- see
+                :meth:`writeConfig`.
+        """
+        del channelIndex, adminIndex
+        self.written_sections.append("default_channel")
+        self.transaction_calls.append("default_channel")
+        if "default_channel" in self._iface.fail_sections:
+            if self._iface.fail_exc is not None:
+                raise self._iface.fail_exc("default_channel")
+            raise RuntimeError("simulated device write failure for section 'default_channel'")
 
     def beginSettingsTransaction(self) -> None:  # noqa: N802 -- matches Node's own spelling
         """Record a settings-transaction begin.
@@ -368,6 +431,11 @@ class _FakeConnectionNode:
         self.localConfig.CopyFrom(device.localNode.localConfig)
         self.moduleConfig = localonly_pb2.LocalModuleConfig()
         self.moduleConfig.CopyFrom(device.localNode.moduleConfig)
+        self.channels: list[channel_pb2.Channel] = []
+        for ch in device.localNode.channels:
+            staged = channel_pb2.Channel()
+            staged.CopyFrom(ch)
+            self.channels.append(staged)
         self._in_transaction = False
         self._pending_sections: set[str] = set()
 
@@ -451,6 +519,58 @@ class _FakeConnectionNode:
             return
 
         self._persist(section)
+
+    def getChannelByChannelIndex(  # noqa: N802 -- matches Node's own spelling
+        self,
+        channelIndex: int,  # noqa: N803 -- matches Node's own spelling
+    ) -> channel_pb2.Channel | None:
+        """Return this connection's staged channel at ``channelIndex``.
+
+        Args:
+            channelIndex: The channel index to look up.
+
+        Returns:
+            The matching staged :class:`channel_pb2.Channel`, or ``None``
+            if out of range.
+        """
+        if 0 <= channelIndex < len(self.channels):
+            return self.channels[channelIndex]
+        return None
+
+    def writeChannel(  # noqa: N802 -- matches Node's own spelling
+        self,
+        channelIndex: int,  # noqa: N803 -- matches Node's own spelling
+        adminIndex: int = 0,  # noqa: N803 -- matches Node's own spelling
+    ) -> None:
+        """Push this connection's staged channel to the device, if it accepts it.
+
+        Unlike :meth:`writeConfig`, never buffered by a settings
+        transaction: ``writeChannel``/``AdminMessage.set_channel`` is
+        never deferred past a commit in production code either, so this
+        fake persists it immediately regardless of ``_in_transaction``.
+
+        Args:
+            channelIndex: The channel index to write.
+            adminIndex: Ignored; accepted for signature compatibility
+                with the real ``Node.writeChannel``.
+
+        Raises:
+            OSError: If this connection was already closed.
+            BaseException: Propagated from :meth:`FakeNode.writeChannel`
+                when ``"default_channel"`` is listed in the device's
+                ``fail_sections`` -- nothing is persisted in that case.
+        """
+        if self._connection.closed:
+            raise OSError(errno.EBADF, "fake connection is closed")
+
+        device = self._connection._device
+        # Records the write attempt and raises the simulated device-side
+        # failure, if any -- exactly what writeConfig's delegation does.
+        device.localNode.writeChannel(channelIndex, adminIndex)
+
+        staged = self.channels[channelIndex]
+        persisted = device.localNode.channels[channelIndex]
+        persisted.CopyFrom(staged)
 
     def setOwner(  # noqa: N802 -- must match meshtastic's own Node.setOwner spelling
         self, long_name: str | None = None, short_name: str | None = None, **kwargs: object

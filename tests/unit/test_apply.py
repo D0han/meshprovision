@@ -9,7 +9,7 @@ from collections.abc import Callable
 from typing import Final, Self
 
 import pytest
-from meshtastic.protobuf import localonly_pb2
+from meshtastic.protobuf import channel_pb2, localonly_pb2
 
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.crypto import redact
@@ -45,6 +45,7 @@ from meshprovision.provisioning.apply import (
     generate_ble_pin,
     persist_result,
     verify_plan,
+    write_default_channel,
     write_section,
 )
 from meshprovision.provisioning.plan import (
@@ -204,8 +205,92 @@ def test_write_section_regenerate_without_a_keypair_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# write_default_channel.
+# ---------------------------------------------------------------------------
+
+
+def test_write_default_channel_applies_fields_and_calls_write_channel() -> None:
+    iface = _FakeIfaceForApply()
+    change = SectionChange(
+        section="default_channel",
+        kind=detect.SectionKind.CHANNEL,
+        changes=(
+            FieldChange(
+                section="default_channel", field="position_precision", current=0, desired=12
+            ),
+            FieldChange(section="default_channel", field="is_muted", current=False, desired=True),
+        ),
+    )
+
+    write_default_channel(iface, change)  # type: ignore[arg-type]
+
+    channel = iface.localNode.channels[0]
+    assert channel.settings.module_settings.position_precision == 12
+    assert channel.settings.module_settings.is_muted is True
+    assert iface.localNode.written_sections == ["default_channel"]
+
+
+def test_write_default_channel_no_primary_channel_raises() -> None:
+    iface = _FakeIfaceForApply()
+    iface.localNode.channels = []
+    change = SectionChange(
+        section="default_channel",
+        kind=detect.SectionKind.CHANNEL,
+        changes=(
+            FieldChange(
+                section="default_channel", field="position_precision", current=0, desired=12
+            ),
+        ),
+    )
+
+    with pytest.raises(ProvisioningError, match="not available"):
+        write_default_channel(iface, change)  # type: ignore[arg-type]
+
+
+def test_write_default_channel_rejected_field_restores_snapshot() -> None:
+    iface = _FakeIfaceForApply()
+    change = SectionChange(
+        section="default_channel",
+        kind=detect.SectionKind.CHANNEL,
+        changes=(
+            FieldChange(
+                section="default_channel", field="not_a_real_field", current=None, desired=1
+            ),
+        ),
+    )
+    pre_call = channel_pb2.ModuleSettings()
+    pre_call.CopyFrom(iface.localNode.channels[0].settings.module_settings)
+
+    with pytest.raises(PlanConflictError):
+        write_default_channel(iface, change)  # type: ignore[arg-type]
+
+    assert iface.localNode.channels[0].settings.module_settings == pre_call
+    assert iface.localNode.written_sections == []
+
+
+def test_write_default_channel_wraps_every_device_io_error(
+    device_io_error: Callable[[], BaseException],
+) -> None:
+    exc = device_io_error()
+    iface = _FakeIfaceRaisesOnWrite(exc)
+    change = SectionChange(section="default_channel", kind=detect.SectionKind.CHANNEL, changes=())
+
+    with pytest.raises(ProvisioningError) as exc_info:
+        write_default_channel(iface, change)  # type: ignore[arg-type]
+
+    assert exc_info.value.__cause__ is exc
+
+
+# ---------------------------------------------------------------------------
 # A minimal fake interface for write/verify tests.
 # ---------------------------------------------------------------------------
+
+
+def _default_primary_channel() -> channel_pb2.Channel:
+    ch = channel_pb2.Channel()
+    ch.index = 0
+    ch.role = channel_pb2.Channel.Role.PRIMARY
+    return ch
 
 
 class _FakeLocalNode:
@@ -213,6 +298,7 @@ class _FakeLocalNode:
         self._iface = iface
         self.localConfig = localonly_pb2.LocalConfig()
         self.moduleConfig = localonly_pb2.LocalModuleConfig()
+        self.channels: list[channel_pb2.Channel] = [_default_primary_channel()]
         self.written_sections: list[str] = []
         self.transaction_calls: list[str] = []
         """Every beginSettingsTransaction()/commitSettingsTransaction() call
@@ -226,6 +312,22 @@ class _FakeLocalNode:
     def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
         self.written_sections.append(section)
         self.transaction_calls.append(section)
+
+    def getChannelByChannelIndex(  # noqa: N802 -- real method name
+        self,
+        channelIndex: int,  # noqa: N803 -- real method name
+    ) -> channel_pb2.Channel | None:
+        if 0 <= channelIndex < len(self.channels):
+            return self.channels[channelIndex]
+        return None
+
+    def writeChannel(  # noqa: N802 -- real method name
+        self,
+        channelIndex: int,  # noqa: ARG002, N803 -- real method name
+        adminIndex: int = 0,  # noqa: ARG002, N803 -- real method name
+    ) -> None:
+        self.written_sections.append("default_channel")
+        self.transaction_calls.append("default_channel")
 
     def beginSettingsTransaction(self) -> None:  # noqa: N802 -- real MeshInterface method name
         self.transaction_calls.append("<begin>")
@@ -275,6 +377,11 @@ class _FakeIfaceForApply:
         fresh = type(self)(node_num=self.myInfo.my_node_num if node_num is None else node_num)
         fresh.localNode.localConfig.CopyFrom(self.localNode.localConfig)
         fresh.localNode.moduleConfig.CopyFrom(self.localNode.moduleConfig)
+        fresh.localNode.channels = []
+        for ch in self.localNode.channels:
+            copy = channel_pb2.Channel()
+            copy.CopyFrom(ch)
+            fresh.localNode.channels.append(copy)
         fresh.user = dict(self.user)
         return fresh
 
@@ -367,6 +474,67 @@ def test_verify_plan_int_one_against_desired_true_is_unconfirmed(make_live) -> N
     results = verify_plan(plan, live_after, keypair=None)
     tx_result = next(r for r in results if r.field == "tx_enabled")
     assert tx_result.status == WriteStatus.UNCONFIRMED
+
+
+def test_verify_plan_default_channel_confirmed_against_live_default_channel(make_live) -> None:
+    """default_channel must be read off live_after.default_channel, not the generic value() path.
+
+    live.value()/LiveConfig.sections/module_sections deliberately exclude
+    default_channel (it is backed by a structurally different container),
+    so without the dedicated branch this would always read None and
+    falsely report UNCONFIRMED even on a fully successful write.
+    """
+    template = _template()
+    template2 = template.model_copy(
+        update={
+            "default_channel": template.default_channel.model_copy(
+                update={"position_precision": 12}
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+    assert plan.section("default_channel") is not None
+
+    live_after = make_live(
+        template2,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    result = next(r for r in results if r.section == "default_channel")
+    assert result.status == WriteStatus.CONFIRMED
+
+
+def test_verify_plan_default_channel_mismatch_is_unconfirmed(make_live) -> None:
+    template = _template()
+    template2 = template.model_copy(
+        update={
+            "default_channel": template.default_channel.model_copy(
+                update={"position_precision": 12}
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    result = next(r for r in results if r.section == "default_channel")
+    assert result.status == WriteStatus.UNCONFIRMED
+    assert result.expected == "12"
 
 
 def test_verify_key_material_nodedb_present_but_wrong_is_unconfirmed(make_live) -> None:
@@ -1866,6 +2034,132 @@ def test_apply_plan_begins_transaction_before_first_write_and_commits_before_sec
     assert mid_plan_iface.localNode.written_sections == ["security"]
 
 
+def test_apply_plan_default_channel_writes_before_security_reconnecting(make_live) -> None:
+    """default_channel shares security's post-commit reconnect and lands right before it."""
+    template = _template()
+    template2 = template.model_copy(
+        update={
+            "default_channel": template.default_channel.model_copy(
+                update={"position_precision": 12}
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    channel_section = next(s for s in plan.sections if s.section == "default_channel")
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    plan = dataclasses.replace(plan, sections=(lora_change, channel_section, security_section))
+    kp = generate_keypair()
+
+    reconnects: list[_FakeIfaceForApply] = []
+
+    def _reopen_and_record(n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+        fresh = _reopen_same_device(n, cur)
+        reconnects.append(fresh)
+        return fresh
+
+    first_iface = _FakeIfaceForApply()
+    session = _FakeSessionTracksRefresh(first_iface, _reopen_and_record)
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert outcome.ok is True, outcome.describe()
+    assert first_iface.localNode.transaction_calls == ["<begin>", "lora", "<commit>"]
+    assert "default_channel" not in first_iface.localNode.written_sections
+    assert "security" not in first_iface.localNode.written_sections
+
+    mid_plan_iface, _final_iface = reconnects
+    assert mid_plan_iface.localNode.written_sections == ["default_channel", "security"]
+
+
+def test_apply_plan_default_channel_failure_skips_security_reconnecting(make_live) -> None:
+    """A default_channel write failure cascades into security being SKIPPED."""
+    template = _template()
+    template2 = template.model_copy(
+        update={
+            "default_channel": template.default_channel.model_copy(
+                update={"position_precision": 12}
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    channel_section = next(s for s in plan.sections if s.section == "default_channel")
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    plan = dataclasses.replace(plan, sections=(lora_change, channel_section, security_section))
+    kp = generate_keypair()
+
+    first_iface = _FakeIfaceForApply()
+    failing_iface = _FakeIfaceRaisesOnWrite(OSError(errno.EIO, "fake I/O error"))
+    session = _FakeSessionTracksRefresh(first_iface, lambda _n, _cur: failing_iface)
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    channel_result = next(r for r in outcome.results if r.section == "default_channel")
+    assert channel_result.status == WriteStatus.FAILED
+    assert "may or may not" in channel_result.message
+
+    security_result = next(r for r in outcome.results if r.section == "security")
+    assert security_result.status == WriteStatus.SKIPPED
+    assert "default_channel" in security_result.message
+
+    assert outcome.security_attempted is False
+    assert outcome.may_update_database is False
+
+
+def test_apply_plan_default_channel_in_place_lands_before_security(make_live) -> None:
+    """Under --no-reconnect, default_channel writes in its natural order, no extra reconnect."""
+    template = _template()
+    template2 = template.model_copy(
+        update={
+            "default_channel": template.default_channel.model_copy(
+                update={"position_precision": 12}
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    channel_section = next(s for s in plan.sections if s.section == "default_channel")
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    plan = dataclasses.replace(plan, sections=(lora_change, channel_section, security_section))
+    kp = generate_keypair()
+
+    iface = _FakeIfaceForApply()
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert outcome.ok is True, outcome.describe()
+    assert iface.localNode.transaction_calls == [
+        "<begin>",
+        "lora",
+        "default_channel",
+        "security",
+        "<commit>",
+    ]
+
+
 def test_apply_plan_commits_transaction_even_when_a_mid_loop_section_fails(make_live) -> None:
     """A mid-loop non-security failure must not skip the finally-driven commit."""
     template = _template()
@@ -2313,6 +2607,14 @@ class _FakeLocalNodeRaisesOnWrite(_FakeLocalNode):
         self.written_sections.append(section)
         raise self._exc
 
+    def writeChannel(  # noqa: N802 -- real method name
+        self,
+        channelIndex: int,  # noqa: ARG002, N803 -- real method name
+        adminIndex: int = 0,  # noqa: ARG002, N803 -- real method name
+    ) -> None:
+        self.written_sections.append("default_channel")
+        raise self._exc
+
 
 class _FakeIfaceRaisesOnWrite(_FakeIfaceForApply):
     """An interface whose config section write always raises ``exc``."""
@@ -2339,6 +2641,17 @@ class _FakeLocalNodeFailsOnSections(_FakeLocalNode):
     def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
         self.written_sections.append(section)
         if section in self._fail_sections:
+            raise (
+                self._exc if self._exc is not None else OSError(errno.EIO, "simulated I/O failure")
+            )
+
+    def writeChannel(  # noqa: N802 -- real method name
+        self,
+        channelIndex: int,  # noqa: ARG002, N803 -- real method name
+        adminIndex: int = 0,  # noqa: ARG002, N803 -- real method name
+    ) -> None:
+        self.written_sections.append("default_channel")
+        if "default_channel" in self._fail_sections:
             raise (
                 self._exc if self._exc is not None else OSError(errno.EIO, "simulated I/O failure")
             )

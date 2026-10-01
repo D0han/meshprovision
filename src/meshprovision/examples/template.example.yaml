@@ -75,6 +75,16 @@ position:
 power:
   is_power_saving: false
 
+# The primary (index-0) channel's module settings. Scoped to the primary
+# channel only -- meshprovision has no secondary-channel provisioning
+# story. Written through a different device mechanism than every other
+# section above (a channel write, not a config/module-config write), and
+# its reboot behavior has not been verified against real firmware --
+# `mesh provision --dry-run` surfaces a warning for this section.
+default_channel:
+  position_precision: 12 # bits; 0 disables position sharing on this channel
+  is_muted: false
+
 telemetry:
   device_update_interval: 1800
   environment_measurement_enabled: false

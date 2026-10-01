@@ -100,6 +100,7 @@ __all__ = [
     "generate_ble_pin",
     "persist_result",
     "verify_plan",
+    "write_default_channel",
     "write_section",
 ]
 
@@ -349,6 +350,56 @@ def write_section(
             msg.CopyFrom(snapshot)
 
     _logger.info("Wrote config section %s (%d fields)", change.section, len(change.changes))
+
+
+def write_default_channel(iface: MeshInterface, change: SectionChange) -> None:
+    """Write the primary (index-0) channel's module settings to the device.
+
+    A completely different admin message than :func:`write_section`'s
+    ``writeConfig()`` -- ``default_channel`` lives on
+    ``iface.localNode.channels[0].settings.module_settings``, written via
+    ``Node.writeChannel(0)``/``AdminMessage.set_channel``. Never wrapped in
+    the settings transaction :func:`apply_plan` opens for config/module
+    sections.
+
+    Args:
+        iface: The connected interface to write through.
+        change: The section's field changes to apply. Must be the
+            ``"default_channel"`` section.
+
+    Raises:
+        ProvisioningError: If the primary channel is unavailable, or the
+            device write itself fails.
+        PlanConflictError: If a field within ``change`` cannot be applied
+            -- propagated from :func:`apply_field`, before any device
+            write.
+
+    On any failure the section's in-memory message is restored to its
+    pre-call state (a snapshot taken before any field is applied), so an
+    in-place read-back (``--no-reconnect``) never reports an unwritten
+    value as confirmed -- the same contract :func:`write_section` offers.
+    """
+    channel = iface.localNode.getChannelByChannelIndex(0)
+    if channel is None:
+        raise ProvisioningError("Primary channel (index 0) is not available on this device")
+
+    msg = channel.settings.module_settings
+    snapshot = type(msg)()
+    snapshot.CopyFrom(msg)
+    ok = False
+    try:
+        for field_change in change.changes:
+            apply_field(msg, field_change.field, field_change.desired)
+        try:
+            iface.localNode.writeChannel(0)
+        except (*_DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
+            raise ProvisioningError(f"Failed to write default_channel: {exc}") from exc
+        ok = True
+    finally:
+        if not ok:
+            msg.CopyFrom(snapshot)
+
+    _logger.info("Wrote default_channel (%d fields)", len(change.changes))
 
 
 def _render_value(value: object, *, secret: bool) -> str:
@@ -663,6 +714,13 @@ def verify_plan(
                 # write. Read the real post-write value the same way
                 # _verify_key_material/_verify_admin_keys already do.
                 actual = getattr(live_after.security, field_change.field, None)
+            elif change.section == "default_channel":
+                # LiveConfig.sections/module_sections deliberately exclude
+                # "default_channel" too -- it is backed by a structurally
+                # different container (iface.localNode.channels), not
+                # LocalConfig/LocalModuleConfig -- so the generic value()
+                # lookup below would always return None here.
+                actual = live_after.default_channel.get(field_change.field)
             else:
                 actual = live_after.value(change.section, field_change.field)
             if values_equal(actual, field_change.desired):
@@ -845,36 +903,50 @@ def apply_plan(
     cannot be re-read is by definition unverified, and the ODS must not
     be written.
 
-    Writes the owner (name) phase and every non-``security`` section
-    inside one settings transaction (``beginSettingsTransaction()`` /
-    ``commitSettingsTransaction()``), opened only when there is something
-    to write in it -- a plan whose only section is ``security`` writes it
+    Writes the owner (name) phase and every non-``security``,
+    non-``default_channel`` section inside one settings transaction
+    (``beginSettingsTransaction()`` / ``commitSettingsTransaction()``),
+    opened only when there is something to write in it -- a plan whose
+    only sections are ``security``/``default_channel`` writes them
     directly, with no transaction at all. This mirrors the upstream
     meshtastic CLI: an untransacted ``writeConfig`` implicitly saves and
     reboots the device after *every* section, not only ones this project
-    models as ``reboots_device``, so wrapping the non-``security`` writes
-    in one transaction means only the commit reboots the device, once.
+    models as ``reboots_device``, so wrapping these writes in one
+    transaction means only the commit reboots the device, once.
     The transaction is committed exactly once, unconditionally, even when
     a section failed partway through (:attr:`SectionChange.reboots_device`
     plays no role in this any more -- it remains a plan-rendering/display
-    field only). When :attr:`DeviceSession.reads_back` is ``True`` (the
-    normal, reconnecting session), ``security`` is written separately,
-    after the commit, on a freshly reconnected interface -- it is never
-    part of the same transaction, matching the existing invariant that
-    ``security`` is always written last (see
-    :data:`~meshprovision.provisioning.plan.SECTION_ORDER`) to avoid a
-    self-inflicted lockout. When ``reads_back`` is ``False``
-    (``InPlaceSession``/``--no-reconnect``), ``security`` is written
-    *inside* that same one transaction instead: a non-reconnecting
-    session cannot safely commit and then send a further write to a
-    device that may still be rebooting from that commit, since
-    ``InPlaceSession.refresh()`` cannot wait out a real reboot or obtain
-    a fresh handle.
+    field only). ``default_channel`` is never part of this transaction at
+    all, regardless of session kind: :func:`write_default_channel` sends
+    ``AdminMessage.set_channel`` via ``Node.writeChannel()``, structurally
+    unrelated to ``begin``/``commitSettingsTransaction()`` (which only
+    ever affect ``writeConfig``). When :attr:`DeviceSession.reads_back` is
+    ``True`` (the normal, reconnecting session), ``default_channel`` and
+    ``security`` are both deferred past the commit, written in that order
+    on a freshly reconnected interface -- this reuses the *existing*
+    post-commit reconnect+identity-check that otherwise exists solely to
+    gate the deferred ``security`` write; no new reconnect is invented for
+    ``default_channel``. This is the conservative choice given
+    ``writeChannel``'s reboot behavior is unverified against real
+    firmware: if it does trigger an unexpected reboot, every config/module
+    field has already safely landed (the transaction already committed),
+    and the reboot is caught by the same reconnect+identity-check machinery
+    ``security`` already relies on. When ``reads_back`` is ``False``
+    (``InPlaceSession``/``--no-reconnect``), both ``default_channel`` and
+    ``security`` are written in their natural :data:`~meshprovision.
+    provisioning.plan.SECTION_ORDER` position within the single untransacted
+    loop instead (``default_channel`` still never touches the transaction
+    itself, it just runs in the same pass): a non-reconnecting session
+    cannot safely commit and then send further writes to a device that may
+    still be rebooting from that commit, since ``InPlaceSession.refresh()``
+    cannot wait out a real reboot or obtain a fresh handle.
 
     Stops on the first failure: once the name phase or any section fails
-    to write, every remaining section (``security`` included) is recorded
-    :attr:`WriteStatus.SKIPPED` and never sent to the device. This is what
-    enforces :data:`~meshprovision.provisioning.plan.SECTION_ORDER`'s
+    to write, every remaining section (``default_channel``/``security``
+    included) is recorded :attr:`WriteStatus.SKIPPED` and never sent to
+    the device -- a ``default_channel`` failure cascades into ``security``
+    being skipped the same way any other section's failure does. This is
+    what enforces :data:`~meshprovision.provisioning.plan.SECTION_ORDER`'s
     documented invariant -- without it, a later section (not only
     ``security``) could still land after an earlier one failed, including
     one that locks the node against further management. The final verify
@@ -882,16 +954,23 @@ def apply_plan(
     :func:`verify_plan`'s ``attempted_sections``).
 
     Every reconnect (the one mid-plan refresh right after committing the
-    transaction, when ``security`` remains to be written on a
-    reconnecting session, and the final verify) also confirms the device
-    that answered is still the same node the plan was built for, via
-    :func:`~meshprovision.provisioning.detect.read_node_id`. That
-    mid-plan refresh -- and the identity check that follows it -- is
-    skipped entirely when there is no ``security`` section left to write
-    after the commit (nothing non-``security`` was the only thing in the
-    plan, or an earlier failure already means ``security`` will be
-    skipped). A mismatch is an unconditional, unbypassable hard stop:
-    nothing further is written, no result claims a confirmed write, and
+    transaction, when ``default_channel``/``security`` remain to be
+    written on a reconnecting session, and the final verify) also confirms
+    the device that answered is still the same node the plan was built
+    for, via :func:`~meshprovision.provisioning.detect.read_node_id`. That
+    mid-plan refresh -- and the identity check that follows it -- is gated
+    purely on whether a ``security`` section is present and the session
+    reads back (see ``defer_security`` below); ``default_channel`` rides
+    along on that same gate rather than having one of its own. So it is
+    skipped entirely when the plan has no ``security`` section at all
+    (even if it has a ``default_channel`` one -- that case writes
+    ``default_channel`` untransacted, in its natural
+    :data:`~meshprovision.provisioning.plan.SECTION_ORDER` position,
+    with no deferral and no extra reconnect), on a non-reconnecting
+    session, or when an earlier failure already means both
+    ``default_channel`` and ``security`` will be skipped. A mismatch is an
+    unconditional, unbypassable hard stop: nothing further is written, no
+    result claims a confirmed write, and
     :attr:`ApplyOutcome.may_update_database` is ``False``. There is no
     legitimate workflow where the connected node's id changes mid-run --
     ``ReconnectingSession`` exists only to re-read the same device -- and
@@ -964,7 +1043,10 @@ def apply_plan(
     iface = session.interface
 
     security_section = plan.section("security")
-    non_security_sections = tuple(s for s in plan.sections if s.section != "security")
+    channel_section = plan.section("default_channel")
+    non_security_sections = tuple(
+        s for s in plan.sections if s.section not in ("security", "default_channel")
+    )
     needs_transaction = (not plan.name_change.is_empty) or any(
         not s.is_empty for s in non_security_sections
     )
@@ -1021,7 +1103,10 @@ def apply_plan(
                 continue
 
             try:
-                write_section(iface, change, key_plan=plan.key_plan, keypair=keypair)
+                if change.section == "default_channel":
+                    write_default_channel(iface, change)
+                else:
+                    write_section(iface, change, key_plan=plan.key_plan, keypair=keypair)
             except (PlanConflictError, EnumMappingError) as exc:
                 # Pre-I/O failure: apply_field rejected the plan before any
                 # device write was attempted, so this section was never even
@@ -1165,24 +1250,60 @@ def apply_plan(
                     security_attempted=False,
                 )
 
-            assert security_section is not None  # noqa: S101 -- defer_security already guards this
-            try:
-                write_section(iface, security_section, key_plan=plan.key_plan, keypair=keypair)
-            except (PlanConflictError, EnumMappingError) as exc:
-                results.append(WriteResult("security", WriteStatus.FAILED, f"not written: {exc}"))
-                stop_reason = "security could not be written"
-            except ProvisioningError as exc:
-                attempted.append("security")
+            # default_channel also shares this reconnect rather than getting
+            # its own: it lands here, immediately before security, so a
+            # channel-write failure cascades into security being SKIPPED via
+            # the same stop_reason mechanism every other section already uses.
+            if channel_section is not None:
+                try:
+                    write_default_channel(iface, channel_section)
+                except (PlanConflictError, EnumMappingError) as exc:
+                    results.append(
+                        WriteResult("default_channel", WriteStatus.FAILED, f"not written: {exc}")
+                    )
+                    stop_reason = "default_channel could not be written"
+                except ProvisioningError as exc:
+                    attempted.append("default_channel")
+                    results.append(
+                        WriteResult(
+                            "default_channel",
+                            WriteStatus.FAILED,
+                            f"{exc} (the device may or may not have applied it)",
+                        )
+                    )
+                    stop_reason = "the default_channel write failed"
+                else:
+                    attempted.append("default_channel")
+
+            if stop_reason is not None:
                 results.append(
                     WriteResult(
                         "security",
-                        WriteStatus.FAILED,
-                        f"{exc} (the device may or may not have applied it)",
+                        WriteStatus.SKIPPED,
+                        f"not written: stopped because {stop_reason}",
                     )
                 )
-                stop_reason = "the security write failed"
             else:
-                attempted.append("security")
+                assert security_section is not None  # noqa: S101 -- defer_security already guards this
+                try:
+                    write_section(iface, security_section, key_plan=plan.key_plan, keypair=keypair)
+                except (PlanConflictError, EnumMappingError) as exc:
+                    results.append(
+                        WriteResult("security", WriteStatus.FAILED, f"not written: {exc}")
+                    )
+                    stop_reason = "security could not be written"
+                except ProvisioningError as exc:
+                    attempted.append("security")
+                    results.append(
+                        WriteResult(
+                            "security",
+                            WriteStatus.FAILED,
+                            f"{exc} (the device may or may not have applied it)",
+                        )
+                    )
+                    stop_reason = "the security write failed"
+                else:
+                    attempted.append("security")
 
     security_attempted = "security" in attempted
 

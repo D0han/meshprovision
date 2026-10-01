@@ -68,6 +68,7 @@ from meshprovision.name_pattern import (
 
 __all__ = [
     "KNOWN_MODULE_OPTIONS",
+    "DefaultChannelSection",
     "DeviceSection",
     "LoraSection",
     "NeighborInfoSection",
@@ -527,6 +528,30 @@ class NeighborInfoSection(BaseModel):
     transmit_over_lora: bool | None = None
 
 
+class DefaultChannelSection(BaseModel):
+    """The primary (index-0) channel's ``ModuleSettings`` fields.
+
+    Scoped to channel index 0 only -- meshprovision has no secondary-channel
+    provisioning story. Deliberately not part of config/module-config: a
+    device's channels live in a separate protobuf container
+    (``iface.localNode.channels``), written through a different admin
+    message (``AdminMessage.set_channel`` via ``Node.writeChannel``), never
+    ``writeConfig``.
+
+    Attributes:
+        position_precision: Position precision shared in this channel's
+            broadcasts, in bits (0 disables position sharing on this
+            channel).
+        is_muted: Whether this channel's traffic is muted (received but not
+            relayed/notified).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    position_precision: int | None = Field(default=None, ge=0)
+    is_muted: bool | None = None
+
+
 class SecuritySection(BaseModel):
     """``config.security`` fields applied at provisioning time.
 
@@ -625,6 +650,8 @@ class TemplateConfig(BaseModel):
         power: ``config.power`` fields.
         telemetry: ``ModuleConfig.telemetry`` fields.
         neighbor_info: ``ModuleConfig.neighbor_info`` fields.
+        default_channel: The primary (index-0) channel's ``ModuleSettings``
+            fields.
         security: ``config.security`` fields.
     """
 
@@ -651,6 +678,7 @@ class TemplateConfig(BaseModel):
     power: PowerSection = Field(default_factory=PowerSection)
     telemetry: TelemetrySection = Field(default_factory=TelemetrySection)
     neighbor_info: NeighborInfoSection = Field(default_factory=NeighborInfoSection)
+    default_channel: DefaultChannelSection = Field(default_factory=DefaultChannelSection)
     security: SecuritySection = Field(default_factory=SecuritySection)
 
     @field_validator("enabled_options", "disabled_options", "admin_nodes", mode="before")

@@ -113,6 +113,41 @@ def test_factory_provisioning_end_to_end(
     _assert_no_secrets(result.stderr)
 
 
+def test_factory_provisioning_writes_default_channel_before_security(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """A templated default_channel block is written, landing before security.
+
+    Idempotency guard: a second run makes no further channel write,
+    consistent with this project's existing idempotency guarantee for
+    every other section.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(
+        write_template(default_channel={"position_precision": 12, "is_muted": True})
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    channel = iface.localNode.channels[0]
+    assert channel.settings.module_settings.position_precision == 12
+    assert channel.settings.module_settings.is_muted is True
+    assert "default_channel" in iface.localNode.written_sections
+    assert iface.localNode.written_sections.index(
+        "default_channel"
+    ) < iface.localNode.written_sections.index("security")
+
+    iface.localNode.written_sections.clear()
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert second.exit_code == 0
+    assert "default_channel" not in iface.localNode.written_sections
+    assert "No changes needed." in second.stderr
+
+
 def test_no_reconnect_skips_the_reconnect_verify_connection(
     runner: CliRunner,
     env: dict[str, str],
