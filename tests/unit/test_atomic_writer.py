@@ -38,11 +38,8 @@ def test_write_bytes_atomic_creates_file_no_stray_temp(tmp_path: Path) -> None:
     backup_dir = tmp_path / "backups"
     write_bytes_atomic(target, b"hello", backup=False, backup_dir=backup_dir)
     assert target.read_bytes() == b"hello"
-    assert list(tmp_path.iterdir()) == [target] or all(
-        p in (target, backup_dir) for p in tmp_path.iterdir()
-    )
-    stray = [p for p in tmp_path.iterdir() if p.name.startswith(".") and "tmp" in p.name]
-    assert stray == []
+    assert sorted(tmp_path.iterdir()) == [target]
+    assert not backup_dir.exists()
 
 
 def test_exception_inside_block_leaves_target_untouched(tmp_path: Path) -> None:

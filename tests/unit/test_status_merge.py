@@ -1021,13 +1021,16 @@ def test_build_table_returns_expected_columns(local_tz: None) -> None:
 
 
 @pytest.mark.parametrize(
-    "payload",
+    ("payload", "expected_escape"),
     [
-        "X\x1b]52;c;cm0K\x1b\\\x1b[1A",  # ESC-led OSC 52 clipboard write + cursor-up CSI
-        "X\x9b31m",  # single-byte C1 CSI
+        ("X\x1b]52;c;cm0K\x1b\\\x1b[1A", "\\x1b"),
+        ("X\x9b31m", "\\x9b"),
     ],
+    ids=["esc_osc_sequence", "c1_csi_sequence"],
 )
-def test_render_console_escapes_terminal_control_sequences_in_long_name(payload: str) -> None:
+def test_render_console_escapes_terminal_control_sequences_in_long_name(
+    payload: str, expected_escape: str
+) -> None:
     """Regression test for Round 37's terminal-escape-injection fix (S6).
 
     A loranet ``longName`` carrying raw control bytes must never reach
@@ -1043,4 +1046,4 @@ def test_render_console_escapes_terminal_control_sequences_in_long_name(payload:
     output = buf.getvalue()
     assert "\x1b" not in output
     assert "\x9b" not in output
-    assert "\\x1b" in output or "\\x9b" in output
+    assert expected_escape in output

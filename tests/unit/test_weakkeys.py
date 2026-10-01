@@ -18,6 +18,7 @@ from meshprovision.crypto.weakkeys import (
     NON_OVERRIDABLE_CHECKS,
     SMALL_ORDER_POINTS,
     WeakKeyCheck,
+    _known_bad_keys_candidates,
     audit_keypair,
     audit_node,
     audit_private_key,
@@ -561,11 +562,16 @@ def test_clamping_check_default_off_and_explicit_on(keypair_factory) -> None:
     unclamped_findings = [f for f in result_checked.findings if f.check == WeakKeyCheck.UNCLAMPED]
     assert len(unclamped_findings) == 1
     assert unclamped_findings[0].severity == "warning"
-    assert result_checked.compromised is False or any(
-        f.severity == "critical"
-        for f in result_checked.findings
-        if f.check != WeakKeyCheck.UNCLAMPED
-    )
+    assert result_checked.compromised is True
+
+
+def test_unclamped_only_key_is_warning_not_compromise(keypair_factory) -> None:
+    raw = bytearray(keypair_factory().private.reveal())
+    raw[0] |= 0x01
+    result = audit_private_key(bytes(raw), check_clamping=True, known_bad=frozenset())
+    assert [f.check for f in result.findings] == [WeakKeyCheck.UNCLAMPED]
+    assert result.findings[0].severity == "warning"
+    assert result.compromised is False
 
 
 def test_check_clamping_default_is_off_when_omitted_at_every_entry_point() -> None:
@@ -878,7 +884,8 @@ def test_load_known_bad_keys_absence_logs_at_info_with_searched_paths(
     assert len(messages) == 1
     assert str(package_candidate) in messages[0]
     assert str(cwd_candidate) in messages[0]
-    assert repo_candidate is None or str(repo_candidate) in messages[0]
+    for candidate in _known_bad_keys_candidates(db_path=None):
+        assert str(candidate) in messages[0]
     assert KNOWN_BAD_KEYS_ENV in messages[0]
 
 

@@ -73,9 +73,8 @@ def test_factory_node_plan(make_live, template) -> None:
     expected_config_order = [s for s in SECTION_ORDER if s not in ("bluetooth", "security")]
     present_config = [s for s in section_names if s in expected_config_order]
     assert present_config == [s for s in expected_config_order if s in section_names]
-    assert "security" not in section_names or section_names[-1] == "security"
-    if "bluetooth" in section_names and "security" in section_names:
-        assert section_names.index("bluetooth") < section_names.index("security")
+    assert section_names[-1] == "security"
+    assert section_names.index("bluetooth") < section_names.index("security")
 
     security_section = plan.section("security")
     assert security_section is not None
@@ -317,9 +316,7 @@ def test_admin_nodes_empty_never_strips_live_keys(make_live, template, keypair_f
     )
     plan = build_plan(inputs)
 
-    assert plan.key_plan.desired_admin_keys == tuple(sorted((kp1.public, kp2.public))) or set(
-        plan.key_plan.desired_admin_keys
-    ) == {kp1.public, kp2.public}
+    assert plan.key_plan.desired_admin_keys == (kp1.public, kp2.public)
     assert plan.key_plan.change_admin_keys is False
     to_record = plan.to_record()
     assert to_record.authorized_admin_keys == ("X_pub", "Y_pub")

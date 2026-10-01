@@ -1261,7 +1261,7 @@ def test_admin_import_allow_weak_still_refuses_a_small_order_key(
     result = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--allow-weak"], env)
 
     assert result.exit_code == ExitCode.CRYPTO
-    assert "no flag" in result.stderr.lower() or "cannot override" in result.stderr.lower()
+    assert "no flag can override this refusal" in result.stderr
 
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     rows = {row["key_ref"] for row in loaded.keys}
