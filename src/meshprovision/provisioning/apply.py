@@ -695,6 +695,25 @@ def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | Non
     return None
 
 
+def _backend_error_detail(exc: ConnectionBackendError) -> str:
+    """Render a single-line detail string for a failed reconnect, including any hint.
+
+    ``str(exc)`` alone drops the hint (see ``MeshprovisionError.__str__``),
+    and ``user_message`` isn't right here either -- it inserts a newline
+    before the hint, which would break the CLI's one-line
+    ``label: FAILED -- message`` rendering.
+
+    Args:
+        exc: The reconnect failure to describe.
+
+    Returns:
+        ``f"{exc} (hint: {exc.hint})"`` when a hint is set, else ``str(exc)``.
+    """
+    if exc.hint:
+        return f"{exc} (hint: {exc.hint})"
+    return str(exc)
+
+
 def _identity_mismatch(plan: ChangePlan, got: NodeId) -> WriteResult:
     """Build the ``FAILED`` result for a reconnect that answered as a different node.
 
@@ -943,20 +962,30 @@ def apply_plan(
                 on_reconnect()
             try:
                 iface = session.refresh()
-            except ConnectionBackendError:
+            except ConnectionBackendError as exc:
                 results.append(
                     WriteResult(
                         "<verify>",
                         WriteStatus.FAILED,
-                        "Could not reconnect after a reboot-triggering write to continue the plan",
+                        "Could not reconnect after a reboot-triggering write to continue the "
+                        f"plan: {_backend_error_detail(exc)}; stopped",
                     )
+                )
+                results.extend(
+                    WriteResult(
+                        remaining.section,
+                        WriteStatus.SKIPPED,
+                        "not written: stopped because the device could not be reconnected "
+                        "after a reboot",
+                    )
+                    for remaining in plan.sections[index + 1 :]
                 )
                 return ApplyOutcome(
                     node_id=plan.node_id,
                     results=tuple(results),
                     dry_run=False,
                     verified=True,
-                    security_attempted="security" in attempted,
+                    security_attempted=False,
                 )
 
             # Confirm the device that answered the reboot reconnect is still
@@ -1017,9 +1046,13 @@ def apply_plan(
         on_reconnect()
     try:
         fresh_iface = session.refresh()
-    except ConnectionBackendError:
+    except ConnectionBackendError as exc:
         results.append(
-            WriteResult("<verify>", WriteStatus.FAILED, "Could not reconnect to verify the writes")
+            WriteResult(
+                "<verify>",
+                WriteStatus.FAILED,
+                f"Could not reconnect to verify the writes: {_backend_error_detail(exc)}",
+            )
         )
         return ApplyOutcome(
             node_id=plan.node_id,

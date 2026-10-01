@@ -1382,6 +1382,75 @@ def test_apply_plan_reports_uncertain_when_mid_loop_reconnect_fails(make_live) -
     assert "device" not in iface.localNode.written_sections
 
 
+class _FakeSessionRefreshFailsWithHintAfterFirstCall:
+    """Mid-loop reconnect-failure variant whose exception carries an actionable hint."""
+
+    def __init__(self, iface: _FakeIfaceForApply) -> None:
+        self._iface = iface
+
+    @property
+    def interface(self) -> _FakeIfaceForApply:
+        return self._iface
+
+    def describe(self) -> str:
+        return "fake (refresh fails, with hint)"
+
+    def refresh(self) -> _FakeIfaceForApply:
+        raise ConnectionFailedError(
+            "link dropped after reboot", hint="check the cable", transport="serial"
+        )
+
+
+def test_apply_plan_mid_loop_reconnect_failure_skips_remaining_sections_and_keeps_the_hint(
+    make_live,
+) -> None:
+    """The mid-plan reconnect-failure arm must carry the cause/hint and SKIP what's left.
+
+    Companion to the sibling identity-check arms just below it (mismatch
+    and unreadable-identity), which already extend `results` with a
+    SKIPPED entry per remaining section and set `security_attempted=False`
+    -- this arm must do the same instead of silently dropping the rest of
+    the plan.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    kp = generate_keypair()
+
+    rebooting_lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="hop_limit", current=3, desired=5),),
+        reboots_device=True,
+    )
+    later_device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    plan = dataclasses.replace(
+        plan, sections=(rebooting_lora_change, later_device_change, security_section)
+    )
+
+    iface = _FakeIfaceForApply()
+    session = _FakeSessionRefreshFailsWithHintAfterFirstCall(iface)
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.status == WriteStatus.FAILED
+    assert "link dropped after reboot" in verify_result.message
+    assert "check the cable" in verify_result.message
+
+    device_result = next(r for r in outcome.results if r.section == "device")
+    assert device_result.status == WriteStatus.SKIPPED
+    security_result = next(r for r in outcome.results if r.section == "security")
+    assert security_result.status == WriteStatus.SKIPPED
+
+    assert outcome.security_attempted is False
+
+
 # ---------------------------------------------------------------------------
 # apply_plan reconnect identity check (E3) -- a mid-plan or final reconnect
 # that answers as a different node must be an unconditional hard stop.
@@ -1803,7 +1872,45 @@ def test_apply_plan_reports_uncertain_when_the_reconnect_fails(tmp_path, make_li
     verify_results = [r for r in outcome.results if r.section == "<verify>"]
     assert len(verify_results) == 1
     assert verify_results[0].status == WriteStatus.FAILED
-    assert verify_results[0].message == "Could not reconnect to verify the writes"
+    assert verify_results[0].message.startswith("Could not reconnect to verify the writes")
+
+
+class _RefreshFailsWithHintSession:
+    """Final-verify reconnect-failure variant whose exception carries an actionable hint."""
+
+    def __init__(self, iface: _FakeIfaceForApply) -> None:
+        self._iface = iface
+
+    @property
+    def interface(self) -> _FakeIfaceForApply:
+        return self._iface
+
+    def describe(self) -> str:
+        return "fake (refresh always fails, with hint)"
+
+    def refresh(self) -> _FakeIfaceForApply:
+        raise ConnectionFailedError("link dropped", hint="check the cable", transport="serial")
+
+
+def test_apply_plan_final_verify_reconnect_failure_keeps_the_cause_and_hint(
+    tmp_path, make_live
+) -> None:
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    kp = generate_keypair()
+
+    iface = _FakeIfaceForApply()
+    session = _RefreshFailsWithHintSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    verify_results = [r for r in outcome.results if r.section == "<verify>"]
+    assert len(verify_results) == 1
+    assert verify_results[0].status == WriteStatus.FAILED
+    assert verify_results[0].message.startswith("Could not reconnect to verify the writes")
+    assert "link dropped" in verify_results[0].message
+    assert "check the cable" in verify_results[0].message
 
 
 def test_apply_plan_keeps_an_earlier_section_failure_when_the_final_reconnect_also_fails(
