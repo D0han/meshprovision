@@ -368,7 +368,9 @@ def _render_value(value: object, *, secret: bool) -> str:
     return str(value)
 
 
-def _verify_name(live: detect.LiveConfig, desired: str | None, *, field: str) -> WriteResult | None:
+def _verify_name(
+    live: detect.LiveConfig, desired: str | None, *, field: str, read_back: bool = True
+) -> WriteResult | None:
     """Verify one name field (``short_name``/``long_name``) against its desired value.
 
     Args:
@@ -376,6 +378,17 @@ def _verify_name(live: detect.LiveConfig, desired: str | None, *, field: str) ->
         desired: The name the plan intended to write, or ``None`` if this
             name was not part of the plan.
         field: ``"short_name"`` or ``"long_name"``.
+        read_back: Whether the session that produced ``live`` genuinely
+            re-read from the device (see
+            :attr:`~meshprovision.provisioning.apply_session.DeviceSession.reads_back`).
+            When ``False``, a mismatch that would otherwise be
+            :attr:`WriteStatus.UNCONFIRMED` is instead reported
+            :attr:`WriteStatus.CONFIRMED` with a note that the write
+            could not be read back -- the in-memory interface a
+            non-reconnecting session re-reads may simply not reflect the
+            same post-write state a real reconnect would, so an
+            unconditional UNCONFIRMED here would misreport imprecision
+            as failure (``--no-reconnect``, see firmware issue #7449).
 
     Returns:
         ``None`` when ``desired`` is ``None`` (nothing to verify);
@@ -404,6 +417,13 @@ def _verify_name(live: detect.LiveConfig, desired: str | None, *, field: str) ->
             field=field,
             expected=desired,
             actual=actual,
+        )
+    if not read_back:
+        return WriteResult(
+            "owner",
+            WriteStatus.CONFIRMED,
+            "written; not read back (--no-reconnect)",
+            field=field,
         )
     return WriteResult(
         "owner",
@@ -561,6 +581,7 @@ def verify_plan(
     keypair: KeyPair | None,
     device_public_key: object = None,
     attempted_sections: Collection[str] | None = None,
+    read_back: bool = True,
 ) -> tuple[WriteResult, ...]:
     """Compare a freshly re-read device state against a plan's intent.
 
@@ -574,6 +595,18 @@ def verify_plan(
             copy the write phase used).
         keypair: The freshly generated keypair, when the plan regenerated
             one.
+        read_back: Whether the session that produced ``live_after``
+            genuinely re-read from the device (see
+            :attr:`~meshprovision.provisioning.apply_session.DeviceSession.reads_back`).
+            Threaded only to the two name-field verifications (see
+            :func:`_verify_name`) -- the one case where the in-memory
+            interface a non-reconnecting session re-reads may not reflect
+            the same post-write state a real reconnect would. Ordinary
+            field verification, :func:`_verify_key_material`, and
+            :func:`_verify_admin_keys` compare directly against the
+            in-memory interface either way, and the CLI refuses
+            ``--no-reconnect`` outright when the plan would regenerate
+            the key (see ``run_provision``), so they never need this.
         device_public_key: The raw value of ``iface.getPublicKey()``, as
             documented on :func:`_verify_key_material`.
         attempted_sections: The section names whose ``writeConfig`` was
@@ -602,6 +635,7 @@ def verify_plan(
         live_after,
         plan.name_change.desired_short_name if plan.name_change.short_changed else None,
         field="short_name",
+        read_back=read_back,
     )
     if short_result is not None:
         results.append(short_result)
@@ -609,6 +643,7 @@ def verify_plan(
         live_after,
         plan.name_change.desired_long_name if plan.name_change.long_changed else None,
         field="long_name",
+        read_back=read_back,
     )
     if long_result is not None:
         results.append(long_result)
@@ -1108,6 +1143,7 @@ def apply_plan(
             keypair=keypair,
             device_public_key=device_pub,
             attempted_sections=frozenset(attempted),
+            read_back=session.reads_back,
         )
     )
 

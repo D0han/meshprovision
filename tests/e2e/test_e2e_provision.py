@@ -114,7 +114,11 @@ def test_factory_provisioning_end_to_end(
 
 
 def test_no_reconnect_skips_the_reconnect_verify_connection(
-    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
 ) -> None:
     """--no-reconnect genuinely changes behavior, not just prints a warning.
 
@@ -123,8 +127,22 @@ def test_no_reconnect_skips_the_reconnect_verify_connection(
     records every backend.connect() call, so a normal run shows more
     than the one initial connection. --no-reconnect uses InPlaceSession,
     which never calls backend.connect() again at all.
+
+    The node is already in the database with a keypair matching the
+    device's own, so the plan does not regenerate the key -- a plan that
+    regenerates is refused outright under --no-reconnect (see
+    test_no_reconnect_refuses_a_key_regenerating_plan_before_any_write),
+    which would short-circuit this test before it ever exercised the
+    "no reconnect" behavior this test is actually about.
     """
-    bus.use(FakeMeshInterface("deadbe01"))
+    kp = keypair_factory()
+    node_record = NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE)
+    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
+    seed_db(nodes=[node_record], keys=[pub_record, priv_record])
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
 
     result = invoke(
         runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--no-reconnect"], env
@@ -137,6 +155,28 @@ def test_no_reconnect_skips_the_reconnect_verify_connection(
 
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     assert len(loaded.nodes) == 1
+
+
+def test_no_reconnect_refuses_a_key_regenerating_plan_before_any_write(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """--no-reconnect can never verify a key regeneration, so it is refused up front.
+
+    A FACTORY node (no database record) always regenerates its key --
+    --no-reconnect never reconnects, so it has no way to confirm a
+    regenerated key actually survived the device's reboot (firmware
+    issue #7449). The refusal happens before any device write.
+    """
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(
+        runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--no-reconnect"], env
+    )
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "--no-reconnect" in result.stderr
+    assert "regenerat" in result.stderr
+    assert iface.localNode.written_sections == []
 
 
 def test_a_normal_run_reconnects_more_than_once(

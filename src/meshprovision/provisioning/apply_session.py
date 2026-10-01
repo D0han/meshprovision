@@ -252,6 +252,11 @@ class DeviceSession(Protocol):
         """The currently-open interface."""
         ...
 
+    @property
+    def reads_back(self) -> bool:
+        """Whether `refresh()` re-reads from the device, vs. returning the same interface."""
+        ...
+
     def describe(self) -> str:
         """Return a one-line, operator-facing description of this session."""
         ...
@@ -319,6 +324,16 @@ class ReconnectingSession:
         if self._iface is None:
             raise ProvisioningError("ReconnectingSession has not been opened; call open() first.")
         return self._iface
+
+    @property
+    def reads_back(self) -> bool:
+        """Whether `refresh()` actually re-reads from the device.
+
+        Returns:
+            ``True`` -- this session genuinely closes and reopens the
+            connection.
+        """
+        return True
 
     def describe(self) -> str:
         """Return a one-line, operator-facing description of this session.
@@ -416,6 +431,16 @@ class InPlaceSession:
             :attr:`iface`.
         """
         return self.iface
+
+    @property
+    def reads_back(self) -> bool:
+        """Whether `refresh()` actually re-reads from the device.
+
+        Returns:
+            ``False`` -- :meth:`refresh` returns the same in-memory
+            interface, unchanged.
+        """
+        return False
 
     def describe(self) -> str:
         """Return a one-line, operator-facing description of this session.

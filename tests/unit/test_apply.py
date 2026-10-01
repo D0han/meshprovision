@@ -622,6 +622,46 @@ def test_verify_plan_only_short_name_changed_skips_blank_long_name_readback(
     assert name_results[0].status == WriteStatus.UNCONFIRMED
 
 
+def test_verify_plan_name_mismatch_with_read_back_false_is_confirmed_not_unconfirmed(
+    make_live,
+) -> None:
+    """--no-reconnect (``read_back=False``) downgrades a name mismatch to CONFIRMED.
+
+    Same setup as
+    test_verify_plan_only_short_name_changed_skips_blank_long_name_readback,
+    which asserts UNCONFIRMED for this exact mismatch under the default
+    ``read_back=True`` -- here, with ``read_back=False``, the mismatch
+    must instead report CONFIRMED with a note that the write could not be
+    read back, since the in-memory interface a non-reconnecting session
+    re-reads may simply not reflect the same post-write state a real
+    reconnect would (see _verify_name).
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="AB12",
+    )
+    plan = build_plan(inputs)
+    assert plan.name_change.short_changed
+
+    live_after = make_live(
+        template,
+        short_name="",
+        long_name="",
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None, read_back=False)
+
+    name_results = [r for r in results if r.section == "owner"]
+    assert [r.field for r in name_results] == ["short_name"]
+    assert name_results[0].status == WriteStatus.CONFIRMED
+    assert name_results[0].message == "written; not read back (--no-reconnect)"
+
+
 def test_verify_plan_name_truncated_confirmed(make_live) -> None:
     template = _template()
     live = make_live(template, security=make_security(empty=True))
@@ -928,6 +968,21 @@ def _node_id() -> NodeId:
 
 
 # ---------------------------------------------------------------------------
+# DeviceSession.reads_back.
+# ---------------------------------------------------------------------------
+
+
+def test_reconnecting_session_reads_back_is_true() -> None:
+    session = ReconnectingSession(backend=object())  # type: ignore[arg-type]
+    assert session.reads_back is True
+
+
+def test_in_place_session_reads_back_is_false() -> None:
+    session = InPlaceSession(_FakeIfaceForApply())  # type: ignore[arg-type]
+    assert session.reads_back is False
+
+
+# ---------------------------------------------------------------------------
 # apply_plan / persist_result, over InPlaceSession + fake interface.
 # ---------------------------------------------------------------------------
 
@@ -1179,6 +1234,10 @@ class _FakeSessionTracksRefresh:
     @property
     def interface(self) -> _FakeIfaceForApply:
         return self._iface
+
+    @property
+    def reads_back(self) -> bool:
+        return True
 
     def describe(self) -> str:
         return "fake (tracks refresh calls)"

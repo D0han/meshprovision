@@ -109,6 +109,15 @@ verified against the in-memory interface only. The default reconnects and
 re-reads, because of firmware issue #7449 (a restored private key could
 be discarded on reboot, with the device regenerating fresh keys).
 
+Because `--no-reconnect` never reconnects, it has no way to tell a key
+that genuinely persisted apart from one firmware silently discarded on
+reboot, so it refuses outright -- before any device I/O -- whenever the
+plan would regenerate the node's key. A FACTORY node always regenerates a
+key, so a FACTORY node can never be provisioned with `--no-reconnect`. For
+everything else (renames, ordinary field writes), a write that can't be
+read back is reported `CONFIRMED` with a `"written; not read back
+(--no-reconnect)"` note rather than being misreported as a mismatch.
+
 A node whose `Nodes` sheet row has `management=observed` (recorded by
 `mesh adopt`, below — or simply a row you typed in by hand, since a blank
 `management` cell reads back as `observed`) is refused with exit code 5

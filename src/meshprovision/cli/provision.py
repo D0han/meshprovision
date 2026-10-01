@@ -1302,6 +1302,17 @@ def run_provision(
     except AdminKeyRotationRefusedError as exc:
         raise _finalize_admin_key_rotation_error(exc, live, pending_path=pending_path) from exc
 
+    if opts.no_reconnect and change_plan.key_plan.regenerate:
+        raise PlanConflictError(
+            "--no-reconnect cannot verify a key regeneration: it never reconnects, so it "
+            "can only compare against the in-memory interface, which cannot tell a key that "
+            "genuinely persisted apart from one firmware silently discarded on reboot "
+            "(firmware #7449). A FACTORY node always regenerates a key, so it can never be "
+            "provisioned with --no-reconnect.",
+            field="security.public_key",
+            hint="Re-run without --no-reconnect.",
+        )
+
     if opts.admin_ref is not None and opts.admin_ref != change_plan.node_id.hex:
         existing_alias_pub = db.keys.find(schema.ref_for(opts.admin_ref, KeyType.ADMIN_PUBLIC))
         if existing_alias_pub is not None and alias_would_rotate_admin_key(

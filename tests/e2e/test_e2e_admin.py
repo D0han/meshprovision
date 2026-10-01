@@ -926,7 +926,12 @@ def test_admin_bootstrap_inherits_the_archived_gate(
 
 
 def test_admin_bootstrap_inherits_no_reconnect(
-    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
 ) -> None:
     """admin_bootstrap reuses run_provision wholesale -- confirms --no-reconnect is honored too.
 
@@ -938,8 +943,24 @@ def test_admin_bootstrap_inherits_no_reconnect(
     (bus.connections is the same real discriminator used for
     provision's own --no-reconnect test) is strong evidence for the
     others sharing that exact code path.
+
+    The node is already in the database with a keypair matching the
+    device's own (the same non-regenerating setup
+    test_admin_bootstrap_ref_aliases_the_existing_on_file_key_without_regenerating
+    uses), since a plan that regenerates is refused outright under
+    --no-reconnect and would short-circuit this test before it ever
+    exercised the "no reconnect" behavior this test is actually about.
     """
-    bus.use(FakeMeshInterface("deadbe01"))
+    kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE)],
+        keys=list(KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)),
+    )
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
 
     result = invoke(
         runner,
