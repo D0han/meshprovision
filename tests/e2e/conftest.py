@@ -98,6 +98,20 @@ class FakeNode:
         self.localConfig = localonly_pb2.LocalConfig()
         self.moduleConfig = localonly_pb2.LocalModuleConfig()
         self.written_sections: list[str] = []
+        self.transaction_calls: list[str] = []
+        """Every beginSettingsTransaction()/commitSettingsTransaction() call
+        plus every writeConfig() section name, in true chronological order
+        -- lets a test assert relative call ORDER (e.g. "begin before the
+        first write", "commit before security"), not just that each
+        happened. Populated regardless of whether the call reached this
+        device directly (:class:`FakeNode`, the ``--no-reconnect`` path)
+        or via a :class:`_FakeConnectionNode` delegating through for
+        recording -- so order is correct across a reconnect too, since
+        a reconnect gets a *new* :class:`_FakeConnectionNode` but the same
+        underlying device/:class:`FakeNode`. ``written_sections`` stays
+        section-names-only, for every existing test that already asserts
+        against it.
+        """
 
     def writeConfig(self, section: str) -> None:  # noqa: N802 -- matches Node's own spelling
         """Record a device-side write attempt, simulating a firmware failure.
@@ -121,10 +135,34 @@ class FakeNode:
                 set.
         """
         self.written_sections.append(section)
+        self.transaction_calls.append(section)
         if section in self._iface.fail_sections:
             if self._iface.fail_exc is not None:
                 raise self._iface.fail_exc(section)
             raise RuntimeError(f"simulated device write failure for section {section!r}")
+
+    def beginSettingsTransaction(self) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Record a settings-transaction begin.
+
+        Reached directly for an :class:`InPlaceSession` (``--no-reconnect``)
+        -- which has no separate staged/persisted layering to defer, since
+        :meth:`writeConfig` above already mutates :attr:`localConfig`/
+        :attr:`moduleConfig` in place -- and indirectly, via
+        :meth:`_FakeConnectionNode.beginSettingsTransaction`, for the
+        reconnecting path. Either way this is a no-op beyond recording the
+        call: there is no device-side state to flip here.
+        """
+        self.transaction_calls.append("<begin>")
+
+    def commitSettingsTransaction(self) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Record a settings-transaction commit.
+
+        See :meth:`beginSettingsTransaction` -- same reasoning: nothing to
+        actually commit on this device-level object, since every write
+        already landed in :attr:`localConfig`/:attr:`moduleConfig`
+        directly.
+        """
+        self.transaction_calls.append("<commit>")
 
     def setOwner(  # noqa: N802 -- must match meshtastic's own Node.setOwner spelling
         self, long_name: str | None = None, short_name: str | None = None, **kwargs: object
@@ -301,6 +339,20 @@ class _FakeConnectionNode:
     *this* connection immediately but reaches the device -- and so any
     other connection -- only once :meth:`writeConfig` actually persists
     it.
+
+    Transactional semantics: :meth:`beginSettingsTransaction` switches
+    this connection into buffering mode -- every :meth:`writeConfig` from
+    then on still records the attempt (and can still raise a simulated
+    device-side failure) on the device, but no longer immediately copies
+    the staged section into the device's persisted config; it only notes
+    which sections are pending. :meth:`commitSettingsTransaction` then
+    copies every pending section from staged to persisted in one go (the
+    firmware issue #7449 key-drop simulation applies at commit time for
+    ``security``, exactly as it does for an untransacted write) and
+    leaves buffering mode. A :meth:`writeConfig` call made while NOT
+    buffering (no transaction open -- the only path for a security-only
+    plan, which ``apply_plan`` never wraps in a transaction) persists
+    immediately, exactly as before this mode existed.
     """
 
     def __init__(self, connection: FakeConnection) -> None:
@@ -316,28 +368,16 @@ class _FakeConnectionNode:
         self.localConfig.CopyFrom(device.localNode.localConfig)
         self.moduleConfig = localonly_pb2.LocalModuleConfig()
         self.moduleConfig.CopyFrom(device.localNode.moduleConfig)
+        self._in_transaction = False
+        self._pending_sections: set[str] = set()
 
-    def writeConfig(self, section: str) -> None:  # noqa: N802 -- matches Node's own spelling
-        """Push this connection's staged ``section`` to the device, if it accepts it.
+    def _persist(self, section: str) -> None:
+        """Copy this connection's staged ``section`` into the device's persisted config.
 
         Args:
-            section: The config or module-config section name to write.
-
-        Raises:
-            OSError: If this connection was already closed.
-            BaseException: Propagated from :meth:`FakeNode.writeConfig`
-                when ``section`` is listed in the device's
-                ``fail_sections`` -- nothing is persisted in that case.
+            section: The config or module-config section name to persist.
         """
-        if self._connection.closed:
-            raise OSError(errno.EBADF, "fake connection is closed")
-
         device = self._connection._device
-        # Records the write attempt and raises the simulated device-side
-        # failure, if any -- exactly what a real writeConfig() call does
-        # before this fake decides whether to persist anything.
-        device.localNode.writeConfig(section)
-
         is_config = section in localonly_pb2.LocalConfig.DESCRIPTOR.fields_by_name
         staged_root = self.localConfig if is_config else self.moduleConfig
         persisted_node = device.localNode
@@ -351,6 +391,66 @@ class _FakeConnectionNode:
             # reads) is unaffected.
             device.localNode.localConfig.security.private_key = b""
             device.localNode.localConfig.security.public_key = b""
+
+    def beginSettingsTransaction(self) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Switch this connection into buffering mode.
+
+        Raises:
+            OSError: If this connection was already closed.
+        """
+        if self._connection.closed:
+            raise OSError(errno.EBADF, "fake connection is closed")
+        self._connection._device.localNode.beginSettingsTransaction()
+        self._in_transaction = True
+        self._pending_sections = set()
+
+    def commitSettingsTransaction(self) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Persist every section buffered since :meth:`beginSettingsTransaction`.
+
+        Leaves buffering mode once done.
+
+        Raises:
+            OSError: If this connection was already closed.
+        """
+        if self._connection.closed:
+            raise OSError(errno.EBADF, "fake connection is closed")
+        self._connection._device.localNode.commitSettingsTransaction()
+        for section in self._pending_sections:
+            self._persist(section)
+        self._pending_sections = set()
+        self._in_transaction = False
+
+    def writeConfig(self, section: str) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Push this connection's staged ``section`` to the device, if it accepts it.
+
+        While a transaction is open (see :meth:`beginSettingsTransaction`),
+        the section is buffered instead -- it reaches the device's
+        persisted config only once :meth:`commitSettingsTransaction` runs.
+
+        Args:
+            section: The config or module-config section name to write.
+
+        Raises:
+            OSError: If this connection was already closed.
+            BaseException: Propagated from :meth:`FakeNode.writeConfig`
+                when ``section`` is listed in the device's
+                ``fail_sections`` -- nothing is buffered or persisted in
+                that case.
+        """
+        if self._connection.closed:
+            raise OSError(errno.EBADF, "fake connection is closed")
+
+        device = self._connection._device
+        # Records the write attempt and raises the simulated device-side
+        # failure, if any -- exactly what a real writeConfig() call does
+        # before this fake decides whether to buffer or persist anything.
+        device.localNode.writeConfig(section)
+
+        if self._in_transaction:
+            self._pending_sections.add(section)
+            return
+
+        self._persist(section)
 
     def setOwner(  # noqa: N802 -- must match meshtastic's own Node.setOwner spelling
         self, long_name: str | None = None, short_name: str | None = None, **kwargs: object

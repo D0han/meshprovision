@@ -845,6 +845,32 @@ def apply_plan(
     cannot be re-read is by definition unverified, and the ODS must not
     be written.
 
+    Writes the owner (name) phase and every non-``security`` section
+    inside one settings transaction (``beginSettingsTransaction()`` /
+    ``commitSettingsTransaction()``), opened only when there is something
+    to write in it -- a plan whose only section is ``security`` writes it
+    directly, with no transaction at all. This mirrors the upstream
+    meshtastic CLI: an untransacted ``writeConfig`` implicitly saves and
+    reboots the device after *every* section, not only ones this project
+    models as ``reboots_device``, so wrapping the non-``security`` writes
+    in one transaction means only the commit reboots the device, once.
+    The transaction is committed exactly once, unconditionally, even when
+    a section failed partway through (:attr:`SectionChange.reboots_device`
+    plays no role in this any more -- it remains a plan-rendering/display
+    field only). When :attr:`DeviceSession.reads_back` is ``True`` (the
+    normal, reconnecting session), ``security`` is written separately,
+    after the commit, on a freshly reconnected interface -- it is never
+    part of the same transaction, matching the existing invariant that
+    ``security`` is always written last (see
+    :data:`~meshprovision.provisioning.plan.SECTION_ORDER`) to avoid a
+    self-inflicted lockout. When ``reads_back`` is ``False``
+    (``InPlaceSession``/``--no-reconnect``), ``security`` is written
+    *inside* that same one transaction instead: a non-reconnecting
+    session cannot safely commit and then send a further write to a
+    device that may still be rebooting from that commit, since
+    ``InPlaceSession.refresh()`` cannot wait out a real reboot or obtain
+    a fresh handle.
+
     Stops on the first failure: once the name phase or any section fails
     to write, every remaining section (``security`` included) is recorded
     :attr:`WriteStatus.SKIPPED` and never sent to the device. This is what
@@ -855,12 +881,17 @@ def apply_plan(
     pass only checks sections that were actually attempted (see
     :func:`verify_plan`'s ``attempted_sections``).
 
-    Every reconnect (mid-plan, after a reboot-triggering write, and the
-    final verify) also confirms the device that answered is still the
-    same node the plan was built for, via
-    :func:`~meshprovision.provisioning.detect.read_node_id`. A mismatch
-    is an unconditional, unbypassable hard stop: nothing further is
-    written, no result claims a confirmed write, and
+    Every reconnect (the one mid-plan refresh right after committing the
+    transaction, when ``security`` remains to be written on a
+    reconnecting session, and the final verify) also confirms the device
+    that answered is still the same node the plan was built for, via
+    :func:`~meshprovision.provisioning.detect.read_node_id`. That
+    mid-plan refresh -- and the identity check that follows it -- is
+    skipped entirely when there is no ``security`` section left to write
+    after the commit (nothing non-``security`` was the only thing in the
+    plan, or an earlier failure already means ``security`` will be
+    skipped). A mismatch is an unconditional, unbypassable hard stop:
+    nothing further is written, no result claims a confirmed write, and
     :attr:`ApplyOutcome.may_update_database` is ``False``. There is no
     legitimate workflow where the connected node's id changes mid-run --
     ``ReconnectingSession`` exists only to re-read the same device -- and
@@ -882,8 +913,9 @@ def apply_plan(
             to :func:`persist_result`, which does record it.
         dry_run: When ``True``, no device writes are attempted; every
             result is :attr:`WriteStatus.SKIPPED`.
-        settle_seconds: Pause after a reboot-triggering write, and again
-            before the final verification reconnect.
+        settle_seconds: Pause before the one mid-plan reconnect (after
+            committing the settings transaction, before ``security``),
+            and again before the final verification reconnect.
         sleep: Sleep function, injectable for tests.
         on_reconnect: Called right before each ``session.refresh()`` --
             covers the quiet several-second window during which a reboot
@@ -931,67 +963,130 @@ def apply_plan(
     stop_reason: str | None = None
     iface = session.interface
 
-    name_failure = _run_name_phase(iface, plan)
-    if name_failure is not None:
-        results.append(name_failure)
-        stop_reason = "the owner (name) write failed"
+    security_section = plan.section("security")
+    non_security_sections = tuple(s for s in plan.sections if s.section != "security")
+    needs_transaction = (not plan.name_change.is_empty) or any(
+        not s.is_empty for s in non_security_sections
+    )
 
-    last_index = len(plan.sections) - 1
-    for index, change in enumerate(plan.sections):
-        if stop_reason is not None:
-            # SECTION_ORDER's invariant ("security is always last") is
-            # enforced here: once anything upstream has failed, nothing
-            # further is written -- security included, since it is not
-            # the only section that can restrict later management (e.g.
-            # serial_enabled). A re-run always re-plans fresh from the
-            # device, so stopping loses no correctness, only progress on
-            # a run that is already uncertain.
+    if needs_transaction:
+        try:
+            iface.localNode.beginSettingsTransaction()
+        except (*_DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
             results.append(
                 WriteResult(
-                    change.section,
+                    "<verify>", WriteStatus.FAILED, f"Could not begin a settings transaction: {exc}"
+                )
+            )
+            return ApplyOutcome(
+                node_id=plan.node_id,
+                results=tuple(results),
+                dry_run=False,
+                verified=True,
+                security_attempted=False,
+            )
+
+    # Only a reconnecting session defers `security` to its own write,
+    # after the transaction commits -- see this function's docstring for
+    # why a non-reconnecting session (InPlaceSession/--no-reconnect) must
+    # keep it inside the one transaction instead. Short-circuits before
+    # ever touching `session.reads_back` when there's no transaction (a
+    # security-only plan) or no `security` section at all.
+    defer_security = needs_transaction and security_section is not None and session.reads_back
+    sections_to_write = non_security_sections if defer_security else plan.sections
+
+    commit_exc: BaseException | None = None
+    try:
+        name_failure = _run_name_phase(iface, plan)
+        if name_failure is not None:
+            results.append(name_failure)
+            stop_reason = "the owner (name) write failed"
+
+        for change in sections_to_write:
+            if stop_reason is not None:
+                # SECTION_ORDER's invariant ("security is always last") is
+                # enforced here: once anything upstream has failed, nothing
+                # further is written -- security included, since it is not
+                # the only section that can restrict later management (e.g.
+                # serial_enabled). A re-run always re-plans fresh from the
+                # device, so stopping loses no correctness, only progress on
+                # a run that is already uncertain.
+                results.append(
+                    WriteResult(
+                        change.section,
+                        WriteStatus.SKIPPED,
+                        f"not written: stopped because {stop_reason}",
+                    )
+                )
+                continue
+
+            try:
+                write_section(iface, change, key_plan=plan.key_plan, keypair=keypair)
+            except (PlanConflictError, EnumMappingError) as exc:
+                # Pre-I/O failure: apply_field rejected the plan before any
+                # device write was attempted, so this section was never even
+                # sent. PlanConflictError is a ProvisioningError subclass, so
+                # this arm must come first.
+                results.append(
+                    WriteResult(change.section, WriteStatus.FAILED, f"not written: {exc}")
+                )
+                stop_reason = f"{change.section} could not be written"
+                continue
+            except ProvisioningError as exc:
+                # The write call itself failed -- the bytes may have left the
+                # host, so this section IS counted as attempted.
+                attempted.append(change.section)
+                results.append(
+                    WriteResult(
+                        change.section,
+                        WriteStatus.FAILED,
+                        f"{exc} (the device may or may not have applied it)",
+                    )
+                )
+                stop_reason = f"the {change.section} write failed"
+                continue
+
+            attempted.append(change.section)
+    finally:
+        # Unconditional once opened, even when a section above failed
+        # partway through: an untransacted write saves (and reboots) after
+        # every section, so a transaction left open would otherwise leave
+        # whatever already reached the device un-persisted.
+        if needs_transaction:
+            try:
+                iface.localNode.commitSettingsTransaction()
+            except (*_DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
+                commit_exc = exc
+
+    if commit_exc is not None:
+        results.append(
+            WriteResult(
+                "<verify>",
+                WriteStatus.FAILED,
+                f"Could not commit the settings transaction: {commit_exc}",
+            )
+        )
+        return ApplyOutcome(
+            node_id=plan.node_id,
+            results=tuple(results),
+            dry_run=False,
+            verified=True,
+            security_attempted=False,
+        )
+
+    if defer_security:
+        if stop_reason is not None:
+            results.append(
+                WriteResult(
+                    "security",
                     WriteStatus.SKIPPED,
                     f"not written: stopped because {stop_reason}",
                 )
             )
-            continue
-
-        try:
-            write_section(iface, change, key_plan=plan.key_plan, keypair=keypair)
-        except (PlanConflictError, EnumMappingError) as exc:
-            # Pre-I/O failure: apply_field rejected the plan before any
-            # device write was attempted, so this section was never even
-            # sent. PlanConflictError is a ProvisioningError subclass, so
-            # this arm must come first.
-            results.append(WriteResult(change.section, WriteStatus.FAILED, f"not written: {exc}"))
-            stop_reason = f"{change.section} could not be written"
-            continue
-        except ProvisioningError as exc:
-            # The write call itself failed -- the bytes may have left the
-            # host, so this section IS counted as attempted.
-            attempted.append(change.section)
-            results.append(
-                WriteResult(
-                    change.section,
-                    WriteStatus.FAILED,
-                    f"{exc} (the device may or may not have applied it)",
-                )
-            )
-            stop_reason = f"the {change.section} write failed"
-            continue
-
-        attempted.append(change.section)
-        if change.reboots_device and index < last_index:
-            # A section besides the last (always "security", written last
-            # precisely to avoid a self-inflicted lockout, see
-            # SECTION_ORDER) just rebooted the device -- the sections
-            # still to come must be written against a fresh connection,
-            # or they would silently write into (or read back from) a
-            # stale, possibly-dead handle. Mirrors the same
-            # sleep-then-refresh sequence used below for the final verify
-            # pass. The last section's own reboot needs no sleep here:
-            # the unconditional sleep+refresh right below already covers
-            # it, so sleeping here too would just double the wait for
-            # the same reboot.
+        else:
+            # The commit above is what actually reboots the device (not any
+            # individual section write any more) -- this is the one mid-plan
+            # reconnect, covering that reboot before `security` is sent.
             sleep(settle_seconds)
             if on_reconnect is not None:
                 on_reconnect()
@@ -1002,18 +1097,17 @@ def apply_plan(
                     WriteResult(
                         "<verify>",
                         WriteStatus.FAILED,
-                        "Could not reconnect after a reboot-triggering write to continue the "
+                        "Could not reconnect after committing settings to continue the "
                         f"plan: {_backend_error_detail(exc)}; stopped",
                     )
                 )
-                results.extend(
+                results.append(
                     WriteResult(
-                        remaining.section,
+                        "security",
                         WriteStatus.SKIPPED,
                         "not written: stopped because the device could not be reconnected "
-                        "after a reboot",
+                        "after committing settings",
                     )
-                    for remaining in plan.sections[index + 1 :]
                 )
                 return ApplyOutcome(
                     node_id=plan.node_id,
@@ -1023,11 +1117,10 @@ def apply_plan(
                     security_attempted=False,
                 )
 
-            # Confirm the device that answered the reboot reconnect is still
-            # the one this plan was built for, before any further section is
-            # written -- security is always last (SECTION_ORDER), so a stop
-            # here provably means it was never sent. Unconditional: no
-            # override flag, per this project's rule for identity-sensitive
+            # Confirm the device that answered this reconnect is still the
+            # one this plan was built for, before `security` -- the freshly
+            # generated keypair and admin keys -- is ever sent. Unconditional:
+            # no override flag, per this project's rule for identity-sensitive
             # operations (see this function's docstring).
             try:
                 got = detect.read_node_id(iface)
@@ -1040,14 +1133,13 @@ def apply_plan(
                         f"continuing: {exc}; stopped",
                     )
                 )
-                results.extend(
+                results.append(
                     WriteResult(
-                        remaining.section,
+                        "security",
                         WriteStatus.SKIPPED,
                         "not written: stopped because the node's identity could not be "
                         "confirmed after reconnecting",
                     )
-                    for remaining in plan.sections[index + 1 :]
                 )
                 return ApplyOutcome(
                     node_id=plan.node_id,
@@ -1058,13 +1150,12 @@ def apply_plan(
                 )
             if got != plan.node_id:
                 results.append(_identity_mismatch(plan, got))
-                results.extend(
+                results.append(
                     WriteResult(
-                        remaining.section,
+                        "security",
                         WriteStatus.SKIPPED,
                         "not written: stopped after reconnecting to a different node",
                     )
-                    for remaining in plan.sections[index + 1 :]
                 )
                 return ApplyOutcome(
                     node_id=plan.node_id,
@@ -1073,6 +1164,25 @@ def apply_plan(
                     verified=True,
                     security_attempted=False,
                 )
+
+            assert security_section is not None  # noqa: S101 -- defer_security already guards this
+            try:
+                write_section(iface, security_section, key_plan=plan.key_plan, keypair=keypair)
+            except (PlanConflictError, EnumMappingError) as exc:
+                results.append(WriteResult("security", WriteStatus.FAILED, f"not written: {exc}"))
+                stop_reason = "security could not be written"
+            except ProvisioningError as exc:
+                attempted.append("security")
+                results.append(
+                    WriteResult(
+                        "security",
+                        WriteStatus.FAILED,
+                        f"{exc} (the device may or may not have applied it)",
+                    )
+                )
+                stop_reason = "the security write failed"
+            else:
+                attempted.append("security")
 
     security_attempted = "security" in attempted
 

@@ -214,9 +214,24 @@ class _FakeLocalNode:
         self.localConfig = localonly_pb2.LocalConfig()
         self.moduleConfig = localonly_pb2.LocalModuleConfig()
         self.written_sections: list[str] = []
+        self.transaction_calls: list[str] = []
+        """Every beginSettingsTransaction()/commitSettingsTransaction() call
+        plus every writeConfig() section name, in true chronological order
+        -- lets a test assert relative call ORDER, not just that each
+        happened. (``written_sections`` stays section-names-only, for
+        every existing test that already asserts against it.) A subclass
+        that overrides ``writeConfig`` does not necessarily append here
+        too -- only the base implementation does."""
 
     def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
         self.written_sections.append(section)
+        self.transaction_calls.append(section)
+
+    def beginSettingsTransaction(self) -> None:  # noqa: N802 -- real MeshInterface method name
+        self.transaction_calls.append("<begin>")
+
+    def commitSettingsTransaction(self) -> None:  # noqa: N802 -- real MeshInterface method name
+        self.transaction_calls.append("<commit>")
 
     def setOwner(  # noqa: N802 -- real MeshInterface method name
         self,
@@ -1275,7 +1290,14 @@ def _reopen_same_device(_n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
 
 
 class _FakeSessionRefreshFailsAfterFirstCall:
-    """A session whose refresh() raises on its first call -- the mid-loop reboot case."""
+    """A session whose refresh() always raises -- the post-commit, pre-security reconnect case.
+
+    ``reads_back`` is ``True``: under the settings-transaction design,
+    this fake is only used with plans that still have a ``security``
+    section to write after the (successful) commit, so apply_plan reaches
+    the one mid-plan reconnect -- unlike a plan with no ``security``
+    section at all, where that property is never consulted.
+    """
 
     def __init__(self, iface: _FakeIfaceForApply) -> None:
         self._iface = iface
@@ -1284,6 +1306,10 @@ class _FakeSessionRefreshFailsAfterFirstCall:
     def interface(self) -> _FakeIfaceForApply:
         return self._iface
 
+    @property
+    def reads_back(self) -> bool:
+        return True
+
     def describe(self) -> str:
         return "fake (refresh fails)"
 
@@ -1291,15 +1317,16 @@ class _FakeSessionRefreshFailsAfterFirstCall:
         raise ConnectionBackendError("link dropped after reboot", transport="serial")
 
 
-def test_apply_plan_reconnects_mid_loop_after_a_reboot_before_writing_later_sections(
+def test_apply_plan_writes_every_non_security_section_before_the_one_mid_plan_refresh(
     make_live,
 ) -> None:
-    """A reboot-triggering section that isn't last must not leave later writes stale.
+    """A reboot-triggering non-security section causes no refresh of its own any more.
 
-    lora.region/modem_preset changes reboot the device; if a later section
-    (e.g. device) is written against the same never-refreshed interface,
-    it's written into (or later read back from) a stale, possibly-dead
-    handle instead of a genuinely fresh connection.
+    Under the settings-transaction design, every non-``security`` section
+    -- "lora" (which reboots the device) and "device" here -- is written
+    (and the transaction committed) against the SAME connection; the only
+    mid-plan reconnect happens once, right before ``security``, never
+    between individual sections.
 
     The plan keeps the real security ``SectionChange`` build_plan()
     produced (rather than dropping it, as an earlier version of this test
@@ -1340,14 +1367,17 @@ def test_apply_plan_reconnects_mid_loop_after_a_reboot_before_writing_later_sect
     session = _FakeSessionTracksRefresh(first_iface, _reopen_and_record)
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
-    # One mid-loop refresh (after "lora" reboots, before "device"), plus the
+    # Both non-security sections land on the SAME connection, in order,
+    # before any refresh -- the transaction only commits once the loop
+    # over them finishes.
+    assert first_iface.localNode.written_sections == ["lora", "device"]
+    assert first_iface.localNode.transaction_calls == ["<begin>", "lora", "device", "<commit>"]
+
+    # Exactly one mid-plan refresh (right before "security"), plus the
     # unconditional final-verify refresh at the end of apply_plan.
     assert session.refresh_calls == 2
-    mid_loop_iface, final_iface = reconnects
-    assert "lora" in first_iface.localNode.written_sections
-    assert "device" not in first_iface.localNode.written_sections
-    assert "device" in mid_loop_iface.localNode.written_sections
-    assert "security" in mid_loop_iface.localNode.written_sections
+    mid_plan_iface, final_iface = reconnects
+    assert mid_plan_iface.localNode.written_sections == ["security"]
     # The final verify reconnect is itself a fresh reopen -- it never
     # writes anything, only re-reads what was already persisted.
     assert final_iface.localNode.written_sections == []
@@ -1407,11 +1437,18 @@ def test_apply_plan_mid_loop_reconnect_to_a_device_that_lost_the_pre_reboot_writ
     assert outcome.may_update_database is False
 
 
-def test_apply_plan_reports_uncertain_when_mid_loop_reconnect_fails(make_live) -> None:
+def test_apply_plan_reports_uncertain_when_the_post_commit_reconnect_fails(make_live) -> None:
+    """The one mid-plan reconnect (after committing, before `security`) can also fail.
+
+    All non-security sections are written and the transaction committed
+    first -- only the refresh right before `security` can fail here;
+    there is no longer a reconnect between individual sections.
+    """
     template = _template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
     kp = generate_keypair()
 
     rebooting_lora_change = SectionChange(
@@ -1425,7 +1462,9 @@ def test_apply_plan_reports_uncertain_when_mid_loop_reconnect_fails(make_live) -
         kind=detect.SectionKind.CONFIG,
         changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
     )
-    plan = dataclasses.replace(plan, sections=(rebooting_lora_change, later_device_change))
+    plan = dataclasses.replace(
+        plan, sections=(rebooting_lora_change, later_device_change, security_section)
+    )
 
     iface = _FakeIfaceForApply()
     session = _FakeSessionRefreshFailsAfterFirstCall(iface)
@@ -1436,13 +1475,20 @@ def test_apply_plan_reports_uncertain_when_mid_loop_reconnect_fails(make_live) -
     verify_result = next(r for r in outcome.results if r.section == "<verify>")
     assert verify_result.status == WriteStatus.FAILED
     assert "reconnect" in verify_result.message
-    # The device section must never be attempted once the mid-loop
-    # reconnect is known to have failed -- the connection is dead.
-    assert "device" not in iface.localNode.written_sections
+    # Both non-security sections are already committed to the device by
+    # the time the (failing) mid-plan reconnect is attempted.
+    assert iface.localNode.written_sections == ["lora", "device"]
+    security_result = next(r for r in outcome.results if r.section == "security")
+    assert security_result.status == WriteStatus.SKIPPED
+    assert outcome.security_attempted is False
 
 
 class _FakeSessionRefreshFailsWithHintAfterFirstCall:
-    """Mid-loop reconnect-failure variant whose exception carries an actionable hint."""
+    """Post-commit, pre-security reconnect-failure variant whose exception carries a hint.
+
+    See :class:`_FakeSessionRefreshFailsAfterFirstCall` for why
+    ``reads_back`` is ``True`` here.
+    """
 
     def __init__(self, iface: _FakeIfaceForApply) -> None:
         self._iface = iface
@@ -1450,6 +1496,10 @@ class _FakeSessionRefreshFailsWithHintAfterFirstCall:
     @property
     def interface(self) -> _FakeIfaceForApply:
         return self._iface
+
+    @property
+    def reads_back(self) -> bool:
+        return True
 
     def describe(self) -> str:
         return "fake (refresh fails, with hint)"
@@ -1460,16 +1510,15 @@ class _FakeSessionRefreshFailsWithHintAfterFirstCall:
         )
 
 
-def test_apply_plan_mid_loop_reconnect_failure_skips_remaining_sections_and_keeps_the_hint(
+def test_apply_plan_post_commit_reconnect_failure_skips_security_and_keeps_the_hint(
     make_live,
 ) -> None:
-    """The mid-plan reconnect-failure arm must carry the cause/hint and SKIP what's left.
+    """The post-commit, pre-security reconnect-failure arm must carry the cause/hint and SKIP it.
 
     Companion to the sibling identity-check arms just below it (mismatch
     and unreadable-identity), which already extend `results` with a
-    SKIPPED entry per remaining section and set `security_attempted=False`
-    -- this arm must do the same instead of silently dropping the rest of
-    the plan.
+    SKIPPED entry for `security` and set `security_attempted=False` --
+    this arm must do the same instead of silently dropping it.
     """
     template = _template()
     live = make_live(template, security=make_security(empty=True))
@@ -1502,8 +1551,10 @@ def test_apply_plan_mid_loop_reconnect_failure_skips_remaining_sections_and_keep
     assert "link dropped after reboot" in verify_result.message
     assert "check the cable" in verify_result.message
 
-    device_result = next(r for r in outcome.results if r.section == "device")
-    assert device_result.status == WriteStatus.SKIPPED
+    # Both non-security sections were already committed before the
+    # (failing) mid-plan reconnect was attempted -- only `security` is
+    # skipped.
+    assert iface.localNode.written_sections == ["lora", "device"]
     security_result = next(r for r in outcome.results if r.section == "security")
     assert security_result.status == WriteStatus.SKIPPED
 
@@ -1555,13 +1606,15 @@ def _factory_plan_with_reboot_then_security(make_live: Callable[..., object]) ->
 
 
 def test_apply_plan_mid_plan_reconnect_to_a_different_node_is_a_hard_stop(make_live) -> None:
-    """E3 headline: an accidental device swap during a mid-plan reboot never sends security.
+    """E3 headline: an accidental device swap during the post-commit reconnect never sends security.
 
-    A mid-plan reconnect (after the rebooting `lora` write) that answers
-    as a different node must stop immediately: no further section is
-    written to the swapped-in device (`security` -- the freshly generated
-    keypair and admin keys -- most of all), and the outcome can never be
-    persisted.
+    Every non-security section is written to -- and the transaction
+    committed on -- the ORIGINAL device before the one mid-plan
+    reconnect (right before `security`) happens, so a swap detected at
+    that reconnect means `lora`/`device` already landed on the real
+    device; `security` -- the freshly generated keypair and admin keys --
+    is the one that must never reach the swapped-in impostor, and the
+    outcome can never be persisted.
     """
     plan = _factory_plan_with_reboot_then_security(make_live)
     kp = generate_keypair()
@@ -1571,7 +1624,7 @@ def test_apply_plan_mid_plan_reconnect_to_a_different_node_is_a_hard_stop(make_l
     session = _FakeSessionTracksRefresh(first_iface, _serve(impostor))
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
-    assert first_iface.localNode.written_sections == ["lora"]
+    assert first_iface.localNode.written_sections == ["lora", "device"]
     assert impostor.localNode.written_sections == []
     assert bytes(impostor.localNode.localConfig.security.private_key) != kp.private.reveal()
 
@@ -1580,9 +1633,6 @@ def test_apply_plan_mid_plan_reconnect_to_a_different_node_is_a_hard_stop(make_l
     assert "!cafe0002" in verify_result.message
     assert "!deadbe01" in verify_result.message
 
-    device_result = next(r for r in outcome.results if r.section == "device")
-    assert device_result.status == WriteStatus.SKIPPED
-    assert "different node" in device_result.message
     security_result = next(r for r in outcome.results if r.section == "security")
     assert security_result.status == WriteStatus.SKIPPED
     assert "different node" in security_result.message
@@ -1754,6 +1804,185 @@ def test_apply_plan_calls_on_reconnect_before_each_refresh(make_live) -> None:
     # callback runs strictly before refresh() increments it.
     assert calls == [0, 1]
     assert session.refresh_calls == 2
+
+
+# ---------------------------------------------------------------------------
+# The settings transaction (D2 Option A, refined by N3/N5): every
+# non-security section (plus the name phase) is written inside one
+# beginSettingsTransaction()/commitSettingsTransaction() pair.
+# ---------------------------------------------------------------------------
+
+
+def test_apply_plan_begins_transaction_before_first_write_and_commits_before_security(
+    make_live,
+) -> None:
+    """Order, not just occurrence: begin precedes the first write, commit precedes security.
+
+    A reconnecting session defers `security` to its own write, after the
+    transaction commits and a fresh reconnect -- so `security` landing on
+    a DIFFERENT (reopened) interface than the one `lora` and the commit
+    used is itself proof that the commit finished first.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    plan = dataclasses.replace(plan, sections=(lora_change, security_section))
+    kp = generate_keypair()
+
+    reconnects: list[_FakeIfaceForApply] = []
+
+    def _reopen_and_record(n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+        fresh = _reopen_same_device(n, cur)
+        reconnects.append(fresh)
+        return fresh
+
+    first_iface = _FakeIfaceForApply()
+    session = _FakeSessionTracksRefresh(first_iface, _reopen_and_record)
+    sleep_calls: list[float] = []
+    on_reconnect_calls: list[int] = []
+    outcome = apply_plan(
+        plan,
+        session,  # type: ignore[arg-type]
+        keypair=kp,
+        sleep=sleep_calls.append,
+        on_reconnect=lambda: on_reconnect_calls.append(session.refresh_calls),
+    )
+
+    assert outcome.ok is True, outcome.describe()
+    assert first_iface.localNode.transaction_calls == ["<begin>", "lora", "<commit>"]
+    assert "security" not in first_iface.localNode.written_sections
+
+    assert session.refresh_calls == 2
+    assert on_reconnect_calls == [0, 1]
+    assert sleep_calls == [DEFAULT_SETTLE_SECONDS, DEFAULT_SETTLE_SECONDS]
+    mid_plan_iface, _final_iface = reconnects
+    assert mid_plan_iface.localNode.written_sections == ["security"]
+
+
+def test_apply_plan_commits_transaction_even_when_a_mid_loop_section_fails(make_live) -> None:
+    """A mid-loop non-security failure must not skip the finally-driven commit."""
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    plan = dataclasses.replace(plan, sections=(lora_change, device_change, security_section))
+    kp = generate_keypair()
+
+    iface = _FakeIfaceFailsOnSections(
+        fail_sections=frozenset({"lora"}), exc=OSError(errno.EIO, "fake I/O error")
+    )
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert iface.localNode.transaction_calls[0] == "<begin>"
+    assert iface.localNode.transaction_calls[-1] == "<commit>"
+    assert "<commit>" in iface.localNode.transaction_calls
+
+    security_result = next(r for r in outcome.results if r.section == "security")
+    assert security_result.status == WriteStatus.SKIPPED
+    assert outcome.security_attempted is False
+    assert outcome.may_update_database is False
+
+
+def test_apply_plan_transaction_scope_security_only_vs_in_place_with_sections(make_live) -> None:
+    """A security-only plan opens no transaction; an in-place session folds security into the one.
+
+    N3: under ``--no-reconnect`` (``InPlaceSession``), ``security`` is
+    written INSIDE the same transaction as every other section, committed
+    exactly once, at the very end -- never split into its own separate
+    write/commit.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    assert [s.section for s in plan.sections] == ["security"]
+    security_section = plan.sections[0]
+
+    security_only_iface = _FakeIfaceForApply()
+    kp = generate_keypair()
+    outcome = apply_plan(
+        plan,
+        InPlaceSession(security_only_iface),
+        keypair=kp,  # type: ignore[arg-type]
+    )
+    assert outcome.ok is True, outcome.describe()
+    assert security_only_iface.localNode.transaction_calls == ["security"]
+
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    multi_section_plan = dataclasses.replace(plan, sections=(lora_change, security_section))
+    multi_iface = _FakeIfaceForApply()
+    kp2 = generate_keypair()
+    outcome2 = apply_plan(
+        multi_section_plan,
+        InPlaceSession(multi_iface),
+        keypair=kp2,  # type: ignore[arg-type]
+    )
+
+    assert outcome2.ok is True, outcome2.describe()
+    assert multi_iface.localNode.transaction_calls == ["<begin>", "lora", "security", "<commit>"]
+    assert multi_iface.localNode.transaction_calls.count("<commit>") == 1
+
+
+def test_apply_plan_post_commit_reconnect_only_happens_when_security_remains(make_live) -> None:
+    """The post-commit settle+refresh+identity-check runs only when `security` is still to write.
+
+    Positive: with `security` present on a reconnecting session, exactly
+    one extra refresh happens (between the commit and the security
+    write), on top of the unconditional final verify. N5: with only
+    non-security sections in the plan, that whole sequence is skipped --
+    the only refresh left is the unconditional final verify.
+    """
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+
+    with_security_plan = dataclasses.replace(plan, sections=(lora_change, security_section))
+    first_iface = _FakeIfaceForApply()
+    session = _FakeSessionTracksRefresh(first_iface, _reopen_same_device)
+    kp = generate_keypair()
+    outcome = apply_plan(with_security_plan, session, keypair=kp)  # type: ignore[arg-type]
+    assert outcome.ok is True, outcome.describe()
+    assert session.refresh_calls == 2
+
+    no_security_plan = dataclasses.replace(plan, sections=(lora_change,), key_plan=KeyPlan())
+    second_iface = _FakeIfaceForApply()
+    second_session = _FakeSessionTracksRefresh(second_iface, _reopen_same_device)
+    outcome2 = apply_plan(no_security_plan, second_session, keypair=None)  # type: ignore[arg-type]
+    assert outcome2.ok is True, outcome2.describe()
+    # Only the unconditional final-verify refresh -- no mid-plan one, since
+    # there is no `security` section left to protect it for.
+    assert second_session.refresh_calls == 1
 
 
 # ---------------------------------------------------------------------------

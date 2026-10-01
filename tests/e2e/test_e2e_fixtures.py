@@ -120,3 +120,45 @@ def test_fake_connection_drop_security_keys_clears_persisted_not_staged() -> Non
     assert device.localNode.localConfig.security.private_key == b""
     assert connection.localNode.localConfig.security.public_key == b"\x01" * 32
     assert connection.getPublicKey() is not None
+
+
+def test_fake_connection_writeconfig_inside_a_transaction_does_not_persist_until_commit() -> None:
+    """The gap the settings-transaction design needs the fakes to close.
+
+    Before `beginSettingsTransaction`/`commitSettingsTransaction` existed
+    on these fakes, every `writeConfig` persisted unconditionally and
+    immediately -- there was no way to express "written, but not yet
+    committed". `apply_plan` now relies on exactly that distinction for a
+    reconnecting session: every non-security section is written and
+    buffered, and only the commit actually reboots the (real) device. A
+    section whose `writeConfig` fails inside the transaction (`bluetooth`
+    here) is dropped, not buffered -- the attempt is still logged, but
+    nothing from it reaches the commit.
+    """
+    device = FakeMeshInterface("deadbe01", fail_sections=frozenset({"bluetooth"}))
+    connection = device.connect()
+
+    connection.localNode.beginSettingsTransaction()
+    connection.localNode.localConfig.lora.hop_limit = 7
+    connection.localNode.writeConfig("lora")
+    connection.localNode.localConfig.bluetooth.fixed_pin = 123456
+    with pytest.raises(RuntimeError):
+        connection.localNode.writeConfig("bluetooth")
+
+    # Buffered, not yet persisted -- even this SAME connection's writeConfig
+    # call left the device's own persisted config untouched.
+    assert device.localNode.localConfig.lora.hop_limit == 0
+    next_connection = device.connect()
+    assert next_connection.localNode.localConfig.lora.hop_limit == 0
+
+    connection.localNode.commitSettingsTransaction()
+
+    # lora was buffered and committed; bluetooth failed and was never
+    # buffered, so the commit has nothing of it to persist.
+    assert device.localNode.localConfig.lora.hop_limit == 7
+    assert device.localNode.localConfig.bluetooth.fixed_pin == 0
+    later_connection = device.connect()
+    assert later_connection.localNode.localConfig.lora.hop_limit == 7
+
+    assert device.localNode.transaction_calls == ["<begin>", "lora", "bluetooth", "<commit>"]
+    assert device.localNode.written_sections == ["lora", "bluetooth"]
