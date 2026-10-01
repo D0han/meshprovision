@@ -260,6 +260,12 @@ def find_env_file(start: Path | None = None) -> Path | None:
     which inspects the caller's stack frame and behaves unpredictably
     when called from within pytest.
 
+    When ``start`` is under the user's home directory, the walk stops at
+    ``$HOME`` itself rather than continuing to filesystem root -- a
+    project nested a few directories deep inside the home directory has
+    no business picking up a ``.env`` planted by another user higher up
+    the tree.
+
     Args:
         start: Directory to begin searching from. Defaults to
             ``Path.cwd()``.
@@ -269,11 +275,54 @@ def find_env_file(start: Path | None = None) -> Path | None:
         found.
     """
     base = start if start is not None else Path.cwd()
-    for directory in (base, *base.parents):
+    directories: tuple[Path, ...] = (base, *base.parents)
+    home = Path.home()
+    if base == home or home in base.parents:
+        bounded: list[Path] = []
+        for directory in directories:
+            bounded.append(directory)
+            if directory == home:
+                break
+        directories = tuple(bounded)
+    for directory in directories:
         candidate = directory / ".env"
         if candidate.is_file():
             return candidate
     return None
+
+
+def _check_env_file_trust(path: Path) -> None:
+    """Refuse a discovered ``.env`` file not owned/locked-down by the current user.
+
+    Only applies to a ``.env`` found by :func:`find_env_file` -- a file
+    planted above the search start by another user on a shared machine,
+    or readable/writable by others, could inject hostile environment
+    overrides. An explicitly-passed ``env_file`` is operator-chosen and
+    is never checked here.
+
+    Skipped entirely on platforms without ``os.getuid`` (Windows), where
+    POSIX ownership/permission bits don't apply.
+
+    Args:
+        path: The discovered ``.env`` file to check.
+
+    Raises:
+        SettingsError: If the file is not owned by the current user, or
+            is writable by its group or by anyone else.
+    """
+    if not hasattr(os, "getuid"):
+        return
+    st = path.stat()
+    if st.st_uid != os.getuid() or st.st_mode & 0o022:
+        raise SettingsError(
+            f"Refusing to load discovered .env file {path}: it is not owned by the "
+            "current user, or is writable by its group or others.",
+            hint=(
+                "Fix the file's ownership and permissions (e.g. `chown` it to "
+                "yourself and `chmod go-w` it), or pass it explicitly with "
+                "--env-file/env_file instead of relying on upward search."
+            ),
+        )
 
 
 def _unrecognized_env_keys(source: Mapping[str, object]) -> set[str]:
@@ -303,6 +352,11 @@ def load_settings(
     :func:`find_env_file` when ``search_dotenv`` is true), then
     ``environ`` (defaulting to ``os.environ``), then ``overrides``.
     ``os.environ`` is never mutated.
+
+    A ``.env`` file found via :func:`find_env_file` is only trusted if
+    it is owned by the current user and not writable by its group or
+    others (see :func:`_check_env_file_trust`); an explicit ``env_file``
+    is operator-chosen and is loaded as-is.
 
     A blank value for any field (including ``MESHPROVISION_CONTACT=`` in
     ``.env``) is treated as "not set" rather than as an empty string,
@@ -335,7 +389,13 @@ def load_settings(
     values: dict[str, str] = {}
     unrecognized: set[str] = set()
     if search_dotenv or env_file is not None:
-        dotenv_path = Path(env_file) if env_file is not None else find_env_file()
+        dotenv_path: Path | None
+        if env_file is not None:
+            dotenv_path = Path(env_file)
+        else:
+            dotenv_path = find_env_file()
+            if dotenv_path is not None:
+                _check_env_file_trust(dotenv_path)
         if dotenv_path is not None and dotenv_path.is_file():
             dotenv_values = dotenv.dotenv_values(dotenv_path)
             values.update({k: v for k, v in dotenv_values.items() if v is not None})

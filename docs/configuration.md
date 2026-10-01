@@ -17,7 +17,11 @@ Part of the meshprovision docs — see the [README](../README.md).
 
 Precedence, highest to lowest: **CLI flag > environment variable > `.env`
 file > built-in default**. `.env` is found by searching upward from the
-current working directory, or named explicitly with `--env-file`.
+current working directory, or named explicitly with `--env-file`. The
+upward search never crosses above your home directory, and a discovered
+`.env` is refused unless it's owned by you and not writable by your
+group or others -- pass `--env-file` explicitly to bypass the search
+(and this check) entirely.
 
 `MESHPROVISION_CONTACT` has no default because lorastats.pl requires
 identifiable contact information in every request and bans IP addresses

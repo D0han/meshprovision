@@ -184,6 +184,47 @@ def test_find_env_file_returns_none_when_absent(tmp_path: Path) -> None:
     assert find_env_file(nested) is None
 
 
+def test_find_env_file_does_not_walk_above_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``.env`` planted above ``$HOME`` must never be picked up.
+
+    Patches ``Path.home`` to a directory under ``tmp_path``, places a
+    ``.env`` *above* that patched home, and confirms searching upward
+    from several levels below the patched home never escapes it.
+    """
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    (tmp_path / ".env").write_text("X=1\n")
+    nested = fake_home / "a" / "b" / "c"
+    nested.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    assert find_env_file(nested) is None
+
+
+def test_load_settings_refuses_group_writable_discovered_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
+    env_file.chmod(0o666)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SettingsError):
+        load_settings(environ={})
+
+
+def test_load_settings_refuses_env_file_owned_by_another_user(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
+    monkeypatch.chdir(tmp_path)
+    real_uid = os.getuid()
+    monkeypatch.setattr(os, "getuid", lambda: real_uid + 1)
+    with pytest.raises(SettingsError):
+        load_settings(environ={})
+
+
 def test_format_validation_error_lists_field_paths_never_input() -> None:
     from pydantic import ValidationError
 
