@@ -403,6 +403,20 @@ def test_backup_files_are_owner_only(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_backup_dir_is_tightened_to_0700(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    backup_dir.chmod(0o755)
+
+    write_bytes_atomic(target, b"v1", backup=False, backup_dir=backup_dir)
+    write_bytes_atomic(target, b"v2", backup=True, backup_dir=backup_dir)
+
+    assert backup_dir.stat().st_mode & 0o777 == 0o700
+    assert len(list_backups(target, backup_dir=backup_dir)) == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
 def test_backup_is_written_via_a_temp_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "data.txt"
     backup_dir = tmp_path / "backups"

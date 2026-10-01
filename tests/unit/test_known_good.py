@@ -86,6 +86,20 @@ def test_refresh_known_good_creates_a_stable_named_copy(tmp_path: Path) -> None:
     assert info.path.stat().st_mode & 0o777 == 0o600
 
 
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_refresh_known_good_tightens_backup_dir_to_0700(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    backup_dir.chmod(0o755)
+
+    info = _refresh(target, backup_dir=backup_dir)
+
+    assert info is not None
+    assert backup_dir.stat().st_mode & 0o777 == 0o700
+
+
 def test_refresh_known_good_never_matches_the_timestamped_backup_glob(tmp_path: Path) -> None:
     target = tmp_path / "nodes_db.ods"
     target.write_bytes(b"v1")
