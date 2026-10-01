@@ -9,6 +9,7 @@ import re
 import pytest
 import structlog
 
+import meshprovision.crypto.redact as redact_module
 from meshprovision.cli.logging_setup import configure_logging
 from meshprovision.crypto.redact import (
     REDACTED,
@@ -186,6 +187,42 @@ class TestRedactProcessor:
             event = {name: "a_pub"}
             result = redact_processor(None, "info", event)
             assert result[name] == "a_pub"
+
+    @pytest.mark.parametrize(
+        "key",
+        ["PrivateKey", "PSK", " admin_key ", "Wifi_PSK"],
+    )
+    def test_sensitive_key_classification_is_case_and_whitespace_insensitive(
+        self, key: str
+    ) -> None:
+        event = {key: "value123"}
+        result = redact_processor(None, "info", event)
+        assert result[key] != "value123"
+        assert result[key] == REDACTED
+
+    def test_safe_key_name_overrides_sensitive_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """SAFE_KEY_NAMES must win even when it artificially collides with SENSITIVE_KEY_NAMES.
+
+        None of the current SAFE names collide with a sensitive name/suffix
+        today, so the override check is otherwise a no-op that could be
+        deleted without any existing test noticing. Forcing a collision
+        here proves the override actually takes precedence, not just that
+        it's never exercised.
+        """
+        monkeypatch.setattr(
+            redact_module,
+            "SENSITIVE_KEY_NAMES",
+            redact_module.SENSITIVE_KEY_NAMES | {"key_ref", "fingerprint"},
+        )
+        event = {
+            "key_ref": "a_pub",
+            "KEY_REF": "a_pub",
+            "private_key": b"value123",
+        }
+        result = redact_processor(None, "info", event)
+        assert result["key_ref"] == "a_pub"
+        assert result["KEY_REF"] == "a_pub"
+        assert result["private_key"] == redact(b"value123")
 
     def test_secret_bytes_under_non_sensitive_key_still_redacted(self) -> None:
         event = {"totally_normal_field": SecretBytes(b"x" * 32)}
