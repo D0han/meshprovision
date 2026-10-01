@@ -78,13 +78,17 @@ def live_config_from_template(
         sections[name] = dict(model.model_dump(exclude_none=True))
 
     module_sections: dict[str, dict[str, object]] = {
-        "telemetry": dict(template.telemetry.model_dump(exclude_none=True))
+        "telemetry": dict(template.telemetry.model_dump(exclude_none=True)),
+        "neighbor_info": dict(template.neighbor_info.model_dump(exclude_none=True)),
     }
 
     module_enabled: dict[str, bool | None] = dict.fromkeys(detect.MODULE_SECTIONS)
     for opt, want in template.option_state().items():
         module_enabled[opt] = want
     module_enabled["telemetry"] = None
+    module_enabled["neighbor_info"] = (
+        template.neighbor_info.enabled if template.neighbor_info.enabled is not None else True
+    )
 
     if section_overrides:
         for name, overrides in section_overrides.items():

@@ -264,7 +264,7 @@ def _plan_config_sections(
 def _plan_module_sections(
     inputs: PlanInputs,
 ) -> tuple[tuple[SectionChange, ...], tuple[PlanWarning, ...]]:
-    """Diff the module-option toggles and telemetry fields (steps 3-4).
+    """Diff the module-option toggles, telemetry, and neighbor_info fields (steps 3-4).
 
     Args:
         inputs: The plan inputs.
@@ -313,6 +313,14 @@ def _plan_module_sections(
     if telemetry_changes:
         module_changes["telemetry"] = SectionChange(
             section="telemetry", kind=live.kind_of("telemetry"), changes=telemetry_changes
+        )
+
+    neighbor_info_changes = _diff_section("neighbor_info", template.neighbor_info, live)
+    if neighbor_info_changes:
+        module_changes["neighbor_info"] = SectionChange(
+            section="neighbor_info",
+            kind=live.kind_of("neighbor_info"),
+            changes=neighbor_info_changes,
         )
 
     ordered = tuple(module_changes[name] for name in sorted(module_changes))

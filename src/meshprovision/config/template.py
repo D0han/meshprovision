@@ -70,6 +70,7 @@ __all__ = [
     "KNOWN_MODULE_OPTIONS",
     "DeviceSection",
     "LoraSection",
+    "NeighborInfoSection",
     "PositionSection",
     "PowerSection",
     "SecuritySection",
@@ -100,7 +101,11 @@ KNOWN_MODULE_OPTIONS: Final[frozenset[str]] = frozenset(
 )
 """Module option names meshprovision recognizes. An option outside this
 set is not an error -- firmware adds modules over time -- but produces a
-:class:`TemplateWarning`."""
+:class:`TemplateWarning`. ``"neighbor_info"`` stays in this set (it is
+still a real firmware module name) even though the list-toggle spelling
+-- listing it in ``enabled_options``/``disabled_options`` -- is rejected
+by :class:`TemplateConfig`'s consistency check in favor of the dedicated
+``neighbor_info`` section."""
 
 _KEY_MATERIAL_KEYS: Final[frozenset[str]] = frozenset(
     {"private_key", "public_key", "admin_key", "adminKey"}
@@ -456,6 +461,8 @@ class TelemetrySection(BaseModel):
     message.
 
     Attributes:
+        device_telemetry_enabled: Whether device-metrics telemetry is
+            collected at all.
         device_update_interval: Device-metrics telemetry interval,
             seconds.
         environment_measurement_enabled: Whether an environment sensor is
@@ -469,15 +476,23 @@ class TelemetrySection(BaseModel):
         air_quality_enabled: Whether an air-quality sensor is read and
             reported.
         air_quality_interval: Air-quality telemetry interval, seconds.
+        air_quality_screen_enabled: Whether air-quality readings appear
+            on the device screen.
         power_measurement_enabled: Whether a power/INA sensor is read and
             reported.
         power_update_interval: Power telemetry interval, seconds.
         power_screen_enabled: Whether power readings appear on the device
             screen.
+        health_measurement_enabled: Whether a health sensor is read and
+            reported.
+        health_update_interval: Health telemetry interval, seconds.
+        health_screen_enabled: Whether health readings appear on the
+            device screen.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
+    device_telemetry_enabled: bool | None = None
     device_update_interval: int | None = Field(default=None, ge=0)
     environment_measurement_enabled: bool | None = None
     environment_update_interval: int | None = Field(default=None, ge=0)
@@ -485,9 +500,31 @@ class TelemetrySection(BaseModel):
     environment_display_fahrenheit: bool | None = None
     air_quality_enabled: bool | None = None
     air_quality_interval: int | None = Field(default=None, ge=0)
+    air_quality_screen_enabled: bool | None = None
     power_measurement_enabled: bool | None = None
     power_update_interval: int | None = Field(default=None, ge=0)
     power_screen_enabled: bool | None = None
+    health_measurement_enabled: bool | None = None
+    health_update_interval: int | None = Field(default=None, ge=0)
+    health_screen_enabled: bool | None = None
+
+
+class NeighborInfoSection(BaseModel):
+    """``ModuleConfig.neighbor_info`` fields applied at provisioning time.
+
+    Attributes:
+        enabled: Whether the neighbor-info module is active. Supersedes
+            listing ``"neighbor_info"`` in ``enabled_options``/
+            ``disabled_options`` -- see ``TemplateConfig``'s consistency check.
+        update_interval: Neighbor-info broadcast interval, seconds.
+        transmit_over_lora: Whether neighbor info is transmitted over LoRa.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool | None = None
+    update_interval: int | None = Field(default=None, ge=0)
+    transmit_over_lora: bool | None = None
 
 
 class SecuritySection(BaseModel):
@@ -587,6 +624,7 @@ class TemplateConfig(BaseModel):
         position: ``config.position`` fields.
         power: ``config.power`` fields.
         telemetry: ``ModuleConfig.telemetry`` fields.
+        neighbor_info: ``ModuleConfig.neighbor_info`` fields.
         security: ``config.security`` fields.
     """
 
@@ -612,6 +650,7 @@ class TemplateConfig(BaseModel):
     position: PositionSection = Field(default_factory=PositionSection)
     power: PowerSection = Field(default_factory=PowerSection)
     telemetry: TelemetrySection = Field(default_factory=TelemetrySection)
+    neighbor_info: NeighborInfoSection = Field(default_factory=NeighborInfoSection)
     security: SecuritySection = Field(default_factory=SecuritySection)
 
     @field_validator("enabled_options", "disabled_options", "admin_nodes", mode="before")
@@ -645,11 +684,12 @@ class TemplateConfig(BaseModel):
         """Cross-field validation, run once after all fields validate.
 
         Checks, in order, raising on the first failure: no option in
-        both enabled/disabled lists; both name patterns fit their
-        firmware byte limits; the short-name capacity floor (only a hard
-        error under ``name_capacity_strict``); ``admin_nodes`` count and
-        reference format; the admin-channel interlock; and the
-        zero-admin-keys lockdown interlock. Enum-typed fields
+        both enabled/disabled lists; ``neighbor_info`` not in either
+        list (use ``neighbor_info.enabled`` instead); both name patterns
+        fit their firmware byte limits; the short-name capacity floor
+        (only a hard error under ``name_capacity_strict``);
+        ``admin_nodes`` count and reference format; the admin-channel
+        interlock; and the zero-admin-keys lockdown interlock. Enum-typed fields
         (``device.role``, ``device.rebroadcast_mode``, ``lora.region``,
         ``lora.modem_preset``, ``position.gps_mode``) are validated and
         canonicalized earlier, per-field, rather than here.
@@ -673,6 +713,20 @@ class TemplateConfig(BaseModel):
                 f"Option(s) {', '.join(overlap)} appear in both enabled_options "
                 "and disabled_options.",
                 field="enabled_options",
+            )
+
+        if "neighbor_info" in self.enabled_options or "neighbor_info" in self.disabled_options:
+            bad_field = (
+                "enabled_options" if "neighbor_info" in self.enabled_options else "disabled_options"
+            )
+            raise TemplateValidationError(
+                "neighbor_info must not appear in enabled_options/disabled_options; "
+                "set neighbor_info.enabled instead.",
+                field=bad_field,
+                hint=(
+                    "Replace `neighbor_info` in the list with a "
+                    "`neighbor_info: {enabled: true}` block."
+                ),
             )
 
         short = PatternSpec.compile(

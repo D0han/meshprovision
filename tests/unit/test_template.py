@@ -8,6 +8,8 @@ from pathlib import Path
 import pytest
 
 from meshprovision.config.template import (
+    NeighborInfoSection,
+    TelemetrySection,
     TemplateConfig,
     load_template,
     load_template_text,
@@ -215,6 +217,37 @@ def test_ensure_capacity_available() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Section models.
+# ---------------------------------------------------------------------------
+
+
+def test_telemetry_section_new_fields_round_trip() -> None:
+    section = TelemetrySection(
+        device_telemetry_enabled=True,
+        health_measurement_enabled=True,
+        health_update_interval=600,
+        health_screen_enabled=False,
+        air_quality_screen_enabled=True,
+    )
+    dumped = section.model_dump()
+    assert dumped["device_telemetry_enabled"] is True
+    assert dumped["health_measurement_enabled"] is True
+    assert dumped["health_update_interval"] == 600
+    assert dumped["health_screen_enabled"] is False
+    assert dumped["air_quality_screen_enabled"] is True
+
+
+def test_neighbor_info_section_fields() -> None:
+    section = NeighborInfoSection(enabled=True, update_interval=14400, transmit_over_lora=False)
+    dumped = section.model_dump()
+    assert dumped == {
+        "enabled": True,
+        "update_interval": 14400,
+        "transmit_over_lora": False,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Cross-field validation.
 # ---------------------------------------------------------------------------
 
@@ -224,6 +257,22 @@ def test_option_in_both_enabled_and_disabled_raises() -> None:
         TemplateConfig(enabled_options=["mqtt"], disabled_options=["mqtt"])
     assert exc_info.value.field == "enabled_options"
     assert "mqtt" in str(exc_info.value)
+
+
+def test_neighbor_info_in_enabled_options_is_rejected() -> None:
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig(enabled_options=["neighbor_info"])
+    assert exc_info.value.field == "enabled_options"
+    assert exc_info.value.hint is not None
+    assert "neighbor_info" in exc_info.value.hint
+
+
+def test_neighbor_info_in_disabled_options_is_rejected() -> None:
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig(disabled_options=["neighbor_info"])
+    assert exc_info.value.field == "disabled_options"
+    assert exc_info.value.hint is not None
+    assert "neighbor_info" in exc_info.value.hint
 
 
 def test_four_admin_nodes_raises_capacity_error() -> None:

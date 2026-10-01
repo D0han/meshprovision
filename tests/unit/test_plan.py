@@ -1566,6 +1566,46 @@ def test_module_diffing_telemetry_has_no_enabled_field(make_live, template) -> N
     )
 
 
+def test_telemetry_new_fields_are_diffed(make_live, template) -> None:
+    template2 = template.model_copy(
+        update={
+            "telemetry": template.telemetry.model_copy(update={"device_telemetry_enabled": True})
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+
+    telemetry_section = plan.section("telemetry")
+    assert telemetry_section is not None
+    change = next(c for c in telemetry_section.changes if c.field == "device_telemetry_enabled")
+    assert change.current is None
+    assert change.desired is True
+
+
+def test_neighbor_info_section_is_diffed_like_telemetry(make_live, template) -> None:
+    template2 = template.model_copy(
+        update={
+            "neighbor_info": template.neighbor_info.model_copy(
+                update={"enabled": True, "update_interval": 14400}
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+
+    neighbor_info_section = plan.section("neighbor_info")
+    assert neighbor_info_section is not None
+    assert neighbor_info_section.kind == detect.SectionKind.MODULE_CONFIG
+    fields = {c.field for c in neighbor_info_section.changes}
+    assert fields == {"enabled", "update_interval"}
+
+
 def test_values_equal_bool_vs_int_and_float_tolerance() -> None:
     from meshprovision.provisioning.plan import values_equal
 

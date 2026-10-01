@@ -10,7 +10,7 @@ version: 1
 # two lists -- listing it in both is a template-load error. An option
 # meshprovision does not recognize is not an error either -- firmware
 # adds modules over time -- it just produces a load-time warning.
-enabled_options: [telemetry, neighbor_info]
+enabled_options: [telemetry]
 disabled_options: [mqtt, serial, range_test, store_forward, remote_hardware, paxcounter]
 
 # Naming. '{n}' is the ONLY placeholder; each occurrence consumes one
@@ -78,6 +78,19 @@ power:
 telemetry:
   device_update_interval: 1800
   environment_measurement_enabled: false
+  # device_telemetry_enabled, health_measurement_enabled,
+  # health_update_interval, health_screen_enabled, and
+  # air_quality_screen_enabled are also available here; omitted fields
+  # are left at the device's current value rather than reset.
+
+# neighbor_info has its own dedicated section (not a module-options list
+# toggle) because, unlike telemetry, it has a real device-level `enabled`
+# field -- listing "neighbor_info" in enabled_options/disabled_options is
+# a template-load error; set neighbor_info.enabled here instead.
+neighbor_info:
+  enabled: true
+  update_interval: 14400
+  transmit_over_lora: false
 
 security:
   # Key material NEVER goes in this file -- a template containing

@@ -40,13 +40,16 @@ version: 1
 Followed by module options:
 
 ```yaml
-enabled_options: [telemetry, neighbor_info]
+enabled_options: [telemetry]
 disabled_options: [mqtt, serial, range_test, store_forward, remote_hardware, paxcounter]
 ```
 
 An option listed in *both* `enabled_options` and `disabled_options` is a
 template-load error. An option meshprovision does not recognize is only a
-warning, because firmware adds new modules over time.
+warning, because firmware adds new modules over time. `neighbor_info` must
+not appear in either list — unlike `telemetry`, it has a real device-level
+`enabled` field, so it gets its own dedicated `neighbor_info:` block instead
+(see below); listing it here is also a template-load error.
 
 ### Naming
 
@@ -96,9 +99,9 @@ unresolvable ref is an error naming the ref and pointing at
 `mesh admin bootstrap` / `mesh admin import`. Zero admins is a legitimate,
 deliberate configuration and is never "repaired" toward three.
 
-`device` (role: `CLIENT`), `lora`, `position`, `power`, and `telemetry`
-blocks follow. Fields omitted from any of these blocks are left at the
-device's current value rather than reset.
+`device` (role: `CLIENT`), `lora`, `position`, `power`, `telemetry`, and
+`neighbor_info` blocks follow. Fields omitted from any of these blocks are
+left at the device's current value rather than reset.
 
 ### Region: `EU_868`, not `PL`
 
