@@ -17,6 +17,7 @@ from meshprovision.db.known_good import KnownGoodProvenance, known_good_info, kn
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import (
+    AtomicWriteError,
     DbConcurrentModificationError,
     DbIntegrityError,
     DbReadError,
@@ -1257,6 +1258,91 @@ def test_ods_database_save_succeeds_after_identical_content_replace_with_new_ino
     db.save()  # must not raise despite the new inode/mtime
 
     assert db.dirty() is False
+    loaded = ods.load_database(path)
+    assert len(loaded.nodes) == 1
+    assert loaded.nodes[0]["node_id"] == "deadbe01"
+
+
+# ---------------------------------------------------------------------------
+# save() also refreshes the known-good copy (C38-2).
+# ---------------------------------------------------------------------------
+
+
+def test_ods_database_save_refreshes_known_good_copy(tmp_path: Path) -> None:
+    """After `save()`, the known-good copy matches the just-saved bytes, verified.
+
+    Regression for Round 38 Batch 23: `save()` used to leave the
+    known-good copy untouched -- only `load_database`/`load()` refreshed
+    it -- so it reflected whatever content the last *load* saw, not the
+    content this `save()` just wrote.
+    """
+    path = tmp_path / "db.ods"
+    db = ods.OdsDatabase.create(path)
+    db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+    db.save()
+
+    known_good = known_good_info(path)
+    assert known_good is not None
+    assert known_good.path.read_bytes() == path.read_bytes()
+
+    status = known_good_status(path)
+    assert status is not None
+    assert status.provenance is KnownGoodProvenance.VERIFIED
+
+
+def test_ods_database_load_after_save_takes_known_good_fast_path(tmp_path: Path) -> None:
+    """The load right after a `save()` finds the known-good copy already current.
+
+    Since `save()` now refreshes the copy itself, the next `load()` --
+    which independently refreshes it too -- has nothing left to do and
+    takes `refresh_known_good`'s cheap stat-only fast path, leaving the
+    copy's own mtime/inode untouched.
+    """
+    path = tmp_path / "db.ods"
+    db = ods.OdsDatabase.create(path)
+    db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+    db.save()
+
+    known_good = known_good_info(path)
+    assert known_good is not None
+    known_good_ino = known_good.path.stat().st_ino
+    known_good_mtime_ns = known_good.path.stat().st_mtime_ns
+
+    ods.load_database(path)
+
+    known_good_after = known_good_info(path)
+    assert known_good_after is not None
+    assert known_good_after.path.stat().st_ino == known_good_ino
+    assert known_good_after.path.stat().st_mtime_ns == known_good_mtime_ns
+
+
+def test_ods_database_save_succeeds_even_if_known_good_refresh_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `refresh_known_good` failure must never make `save()` itself fail.
+
+    The write already landed on disk by the time the known-good refresh
+    runs; a problem refreshing the safety copy (full disk, permissions)
+    must not roll that back or propagate out of `save()`.
+    `refresh_known_good` itself promises to never raise (it swallows
+    ``OSError``/``AtomicWriteError`` internally), so this monkeypatches
+    it to raise ``AtomicWriteError`` directly -- a defense-in-depth check
+    of `save()`'s own catch, not a scenario `refresh_known_good` can
+    actually produce.
+    """
+    path = tmp_path / "db.ods"
+    db = ods.OdsDatabase.create(path)
+    db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+
+    def raising_refresh(*args: Any, **kwargs: Any) -> None:
+        raise AtomicWriteError("simulated known-good refresh failure", path=str(path))
+
+    monkeypatch.setattr(ods, "refresh_known_good", raising_refresh)
+
+    db.save()  # must not raise
+
+    assert db.dirty() is False
+    monkeypatch.undo()  # verifying via load_database() must not hit our fake raise too
     loaded = ods.load_database(path)
     assert len(loaded.nodes) == 1
     assert loaded.nodes[0]["node_id"] == "deadbe01"

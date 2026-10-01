@@ -744,6 +744,38 @@ def test_db_restore_known_good_restores_it(
     assert invoke(runner, ["db", "verify"], env).exit_code == 0
 
 
+def test_db_restore_known_good_after_two_saves_keeps_both_admin_imports(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    """The known-good copy must not go stale behind a *second* `save()`.
+
+    Regression for Round 38 Batch 23: only a successful *load* used to
+    refresh the known-good copy, not a `save()`. Two separate ``admin
+    import`` runs each load once (refreshing the copy from ADMIN1's
+    content) and then save once (previously NOT refreshing it) -- so a
+    corruption after the second import's save used to restore back to
+    the copy from just after the first import, silently losing ADMIN2.
+    """
+    kp1 = generate_keypair()
+    kp2 = generate_keypair()
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+
+    first = invoke(runner, ["admin", "import", f"ADMIN1={kp1.public_b64}"], env)
+    assert first.exit_code == 0
+    second = invoke(runner, ["admin", "import", f"ADMIN2={kp2.public_b64}"], env)
+    assert second.exit_code == 0
+
+    db_path.write_bytes(b"not a zip file at all")
+
+    result = invoke(runner, ["db", "restore", "--known-good", "--yes"], env)
+    assert result.exit_code == 0
+
+    loaded = ods.load_database(db_path)
+    key_refs = {row["key_ref"] for row in loaded.keys}
+    assert "ADMIN1_pub" in key_refs
+    assert "ADMIN2_pub" in key_refs
+
+
 def test_db_restore_known_good_and_a_path_together_is_a_usage_error(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:

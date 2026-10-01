@@ -267,6 +267,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rename it a second time for no reason; a rename is now only allocated
   when the existing names no longer fit the current patterns (e.g. after
   a template change) or the node is new.
+- `OdsDatabase.save()` now refreshes the known-good safety copy too, not
+  just `load_database()`. This reverses an earlier judgment (a prior
+  round deliberately deferred the known-good refresh to the next load):
+  that left the copy one write behind, so `mesh db restore --known-good`
+  could silently lose any `save()`s that landed between the last load
+  and a subsequent corruption. `save()`'s own pre-write backup (already
+  taken on every call) always protected the immediately-preceding
+  version regardless; this closes the gap for every save before that.
 
 ### Fixed
 

@@ -142,9 +142,9 @@ otherwise reported by fingerprint only, never its raw material;
 
 Beyond the timestamped backups `mesh db backup`/`--retention` manage,
 meshprovision keeps a single **known-good safety copy** — refreshed
-automatically every time *any* `mesh` command successfully loads the
-database, read or write alike, not just when you remember to run
-`mesh db backup` yourself. It always lives next to the database itself,
+automatically every time *any* `mesh` command successfully loads *or
+saves* the database, read or write alike, not just when you remember to
+run `mesh db backup` yourself. It always lives next to the database itself,
 in that database's own `backups/` directory (`data/backups/
 nodes_db.known-good.ods` for the default `data/nodes_db.ods` path),
 regardless of any `--backup-dir` a specific `db backup`/`db restore`

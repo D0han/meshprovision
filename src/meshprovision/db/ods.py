@@ -46,6 +46,7 @@ from meshprovision.errors import (
     DbConcurrentModificationError,
     DbIntegrityError,
     DuplicateNodeError,
+    MeshprovisionError,
     SchemaError,
 )
 
@@ -864,6 +865,19 @@ class OdsDatabase:
                 since this session last observed it. A subclass of
                 :class:`AtomicWriteError`.
             AtomicWriteError: If the write or backup fails.
+
+        On success, also best-effort refreshes the file's known-good
+        safety copy (see :func:`meshprovision.db.known_good.
+        refresh_known_good`) from exactly the bytes just written --
+        mirroring what :func:`load_database` already does for a
+        successful read, so the copy no longer goes stale between a
+        write and whatever load happens to run next. Re-validates those
+        bytes via :func:`parse_database` first; if that disagrees (which
+        should not happen, since they are the same bytes
+        :func:`~meshprovision.db.ods_write.write_database` just
+        produced), the refresh is skipped and a warning logged, never
+        raised -- the write itself already succeeded and must not be
+        rolled back over a safety-copy problem.
         """
         if not self._is_dirty:
             _logger.debug("save() called on a clean database; nothing to write.")
@@ -895,6 +909,23 @@ class OdsDatabase:
             len(self._rows.get(schema.NODES_SHEET, ())),
             len(self._rows.get(schema.KEYS_SHEET, ())),
         )
+        # Best-effort: re-validate what was just written and refresh the
+        # known-good copy from it, exactly as load_database() does for a
+        # read, so the copy does not go stale until the next load happens
+        # to run (see the module-level discussion in load_database()).
+        # Reuses written.stat/written.data rather than re-stat'ing
+        # self._path -- stat'ing again here could pick up a concurrent
+        # writer's identity instead of the bytes this save() actually
+        # wrote, the same TOCTOU load_database() avoids on the read side.
+        try:
+            parse_database(written.data, source=self._path)
+            refresh_known_good(self._path, content=written.data, source_stat=written.stat)
+        except MeshprovisionError as exc:
+            _logger.warning(
+                "Wrote %s but could not refresh its known-good copy: %s",
+                self._path,
+                exc,
+            )
 
     @classmethod
     def create(

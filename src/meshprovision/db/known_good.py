@@ -1,9 +1,10 @@
 """The known-good copy: the last database that loaded cleanly.
 
 A single, stable-named copy of a target file -- refreshed on every
-successful load (see :func:`meshprovision.db.ods.load_database`) -- kept
-outside the timestamped backup rotation in :mod:`meshprovision.db.atomic_writer`
-so it is never pruned and never listed alongside it.
+successful load and save (see :func:`meshprovision.db.ods.load_database`
+and :meth:`meshprovision.db.ods.OdsDatabase.save`) -- kept outside the
+timestamped backup rotation in :mod:`meshprovision.db.atomic_writer` so
+it is never pruned and never listed alongside it.
 
 Alongside the copy itself, a small JSON sidecar (``<stem>.known-good.json``)
 records which database it was refreshed from and a content hash. Two
