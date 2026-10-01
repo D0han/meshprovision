@@ -259,6 +259,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   actionable hint instead of loading and silently doing nothing with them.
   Set them with the `meshtastic` CLI's own
   `--setlat`/`--setlon`/`--setalt` instead.
+- `mesh provision --rename` is now idempotent: if a node's recorded
+  `short_name`/`long_name` already parse under the template's *current*
+  `short_name_pattern`/`long_name_pattern`, `--rename` keeps them
+  unchanged instead of always allocating a fresh pair. Previously,
+  running `--rename` twice in a row on an already-conforming node would
+  rename it a second time for no reason; a rename is now only allocated
+  when the existing names no longer fit the current patterns (e.g. after
+  a template change) or the node is new.
 
 ### Fixed
 

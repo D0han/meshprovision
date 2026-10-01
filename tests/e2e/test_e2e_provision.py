@@ -802,18 +802,22 @@ def test_drift_repair_renames_back_and_updates_role(
     assert bytes(iface.localNode.localConfig.security.public_key) == kp.public
 
 
-def test_rename_reallocates_a_fresh_name_for_an_already_provisioned_node(
-    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+def test_rename_reallocates_when_the_template_pattern_changes(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
 ) -> None:
-    """``--rename`` is the one flag that makes ``allocate_names`` actually run again.
+    """``--rename`` still reallocates when the existing name no longer fits.
 
-    Without it (see ``test_zero_admin_keys_is_a_valid_outcome_never_repaired``
-    and ``test_drift_repair_renames_back_and_updates_role`` above), a second
-    provisioning run of an already-known node keeps its recorded name --
-    ``allocate_names`` returns ``(None, None)`` and ``build_plan`` falls back
-    to the database's current name. Nothing in the e2e suite passed
-    ``--rename`` itself before this test, so the "no change" behavior of the
-    other tests was never actually contrasted against the opt-in case.
+    ``allocate_names`` keeps a node's current name under ``--rename`` when it
+    already parses under the template's *current* patterns (see
+    ``test_rename_is_idempotent_when_already_conforming`` below). This test
+    proves the other half still holds: when the template's own
+    ``short_name_pattern``/``long_name_pattern`` change (an operator editing
+    the template, not just re-running the same one), the node's old name no
+    longer parses under the new pattern, so ``--rename`` must still allocate
+    a fresh one -- it is not a blanket "never touch an existing name" rule.
     """
     bus.use(FakeMeshInterface("deadbe01"))
 
@@ -824,6 +828,10 @@ def test_rename_reallocates_a_fresh_name_for_an_already_provisioned_node(
     node = NodeRecord.from_row(loaded.nodes[0])
     assert node.short_name == "MT00"
 
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(
+        write_template(short_name_pattern="XY{n}{n}", long_name_pattern="Meshtastic XY{n}{n}")
+    )
+
     second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--rename"], env)
     assert second.exit_code == 0
     assert "No changes needed." not in second.stderr
@@ -831,8 +839,43 @@ def test_rename_reallocates_a_fresh_name_for_an_already_provisioned_node(
     reloaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     renamed = NodeRecord.from_row(reloaded.nodes[0])
     assert renamed.short_name != "MT00"
-    assert re.fullmatch(r"MT[0-9A-Z]{2}", renamed.short_name)
+    assert re.fullmatch(r"XY[0-9A-Z]{2}", renamed.short_name)
     assert renamed.long_name == f"Meshtastic {renamed.short_name}"
+
+
+def test_rename_is_idempotent_when_already_conforming(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """A second ``--rename`` run is a no-op when the name already conforms.
+
+    Regression test for the ``--rename`` flip-flop: it used to allocate a
+    brand-new ``(short_name, long_name)`` pair on every ``--rename`` run,
+    even when the node's current names already matched the template's
+    patterns exactly -- so running ``mesh provision --rename`` twice in a
+    row renamed the node a second time for no reason. ``allocate_names`` now
+    keeps the existing pair unchanged whenever both names still parse under
+    the template's current patterns, matching the "no change" behavior
+    asserted for a plain (non-``--rename``) rerun elsewhere in this module
+    (see ``test_provision_is_idempotent``).
+    """
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    first = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--rename"], env)
+    assert first.exit_code == 0
+
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    node = NodeRecord.from_row(loaded.nodes[0])
+    assert node.short_name == "MT00"
+    assert node.long_name == "Meshtastic MT00"
+
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--rename"], env)
+    assert second.exit_code == 0
+    assert "No changes needed." in second.stderr
+
+    reloaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    unchanged = NodeRecord.from_row(reloaded.nodes[0])
+    assert unchanged.short_name == node.short_name
+    assert unchanged.long_name == node.long_name
 
 
 def test_stale_db_key_is_corrected_by_adopting_the_devices_reported_key(

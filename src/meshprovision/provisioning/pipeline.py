@@ -642,31 +642,44 @@ def allocate_names(
 
     Returns:
         ``(None, None)`` when ``existing`` is set and ``rename`` is
-        ``False`` -- :func:`~meshprovision.provisioning.plan.build_plan`
-        then keeps the database's (or, failing that, the device's)
-        current names. Otherwise a freshly allocated
-        ``(short_name, long_name)`` pair, using the same namespace index
-        for both when the two patterns' slot counts allow it and the
-        rendered long name isn't already taken by another node's recorded
-        ``long_name`` -- the short and long namespaces are checked
-        independently, so a node whose names fell out of lockstep with
-        the current pattern's index scheme (an older template, a
-        hand-edited row, an imported legacy record) can leave a lower
-        index's long name already in use even though its short name at
-        that same index is free.
+        ``False``, or when ``existing`` is set, ``rename`` is ``True``,
+        and the node's current ``short_name``/``long_name`` both already
+        parse under the template's current patterns --
+        :func:`~meshprovision.provisioning.plan.build_plan` then keeps
+        the database's (or, failing that, the device's) current names.
+        This is what makes ``--rename`` idempotent: a node already
+        conforming to the template isn't reallocated a new name just
+        because ``--rename`` was passed again. Otherwise a freshly
+        allocated ``(short_name, long_name)`` pair, using the same
+        namespace index for both when the two patterns' slot counts
+        allow it and the rendered long name isn't already taken by
+        another node's recorded ``long_name`` -- the short and long
+        namespaces are checked independently, so a node whose names
+        fell out of lockstep with the current pattern's index scheme
+        (an older template, a hand-edited row, an imported legacy
+        record) can leave a lower index's long name already in use
+        even though its short name at that same index is free.
 
     Raises:
         NamespaceExhaustedError: If the short-name pattern's namespace
             has no unused names remaining.
     """
+    short_spec = template.short_name_spec()
+    long_spec = template.long_name_spec()
+
     if existing is not None and not rename:
         return None, None
 
-    short_spec = template.short_name_spec()
+    if (
+        existing is not None
+        and short_spec.parse_index(existing.short_name) is not None
+        and long_spec.parse_index(existing.long_name) is not None
+    ):
+        return existing.short_name, existing.long_name
+
     index, short = nodes.next_free_name(
         short_spec, is_long=False, warn_at=template.name_capacity_warn_utilization
     )
-    long_spec = template.long_name_spec()
     try:
         long = long_spec.render(index)
     except NamespaceExhaustedError:
