@@ -133,11 +133,25 @@ def test_pattern_spec_unmatched_closing_brace() -> None:
 
 @pytest.mark.parametrize(
     "alphabet",
-    ["", "AAB", "A B", "A{B", "A}B"],
+    ["", "AAB", "A B", "A{B", "A}B", "aA", "AB\u00df", "AB\ufb01"],
 )
 def test_alphabet_validation_errors(alphabet: str) -> None:
     with pytest.raises(TemplateValidationError):
         PatternSpec.compile("MT{n}", alphabet, field="short_name_pattern")
+
+
+def test_alphabet_case_collision_error_names_each_pair() -> None:
+    """Case-variant digits are refused, naming every colliding pair.
+
+    ``find_next_free_name`` compares names by ``casefold()``, so ``"aA"``
+    would otherwise count two digits that only ever yield one usable name
+    and overstate ``capacity``.
+    """
+    with pytest.raises(TemplateValidationError) as exc_info:
+        PatternSpec.compile("MT{n}", "0aAbB", field="short_name_pattern")
+
+    assert exc_info.value.field == "name_suffix_alphabet"
+    assert "differ only in case: 'a'/'A', 'b'/'B'." in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

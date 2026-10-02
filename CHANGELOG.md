@@ -312,6 +312,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `name_suffix_alphabet` with characters that differ only in case
+  (e.g. `"aA"`) loaded fine, but names are compared case-insensitively,
+  so each such pair yielded one usable name, not two: the reported
+  capacity (`name_min_capacity` check, utilization warnings) overstated
+  the namespace and allocation could hit "namespace exhausted" early.
+  Such an alphabet is now a template-load error naming each colliding
+  pair, as is a character that case-folds to several characters (`ß` ->
+  `ss`, ligatures like `ﬁ`), which could make two different suffixes
+  collide. A template that loaded before may now be refused; the default
+  base36 alphabet is unaffected.
 - `node_key_admin_refs` counted `authorized_admin_keys` on any
   non-archived node, including `OBSERVED` (adopted-but-not-enrolled)
   rows, as evidence a key is admin-bearing. Since `mesh adopt` records

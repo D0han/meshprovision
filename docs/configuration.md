@@ -75,7 +75,10 @@ name_capacity_strict: false
 ```
 
 `{n}` is the only placeholder, and each occurrence consumes one character
-from `name_suffix_alphabet`; write a literal brace as `{{`/`}}`.
+from `name_suffix_alphabet`; write a literal brace as `{{`/`}}`. Names are
+compared case-insensitively, so the alphabet's characters must be distinct
+ignoring case (`"aA"` is a template-load error), and a character that
+case-folds to several characters (`ß`, ligatures like `ﬁ`) is refused too.
 
 **Hard limits, enforced at template-load time:** firmware **silently
 truncates** an over-length name rather than rejecting it, so meshprovision

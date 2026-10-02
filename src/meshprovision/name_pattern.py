@@ -110,6 +110,12 @@ class PatternSpec:
     def capacity(self) -> int:
         """Return the total number of distinct names this pattern can render.
 
+        Exact because :func:`_validate_alphabet` refuses an alphabet whose
+        characters collide case-insensitively: names are compared by
+        ``casefold()`` (see :func:`~meshprovision.db.nodes.find_next_free_name`),
+        so ``"aA"`` would otherwise count two digits that only ever yield
+        one usable name per slot value.
+
         Returns:
             ``len(alphabet) ** slot_count``.
         """
@@ -222,7 +228,8 @@ class PatternSpec:
             pattern: The pattern string. ``{n}`` is the only supported
                 placeholder; a literal brace is written ``{{`` or ``}}``.
             alphabet: The suffix alphabet: non-empty, no duplicate
-                characters, no whitespace, and no ``{``/``}``.
+                characters (case-insensitively), no whitespace, and no
+                ``{``/``}``.
             field: Name of the template field this pattern came from,
                 used to make error messages actionable.
 
@@ -280,8 +287,8 @@ def _validate_alphabet(alphabet: str) -> None:
 
     Raises:
         TemplateValidationError: If the alphabet is empty, contains
-            duplicate characters, contains whitespace, or contains
-            ``{``/``}``.
+            duplicate characters, contains whitespace, contains
+            ``{``/``}``, or fails :func:`_validate_alphabet_case_folding`.
     """
     if not alphabet:
         raise TemplateValidationError(
@@ -307,6 +314,50 @@ def _validate_alphabet(alphabet: str) -> None:
     if "{" in alphabet or "}" in alphabet:
         raise TemplateValidationError(
             "name_suffix_alphabet must not contain '{' or '}'.",
+            field="name_suffix_alphabet",
+        )
+    _validate_alphabet_case_folding(alphabet)
+
+
+def _validate_alphabet_case_folding(alphabet: str) -> None:
+    """Refuse an alphabet whose characters are not distinct case-insensitively.
+
+    Rendered names are compared by ``casefold()``
+    (:func:`~meshprovision.db.nodes.find_next_free_name`), so two digits
+    that fold to the same character render names that count as one, and
+    :attr:`PatternSpec.capacity` would overstate the namespace. A
+    character that folds to *several* characters (``"ß"`` -> ``"ss"``,
+    the ligature ``"ﬁ"`` -> ``"fi"``) is refused too: its folded form can
+    collide with a run of other digits across slot boundaries (``"ßs"``
+    and ``"sß"`` both fold to ``"sss"``).
+
+    Args:
+        alphabet: The candidate alphabet, already free of exact duplicates.
+
+    Raises:
+        TemplateValidationError: If a character folds to more than one
+            character, or two characters fold to the same one.
+    """
+    multi = [ch for ch in alphabet if len(ch.casefold()) != 1]
+    if multi:
+        listed = ", ".join(f"{ch!r} (-> {ch.casefold()!r})" for ch in multi)
+        raise TemplateValidationError(
+            "name_suffix_alphabet contains character(s) that case-fold to more than "
+            f"one character: {listed}. Names are compared case-insensitively, so such "
+            "a character can make two different suffixes collide.",
+            field="name_suffix_alphabet",
+        )
+    first_by_fold: dict[str, str] = {}
+    pairs: list[str] = []
+    for ch in alphabet:
+        first = first_by_fold.setdefault(ch.casefold(), ch)
+        if first != ch:
+            pairs.append(f"{first!r}/{ch!r}")
+    if pairs:
+        raise TemplateValidationError(
+            "name_suffix_alphabet contains characters that differ only in case: "
+            f"{', '.join(pairs)}. Names are compared case-insensitively, so each "
+            "pair counts as a single suffix digit; keep one of each.",
             field="name_suffix_alphabet",
         )
 
