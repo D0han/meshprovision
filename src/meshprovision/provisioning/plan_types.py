@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from meshprovision.config.template import TemplateConfig
-    from meshprovision.db.nodes import NodeRecord
+    from meshprovision.db.node_record import NodeRecord
     from meshprovision.nodeid import NodeId
 
 __all__ = [
@@ -687,7 +687,7 @@ class ChangePlan:
                 ``confirmed_short_name``.
 
         Returns:
-            The new :class:`~meshprovision.db.nodes.NodeRecord`.
+            The new :class:`~meshprovision.db.node_record.NodeRecord`.
             ``authorized_admin_keys`` is left untouched (preserving
             whatever ``existing`` already had) when :attr:`key_plan` has
             neither ``desired_admin_key_refs`` nor
@@ -708,7 +708,7 @@ class ChangePlan:
             plan is being applied under full template management (whether
             newly enrolled or already there).
         """
-        from meshprovision.db.nodes import NodeRecord as _NodeRecord
+        from meshprovision.db.node_record import NodeRecord as _NodeRecord
         from meshprovision.db.schema import ManagementMode
 
         base = existing if existing is not None else self.db_entry
