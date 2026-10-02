@@ -21,10 +21,19 @@ current working directory, or named explicitly with `--env-file`. The
 upward search never crosses above your home directory, and a discovered
 `.env` (for a symlink, the file it points to) is refused unless it's a
 regular file owned by you and not world-writable (group-writable is fine
-when the group is your primary group, the usual `rw-rw-r--` default; a
-file writable by any other group is refused). The error lists each
-problem with the `chmod`/`chown` command that fixes it. Pass `--env-file`
-explicitly to bypass the search (and this check) entirely.
+when the group is your primary group and no one else is in it, the usual
+`rw-rw-r--` default with a per-user group; a file writable by any other
+group, or by a primary group shared with other users such as `users`, is
+refused). The error lists each problem with the `chmod`/`chown` command
+that fixes it. Pass `--env-file` explicitly to bypass the search (and
+this check) entirely.
+
+"No one else is in it" means the group lists no other members and no
+other account has it as its primary group. On hosts whose LDAP/sssd
+directory doesn't allow enumerating users, only local accounts can be
+checked for the second part, so a directory user who shares your primary
+group without being listed as a member can go unnoticed -- use
+`chmod g-w .env` there if your primary group isn't private.
 
 `MESHPROVISION_CONTACT` has no default because lorastats.pl requires
 identifiable contact information in every request and bans IP addresses

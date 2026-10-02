@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import errno
+import grp
 import os
+import pwd
 import shlex
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 
@@ -26,9 +29,44 @@ from meshprovision.errors import MissingContactError, SettingsError
 pytestmark = pytest.mark.unit
 
 _CONTENT = "MESHPROVISION_CONTACT=me@example.invalid\n"
+_SELF_USER = "mesh-test-self"
+_OTHER_USER = "mesh-test-other"
+_GROUP_NAME = "mesh-test-group"
 _FALLBACK_HINT = (
     ", or pass the file explicitly with --env-file instead of relying on upward search."
 )
+
+
+def _patch_accounts(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    uid: int,
+    gid: int,
+    file_gid: int,
+    group_members: tuple[str, ...],
+    private_group: bool,
+) -> None:
+    """Replace the account database with the current user plus, optionally, one other."""
+    me = pwd.struct_passwd((_SELF_USER, "x", uid, gid, "", "/nonexistent", "/bin/sh"))
+    accounts = [me]
+    if not private_group:
+        accounts.append(
+            pwd.struct_passwd((_OTHER_USER, "x", uid + 1, file_gid, "", "/nonexistent", "/bin/sh"))
+        )
+
+    def getgrgid(lookup_gid: int) -> grp.struct_group:
+        if lookup_gid != file_gid:
+            raise KeyError(lookup_gid)
+        return grp.struct_group((_GROUP_NAME, "x", file_gid, list(group_members)))
+
+    def getpwuid(lookup_uid: int) -> pwd.struct_passwd:
+        if lookup_uid != uid:
+            raise KeyError(lookup_uid)
+        return me
+
+    monkeypatch.setattr(grp, "getgrgid", getgrgid)
+    monkeypatch.setattr(pwd, "getpwuid", getpwuid)
+    monkeypatch.setattr(pwd, "getpwall", lambda: list(accounts))
 
 
 @pytest.fixture
@@ -41,6 +79,12 @@ def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[
 
     With ``symlink=True`` the content, mode and identity anchor all apply to
     ``tmp_path/real.env`` and ``.env`` is a symlink to it.
+
+    ``grp.getgrgid``/``pwd.getpwuid``/``pwd.getpwall`` are always patched too,
+    so no test depends on the host's ``/etc/group``: the file's group is
+    :data:`_GROUP_NAME` with ``group_members`` as its ``gr_mem``, the current
+    user is :data:`_SELF_USER`, and ``private_group=False`` adds an
+    :data:`_OTHER_USER` account whose primary group is the file's group.
     """
     monkeypatch.chdir(tmp_path)
 
@@ -51,6 +95,8 @@ def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[
         primary_gid: bool = True,
         content: str = _CONTENT,
         symlink: bool = False,
+        group_members: tuple[str, ...] = (),
+        private_group: bool = True,
     ) -> Path:
         path = tmp_path / ".env"
         target = tmp_path / "real.env" if symlink else path
@@ -63,6 +109,14 @@ def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[
         gid = st.st_gid if primary_gid else st.st_gid + 1
         monkeypatch.setattr(os, "getuid", lambda: uid)
         monkeypatch.setattr(os, "getgid", lambda: gid)
+        _patch_accounts(
+            monkeypatch,
+            uid=uid,
+            gid=gid,
+            file_gid=st.st_gid,
+            group_members=group_members,
+            private_group=private_group,
+        )
         return path
 
     return make
@@ -299,23 +353,90 @@ def test_discovered_env_trust_matrix(
 
 @pytest.mark.skipif(os.name != "posix", reason="runs the hint's chmod through sh")
 @pytest.mark.parametrize(
-    ("mode", "primary_gid"),
+    ("mode", "primary_gid", "group_members"),
     [
-        pytest.param(0o664, False, id="664-foreign-group"),
-        pytest.param(0o646, True, id="646-world"),
-        pytest.param(0o666, True, id="666-primary-world"),
-        pytest.param(0o666, False, id="666-foreign-world-and-group"),
+        pytest.param(0o664, False, (), id="664-foreign-group"),
+        pytest.param(0o646, True, (), id="646-world"),
+        pytest.param(0o666, True, (), id="666-primary-world"),
+        pytest.param(0o666, False, (), id="666-foreign-world-and-group"),
+        pytest.param(0o664, True, (_OTHER_USER,), id="664-shared-primary-group"),
     ],
 )
 def test_discovered_env_refusal_hint_command_makes_it_loadable(
-    discovered_env: Callable[..., Path], mode: int, primary_gid: bool
+    discovered_env: Callable[..., Path],
+    mode: int,
+    primary_gid: bool,
+    group_members: tuple[str, ...],
 ) -> None:
-    discovered_env(mode, primary_gid=primary_gid)
+    discovered_env(mode, primary_gid=primary_gid, group_members=group_members)
     with pytest.raises(SettingsError) as exc_info:
         load_settings(environ={})
     command = (exc_info.value.hint or "").split("`")[1]
     subprocess.run(["/bin/sh", "-c", command], check=True)
     assert load_settings(environ={}).contact == "me@example.invalid"
+
+
+_SHARED_REASON = f"it is group-writable and its group {_GROUP_NAME} is shared with other users"
+_FOREIGN_REASON = "it is group-writable by a group other than your primary group"
+
+
+@pytest.mark.parametrize(
+    ("primary_gid", "group_members", "private_group", "reason"),
+    [
+        pytest.param(True, (), True, None, id="no-members-accepted"),
+        pytest.param(True, (_SELF_USER,), True, None, id="only-self-member-accepted"),
+        pytest.param(
+            True, (_SELF_USER, _OTHER_USER), True, _SHARED_REASON, id="other-member-refused"
+        ),
+        pytest.param(True, (), False, _SHARED_REASON, id="other-account-primary-gid-refused"),
+        pytest.param(
+            False,
+            (_OTHER_USER,),
+            False,
+            _FOREIGN_REASON,
+            id="foreign-group-gets-only-foreign-reason",
+        ),
+    ],
+)
+def test_discovered_env_group_write_needs_a_private_primary_group(
+    discovered_env: Callable[..., Path],
+    primary_gid: bool,
+    group_members: tuple[str, ...],
+    private_group: bool,
+    reason: str | None,
+) -> None:
+    path = discovered_env(
+        0o664, primary_gid=primary_gid, group_members=group_members, private_group=private_group
+    )
+    if reason is None:
+        assert load_settings(environ={}).contact == "me@example.invalid"
+        return
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={})
+    assert str(exc_info.value) == f"Refusing to load discovered .env file {path}: {reason}."
+    assert exc_info.value.hint == _expected_hint(path, "chmod g-w")
+
+
+@pytest.mark.parametrize("failing_lookup", ["getgrgid", "getpwuid"])
+def test_discovered_env_group_write_refused_when_account_lookup_fails(
+    discovered_env: Callable[..., Path], monkeypatch: pytest.MonkeyPatch, failing_lookup: str
+) -> None:
+    """A group or user that can't be resolved counts as shared (fail closed)."""
+    path = discovered_env(0o664)
+    st_gid = path.stat().st_gid
+
+    def missing(key: int) -> NoReturn:
+        raise KeyError(key)
+
+    monkeypatch.setattr(grp if failing_lookup == "getgrgid" else pwd, failing_lookup, missing)
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={})
+    group = str(st_gid) if failing_lookup == "getgrgid" else _GROUP_NAME
+    assert str(exc_info.value) == (
+        f"Refusing to load discovered .env file {path}: it is group-writable and its "
+        f"group {group} is shared with other users."
+    )
+    assert exc_info.value.hint == _expected_hint(path, "chmod g-w")
 
 
 def test_discovered_env_symlink_to_trusted_target_loads(

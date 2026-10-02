@@ -307,9 +307,11 @@ def _env_trust_problems(path: Path, st: os.stat_result) -> list[_EnvTrustProblem
     """List every reason the ``st`` of a discovered ``.env`` makes it untrustworthy.
 
     A group-writable file is accepted when its group is the current
-    user's primary group: most distros give each user a private group
-    (umask 002), so ``rw-rw-r--`` is the everyday default and refusing it
-    would block normal users.
+    user's primary group and no one else is in that group (see
+    :func:`_primary_group_is_private`): most distros give each user a
+    private group (umask 002), so ``rw-rw-r--`` is the everyday default
+    and refusing it would block normal users, but a shared primary group
+    (e.g. ``users``) would let every member rewrite the file.
 
     Args:
         path: The discovered ``.env`` path, used only to build the fix
@@ -327,14 +329,77 @@ def _env_trust_problems(path: Path, st: os.stat_result) -> list[_EnvTrustProblem
         problems.append(_EnvTrustProblem("it is not owned by you", f'chown "$USER" {quoted}'))
     if st.st_mode & stat.S_IWOTH:
         problems.append(_EnvTrustProblem("it is world-writable", f"chmod o-w {quoted}"))
-    if st.st_mode & stat.S_IWGRP and st.st_gid != os.getgid():
-        problems.append(
-            _EnvTrustProblem(
-                "it is group-writable by a group other than your primary group",
-                f"chmod g-w {quoted}",
+    if st.st_mode & stat.S_IWGRP:
+        if st.st_gid != os.getgid():
+            problems.append(
+                _EnvTrustProblem(
+                    "it is group-writable by a group other than your primary group",
+                    f"chmod g-w {quoted}",
+                )
             )
-        )
+        elif not _primary_group_is_private(st.st_gid, os.getuid()):
+            problems.append(
+                _EnvTrustProblem(
+                    f"it is group-writable and its group {_group_label(st.st_gid)} "
+                    "is shared with other users",
+                    f"chmod g-w {quoted}",
+                )
+            )
     return problems
+
+
+def _primary_group_is_private(gid: int, uid: int) -> bool:
+    """Return whether no user other than ``uid`` belongs to group ``gid``.
+
+    A group counts as shared if its member list (``gr_mem``) names anyone
+    but ``uid``'s own login name, or if any other account has it as its
+    primary group. Accounts sharing ``uid`` (aliases) are the same user.
+    A group or user that can't be looked up counts as shared (fail closed).
+
+    Known limit: on hosts whose name service doesn't enumerate (LDAP/sssd
+    with enumeration off), ``pwd.getpwall`` sees only local accounts, so a
+    directory user whose primary group is ``gid`` but who isn't listed in
+    ``gr_mem`` goes unnoticed.
+
+    Only called after the ``os.getuid`` guard in
+    :func:`_read_discovered_env_file`, so ``grp``/``pwd`` (POSIX-only) are
+    imported here rather than at module level.
+
+    Args:
+        gid: The file's group, already known to be the user's primary group.
+        uid: The current user's uid.
+
+    Returns:
+        True if the group is effectively the user's private group.
+    """
+    import grp
+    import pwd
+
+    try:
+        members = set(grp.getgrgid(gid).gr_mem)
+        own_name = pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return False
+    if not members <= {own_name}:
+        return False
+    return not any(entry.pw_gid == gid and entry.pw_uid != uid for entry in pwd.getpwall())
+
+
+def _group_label(gid: int) -> str:
+    """Return group ``gid``'s name for messages, or the number if it has none.
+
+    Args:
+        gid: The group id to name.
+
+    Returns:
+        The group name, or ``str(gid)`` when the lookup fails.
+    """
+    import grp
+
+    try:
+        return grp.getgrgid(gid).gr_name
+    except KeyError:
+        return str(gid)
 
 
 def _read_discovered_env_file(path: Path) -> str:
@@ -366,7 +431,8 @@ def _read_discovered_env_file(path: Path) -> str:
     Raises:
         SettingsError: If the file cannot be opened, is not a regular
             file, is not owned by the current user, is world-writable, or
-            is writable by a group other than the user's primary group.
+            is writable by a group other than the user's primary group or
+            by a primary group shared with other users.
     """
     if not hasattr(os, "getuid"):
         return path.read_text(encoding="utf-8")
@@ -428,8 +494,8 @@ def load_settings(
 
     A ``.env`` file found via :func:`find_env_file` is only trusted if
     it is a regular file (a symlink's target counts) owned by the current
-    user and not world-writable nor writable by a foreign group (see
-    :func:`_read_discovered_env_file`); an explicit ``env_file`` is
+    user and not world-writable nor writable by a foreign or shared group
+    (see :func:`_read_discovered_env_file`); an explicit ``env_file`` is
     operator-chosen and is loaded as-is.
 
     A blank value for any field (including ``MESHPROVISION_CONTACT=`` in

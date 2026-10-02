@@ -205,9 +205,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - A discovered `.env` is no longer refused for being group-writable when
-  its group is the user's primary group (the default permissions under
-  umask 002 on most distros). World-writable files, foreign-group
-  group-writable files, files owned by another user, and anything that is
+  its group is the user's primary group and no other user is in that
+  group (the default permissions under umask 002 on distros with per-user
+  groups). World-writable files, foreign-group group-writable files,
+  files writable by a primary group shared with other users (e.g.
+  `users`; on LDAP/sssd hosts without user enumeration only local
+  accounts are checked), files owned by another user, and anything that is
   not a regular file are still refused; a symlinked `.env` is judged by
   the file it points to. The check runs against the same open file that
   is then parsed, so the file can't be swapped between check and read,
