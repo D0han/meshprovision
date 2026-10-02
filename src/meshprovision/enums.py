@@ -47,6 +47,7 @@ __all__ = [
     "hw_model_table",
     "modem_preset_table",
     "normalize_enum_name",
+    "packet_signature_policy_table",
     "rebroadcast_mode_table",
     "region_table",
     "role_table",
@@ -81,6 +82,10 @@ _MODEM_PRESET_PATHS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
 _GPS_MODE_PATHS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("meshtastic.protobuf.config_pb2", ("Config", "PositionConfig", "GpsMode")),
     ("meshtastic.config_pb2", ("Config", "PositionConfig", "GpsMode")),
+)
+_PACKET_SIGNATURE_POLICY_PATHS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("meshtastic.protobuf.config_pb2", ("Config", "SecurityConfig", "PacketSignaturePolicy")),
+    ("meshtastic.config_pb2", ("Config", "SecurityConfig", "PacketSignaturePolicy")),
 )
 
 # ---------------------------------------------------------------------------
@@ -173,8 +178,8 @@ _FALLBACK_HW_MODEL: Final[dict[str, int]] = {
     "WIO_WM1110": 21,
     "STATION_G1": 25,
     "RAK11310": 26,
-    "SENSELORA_RP2040": 27,
-    "SENSELORA_S3": 28,
+    "MAKERFABS_TRACKER": 27,
+    "MAKERFABS_RESERVED": 28,
     "CANARYONE": 29,
     "RP2040_LORA": 30,
     "STATION_G2": 31,
@@ -244,6 +249,15 @@ _FALLBACK_GPS_MODE: Final[dict[str, int]] = {
     "DISABLED": 0,
     "ENABLED": 1,
     "NOT_PRESENT": 2,
+}
+
+# Verified 2026-10-02 against installed meshtastic commit
+# be366660828b5a54469e703209a10aa954927791 (meshtastic/python's unreleased
+# master branch -- see pyproject.toml). Not yet in any tagged PyPI release.
+_FALLBACK_PACKET_SIGNATURE_POLICY: Final[dict[str, int]] = {
+    "PACKET_SIGNATURE_POLICY_COMPATIBLE": 0,
+    "PACKET_SIGNATURE_POLICY_BALANCED": 1,
+    "PACKET_SIGNATURE_POLICY_STRICT": 2,
 }
 
 
@@ -609,6 +623,24 @@ def gps_mode_table() -> EnumTable:
         The :class:`EnumTable` for ``config.position.gps_mode``.
     """
     return _build_table("gps_mode", _GPS_MODE_PATHS, _FALLBACK_GPS_MODE)
+
+
+@cache
+def packet_signature_policy_table() -> EnumTable:
+    """Return the PacketSignaturePolicy enum table, cached after first build.
+
+    Used only for template-load-time validation of
+    ``security.packet_signature_policy`` -- deliberately not part of
+    :func:`enum_tables`, which drives the ODS dropdown lists.
+
+    Returns:
+        The :class:`EnumTable` for ``config.security.packet_signature_policy``.
+    """
+    return _build_table(
+        "packet_signature_policy",
+        _PACKET_SIGNATURE_POLICY_PATHS,
+        _FALLBACK_PACKET_SIGNATURE_POLICY,
+    )
 
 
 def enum_tables() -> Mapping[str, EnumTable]:

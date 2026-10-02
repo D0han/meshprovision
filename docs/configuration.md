@@ -135,6 +135,7 @@ context — this is a real trip hazard.
 security:
   is_managed: false
   admin_channel_enabled: false
+  packet_signature_policy: PACKET_SIGNATURE_POLICY_COMPATIBLE
 ```
 
 Key material **never** goes in this file — a template containing
@@ -143,7 +144,11 @@ Key material **never** goes in this file — a template containing
 `admin_nodes` **and** `--allow-lockdown` on the command line, plus the
 safety gate described in [Security](security.md). `admin_channel_enabled`
 must stay `false` — the legacy admin channel is never used anywhere in
-this project.
+this project. `packet_signature_policy` is firmware 2.8's XEdDSA
+packet-signing policy control (`PACKET_SIGNATURE_POLICY_COMPATIBLE`,
+`_BALANCED`, or `_STRICT`) — not in any official `meshtastic` release yet;
+see the `meshtastic` dependency note in `CHANGELOG.md`. Omit it (or leave
+it unset) to leave the device's current value untouched.
 
 ### Default channel
 

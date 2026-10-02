@@ -23,7 +23,13 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "meshtastic>=2.7.11",
+  # Pinned to a specific commit on meshtastic/python's unreleased master
+  # branch (not an official PyPI release -- 2.7.11 is still latest there)
+  # specifically to get SecurityConfig.packet_signature_policy, a firmware
+  # 2.8 protobuf field not in any tagged release yet. See
+  # ~/.claude/projects/-home-claude-meshprovision/memory/firmware_28_compatibility.md
+  # for why, and re-evaluate once an official 2.8-compatible release lands.
+  "meshtastic @ git+https://github.com/meshtastic/python.git@be366660828b5a54469e703209a10aa954927791",
   "cryptography",
   "pydantic>=2",
   "rich",
@@ -74,6 +80,13 @@ all = ["meshprovision[ble,dev]"]
 
 [project.scripts]
 mesh = "meshprovision.cli.main:cli"
+
+[tool.hatch.metadata]
+# Required for the pinned meshtastic git-commit dependency above (a direct
+# reference). This project is not published to PyPI (an internal tool), so
+# PyPI's own prohibition on direct references in an uploaded package's
+# metadata doesn't apply here.
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/meshprovision"]

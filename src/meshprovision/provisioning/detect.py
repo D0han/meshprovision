@@ -200,6 +200,9 @@ class LiveSecurity:
             ``None`` if not read.
         debug_log_api_enabled: Whether verbose debug logging is exposed
             over the API, or ``None`` if not read.
+        packet_signature_policy: Firmware 2.8's XEdDSA packet-signing
+            policy, as its canonical enum value name, or ``None`` if not
+            read.
     """
 
     public_key: bytes | None = None
@@ -209,6 +212,7 @@ class LiveSecurity:
     admin_channel_enabled: bool = False
     serial_enabled: bool | None = None
     debug_log_api_enabled: bool | None = None
+    packet_signature_policy: str | None = None
 
     @property
     def has_private_key(self) -> bool:
@@ -257,7 +261,8 @@ class LiveSecurity:
             f"admin_keys={admin}, is_managed={self.is_managed!r}, "
             f"admin_channel_enabled={self.admin_channel_enabled!r}, "
             f"serial_enabled={self.serial_enabled!r}, "
-            f"debug_log_api_enabled={self.debug_log_api_enabled!r})"
+            f"debug_log_api_enabled={self.debug_log_api_enabled!r}, "
+            f"packet_signature_policy={self.packet_signature_policy!r})"
         )
 
 
@@ -560,6 +565,23 @@ def is_factory_long_name(long_name: str, node_id: NodeId) -> bool:
     return False
 
 
+def _enum_field_name(msg: Any, field: str) -> str:
+    """Resolve one protobuf enum-typed field to its canonical value name.
+
+    Args:
+        msg: A protobuf message carrying ``field``.
+        field: The enum-typed field's name on ``msg``.
+
+    Returns:
+        The enum value's name, or ``str(raw)`` if the raw number is not a
+        recognized member (matching :func:`_message_fields`'s own
+        fallback behavior for an unrecognized enum number).
+    """
+    raw = getattr(msg, field)
+    enum_value = msg.DESCRIPTOR.fields_by_name[field].enum_type.values_by_number.get(raw)
+    return enum_value.name if enum_value is not None else str(raw)
+
+
 def _message_fields(msg: Any) -> dict[str, object]:
     """Coerce one protobuf config/module-config message into a plain dict.
 
@@ -596,12 +618,10 @@ def _message_fields(msg: Any) -> dict[str, object]:
             FieldDescriptor.TYPE_GROUP,
         ):
             continue
-        raw = getattr(msg, descriptor.name)
         if descriptor.type == FieldDescriptor.TYPE_ENUM:
-            enum_value = descriptor.enum_type.values_by_number.get(raw)
-            result[descriptor.name] = enum_value.name if enum_value is not None else str(raw)
+            result[descriptor.name] = _enum_field_name(msg, descriptor.name)
         else:
-            result[descriptor.name] = raw
+            result[descriptor.name] = getattr(msg, descriptor.name)
     return result
 
 
@@ -704,6 +724,7 @@ def live_config_from_protobufs(
         admin_channel_enabled=bool(sec.admin_channel_enabled),
         serial_enabled=bool(sec.serial_enabled),
         debug_log_api_enabled=bool(sec.debug_log_api_enabled),
+        packet_signature_policy=_enum_field_name(sec, "packet_signature_policy"),
     )
 
     return LiveConfig(

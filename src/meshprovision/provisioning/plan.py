@@ -654,8 +654,10 @@ def _plan_security_section(
     live_sec = inputs.live.security
     template_sec = inputs.template.security
 
-    desired: dict[str, bool] = {"admin_channel_enabled": False}
-    current: dict[str, bool | None] = {"admin_channel_enabled": live_sec.admin_channel_enabled}
+    desired: dict[str, bool | str] = {"admin_channel_enabled": False}
+    current: dict[str, bool | str | None] = {
+        "admin_channel_enabled": live_sec.admin_channel_enabled
+    }
 
     if template_sec.serial_enabled is not None:
         desired["serial_enabled"] = template_sec.serial_enabled
@@ -663,6 +665,9 @@ def _plan_security_section(
     if template_sec.debug_log_api_enabled is not None:
         desired["debug_log_api_enabled"] = template_sec.debug_log_api_enabled
         current["debug_log_api_enabled"] = live_sec.debug_log_api_enabled
+    if template_sec.packet_signature_policy is not None:
+        desired["packet_signature_policy"] = template_sec.packet_signature_policy
+        current["packet_signature_policy"] = live_sec.packet_signature_policy
 
     desired["is_managed"] = lockdown.enable
     current["is_managed"] = live_sec.is_managed

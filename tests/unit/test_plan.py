@@ -1561,6 +1561,65 @@ def test_serial_and_debug_log_api_enabled_diffed_against_template(
     assert debug_change.reason == "template"
 
 
+def test_packet_signature_policy_diffed_against_template(make_live, template, keypair) -> None:
+    live = make_live(
+        template,
+        security=make_security(
+            keypair=keypair, packet_signature_policy="PACKET_SIGNATURE_POLICY_COMPATIBLE"
+        ),
+    )
+    opinionated_template = template.model_copy(
+        update={
+            "security": template.security.model_copy(
+                update={"packet_signature_policy": "PACKET_SIGNATURE_POLICY_STRICT"}
+            )
+        }
+    )
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live,
+        template=opinionated_template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+    )
+
+    plan = build_plan(inputs)
+
+    security = plan.section("security")
+    assert security is not None
+    change = next(c for c in security.changes if c.field == "packet_signature_policy")
+    assert change.current == "PACKET_SIGNATURE_POLICY_COMPATIBLE"
+    assert change.desired == "PACKET_SIGNATURE_POLICY_STRICT"
+    assert change.reason == "template"
+
+
+def test_packet_signature_policy_omitted_from_diff_when_template_leaves_it_none(
+    make_live, template, keypair
+) -> None:
+    """``None`` (the default) must not generate a field change at all.
+
+    Mirrors how ``serial_enabled``/``debug_log_api_enabled`` stay out of
+    the diff entirely when the template doesn't set them -- even though
+    the live device reports a concrete, non-default policy.
+    """
+    live = make_live(
+        template,
+        security=make_security(
+            keypair=keypair, packet_signature_policy="PACKET_SIGNATURE_POLICY_STRICT"
+        ),
+    )
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live, template=template, db_entry=record, state=detect.NodeState.PROVISIONED
+    )
+
+    plan = build_plan(inputs)
+
+    security = plan.section("security")
+    if security is not None:
+        assert all(c.field != "packet_signature_policy" for c in security.changes)
+
+
 def test_foreign_state_adds_warning(make_live, template, keypair) -> None:
     live = make_live(template, security=make_security(keypair=keypair))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FOREIGN)

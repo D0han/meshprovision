@@ -163,6 +163,32 @@ def test_factory_provisioning_sets_is_unmessagable_from_template(
     assert iface.user["isUnmessagable"] is True
 
 
+def test_factory_provisioning_sets_and_confirms_packet_signature_policy(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """A templated ``security.packet_signature_policy`` is written and confirmed.
+
+    A nonzero exit code would mean ``verify_plan`` reported this field
+    ``UNCONFIRMED``/``FAILED`` after read-back, so ``exit_code == 0`` here
+    is itself the round-trip confirmation, the same way
+    ``test_factory_provisioning_sets_is_unmessagable_from_template`` relies
+    on it for the owner-phase field.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(
+        write_template(security={"packet_signature_policy": "PACKET_SIGNATURE_POLICY_STRICT"})
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert iface.localNode.localConfig.security.packet_signature_policy == 2
+    assert "security" in iface.localNode.written_sections
+
+
 def test_factory_provisioning_preserves_an_already_licensed_owner(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

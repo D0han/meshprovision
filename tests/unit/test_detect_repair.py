@@ -198,6 +198,18 @@ def test_message_fields_skips_bytes_and_repeated_fields() -> None:
     assert fields["is_managed"] is True
 
 
+def test_live_config_from_protobufs_converts_packet_signature_policy_enum() -> None:
+    local_config = localonly_pb2.LocalConfig()
+    local_config.security.packet_signature_policy = 2  # PACKET_SIGNATURE_POLICY_STRICT
+    module_config = localonly_pb2.LocalModuleConfig()
+
+    live = detect.live_config_from_protobufs(
+        local_config, module_config, node_id=NodeId.from_hex("deadbe01")
+    )
+
+    assert live.security.packet_signature_policy == "PACKET_SIGNATURE_POLICY_STRICT"
+
+
 def test_live_config_from_protobufs_empty_security_keys_become_none() -> None:
     local_config = localonly_pb2.LocalConfig()
     module_config = localonly_pb2.LocalModuleConfig()

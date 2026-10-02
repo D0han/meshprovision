@@ -117,7 +117,7 @@ _CHIPSET_BY_HW_MODEL: Final[dict[str, Chipset]] = {
     "ESP32_S3_PICO": Chipset.ESP32_S3,
     "CDEBYTE_EORA_S3": Chipset.ESP32_S3,
     "SEEED_XIAO_S3": Chipset.ESP32_S3,
-    "SENSELORA_S3": Chipset.ESP32_S3,
+    "MAKERFABS_RESERVED": Chipset.ESP32_S3,
     "M5STACK_CORES3": Chipset.ESP32_S3,
     # --- Chipset.ESP32_C3 ---
     "HELTEC_HT62": Chipset.ESP32_C3,
@@ -127,7 +127,7 @@ _CHIPSET_BY_HW_MODEL: Final[dict[str, Chipset]] = {
     "RPI_PICO": Chipset.RP2040,
     "RP2040_LORA": Chipset.RP2040,
     "RAK11310": Chipset.RP2040,
-    "SENSELORA_RP2040": Chipset.RP2040,
+    "MAKERFABS_TRACKER": Chipset.RP2040,
     "RP2040_FEATHER_RFM95": Chipset.RP2040,
     # --- Chipset.RP2350 ---
     "RPI_PICO2": Chipset.RP2350,

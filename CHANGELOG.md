@@ -188,6 +188,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phase instead, verified alongside `short_name`/`long_name`. Omitted or
   `null` (the default) leaves the device's current value untouched; there
   is no CLI override, unlike the names.
+- The `meshtastic` dependency now pins to a specific commit
+  (`be366660828b5a54469e703209a10aa954927791`) on `meshtastic/python`'s
+  unreleased `master` branch instead of the PyPI release (`>=2.7.11`,
+  still the latest tagged release) -- the only way to get
+  `Config.SecurityConfig.packet_signature_policy`, a firmware 2.8
+  protobuf field not in any tagged release yet. Re-evaluate once an
+  official 2.8-compatible release lands.
+- A template `security.packet_signature_policy` field: firmware 2.8's
+  XEdDSA packet-signing policy control
+  (`PACKET_SIGNATURE_POLICY_COMPATIBLE`/`_BALANCED`/`_STRICT`), validated
+  and canonicalized against the installed protobuf's own enum, following
+  the same pattern as `device.role`/`lora.region`/etc. Omitted or `null`
+  (the default) leaves the device's current value untouched.
 
 ### Changed
 

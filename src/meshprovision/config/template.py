@@ -44,6 +44,7 @@ from meshprovision.enums import (
     EnumTable,
     gps_mode_table,
     modem_preset_table,
+    packet_signature_policy_table,
     rebroadcast_mode_table,
     region_table,
     role_table,
@@ -573,6 +574,10 @@ class SecuritySection(BaseModel):
         serial_enabled: Whether the serial console/API is enabled.
         debug_log_api_enabled: Whether verbose debug logging is exposed
             over the API.
+        packet_signature_policy: Firmware 2.8's XEdDSA packet-signing
+            policy name, validated and canonicalized against
+            :func:`meshprovision.enums.packet_signature_policy_table`.
+            ``None`` means leave the device's current value untouched.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -581,6 +586,24 @@ class SecuritySection(BaseModel):
     admin_channel_enabled: bool = False
     serial_enabled: bool | None = None
     debug_log_api_enabled: bool | None = None
+    packet_signature_policy: str | None = None
+
+    @field_validator("packet_signature_policy", mode="before")
+    @classmethod
+    def _canonicalize_packet_signature_policy(cls, value: object) -> object:
+        """Canonicalize ``packet_signature_policy`` against its enum table.
+
+        Args:
+            value: The raw field value.
+
+        Returns:
+            ``None``, or the canonical protobuf enum name.
+        """
+        return _canonicalize_enum_field(
+            value,
+            table=packet_signature_policy_table(),
+            field="security.packet_signature_policy",
+        )
 
     @model_validator(mode="before")
     @classmethod

@@ -115,3 +115,6 @@ security:
   # node's own keypair is generated fresh by `mesh provision`.
   is_managed: false # lockdown mode; requires 1-3 admin_nodes AND --allow-lockdown
   admin_channel_enabled: false # must stay false -- the legacy admin channel is never used
+  # packet_signature_policy: PACKET_SIGNATURE_POLICY_COMPATIBLE # firmware 2.8's
+  #   XEdDSA packet-signing policy -- not in any official meshtastic release yet,
+  #   only available via the pinned git-commit dependency (see pyproject.toml)

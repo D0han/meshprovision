@@ -372,14 +372,19 @@ def test_unknown_lora_region_raises() -> None:
         ({"lora": {"region": "NOT_A_REGION"}}, "lora.region"),
         ({"lora": {"modem_preset": "long_fsat"}}, "lora.modem_preset"),
         ({"position": {"gps_mode": "NOT_A_MODE"}}, "position.gps_mode"),
+        (
+            {"security": {"packet_signature_policy": "NOT_A_REAL_POLICY"}},
+            "security.packet_signature_policy",
+        ),
     ],
 )
 def test_unknown_enum_field_raises_naming_the_field(kwargs: dict, field: str) -> None:
     """A typo'd enum-name field is rejected at template-load time, naming the field.
 
-    Covers all 5 enum-typed template fields, not just role/region --
-    rebroadcast_mode, modem_preset, and gps_mode previously passed
-    validation with a typo and only failed mid-``mesh provision``.
+    Covers all 6 enum-typed template fields, not just role/region --
+    rebroadcast_mode, modem_preset, gps_mode, and packet_signature_policy
+    previously passed validation with a typo and only failed mid-``mesh
+    provision``.
     """
     with pytest.raises(TemplateValidationError) as exc_info:
         TemplateConfig(**kwargs)
@@ -395,6 +400,20 @@ def test_enum_fields_are_canonicalized_to_upper_snake() -> None:
     """
     cfg = TemplateConfig(device={"role": "router"})
     assert cfg.device.role == "ROUTER"
+
+
+def test_packet_signature_policy_round_trips() -> None:
+    cfg = TemplateConfig(security={"packet_signature_policy": "PACKET_SIGNATURE_POLICY_STRICT"})
+    assert cfg.security.packet_signature_policy == "PACKET_SIGNATURE_POLICY_STRICT"
+
+
+def test_packet_signature_policy_defaults_to_none() -> None:
+    assert TemplateConfig().security.packet_signature_policy is None
+
+
+def test_unknown_packet_signature_policy_raises() -> None:
+    with pytest.raises(TemplateValidationError):
+        TemplateConfig(security={"packet_signature_policy": "NOT_A_REAL_POLICY"})
 
 
 def test_position_fixed_field_rejected() -> None:

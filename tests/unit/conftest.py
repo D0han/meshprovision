@@ -157,6 +157,7 @@ def make_security(
     admin_channel_enabled: bool = False,
     serial_enabled: bool | None = False,
     debug_log_api_enabled: bool | None = False,
+    packet_signature_policy: str | None = "PACKET_SIGNATURE_POLICY_COMPATIBLE",
     empty: bool = False,
 ) -> LiveSecurity:
     """Build a :class:`LiveSecurity` for tests.
@@ -169,6 +170,8 @@ def make_security(
         admin_channel_enabled: Whether the legacy admin channel is active.
         serial_enabled: Whether the serial console/API is enabled.
         debug_log_api_enabled: Whether verbose debug logging is exposed.
+        packet_signature_policy: The device's current XEdDSA
+            packet-signing policy name.
         empty: When ``True``, ignore every other argument and return a
             completely empty (factory-default) :class:`LiveSecurity`.
 
@@ -185,6 +188,7 @@ def make_security(
         admin_channel_enabled=admin_channel_enabled,
         serial_enabled=serial_enabled,
         debug_log_api_enabled=debug_log_api_enabled,
+        packet_signature_policy=packet_signature_policy,
     )
 
 
