@@ -290,7 +290,7 @@ def test_end_to_end_log_output_never_leaks_key_material(
 
     output = buf.getvalue()
     assert kp.public_b64 not in output
-    assert kp.private_b64() not in output
+    assert kp.private.reveal_b64() not in output
     assert kp.public.hex() not in output
     assert "<redacted" in output
     assert "a_pub" in output

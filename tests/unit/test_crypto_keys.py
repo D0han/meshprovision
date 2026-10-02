@@ -214,6 +214,6 @@ def test_keypair_repr_and_fingerprint_never_expose_the_private_key(
 ) -> None:
     kp = keypair_factory()
     rendered = repr(kp)
-    assert kp.private_b64() not in rendered
+    assert kp.private.reveal_b64() not in rendered
     assert kp.public_b64 in rendered
     assert kp.fingerprint.startswith("sha256:")

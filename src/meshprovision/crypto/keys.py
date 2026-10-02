@@ -112,18 +112,6 @@ class KeyPair:
         """
         return redact.fingerprint(self.public)
 
-    def private_b64(self) -> str:
-        """Return the private key, base64-encoded.
-
-        This is a method, not a property, to make the call site read as
-        the deliberate act it is: this returns secret material. Never
-        log or print the result.
-
-        Returns:
-            The base64 encoding of the private key.
-        """
-        return self.private.reveal_b64()
-
     def __repr__(self) -> str:
         """Return a representation that never exposes the private key.
 
