@@ -7,10 +7,10 @@ from checks that can actually be run against a key or a fleet, layered
 from cheapest/most-structural to most-contextual:
 
 1. **Blocklist** (:func:`audit_public_key`, :func:`audit_private_key`) --
-   membership in :func:`load_known_bad_keys`, which always includes
-   :data:`SMALL_ORDER_POINTS` (libsodium's 7 canonical X25519 small-order
-   points) plus anything in the operator-extensible
-   ``data/known_bad_keys.txt``.
+   membership in :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`,
+   which always includes :data:`~meshprovision.crypto.known_bad_keys.SMALL_ORDER_POINTS`
+   (libsodium's 7 canonical X25519 small-order points) plus anything in
+   the operator-extensible ``data/known_bad_keys.txt``.
 2. **Structural** -- all-zero, a single repeated byte, a monotonic byte
    run, or abnormally low Hamming weight / byte diversity. These are the
    unseeded-RNG failure signature described in the advisory.
@@ -25,9 +25,10 @@ from cheapest/most-structural to most-contextual:
    a public key is exactly the vendor key-cloning failure mode the CVE
    describes.
 
-**Invariant:** every element of :data:`SMALL_ORDER_POINTS` is exactly 32
-bytes, and (per a unit test in the test layer, not this module)
-``set(SMALL_ORDER_POINTS)`` is always a subset of
+**Invariant:** every element of
+:data:`~meshprovision.crypto.known_bad_keys.SMALL_ORDER_POINTS` is
+exactly 32 bytes, and (per a unit test in the test layer, not this
+module) ``set(SMALL_ORDER_POINTS)`` is always a subset of
 ``load_known_bad_keys()`` -- whether or not
 ``data/known_bad_keys.txt`` is present on disk.
 
@@ -52,29 +53,25 @@ checked.
 from __future__ import annotations
 
 import hmac
-import logging
-import os
 import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
-from pathlib import Path
 from typing import Final
 
 from meshprovision.crypto import keys
+from meshprovision.crypto.known_bad_keys import SMALL_ORDER_POINTS, load_known_bad_keys
 from meshprovision.crypto.redact import SecretBytes, fingerprint, reveal
-from meshprovision.errors import KeyMaterialError, SettingsError, WeakKeyError, WeakKeySeverity
+from meshprovision.errors import KeyMaterialError, WeakKeyError, WeakKeySeverity
 
 __all__ = [
     "DUPLICATE_KEY_REASON",
     "FIRMWARE_FIXED_MIN",
     "FIRMWARE_VULNERABLE_MIN",
-    "KNOWN_BAD_KEYS_ENV",
     "LOW_HAMMING_MAX",
     "LOW_HAMMING_MIN",
     "MIN_DISTINCT_BYTES",
     "NON_OVERRIDABLE_CHECKS",
-    "SMALL_ORDER_POINTS",
     "AuditResult",
     "WeakKeyCheck",
     "WeakKeyFinding",
@@ -82,7 +79,6 @@ __all__ = [
     "audit_node",
     "audit_private_key",
     "audit_public_key",
-    "default_known_bad_keys_path",
     "find_duplicate_public_keys",
     "hamming_weight",
     "is_all_zero",
@@ -91,21 +87,14 @@ __all__ = [
     "is_repeated_byte",
     "is_small_order",
     "is_vulnerable_firmware",
-    "load_known_bad_keys",
     "parse_firmware_version",
-    "parse_known_bad_keys",
 ]
-
-_logger = logging.getLogger(__name__)
 
 FIRMWARE_VULNERABLE_MIN: Final[tuple[int, int, int]] = (2, 5, 0)
 """First firmware version inside the CVE-2025-52464 window (inclusive)."""
 
 FIRMWARE_FIXED_MIN: Final[tuple[int, int, int]] = (2, 6, 11)
 """First firmware version outside the CVE-2025-52464 window (exclusive bound)."""
-
-KNOWN_BAD_KEYS_ENV: Final[str] = "MESHPROVISION_KNOWN_BAD_KEYS"
-"""Environment variable overriding the blocklist file path."""
 
 LOW_HAMMING_MIN: Final[int] = 32
 """Below this Hamming weight, a 32-byte value is critically suspect.
@@ -123,80 +112,12 @@ MIN_DISTINCT_BYTES: Final[int] = 5
 Random 32 bytes have ~30 distinct values out of 256 possible.
 """
 
-# The 7 canonical X25519 small-order / degenerate public keys from
-# libsodium's has_small_order() blocklist
-# (crypto_scalarmult/curve25519/ref10/x25519_ref10.c), decoded from the
-# same base64 encodings committed verbatim to data/known_bad_keys.txt so
-# the two files can never silently drift apart. p = 2**255 - 19; all
-# encodings are little-endian 32-byte.
-_SMALL_ORDER_ALL_ZERO = bytes.fromhex(
-    "0000000000000000000000000000000000000000000000000000000000000000"
-)
-"""The all-zero point (order 4). Also the firmware's own weak-key check."""
-
-_SMALL_ORDER_POINT_ONE = bytes.fromhex(
-    "0100000000000000000000000000000000000000000000000000000000000000"
-)
-"""The point 1 (order 1): 0x01 followed by 31 zero bytes."""
-
-_SMALL_ORDER_8_A = bytes.fromhex("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800")
-"""Order-8 point #1 (libsodium blacklist entry 3)."""
-
-_SMALL_ORDER_8_B = bytes.fromhex("5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157")
-"""Order-8 point #2 (libsodium blacklist entry 4)."""
-
-_SMALL_ORDER_P_MINUS_1 = bytes.fromhex(
-    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
-)
-"""p - 1 (order 2)."""
-
-_SMALL_ORDER_P = bytes.fromhex("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")
-"""p (order 4) -- the field modulus itself, a non-canonical encoding of 0."""
-
-_SMALL_ORDER_P_PLUS_1 = bytes.fromhex(
-    "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f"
-)
-"""p + 1 (order 1) -- a non-canonical encoding of 1."""
-
-SMALL_ORDER_POINTS: Final[tuple[bytes, ...]] = (
-    _SMALL_ORDER_ALL_ZERO,
-    _SMALL_ORDER_POINT_ONE,
-    _SMALL_ORDER_8_A,
-    _SMALL_ORDER_8_B,
-    _SMALL_ORDER_P_MINUS_1,
-    _SMALL_ORDER_P,
-    _SMALL_ORDER_P_PLUS_1,
-)
-"""The 7 canonical libsodium X25519 small-order / degenerate public keys.
-
-Every entry is exactly 32 bytes (verified below, at import time). Any
-node advertising one of these has a broken or malicious key, and every
-shared secret derived from one is degenerate.
-"""
-
-if any(len(point) != keys.X25519_KEY_SIZE for point in SMALL_ORDER_POINTS):
-    raise KeyMaterialError(
-        "SMALL_ORDER_POINTS contains an entry that is not "
-        f"{keys.X25519_KEY_SIZE} bytes; this is a packaging bug",
-        reason="invalid small-order point table",
-    )
-
 _FIRMWARE_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 
 _SEVERITY_RANK: Final[dict[WeakKeySeverity, int]] = {
     WeakKeySeverity.CRITICAL: 0,
     WeakKeySeverity.WARNING: 1,
 }
-
-_blocklist_cache: dict[tuple[Path, int, int], frozenset[bytes]] = {}
-"""Module-private cache of parsed blocklist files, keyed by (path, mtime_ns, size).
-
-Deliberately mutable, unlike the rest of this project's data structures:
-this is infrastructure caching, not domain state. Keying on the file's
-mtime and size (rather than just its path) means a rewritten blocklist
-file is picked up on the next call without ever re-reading an unchanged
-one.
-"""
 
 
 class WeakKeyCheck(StrEnum):
@@ -241,9 +162,10 @@ structurally degenerate (a known-*leaked* key, say) stays overridable
 via ``--allow-weak-admin-key``/``admin import --allow-weak``, per this
 project's D4 decision -- an operator who has verified out-of-band that a
 flagged key is nonetheless the one they intend to use may still force it.
-Every :data:`SMALL_ORDER_POINTS` entry also produces a
-:attr:`~WeakKeyCheck.BLOCKLIST` finding (see :func:`load_known_bad_keys`),
-so it stays non-overridable through :attr:`~WeakKeyCheck.SMALL_ORDER`
+Every :data:`~meshprovision.crypto.known_bad_keys.SMALL_ORDER_POINTS`
+entry also produces a :attr:`~WeakKeyCheck.BLOCKLIST` finding (see
+:func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`), so it
+stays non-overridable through :attr:`~WeakKeyCheck.SMALL_ORDER`
 regardless.
 """
 
@@ -451,177 +373,6 @@ def is_vulnerable_firmware(version: str | tuple[int, int, int] | None) -> bool:
     return FIRMWARE_VULNERABLE_MIN <= version < FIRMWARE_FIXED_MIN
 
 
-def _known_bad_keys_candidates(*, db_path: Path | None = None) -> list[Path]:
-    """Build the ordered, non-env candidate list, without checking existence.
-
-    Args:
-        db_path: The configured database path, when known. Its parent
-            directory is tried first among these candidates.
-
-    Returns:
-        The candidates in search order: DB-sibling (if ``db_path`` is
-        given), package, repo root (if resolvable), then cwd.
-    """
-    candidates: list[Path] = []
-    if db_path is not None:
-        candidates.append(db_path.parent / "known_bad_keys.txt")
-
-    module_parents = Path(__file__).resolve().parents
-    package_root = module_parents[1]
-    repo_root_candidate = module_parents[3] if len(module_parents) > 3 else None
-    candidates.append(package_root / "data" / "known_bad_keys.txt")
-    if repo_root_candidate is not None:
-        candidates.append(repo_root_candidate / "data" / "known_bad_keys.txt")
-    candidates.append(Path.cwd() / "data" / "known_bad_keys.txt")
-    return candidates
-
-
-def default_known_bad_keys_path(*, db_path: Path | None = None) -> Path | None:
-    """Resolve the default location of the on-disk key blocklist.
-
-    Tries, in order: the path in :data:`KNOWN_BAD_KEYS_ENV` (if set);
-    ``db_path.parent/known_bad_keys.txt`` (if ``db_path`` is given -- the
-    database's own directory is stable regardless of the caller's
-    current working directory, unlike the ``./data`` fallback below);
-    ``<package>/data/known_bad_keys.txt`` (in case the file is ever
-    vendored into the installed package); ``<repo root>/data/known_bad_keys.txt``
-    (a checkout run from source); ``./data/known_bad_keys.txt`` relative
-    to the current working directory.
-
-    The package candidate is deliberately searched *after* the DB
-    sibling: a bundled copy must never take priority over an operator's
-    own file, or it would permanently hide the operator's additions.
-
-    Args:
-        db_path: The configured database path, when known. Passed
-            through from :meth:`~meshprovision.cli.common.CliContext.
-            known_bad_keys`.
-
-    Returns:
-        The first candidate path that exists, or ``None`` if none does
-        (this is not an error -- see :func:`load_known_bad_keys`).
-
-    Raises:
-        SettingsError: If :data:`KNOWN_BAD_KEYS_ENV` is set to a path
-            that does not exist.
-    """
-    env_value = os.environ.get(KNOWN_BAD_KEYS_ENV)
-    if env_value and env_value.strip():
-        candidate = Path(env_value.strip()).expanduser()
-        if candidate.exists():
-            return candidate
-        raise SettingsError(
-            f"{KNOWN_BAD_KEYS_ENV} is set to a path that does not exist: {candidate}",
-            hint=(
-                f"Check the path in {KNOWN_BAD_KEYS_ENV}, or unset it to use the bundled blocklist."
-            ),
-        )
-
-    for candidate in _known_bad_keys_candidates(db_path=db_path):
-        if candidate.exists():
-            return candidate
-    return None
-
-
-def parse_known_bad_keys(text: str, *, source: str = "<string>") -> tuple[bytes, ...]:
-    """Parse the contents of a known-bad-keys blocklist file.
-
-    Pure: performs no I/O. One base64-encoded 32-byte key per line;
-    everything from the first ``#`` to end of line is a comment; blank
-    lines are ignored.
-
-    Args:
-        text: The file contents to parse.
-        source: Identifies the file for error messages (never the
-            offending token itself).
-
-    Returns:
-        The decoded keys, deduplicated preserving first-seen order.
-
-    Raises:
-        KeyMaterialError: If any non-comment, non-blank line fails to
-            decode to exactly 32 bytes of canonical base64.
-    """
-    seen: dict[bytes, None] = {}
-    for lineno, raw_line in enumerate(text.splitlines(), start=1):
-        line = raw_line.split("#", 1)[0].strip()
-        if not line:
-            continue
-        raw = keys.decode_key(line, field=f"{source}:{lineno}")
-        seen.setdefault(raw, None)
-    return tuple(seen)
-
-
-def load_known_bad_keys(
-    path: Path | None = None, *, db_path: Path | None = None
-) -> frozenset[bytes]:
-    """Load the effective known-bad-keys blocklist.
-
-    Always includes :data:`SMALL_ORDER_POINTS`, whether or not an
-    on-disk file is present -- absence of the file is a supported,
-    non-error condition. Results are cached in a module-private dict
-    keyed by ``(path, mtime_ns, size)``, so repeated audits do not
-    re-read the file, but a rewritten file is picked up on the next call.
-
-    Args:
-        path: An explicit blocklist path. When ``None``, resolved via
-            :func:`default_known_bad_keys_path`.
-        db_path: The configured database path, passed through to
-            :func:`default_known_bad_keys_path` when ``path`` is
-            ``None``, so an installed ``mesh`` run finds a blocklist
-            file next to its database regardless of the current
-            working directory. Ignored when ``path`` is given.
-
-    Returns:
-        The union of :data:`SMALL_ORDER_POINTS` and everything parsed
-        from the resolved file (or just :data:`SMALL_ORDER_POINTS` if no
-        file was found).
-
-    Raises:
-        KeyMaterialError: If the resolved file exists but cannot be read,
-            or contains a malformed entry (via :func:`parse_known_bad_keys`).
-        SettingsError: If :data:`KNOWN_BAD_KEYS_ENV` is set to a path that
-            does not exist (propagated from :func:`default_known_bad_keys_path`).
-    """
-    resolved = path if path is not None else default_known_bad_keys_path(db_path=db_path)
-    if resolved is None or not resolved.exists():
-        searched = ", ".join(str(c) for c in _known_bad_keys_candidates(db_path=db_path))
-        _logger.info(
-            "no known_bad_keys.txt found (looked in: %s); using only the %d built-in "
-            "small-order points; set %s to use a custom blocklist",
-            searched,
-            len(SMALL_ORDER_POINTS),
-            KNOWN_BAD_KEYS_ENV,
-        )
-        return frozenset(SMALL_ORDER_POINTS)
-
-    try:
-        stat = resolved.stat()
-    except OSError as exc:
-        raise KeyMaterialError(
-            f"blocklist file could not be read: {resolved}",
-            reason="blocklist file could not be read",
-        ) from exc
-
-    cache_key = (resolved, stat.st_mtime_ns, stat.st_size)
-    cached = _blocklist_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    try:
-        text = resolved.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise KeyMaterialError(
-            f"blocklist file could not be read: {resolved}",
-            reason="blocklist file could not be read",
-        ) from exc
-
-    parsed = parse_known_bad_keys(text, source=str(resolved))
-    result = frozenset(parsed) | frozenset(SMALL_ORDER_POINTS)
-    _blocklist_cache[cache_key] = result
-    return result
-
-
 def is_all_zero(raw: bytes) -> bool:
     """Check whether every byte of ``raw`` is zero.
 
@@ -646,8 +397,9 @@ def is_small_order(public: bytes) -> bool:
 
     Returns:
         ``True`` if ``public`` matches any entry in
-        :data:`SMALL_ORDER_POINTS`. Always ``False`` for a length other
-        than :data:`meshprovision.crypto.keys.X25519_KEY_SIZE`.
+        :data:`~meshprovision.crypto.known_bad_keys.SMALL_ORDER_POINTS`.
+        Always ``False`` for a length other than
+        :data:`meshprovision.crypto.keys.X25519_KEY_SIZE`.
     """
     if len(public) != keys.X25519_KEY_SIZE:
         return False
@@ -878,7 +630,7 @@ def audit_public_key(
         node_id: Affected node id, in display form, when known.
         key_ref: Affected key reference in the ``Keys`` sheet, when known.
         known_bad: The blocklist to check against. When ``None``, loaded
-            via :func:`load_known_bad_keys`.
+            via :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`.
 
     Returns:
         The audit result, with findings sorted critical-first.
@@ -946,7 +698,7 @@ def audit_private_key(
         node_id: Affected node id, in display form, when known.
         key_ref: Affected key reference in the ``Keys`` sheet, when known.
         known_bad: The blocklist to check against. When ``None``, loaded
-            via :func:`load_known_bad_keys`.
+            via :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`.
         check_clamping: Whether to also check X25519 clamping. Defaults
             to ``False`` because an unclamped private key is normal for
             some backends (see the module docstring); when ``True``, an
@@ -1039,8 +791,9 @@ def audit_keypair(
         node_id: Affected node id, in display form, when known.
         key_ref: Affected key reference in the ``Keys`` sheet, when known.
         known_bad: The blocklist to check against. When ``None``, loaded
-            once via :func:`load_known_bad_keys` and shared between the
-            private and public sub-audits.
+            once via
+            :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`
+            and shared between the private and public sub-audits.
         check_clamping: Passed through to :func:`audit_private_key`.
 
     Returns:
@@ -1148,7 +901,7 @@ def audit_node(
             ``observed-*`` ref, and the node's own ref, so the mapping
             ``audit_node_key`` supplies here is always alias-safe.
         known_bad: An explicit blocklist. When ``None``, loaded once via
-            :func:`load_known_bad_keys`.
+            :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`.
         check_clamping: Passed through to the private-key audit path.
 
     Returns:

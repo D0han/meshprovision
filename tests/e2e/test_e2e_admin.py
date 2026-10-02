@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from meshprovision.crypto import redact, weakkeys
+from meshprovision.crypto import known_bad_keys, redact
 from meshprovision.crypto.keys import encode_key, generate_keypair
 from meshprovision.db import ods
 from meshprovision.db.keys import KeyRecord
@@ -1039,7 +1039,7 @@ def test_admin_import_dry_run_still_refuses_a_weak_key(
     the whole point is showing the operator what --allow-weak would
     actually need to override.
     """
-    bad_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[0]).decode("ascii")
+    bad_b64 = base64.b64encode(known_bad_keys.SMALL_ORDER_POINTS[0]).decode("ascii")
 
     result = invoke(runner, ["admin", "import", f"ADMIN9={bad_b64}", "--dry-run"], env)
 
@@ -1156,7 +1156,7 @@ def test_admin_import_allow_alias_does_not_suppress_the_weak_key_audit(
     first = invoke(runner, ["admin", "import", f"ADMIN9={kp.public_b64}"], env)
     assert first.exit_code == 0
 
-    bad_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[1]).decode("ascii")
+    bad_b64 = base64.b64encode(known_bad_keys.SMALL_ORDER_POINTS[1]).decode("ascii")
     result = invoke(
         runner,
         [
@@ -1202,7 +1202,7 @@ def test_provision_refuses_to_authorize_a_seeded_small_order_admin_key(
             KeyRecord.from_material(
                 "ADMIN9",
                 KeyType.ADMIN_PUBLIC,
-                weakkeys.SMALL_ORDER_POINTS[2],
+                known_bad_keys.SMALL_ORDER_POINTS[2],
                 origin=KeyOrigin.IMPORTED,
             )
         ]
@@ -1257,7 +1257,7 @@ def test_admin_import_allow_weak_still_refuses_a_small_order_key(
     runner: CliRunner, env: dict[str, str]
 ) -> None:
     """S4/D4: --allow-weak never authorizes a SMALL_ORDER (or ALL_ZERO) finding."""
-    small_order_b64 = base64.b64encode(weakkeys.SMALL_ORDER_POINTS[2]).decode("ascii")
+    small_order_b64 = base64.b64encode(known_bad_keys.SMALL_ORDER_POINTS[2]).decode("ascii")
     result = invoke(runner, ["admin", "import", f"ADMIN9={small_order_b64}", "--allow-weak"], env)
 
     assert result.exit_code == ExitCode.CRYPTO
@@ -1457,7 +1457,7 @@ def test_admin_list_table_shows_the_weak_key_audit_result(
             KeyRecord.from_material(
                 "ADMIN_BAD",
                 KeyType.ADMIN_PUBLIC,
-                weakkeys.SMALL_ORDER_POINTS[1],
+                known_bad_keys.SMALL_ORDER_POINTS[1],
                 origin=KeyOrigin.IMPORTED,
             )
         ]

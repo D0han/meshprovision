@@ -73,7 +73,7 @@ _EXAMPLES_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "examples"
 sdist, or editable checkout) because it lives inside the package itself,
 unlike ``data/nodes_db.example.ods`` or ``data/known_bad_keys.txt``,
 which stay outside ``src/`` and need their own resolution (see
-:func:`meshprovision.crypto.weakkeys.default_known_bad_keys_path`)."""
+:func:`meshprovision.crypto.known_bad_keys.default_known_bad_keys_path`)."""
 
 _CONTACT_LINE_RE: Final[re.Pattern[str]] = re.compile(
     r"^MESHPROVISION_CONTACT[ \t]*=.*$", re.MULTILINE

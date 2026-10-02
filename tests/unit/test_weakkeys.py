@@ -10,20 +10,24 @@ import pytest
 
 from meshprovision.crypto import weakkeys
 from meshprovision.crypto.keys import KeyPair, generate_keypair
-from meshprovision.crypto.weakkeys import (
+from meshprovision.crypto.known_bad_keys import (
     KNOWN_BAD_KEYS_ENV,
+    SMALL_ORDER_POINTS,
+    _known_bad_keys_candidates,
+    default_known_bad_keys_path,
+    load_known_bad_keys,
+    parse_known_bad_keys,
+)
+from meshprovision.crypto.weakkeys import (
     LOW_HAMMING_MAX,
     LOW_HAMMING_MIN,
     MIN_DISTINCT_BYTES,
     NON_OVERRIDABLE_CHECKS,
-    SMALL_ORDER_POINTS,
     WeakKeyCheck,
-    _known_bad_keys_candidates,
     audit_keypair,
     audit_node,
     audit_private_key,
     audit_public_key,
-    default_known_bad_keys_path,
     find_duplicate_public_keys,
     hamming_weight,
     is_low_entropy,
@@ -31,9 +35,7 @@ from meshprovision.crypto.weakkeys import (
     is_repeated_byte,
     is_small_order,
     is_vulnerable_firmware,
-    load_known_bad_keys,
     parse_firmware_version,
-    parse_known_bad_keys,
 )
 from meshprovision.errors import KeyMaterialError, SettingsError
 
@@ -730,9 +732,9 @@ def test_default_known_bad_keys_path_env_existing_file_wins(
 
 def _candidate_paths() -> tuple[Path, Path | None, Path]:
     """The three non-env candidates default_known_bad_keys_path tries, in order."""
-    import meshprovision.crypto.weakkeys as weakkeys_module
+    import meshprovision.crypto.known_bad_keys as known_bad_keys_module
 
-    module_parents = Path(weakkeys_module.__file__).resolve().parents
+    module_parents = Path(known_bad_keys_module.__file__).resolve().parents
     package_root = module_parents[1]
     repo_root_candidate = module_parents[3] if len(module_parents) > 3 else None
     return (
@@ -876,7 +878,7 @@ def test_load_known_bad_keys_absence_logs_at_info_with_searched_paths(
 
     monkeypatch.setattr(Path, "exists", fake_exists)
 
-    with caplog.at_level(logging.INFO, logger="meshprovision.crypto.weakkeys"):
+    with caplog.at_level(logging.INFO, logger="meshprovision.crypto.known_bad_keys"):
         result = load_known_bad_keys()
 
     assert result == frozenset(SMALL_ORDER_POINTS)

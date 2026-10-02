@@ -48,7 +48,7 @@ def _ensure_package_importable() -> None:
 _ensure_package_importable()
 
 from meshprovision.crypto import keys as crypto_keys  # noqa: E402
-from meshprovision.crypto import weakkeys  # noqa: E402
+from meshprovision.crypto import known_bad_keys  # noqa: E402
 from meshprovision.db import locking  # noqa: E402
 from meshprovision.errors import KeyMaterialError, MeshprovisionError  # noqa: E402
 
@@ -118,12 +118,12 @@ def _resolve_target(target: Path | None) -> Path:
 
     Returns:
         ``target`` if given; otherwise
-        :func:`meshprovision.crypto.weakkeys.default_known_bad_keys_path`;
+        :func:`meshprovision.crypto.known_bad_keys.default_known_bad_keys_path`;
         otherwise ``<repo root>/data/known_bad_keys.txt``.
     """
     if target is not None:
         return target
-    default = weakkeys.default_known_bad_keys_path()
+    default = known_bad_keys.default_known_bad_keys_path()
     if default is not None:
         return default
     repo_root = Path(__file__).resolve().parents[1]
@@ -282,7 +282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise MeshprovisionError(f"could not create directory for: {target}") from exc
         with locking.exclusive_lock(target):
             existing_text = target.read_text(encoding="utf-8") if target.exists() else ""
-            existing = set(weakkeys.parse_known_bad_keys(existing_text, source=str(target)))
+            existing = set(known_bad_keys.parse_known_bad_keys(existing_text, source=str(target)))
 
             new_keys = [raw for raw in decoded if raw not in existing]
             already_present = len(decoded) - len(new_keys)

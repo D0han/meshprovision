@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from meshprovision.crypto import weakkeys
+from meshprovision.crypto import known_bad_keys, weakkeys
 from meshprovision.crypto.keys import KeyPair
 from meshprovision.db import ods, ods_write, pending_keys
 from meshprovision.db.keys import KeyRecord
@@ -1170,7 +1170,7 @@ def test_revoked_live_admin_key_is_dropped_from_the_record(
 ) -> None:
     kp = keypair_factory()
     admin2_kp = keypair_factory()
-    weak_public = weakkeys.SMALL_ORDER_POINTS[3]
+    weak_public = known_bad_keys.SMALL_ORDER_POINTS[3]
     node_record = NodeRecord(
         node_id="deadbe01",
         short_name="MT07",

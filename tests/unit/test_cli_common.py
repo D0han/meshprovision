@@ -500,7 +500,7 @@ class TestCliContextKnownBadKeys:
     ) -> None:
         """The DB-sibling candidate is used even when run from an unrelated cwd."""
         from meshprovision.crypto.keys import generate_keypair
-        from meshprovision.crypto.weakkeys import KNOWN_BAD_KEYS_ENV
+        from meshprovision.crypto.known_bad_keys import KNOWN_BAD_KEYS_ENV
 
         monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
         project = tmp_path / "project" / "data"
@@ -522,7 +522,7 @@ class TestCliContextKnownBadKeys:
     def test_still_includes_the_built_in_small_order_points_when_no_file_is_found(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
-        from meshprovision.crypto.weakkeys import KNOWN_BAD_KEYS_ENV, SMALL_ORDER_POINTS
+        from meshprovision.crypto.known_bad_keys import KNOWN_BAD_KEYS_ENV, SMALL_ORDER_POINTS
 
         monkeypatch.delenv(KNOWN_BAD_KEYS_ENV, raising=False)
         db_path = tmp_path / "nowhere" / "nodes_db.ods"  # no sibling file exists

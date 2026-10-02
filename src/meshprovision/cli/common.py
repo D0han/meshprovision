@@ -41,7 +41,7 @@ from rich.console import Console
 
 from meshprovision.config import template as template_module
 from meshprovision.config.settings import Settings, load_settings
-from meshprovision.crypto import redact, weakkeys
+from meshprovision.crypto import known_bad_keys, redact
 from meshprovision.errors import (
     AmbiguousDeviceError,
     AtomicWriteError,
@@ -607,18 +607,18 @@ class CliContext:
         """Load the effective known-bad-keys blocklist for this run.
 
         Passes :attr:`settings`'s ``db_path`` through to
-        :func:`~meshprovision.crypto.weakkeys.load_known_bad_keys`, so an
-        installed ``mesh`` run finds an operator-maintained blocklist
-        file next to the database it was pointed at
+        :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`,
+        so an installed ``mesh`` run finds an operator-maintained
+        blocklist file next to the database it was pointed at
         (``--db-path``/``MESHPROVISION_DB_PATH``), regardless of the
         current working directory. The single call site every ``mesh``
         subcommand should use instead of calling
-        :func:`~meshprovision.crypto.weakkeys.load_known_bad_keys`
+        :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`
         directly.
 
         Returns:
             The effective blocklist; see
-            :func:`~meshprovision.crypto.weakkeys.load_known_bad_keys`.
+            :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`.
 
         Raises:
             KeyMaterialError: If the resolved file exists but could not
@@ -626,7 +626,7 @@ class CliContext:
             SettingsError: If ``MESHPROVISION_KNOWN_BAD_KEYS`` is set to
                 a path that does not exist.
         """
-        return weakkeys.load_known_bad_keys(db_path=self.settings.db_path)
+        return known_bad_keys.load_known_bad_keys(db_path=self.settings.db_path)
 
     def _warn_if_libreoffice_lock_marker_present(self, path: Path) -> None:
         """Warn if LibreOffice's own lock-marker file is present next to ``path``.
