@@ -13,6 +13,7 @@ import httpx
 import pytest
 import respx
 
+from meshprovision.cache import http as http_module
 from meshprovision.cache.http import (
     DEFAULT_BACKOFF_BASE,
     DEFAULT_BACKOFF_MAX,
@@ -404,6 +405,70 @@ def test_too_many_redirects_raises_http_error_without_retry(tmp_path: Path) -> N
     assert client.stats.network_requests == 1
     assert route.call_count > 1  # httpx itself follows the loop before giving up.
     assert "redirecting in a loop" in (exc_info.value.hint or "")
+
+
+_DOWNGRADE_LOCATION = "http://evil.invalid/data.json?token=secret"
+
+
+@respx.mock
+def test_https_to_http_redirect_is_refused_without_retry_or_cache(tmp_path: Path) -> None:
+    """An https -> http redirect must never be sent, retried, or cached."""
+    respx.get(URL).mock(return_value=httpx.Response(302, headers={"Location": _DOWNGRADE_LOCATION}))
+    downgraded = respx.route(host="evil.invalid").mock(
+        return_value=httpx.Response(200, json={"a": 1})
+    )
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    with pytest.raises(HttpError) as exc_info:
+        client.get(URL)
+    assert isinstance(exc_info.value.__cause__, http_module._InsecureRedirectError)
+    assert downgraded.call_count == 0
+    assert client.stats.retries == 0
+    assert client.stats.network_requests == 1
+    assert list((tmp_path / "cache").rglob("*.json")) == []
+
+
+@respx.mock
+def test_https_downgrade_hint_names_target_without_query(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(301, headers={"Location": _DOWNGRADE_LOCATION}))
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    with pytest.raises(HttpError) as exc_info:
+        client.get(URL)
+    hint = exc_info.value.hint or ""
+    assert "redirected to http://evil.invalid/data.json, which would drop HTTPS" in hint
+    assert "secret" not in hint
+    assert "secret" not in str(exc_info.value)
+
+
+@respx.mock
+def test_relative_same_host_redirect_is_followed(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(301, headers={"Location": "/moved.json"}))
+    moved = respx.get("https://example.invalid/moved.json").mock(
+        return_value=httpx.Response(200, json={"a": 1})
+    )
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    assert client.get(URL).json() == {"a": 1}
+    assert moved.call_count == 1
+
+
+@respx.mock
+def test_cross_host_https_redirect_is_followed(tmp_path: Path) -> None:
+    respx.get(URL).mock(
+        return_value=httpx.Response(302, headers={"Location": "https://cdn.example.invalid/d.json"})
+    )
+    cdn = respx.get("https://cdn.example.invalid/d.json").mock(
+        return_value=httpx.Response(200, json={"a": 1})
+    )
+    now = [0.0]
+    client = _make_client(tmp_path, now=now)
+
+    assert client.get(URL).json() == {"a": 1}
+    assert cdn.call_count == 1
 
 
 class _RawByteStream(httpx.SyncByteStream):

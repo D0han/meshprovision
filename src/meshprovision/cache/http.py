@@ -9,7 +9,10 @@ a disk-backed response cache keyed by method + URL + sorted params.
 
 TLS verification is an invariant of this class, not an option: there is
 deliberately no ``verify`` constructor parameter. The internal
-``httpx.Client`` is always built with ``verify=True``.
+``httpx.Client`` is always built with ``verify=True``, and it refuses to
+follow a redirect from an ``https`` URL to a non-``https`` one (which
+would send the operator-contact ``User-Agent`` in cleartext and cache an
+unauthenticated body for the full TTL).
 
 **TTL precedence.** This module does not know about
 :class:`meshprovision.config.settings.Settings` -- the ``cache`` group is
@@ -143,6 +146,55 @@ _HTTP_CLIENT_ERROR_MIN: Final[int] = 400
 _HTTP_CLIENT_ERROR_MAX: Final[int] = 500
 _HTTP_SUCCESS_MIN: Final[int] = 200
 _HTTP_SUCCESS_MAX: Final[int] = 300
+
+
+class _InsecureRedirectError(httpx.RequestError):
+    """A redirect from an ``https`` URL to a non-``https`` one was refused.
+
+    A :class:`httpx.RequestError` (not a ``TransportError``) so that
+    :meth:`CachedHTTPClient._fetch_with_retry` treats it like a redirect
+    loop: deterministic, never retried, wrapped as :class:`HttpError`.
+    """
+
+    def __init__(self, target: str, *, request: httpx.Request) -> None:
+        """Initialize the error.
+
+        Args:
+            target: The refused redirect target, without its query string.
+            request: The ``https`` request whose response redirected.
+        """
+        super().__init__(
+            f"refused to follow a redirect from HTTPS to non-HTTPS URL {target}",
+            request=request,
+        )
+        self.target = target
+
+
+def _refuse_insecure_redirect(response: httpx.Response) -> None:
+    """``httpx`` response hook: refuse any ``https`` -> non-``https`` redirect.
+
+    Runs on every response, before ``httpx`` builds the next request of a
+    redirect chain, so the downgraded request is never sent. A redirect
+    between two ``https`` URLs (same host or not) is followed as usual,
+    as is a ``Location`` that ``httpx`` itself cannot parse (left for
+    ``httpx`` to report).
+
+    Args:
+        response: The response just received.
+
+    Raises:
+        _InsecureRedirectError: If ``response`` redirects from an ``https``
+            URL to a non-``https`` one.
+    """
+    if not response.has_redirect_location:
+        return
+    source = response.request.url
+    try:
+        target = source.join(response.headers["location"])
+    except httpx.InvalidURL:
+        return
+    if source.scheme == "https" and target.scheme != "https":
+        raise _InsecureRedirectError(str(target.copy_with(query=None)), request=response.request)
 
 
 def _param_pairs(
@@ -496,6 +548,12 @@ class CachedHTTPClient:
       ``verify=True``, ``follow_redirects=True``, and an explicit
       ``httpx.Timeout``. This is an invariant of the class, not an
       option.
+    - **No HTTPS downgrade on redirect.** The internal ``httpx.Client``
+      follows redirects, but a response hook refuses one from an
+      ``https`` URL to a non-``https`` URL before it is sent; the call
+      fails with :class:`HttpError` (not retried, nothing cached).
+      An externally supplied ``client`` gets no such hook -- its
+      redirect policy is the caller's responsibility.
     - **A required, non-empty User-Agent.** ``user_agent`` embeds the
       operator's contact string that lorastats.pl requires; a blank
       value raises :class:`MissingContactError` before any request can
@@ -554,7 +612,8 @@ class CachedHTTPClient:
             client: An existing ``httpx.Client`` to use instead of
                 constructing one. When supplied, this instance does not
                 own it and :meth:`close` will not close it. Intended for
-                tests (``respx``-mocked clients).
+                tests (``respx``-mocked clients). It is used as-is: the
+                HTTPS-downgrade redirect refusal is not added to it.
             sleep: Callable used to wait between retries. Overridable for
                 deterministic tests.
             clock: Callable returning the current unix epoch seconds.
@@ -586,6 +645,7 @@ class CachedHTTPClient:
             follow_redirects=True,
             verify=True,
             headers={"User-Agent": user_agent, "Accept": "application/json"},
+            event_hooks={"response": [_refuse_insecure_redirect]},
         )
 
     @property
@@ -935,9 +995,9 @@ class CachedHTTPClient:
 
         Raises:
             HttpError: On a non-retryable failure (including a
-                ``TooManyRedirects`` redirect loop or an undecodable
-                response body), or after exhausting retries on a
-                retryable transport error.
+                ``TooManyRedirects`` redirect loop, a refused HTTPS ->
+                non-HTTPS redirect, or an undecodable response body), or
+                after exhausting retries on a retryable transport error.
             RateLimitError: If the server responds with HTTP 429 (never
                 retried automatically).
         """
@@ -969,10 +1029,11 @@ class CachedHTTPClient:
                 self._backoff(attempt, url=url)
                 continue
             except httpx.RequestError as exc:
-                # Deterministic for a given server state (a redirect loop, an
-                # undecodable body), unlike `TransportError` above -- so this is
-                # not retried. Must stay after the `TransportError` arm, since
-                # `TransportError` is itself a `RequestError` subclass.
+                # Deterministic for a given server state (a redirect loop, a
+                # refused HTTPS downgrade, an undecodable body), unlike
+                # `TransportError` above -- so this is not retried. Must stay
+                # after the `TransportError` arm, since `TransportError` is
+                # itself a `RequestError` subclass.
                 hint = None
                 if isinstance(exc, httpx.TooManyRedirects):
                     last_url = None
@@ -983,6 +1044,11 @@ class CachedHTTPClient:
                         last_url = _display_url(str(exc.request.url.copy_with(query=None)), None)
                     hint = "the server (or a proxy/captive portal) is redirecting in a loop" + (
                         f" (last URL: {last_url})" if last_url else ""
+                    )
+                elif isinstance(exc, _InsecureRedirectError):
+                    hint = (
+                        f"the server (or a proxy/captive portal) redirected to {exc.target}, "
+                        "which would drop HTTPS; check the URL and your network"
                     )
                 raise HttpError(
                     f"Request to {url} failed: {exc}", url=url, source=source, hint=hint

@@ -675,6 +675,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The HTTP client no longer follows a redirect from an `https` URL to a
+  plain-`http` one. Following it sent the request -- including the
+  `User-Agent` carrying the operator's `MESHPROVISION_CONTACT` -- in
+  cleartext, and cached the unauthenticated response body for the full
+  cache TTL. Such a redirect now fails that source's fetch with an error
+  naming the refused target (it is not retried and nothing is cached);
+  `https` -> `https` redirects, including to another host, are still
+  followed.
 - **`mesh status`'s rendered table and `mesh admin list`'s table no longer
   interpret a device-reported name as Rich markup.** A name sourced from a
   third-party aggregator (loranet.pl/lorastats.pl) could embed markup like
