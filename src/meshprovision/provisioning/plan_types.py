@@ -526,9 +526,10 @@ class ChangePlan:
         """Render this plan as ready-to-print ``--dry-run`` lines.
 
         Returns:
-            One already-redacted line per name change, per field change,
-            and per key-plan decision. Never renders raw key material or
-            a raw BLE PIN.
+            One already-redacted line per owner-phase change (``short_name``,
+            ``long_name``, ``is_unmessagable``), per field change, and per
+            key-plan decision. Never renders raw key material or a raw BLE
+            PIN.
         """
         lines: list[str] = []
         if self.name_change.short_changed:
@@ -540,6 +541,11 @@ class ChangePlan:
             lines.append(
                 f"owner.long_name: {self.name_change.current_long_name!r} -> "
                 f"{self.name_change.desired_long_name!r}"
+            )
+        if self.name_change.is_unmessagable_changed:
+            lines.append(
+                f"owner.is_unmessagable: {self.name_change.current_is_unmessagable!r} -> "
+                f"{self.name_change.desired_is_unmessagable!r}"
             )
         for section in self.sections:
             for change in section.changes:
@@ -573,7 +579,11 @@ class ChangePlan:
         """Render a one-line summary of this plan.
 
         Returns:
-            For example ``"3 sections, 7 fields, keys: regenerate, admin: 2"``.
+            For example ``"3 sections, 7 fields, owner: 1 field, keys:
+            regenerate, admin: 2"``. The ``owner`` part counts the
+            owner-phase changes (``short_name``/``long_name``/
+            ``is_unmessagable``), which live outside :attr:`sections`, and
+            is omitted when there are none.
         """
         section_count = len(self.sections)
         field_count = sum(len(section.changes) for section in self.sections)
@@ -581,6 +591,15 @@ class ChangePlan:
             f"{section_count} section{'s' if section_count != 1 else ''}",
             f"{field_count} field{'s' if field_count != 1 else ''}",
         ]
+        owner_count = sum(
+            (
+                self.name_change.short_changed,
+                self.name_change.long_changed,
+                self.name_change.is_unmessagable_changed,
+            )
+        )
+        if owner_count:
+            parts.append(f"owner: {owner_count} field{'s' if owner_count != 1 else ''}")
         key_bits: list[str] = []
         if self.key_plan.regenerate:
             key_bits.append("regenerate")
@@ -608,6 +627,8 @@ class ChangePlan:
                 "desired_short_name": self.name_change.desired_short_name,
                 "current_long_name": self.name_change.current_long_name,
                 "desired_long_name": self.name_change.desired_long_name,
+                "current_is_unmessagable": self.name_change.current_is_unmessagable,
+                "desired_is_unmessagable": self.name_change.desired_is_unmessagable,
             },
             "sections": [
                 {

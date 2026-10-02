@@ -187,7 +187,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no section of its own -- it slots into the existing name-write (owner)
   phase instead, verified alongside `short_name`/`long_name`. Omitted or
   `null` (the default) leaves the device's current value untouched; there
-  is no CLI override, unlike the names.
+  is no CLI override, unlike the names. A planned change is previewed like
+  the names: an `owner.is_unmessagable: <current> -> <desired>` line in
+  `mesh provision --dry-run`, `current_is_unmessagable`/
+  `desired_is_unmessagable` under `name_change` in the `--json` plan, and
+  an `owner: N field(s)` count (names included) in the plan summary.
 - The `meshtastic` dependency now pins to a specific commit
   (`be366660828b5a54469e703209a10aa954927791`) on `meshtastic/python`'s
   unreleased `master` branch instead of the PyPI release (`>=2.7.11`,

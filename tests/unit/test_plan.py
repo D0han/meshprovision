@@ -17,6 +17,7 @@ from meshprovision.errors import (
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan import (
     SECTION_ORDER,
+    ChangePlan,
     FieldChange,
     PlanInputs,
     build_plan,
@@ -212,6 +213,66 @@ def test_is_licensed_always_echoed_from_live_with_no_template_control(make_live,
 
     assert plan.name_change.current_is_licensed is True
     assert plan.name_change.desired_is_licensed is True
+
+
+def _is_unmessagable_only_plan(make_live, template, keypair) -> ChangePlan:
+    """Build a PROVISIONED plan whose only change is ``is_unmessagable`` False -> True."""
+    live = make_live(template, is_unmessagable=False, security=make_security(keypair=keypair))
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live,
+        template=template.model_copy(update={"is_unmessagable": True}),
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        admin_keys=(),
+        db_public_key=keypair.public,
+    )
+    return build_plan(inputs)
+
+
+def test_is_unmessagable_only_plan_is_previewed_in_describe_and_summary(
+    make_live, template, keypair
+) -> None:
+    """A flag-only owner change is non-empty, so ``--dry-run`` must show it.
+
+    Previously ``describe()`` was empty and ``summary()`` read "0 sections,
+    0 fields" for a plan that still issues ``setOwner`` and reboots.
+    """
+    plan = _is_unmessagable_only_plan(make_live, template, keypair)
+
+    assert plan.is_empty is False
+    assert plan.sections == ()
+    assert plan.describe() == ("owner.is_unmessagable: False -> True",)
+    assert plan.summary() == "0 sections, 0 fields, owner: 1 field"
+
+
+def test_is_unmessagable_change_is_in_the_json_plan(make_live, template, keypair) -> None:
+    plan = _is_unmessagable_only_plan(make_live, template, keypair)
+
+    name_change = plan.to_json_dict()["name_change"]
+
+    assert isinstance(name_change, dict)
+    assert name_change["current_is_unmessagable"] is False
+    assert name_change["desired_is_unmessagable"] is True
+
+
+def test_summary_owner_count_includes_name_changes(make_live, template, keypair) -> None:
+    """Names and the flag share the owner phase, so one count covers all three."""
+    live = make_live(template, is_unmessagable=False, security=make_security(keypair=keypair))
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live,
+        template=template.model_copy(update={"is_unmessagable": True}),
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        admin_keys=(),
+        db_public_key=keypair.public,
+        desired_short_name="MT99",
+    )
+
+    plan = build_plan(inputs)
+
+    assert plan.summary() == "0 sections, 0 fields, owner: 2 fields"
 
 
 # ---------------------------------------------------------------------------
