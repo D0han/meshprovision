@@ -207,7 +207,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A discovered `.env` is no longer refused for being group-writable when
   its group is the user's primary group (the default permissions under
   umask 002 on most distros). World-writable files, foreign-group
-  group-writable files, and files owned by another user are still refused.
+  group-writable files, files owned by another user, and anything that is
+  not a regular file are still refused; a symlinked `.env` is judged by
+  the file it points to. The check runs against the same open file that
+  is then parsed, so the file can't be swapped between check and read,
+  and the error lists each problem with the `chmod`/`chown` command that
+  fixes it.
 - The `Nodes`/`Keys` sheets are now always sorted -- on load, on every
   in-memory mutation, and on write -- instead of preserving insertion/
   hand-editing order. `Nodes` sorts by `long_name` (falling back to

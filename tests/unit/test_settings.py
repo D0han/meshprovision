@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import errno
 import os
+import shlex
+import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from meshprovision.config import settings as settings_module
 from meshprovision.config.settings import (
     APP_NAME,
     DEFAULT_CACHE_TTL,
@@ -22,6 +26,9 @@ from meshprovision.errors import MissingContactError, SettingsError
 pytestmark = pytest.mark.unit
 
 _CONTENT = "MESHPROVISION_CONTACT=me@example.invalid\n"
+_FALLBACK_HINT = (
+    ", or pass the file explicitly with --env-file instead of relying on upward search."
+)
 
 
 @pytest.fixture
@@ -31,6 +38,9 @@ def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[
     The mode is set with chmod (umask-independent) and ``os.getuid``/``os.getgid``
     are patched relative to the file's REAL ``st_uid``/``st_gid``, so the outcome
     is the same whatever user, primary group, umask or setgid tmp dir runs it.
+
+    With ``symlink=True`` the content, mode and identity anchor all apply to
+    ``tmp_path/real.env`` and ``.env`` is a symlink to it.
     """
     monkeypatch.chdir(tmp_path)
 
@@ -40,11 +50,15 @@ def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[
         own_uid: bool = True,
         primary_gid: bool = True,
         content: str = _CONTENT,
+        symlink: bool = False,
     ) -> Path:
         path = tmp_path / ".env"
-        path.write_text(content)
-        path.chmod(mode)
-        st = path.stat()
+        target = tmp_path / "real.env" if symlink else path
+        target.write_text(content)
+        target.chmod(mode)
+        if symlink:
+            path.symlink_to(target)
+        st = target.stat()
         uid = st.st_uid if own_uid else st.st_uid + 1
         gid = st.st_gid if primary_gid else st.st_gid + 1
         monkeypatch.setattr(os, "getuid", lambda: uid)
@@ -234,18 +248,36 @@ def test_find_env_file_does_not_walk_above_home(
     assert find_env_file(nested) is None
 
 
+def _expected_hint(path: Path, *fixes: str) -> str:
+    quoted = shlex.quote(str(path))
+    return "Fix it with `" + " && ".join(f"{fix} {quoted}" for fix in fixes) + "`" + _FALLBACK_HINT
+
+
 @pytest.mark.parametrize(
-    ("mode", "own_uid", "primary_gid", "accepted"),
+    ("mode", "own_uid", "primary_gid", "fixes"),
     [
-        pytest.param(0o600, True, True, True, id="600-owner-primary-accepted"),
-        pytest.param(0o644, True, True, True, id="644-owner-primary-accepted"),
-        pytest.param(0o664, True, True, True, id="664-owner-primary-group-write-accepted"),
-        pytest.param(0o664, True, False, False, id="664-owner-foreign-group-write-refused"),
-        pytest.param(0o646, True, True, False, id="646-owner-primary-world-write-refused"),
-        pytest.param(0o646, True, False, False, id="646-owner-foreign-world-write-refused"),
-        pytest.param(0o666, True, True, False, id="666-owner-primary-world-group-write-refused"),
-        pytest.param(0o600, False, True, False, id="600-other-owner-primary-refused"),
-        pytest.param(0o600, False, False, False, id="600-other-owner-foreign-refused"),
+        pytest.param(0o600, True, True, (), id="600-owner-primary-accepted"),
+        pytest.param(0o644, True, True, (), id="644-owner-primary-accepted"),
+        pytest.param(0o664, True, True, (), id="664-owner-primary-group-write-accepted"),
+        pytest.param(
+            0o664, True, False, ("chmod g-w",), id="664-owner-foreign-group-write-refused"
+        ),
+        pytest.param(0o646, True, True, ("chmod o-w",), id="646-owner-primary-world-write-refused"),
+        pytest.param(
+            0o646, True, False, ("chmod o-w",), id="646-owner-foreign-world-write-refused"
+        ),
+        pytest.param(
+            0o666, True, True, ("chmod o-w",), id="666-owner-primary-world-group-write-refused"
+        ),
+        pytest.param(
+            0o666,
+            True,
+            False,
+            ("chmod o-w", "chmod g-w"),
+            id="666-owner-foreign-world-group-write-refused",
+        ),
+        pytest.param(0o600, False, True, ('chown "$USER"',), id="600-other-owner-primary-refused"),
+        pytest.param(0o600, False, False, ('chown "$USER"',), id="600-other-owner-foreign-refused"),
     ],
 )
 def test_discovered_env_trust_matrix(
@@ -253,14 +285,114 @@ def test_discovered_env_trust_matrix(
     mode: int,
     own_uid: bool,
     primary_gid: bool,
-    accepted: bool,
+    fixes: tuple[str, ...],
 ) -> None:
-    discovered_env(mode, own_uid=own_uid, primary_gid=primary_gid)
-    if accepted:
+    path = discovered_env(mode, own_uid=own_uid, primary_gid=primary_gid)
+    if not fixes:
         assert load_settings(environ={}).contact == "me@example.invalid"
     else:
-        with pytest.raises(SettingsError):
+        with pytest.raises(SettingsError) as exc_info:
             load_settings(environ={})
+        assert str(exc_info.value).startswith(f"Refusing to load discovered .env file {path}: ")
+        assert exc_info.value.hint == _expected_hint(path, *fixes)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="runs the hint's chmod through sh")
+@pytest.mark.parametrize(
+    ("mode", "primary_gid"),
+    [
+        pytest.param(0o664, False, id="664-foreign-group"),
+        pytest.param(0o646, True, id="646-world"),
+        pytest.param(0o666, True, id="666-primary-world"),
+        pytest.param(0o666, False, id="666-foreign-world-and-group"),
+    ],
+)
+def test_discovered_env_refusal_hint_command_makes_it_loadable(
+    discovered_env: Callable[..., Path], mode: int, primary_gid: bool
+) -> None:
+    discovered_env(mode, primary_gid=primary_gid)
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={})
+    command = (exc_info.value.hint or "").split("`")[1]
+    subprocess.run(["/bin/sh", "-c", command], check=True)
+    assert load_settings(environ={}).contact == "me@example.invalid"
+
+
+def test_discovered_env_symlink_to_trusted_target_loads(
+    discovered_env: Callable[..., Path],
+) -> None:
+    path = discovered_env(0o600, symlink=True)
+    assert path.is_symlink()
+    assert load_settings(environ={}).contact == "me@example.invalid"
+
+
+def test_discovered_env_symlink_to_untrusted_target_is_refused(
+    discovered_env: Callable[..., Path],
+) -> None:
+    path = discovered_env(0o646, symlink=True)
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={})
+    assert exc_info.value.hint == _expected_hint(path, "chmod o-w")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs os.mkfifo")
+def test_read_discovered_env_file_refuses_a_fifo(tmp_path: Path) -> None:
+    fifo = tmp_path / ".env"
+    os.mkfifo(fifo)
+    with pytest.raises(SettingsError, match="it is not a regular file"):
+        settings_module._read_discovered_env_file(fifo)
+
+
+def test_discovered_env_open_failure_is_a_settings_error(
+    discovered_env: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = discovered_env(0o600)
+
+    def refuse_open(*_args: object, **_kwargs: object) -> int:
+        raise PermissionError(errno.EACCES, "Permission denied")
+
+    monkeypatch.setattr(os, "open", refuse_open)
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={})
+    assert str(exc_info.value) == f"Could not open discovered .env file {path}: Permission denied"
+    assert isinstance(exc_info.value.__cause__, PermissionError)
+
+
+def test_discovered_env_is_parsed_from_the_checked_open_file(
+    discovered_env: Callable[..., Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A ``.env`` swapped for another file mid-check must not be what gets parsed.
+
+    The swap is triggered from inside the trust check (its ``os.getuid``
+    call): a check-then-reopen-by-path implementation would parse the
+    swapped-in file, while checking and reading one open descriptor parses
+    the file that was actually checked.
+    """
+    path = discovered_env(0o600)
+    real_uid = os.getuid()
+    swapped: list[bool] = []
+
+    def swap_then_getuid() -> int:
+        if not swapped:
+            replacement = tmp_path / "replacement.env"
+            replacement.write_text("MESHPROVISION_CONTACT=swapped@example.invalid\n")
+            replacement.chmod(0o600)
+            replacement.replace(path)
+            swapped.append(True)
+        return real_uid
+
+    monkeypatch.setattr(os, "getuid", swap_then_getuid)
+    assert load_settings(environ={}).contact == "me@example.invalid"
+    assert swapped == [True]
+
+
+def test_discovered_env_is_not_checked_without_getuid(
+    discovered_env: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """On platforms without ``os.getuid`` (Windows) the file is read unchecked."""
+    discovered_env(0o666, primary_gid=False)
+    monkeypatch.delattr(os, "getuid")
+    assert load_settings(environ={}).contact == "me@example.invalid"
 
 
 def test_format_validation_error_lists_field_paths_never_input() -> None:

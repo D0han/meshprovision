@@ -20,12 +20,15 @@ this module imports nothing from ``meshprovision.config.template``.
 
 from __future__ import annotations
 
+import io
 import logging
 import os
+import shlex
+import stat
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, NamedTuple, TypeAlias
 
 import dotenv
 import platformdirs
@@ -291,48 +294,108 @@ def find_env_file(start: Path | None = None) -> Path | None:
     return None
 
 
-def _check_env_file_trust(path: Path) -> None:
-    """Refuse a discovered ``.env`` file not owned/locked-down by the current user.
+class _EnvTrustProblem(NamedTuple):
+    """One reason a discovered ``.env`` file is refused, and the command that fixes it."""
 
-    Only applies to a ``.env`` found by :func:`find_env_file` -- a file
-    planted above the search start by another user on a shared machine,
-    or readable/writable by others, could inject hostile environment
-    overrides. An explicitly-passed ``env_file`` is operator-chosen and
-    is never checked here.
+    reason: str
+    """Why the file is refused, phrased to follow "Refusing to load ...: "."""
+    fix: str
+    """A shell command that removes this reason, with the path already shell-quoted."""
+
+
+def _env_trust_problems(path: Path, st: os.stat_result) -> list[_EnvTrustProblem]:
+    """List every reason the ``st`` of a discovered ``.env`` makes it untrustworthy.
 
     A group-writable file is accepted when its group is the current
     user's primary group: most distros give each user a private group
     (umask 002), so ``rw-rw-r--`` is the everyday default and refusing it
-    would block normal users. A world-writable file, or a group-writable
-    one owned by some other group, is still refused.
-
-    Skipped entirely on platforms without ``os.getuid`` (Windows), where
-    POSIX ownership/permission bits don't apply.
+    would block normal users.
 
     Args:
-        path: The discovered ``.env`` file to check.
+        path: The discovered ``.env`` path, used only to build the fix
+            commands (``chmod``/``chown`` follow a symlink to its target,
+            which is what ``st`` describes).
+        st: ``os.fstat`` of the open file descriptor that will be parsed.
+
+    Returns:
+        One :class:`_EnvTrustProblem` per failed check, in a stable order
+        (owner, world-write, group-write); empty if the file is trusted.
+    """
+    quoted = shlex.quote(str(path))
+    problems: list[_EnvTrustProblem] = []
+    if st.st_uid != os.getuid():
+        problems.append(_EnvTrustProblem("it is not owned by you", f'chown "$USER" {quoted}'))
+    if st.st_mode & stat.S_IWOTH:
+        problems.append(_EnvTrustProblem("it is world-writable", f"chmod o-w {quoted}"))
+    if st.st_mode & stat.S_IWGRP and st.st_gid != os.getgid():
+        problems.append(
+            _EnvTrustProblem(
+                "it is group-writable by a group other than your primary group",
+                f"chmod g-w {quoted}",
+            )
+        )
+    return problems
+
+
+def _read_discovered_env_file(path: Path) -> str:
+    """Return the text of a discovered ``.env`` file, refusing an untrustworthy one.
+
+    Only applies to a ``.env`` found by :func:`find_env_file` -- a file
+    planted above the search start by another user on a shared machine,
+    or writable by others, could inject hostile environment overrides.
+    An explicitly-passed ``env_file`` is operator-chosen and is never
+    checked here.
+
+    The file is opened once and the ownership/permission checks run
+    against ``os.fstat`` of that same descriptor, whose contents are then
+    returned for parsing: nothing is re-opened by path, so the file
+    cannot be swapped between the check and the read. A symlinked
+    ``.env`` is followed, and its *target* is what gets checked and read.
+    ``O_NONBLOCK`` keeps a FIFO from hanging the open; anything that is
+    not a regular file is refused.
+
+    On platforms without ``os.getuid`` (Windows), where POSIX ownership/
+    permission bits don't apply, the file is read without any checks.
+
+    Args:
+        path: The discovered ``.env`` file.
+
+    Returns:
+        The file's full text, decoded as UTF-8.
 
     Raises:
-        SettingsError: If the file is not owned by the current user, is
-            world-writable, or is writable by a group other than the
-            user's primary group.
+        SettingsError: If the file cannot be opened, is not a regular
+            file, is not owned by the current user, is world-writable, or
+            is writable by a group other than the user's primary group.
     """
     if not hasattr(os, "getuid"):
-        return
-    st = path.stat()
-    group_write_ok = st.st_gid == os.getgid()
-    unsafe_mode = st.st_mode & (0o002 if group_write_ok else 0o022)
-    if st.st_uid != os.getuid() or unsafe_mode:
+        return path.read_text(encoding="utf-8")
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK)
+    except OSError as exc:
         raise SettingsError(
-            f"Refusing to load discovered .env file {path}: it is not owned by the "
-            "current user, is world-writable, or is writable by a group other than "
-            "your primary group.",
-            hint=(
-                "Fix the file's ownership and permissions (e.g. `chown` it to "
-                "yourself and `chmod o-w` it), or pass it explicitly with "
-                "--env-file/env_file instead of relying on upward search."
-            ),
-        )
+            f"Could not open discovered .env file {path}: {exc.strerror or exc}",
+            hint="Make the file readable by you, or pass a .env file explicitly with --env-file.",
+        ) from exc
+    with os.fdopen(fd, encoding="utf-8") as stream:
+        st = os.fstat(stream.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise SettingsError(
+                f"Refusing to load discovered .env file {path}: it is not a regular file.",
+                hint="Replace it with a regular file, or pass one explicitly with --env-file.",
+            )
+        problems = _env_trust_problems(path, st)
+        if problems:
+            reasons = "; ".join(problem.reason for problem in problems)
+            fixes = " && ".join(problem.fix for problem in problems)
+            raise SettingsError(
+                f"Refusing to load discovered .env file {path}: {reasons}.",
+                hint=(
+                    f"Fix it with `{fixes}`, or pass the file explicitly with "
+                    "--env-file instead of relying on upward search."
+                ),
+            )
+        return stream.read()
 
 
 def _unrecognized_env_keys(source: Mapping[str, object]) -> set[str]:
@@ -364,9 +427,10 @@ def load_settings(
     ``os.environ`` is never mutated.
 
     A ``.env`` file found via :func:`find_env_file` is only trusted if
-    it is owned by the current user and not world-writable nor writable
-    by a foreign group (see :func:`_check_env_file_trust`); an explicit ``env_file``
-    is operator-chosen and is loaded as-is.
+    it is a regular file (a symlink's target counts) owned by the current
+    user and not world-writable nor writable by a foreign group (see
+    :func:`_read_discovered_env_file`); an explicit ``env_file`` is
+    operator-chosen and is loaded as-is.
 
     A blank value for any field (including ``MESHPROVISION_CONTACT=`` in
     ``.env``) is treated as "not set" rather than as an empty string,
@@ -393,21 +457,24 @@ def load_settings(
         A validated :class:`Settings` instance.
 
     Raises:
-        SettingsError: If the layered values fail :class:`Settings`
-            validation.
+        SettingsError: If a discovered ``.env`` file is refused (see
+            :func:`_read_discovered_env_file`), or the layered values fail
+            :class:`Settings` validation.
     """
     values: dict[str, str] = {}
     unrecognized: set[str] = set()
     if search_dotenv or env_file is not None:
-        dotenv_path: Path | None
+        dotenv_values: dict[str, str | None] | None = None
         if env_file is not None:
-            dotenv_path = Path(env_file)
+            explicit_path = Path(env_file)
+            if explicit_path.is_file():
+                dotenv_values = dotenv.dotenv_values(explicit_path)
         else:
-            dotenv_path = find_env_file()
-            if dotenv_path is not None:
-                _check_env_file_trust(dotenv_path)
-        if dotenv_path is not None and dotenv_path.is_file():
-            dotenv_values = dotenv.dotenv_values(dotenv_path)
+            discovered_path = find_env_file()
+            if discovered_path is not None:
+                text = _read_discovered_env_file(discovered_path)
+                dotenv_values = dotenv.dotenv_values(stream=io.StringIO(text))
+        if dotenv_values is not None:
             values.update({k: v for k, v in dotenv_values.items() if v is not None})
             unrecognized.update(_unrecognized_env_keys(dotenv_values))
 
