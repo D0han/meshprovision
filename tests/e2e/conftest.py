@@ -774,7 +774,7 @@ class DeviceBus:
 def bus(monkeypatch: pytest.MonkeyPatch) -> DeviceBus:
     """Patch all three connection backends' ``connect()`` at the class level.
 
-    Patching the class (rather than ``cli.provision.resolve_backend``)
+    Patching the class (rather than ``cli.transport.resolve_backend``)
     keeps the real transport-selection logic under test.
 
     Args:

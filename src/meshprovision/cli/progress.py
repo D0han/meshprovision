@@ -4,7 +4,7 @@ Used to wrap blocking operations that have no progress callback of their
 own -- most notably ``BLEInterface(...)`` (:func:`meshprovision.
 provisioning.connection.BLEBackend.connect`), whose worst case runs to
 several minutes with nothing to show for it. See
-:func:`~meshprovision.cli.provision.connected_with_progress`.
+:func:`~meshprovision.cli.transport.connected_with_progress`.
 
 Always on, not gated behind ``-v``: an operator watching a hung connect
 needs to see it is still alive regardless of the chosen log level. The

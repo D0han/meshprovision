@@ -3,7 +3,7 @@
 This module MUST NOT reference ``apply_plan``, ``ReconnectingSession``,
 ``InPlaceSession``, ``device_session``, ``writeConfig``, or ``setOwner`` --
 nothing here ever writes to a **device**. For a live device, it connects
-through :func:`meshprovision.cli.provision.connected_with_progress`, a
+through :func:`meshprovision.cli.transport.connected_with_progress`, a
 plain connect/yield/close context manager (never a write-verification-
 oriented session) that additionally prints progress and a heartbeat while
 the connect is in flight, reads the device's live state via
@@ -40,7 +40,7 @@ from meshprovision.cli.common import (
     pass_cli,
 )
 from meshprovision.cli.help_format import MeshCommand
-from meshprovision.cli.provision import (
+from meshprovision.cli.transport import (
     TransportOptions,
     connected_with_progress,
     resolve_backend,

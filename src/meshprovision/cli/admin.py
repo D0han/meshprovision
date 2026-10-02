@@ -30,11 +30,13 @@ from meshprovision.cli.common import (
 from meshprovision.cli.help_format import MeshGroup
 from meshprovision.cli.provision import (
     ProvisionOptions,
+    provisioning_options,
+    run_provision,
+)
+from meshprovision.cli.transport import (
     TransportOptions,
     device_session,
-    provisioning_options,
     resolve_backend,
-    run_provision,
     transport_options,
 )
 from meshprovision.crypto import keys as crypto_keys
