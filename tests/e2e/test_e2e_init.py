@@ -18,6 +18,7 @@ import pytest
 
 from meshprovision.db.nodes import NodeRepository
 from meshprovision.db.ods import OdsDatabase
+from tests.conftest import WIDE_TERMINAL_COLUMNS
 from tests.e2e.conftest import db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.e2e
 
-_BARE_ENV: dict[str, str] = {"COLUMNS": "200", "NO_COLOR": "1"}
+_BARE_ENV: dict[str, str] = {"COLUMNS": WIDE_TERMINAL_COLUMNS, "NO_COLOR": "1"}
 
 
 def test_creates_env_template_and_database_in_an_empty_directory(

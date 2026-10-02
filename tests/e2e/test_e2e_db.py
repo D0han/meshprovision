@@ -18,6 +18,7 @@ from meshprovision.db.locking import lock_path_for
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.observed_keys import observed_key_ref
 from meshprovision.db.schema import KeyOrigin, KeyType
+from tests.conftest import WIDE_TERMINAL_COLUMNS
 from tests.e2e.conftest import invoke
 
 if TYPE_CHECKING:
@@ -1025,7 +1026,7 @@ def _fleet_env(tmp_path: Path, name: str) -> dict[str, str]:
         "MESHPROVISION_CONTACT": "meshprovision-tests@example.invalid",
         "MESHPROVISION_CACHE_DIR": str(tmp_path / "cache"),
         "MESHPROVISION_LOG_LEVEL": "WARNING",
-        "COLUMNS": "200",
+        "COLUMNS": WIDE_TERMINAL_COLUMNS,
         "NO_COLOR": "1",
         "MESHPROVISION_DB_PATH": str(tmp_path / name / "nodes_db.ods"),
     }
@@ -1192,7 +1193,7 @@ def _symlinked_fleet_env(tmp_path: Path, *, link: Path, real_target: Path) -> di
         "MESHPROVISION_CONTACT": "meshprovision-tests@example.invalid",
         "MESHPROVISION_CACHE_DIR": str(tmp_path / "cache"),
         "MESHPROVISION_LOG_LEVEL": "WARNING",
-        "COLUMNS": "200",
+        "COLUMNS": WIDE_TERMINAL_COLUMNS,
         "NO_COLOR": "1",
         "MESHPROVISION_DB_PATH": str(link),
     }

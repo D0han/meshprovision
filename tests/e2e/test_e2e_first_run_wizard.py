@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests.conftest import WIDE_TERMINAL_COLUMNS
 from tests.e2e.conftest import invoke
 
 if TYPE_CHECKING:
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.e2e
 
-_BARE_ENV: dict[str, str] = {"COLUMNS": "200", "NO_COLOR": "1"}
+_BARE_ENV: dict[str, str] = {"COLUMNS": WIDE_TERMINAL_COLUMNS, "NO_COLOR": "1"}
 
 
 def test_wizard_fires_on_an_interactive_first_run_and_the_command_then_succeeds(

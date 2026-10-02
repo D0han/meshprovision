@@ -64,6 +64,11 @@ KNOWN_BAD_KEYS_FILE: Final[Path] = REPO_ROOT / "data" / "known_bad_keys.txt"
 TEST_CONTACT: Final[str] = "meshprovision-tests@example.invalid"
 """A syntactically valid, obviously-fake ``MESHPROVISION_CONTACT`` value."""
 
+#: ``COLUMNS`` for CLI test runs. Rich hard-wraps stderr at this width (a path
+#: longer than it is split mid-word), so it must exceed any message embedding a
+#: pytest ``tmp_path``, whose length varies with ``--basetemp``.
+WIDE_TERMINAL_COLUMNS: Final[str] = "100000"
+
 
 @pytest.fixture(autouse=True)
 def _isolated_cwd_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -104,7 +109,7 @@ def cli_env(tmp_path: Path) -> dict[str, str]:
         "MESHPROVISION_CONTACT": TEST_CONTACT,
         "MESHPROVISION_CACHE_DIR": str(tmp_path / "cache"),
         "MESHPROVISION_LOG_LEVEL": "WARNING",
-        "COLUMNS": "200",
+        "COLUMNS": WIDE_TERMINAL_COLUMNS,
         "NO_COLOR": "1",
     }
 
