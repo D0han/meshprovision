@@ -202,13 +202,38 @@ def test_find_env_file_does_not_walk_above_home(
     assert find_env_file(nested) is None
 
 
-def test_load_settings_refuses_group_writable_discovered_env_file(
+def test_load_settings_refuses_world_writable_discovered_env_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
     env_file.chmod(0o666)
     monkeypatch.chdir(tmp_path)
+    with pytest.raises(SettingsError):
+        load_settings(environ={})
+
+
+def test_load_settings_accepts_group_writable_env_file_in_primary_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
+    env_file.chmod(0o664)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(os, "getgid", lambda: env_file.stat().st_gid)
+    settings = load_settings(environ={})
+    assert settings.contact == "me@example.invalid"
+
+
+def test_load_settings_refuses_group_writable_env_file_in_foreign_group(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
+    env_file.chmod(0o664)
+    monkeypatch.chdir(tmp_path)
+    real_gid = env_file.stat().st_gid
+    monkeypatch.setattr(os, "getgid", lambda: real_gid + 1)
     with pytest.raises(SettingsError):
         load_settings(environ={})
 

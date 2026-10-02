@@ -300,6 +300,12 @@ def _check_env_file_trust(path: Path) -> None:
     overrides. An explicitly-passed ``env_file`` is operator-chosen and
     is never checked here.
 
+    A group-writable file is accepted when its group is the current
+    user's primary group: most distros give each user a private group
+    (umask 002), so ``rw-rw-r--`` is the everyday default and refusing it
+    would block normal users. A world-writable file, or a group-writable
+    one owned by some other group, is still refused.
+
     Skipped entirely on platforms without ``os.getuid`` (Windows), where
     POSIX ownership/permission bits don't apply.
 
@@ -307,19 +313,23 @@ def _check_env_file_trust(path: Path) -> None:
         path: The discovered ``.env`` file to check.
 
     Raises:
-        SettingsError: If the file is not owned by the current user, or
-            is writable by its group or by anyone else.
+        SettingsError: If the file is not owned by the current user, is
+            world-writable, or is writable by a group other than the
+            user's primary group.
     """
     if not hasattr(os, "getuid"):
         return
     st = path.stat()
-    if st.st_uid != os.getuid() or st.st_mode & 0o022:
+    group_write_ok = st.st_gid == os.getgid()
+    unsafe_mode = st.st_mode & (0o002 if group_write_ok else 0o022)
+    if st.st_uid != os.getuid() or unsafe_mode:
         raise SettingsError(
             f"Refusing to load discovered .env file {path}: it is not owned by the "
-            "current user, or is writable by its group or others.",
+            "current user, is world-writable, or is writable by a group other than "
+            "your primary group.",
             hint=(
                 "Fix the file's ownership and permissions (e.g. `chown` it to "
-                "yourself and `chmod go-w` it), or pass it explicitly with "
+                "yourself and `chmod o-w` it), or pass it explicitly with "
                 "--env-file/env_file instead of relying on upward search."
             ),
         )
@@ -354,8 +364,8 @@ def load_settings(
     ``os.environ`` is never mutated.
 
     A ``.env`` file found via :func:`find_env_file` is only trusted if
-    it is owned by the current user and not writable by its group or
-    others (see :func:`_check_env_file_trust`); an explicit ``env_file``
+    it is owned by the current user and not world-writable nor writable
+    by a foreign group (see :func:`_check_env_file_trust`); an explicit ``env_file``
     is operator-chosen and is loaded as-is.
 
     A blank value for any field (including ``MESHPROVISION_CONTACT=`` in

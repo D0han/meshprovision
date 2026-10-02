@@ -19,8 +19,9 @@ Precedence, highest to lowest: **CLI flag > environment variable > `.env`
 file > built-in default**. `.env` is found by searching upward from the
 current working directory, or named explicitly with `--env-file`. The
 upward search never crosses above your home directory, and a discovered
-`.env` is refused unless it's owned by you and not writable by your
-group or others -- pass `--env-file` explicitly to bypass the search
+`.env` is refused unless it's owned by you and not world-writable
+(group-writable is fine when the group is your primary group, the usual
+`rw-rw-r--` default; a file writable by any other group is refused) -- pass `--env-file` explicitly to bypass the search
 (and this check) entirely.
 
 `MESHPROVISION_CONTACT` has no default because lorastats.pl requires
