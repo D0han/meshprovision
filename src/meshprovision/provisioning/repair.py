@@ -46,8 +46,6 @@ class DriftKind(StrEnum):
     FIRMWARE = "firmware"
     RADIO = "radio"
     ADMIN_KEYS = "admin_keys"
-    KEY_MATERIAL = "key_material"
-    SECURITY = "security"
 
 
 @dataclass(frozen=True, slots=True)
@@ -224,15 +222,15 @@ def diff_record(
             )
         )
 
-    # DriftKind.KEY_MATERIAL is never emitted here: record.public_key_ref
+    # The node's own key material is not compared here: record.public_key_ref
     # (db/nodes.py) is `schema.ref_for(node_id, ...)`, derived from node_id,
     # which is a required field -- it can never be empty for a valid
     # NodeRecord, so a check for "recorded ref empty but device has a real
     # key" can never fire.
 
     # is_managed/admin_channel_enabled have no Nodes-sheet column to compare
-    # against directly (see DriftKind.SECURITY docstring); the security
-    # safety gate in plan.py is what enforces their target values at
-    # plan-build time, so this function has nothing to diff for them.
+    # against directly; the security safety gate in plan.py is what enforces
+    # their target values at plan-build time, so this function has nothing to
+    # diff for them.
 
     return tuple(drifts)
