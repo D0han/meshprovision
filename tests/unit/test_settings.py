@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,38 @@ from meshprovision.errors import MissingContactError, SettingsError
 
 pytestmark = pytest.mark.unit
 
+_CONTENT = "MESHPROVISION_CONTACT=me@example.invalid\n"
+
+
+@pytest.fixture
+def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Path]:
+    """Write ``tmp_path/.env`` at an exact mode and pin the process identity to it.
+
+    The mode is set with chmod (umask-independent) and ``os.getuid``/``os.getgid``
+    are patched relative to the file's REAL ``st_uid``/``st_gid``, so the outcome
+    is the same whatever user, primary group, umask or setgid tmp dir runs it.
+    """
+    monkeypatch.chdir(tmp_path)
+
+    def make(
+        mode: int = 0o600,
+        *,
+        own_uid: bool = True,
+        primary_gid: bool = True,
+        content: str = _CONTENT,
+    ) -> Path:
+        path = tmp_path / ".env"
+        path.write_text(content)
+        path.chmod(mode)
+        st = path.stat()
+        uid = st.st_uid if own_uid else st.st_uid + 1
+        gid = st.st_gid if primary_gid else st.st_gid + 1
+        monkeypatch.setattr(os, "getuid", lambda: uid)
+        monkeypatch.setattr(os, "getgid", lambda: gid)
+        return path
+
+    return make
+
 
 def test_load_settings_from_env_file_alone(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
@@ -30,7 +63,7 @@ def test_load_settings_from_env_file_alone(tmp_path: Path) -> None:
 
 
 def test_load_settings_finds_dotenv_by_default(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    discovered_env: Callable[..., Path],
 ) -> None:
     """``search_dotenv`` defaults to True, and that default is production.
 
@@ -41,8 +74,7 @@ def test_load_settings_finds_dotenv_by_default(
     (``find_env_file`` searches upward from the CWD), and call
     ``load_settings`` with the kwarg omitted entirely.
     """
-    (tmp_path / ".env").write_text("MESHPROVISION_CONTACT=found@example.invalid\n")
-    monkeypatch.chdir(tmp_path)
+    discovered_env(0o600, content="MESHPROVISION_CONTACT=found@example.invalid\n")
     settings = load_settings(environ={})
     assert settings.contact == "found@example.invalid"
 
@@ -202,52 +234,33 @@ def test_find_env_file_does_not_walk_above_home(
     assert find_env_file(nested) is None
 
 
-def test_load_settings_refuses_world_writable_discovered_env_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("mode", "own_uid", "primary_gid", "accepted"),
+    [
+        pytest.param(0o600, True, True, True, id="600-owner-primary-accepted"),
+        pytest.param(0o644, True, True, True, id="644-owner-primary-accepted"),
+        pytest.param(0o664, True, True, True, id="664-owner-primary-group-write-accepted"),
+        pytest.param(0o664, True, False, False, id="664-owner-foreign-group-write-refused"),
+        pytest.param(0o646, True, True, False, id="646-owner-primary-world-write-refused"),
+        pytest.param(0o646, True, False, False, id="646-owner-foreign-world-write-refused"),
+        pytest.param(0o666, True, True, False, id="666-owner-primary-world-group-write-refused"),
+        pytest.param(0o600, False, True, False, id="600-other-owner-primary-refused"),
+        pytest.param(0o600, False, False, False, id="600-other-owner-foreign-refused"),
+    ],
+)
+def test_discovered_env_trust_matrix(
+    discovered_env: Callable[..., Path],
+    mode: int,
+    own_uid: bool,
+    primary_gid: bool,
+    accepted: bool,
 ) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
-    env_file.chmod(0o666)
-    monkeypatch.chdir(tmp_path)
-    with pytest.raises(SettingsError):
-        load_settings(environ={})
-
-
-def test_load_settings_accepts_group_writable_env_file_in_primary_group(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
-    env_file.chmod(0o664)
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(os, "getgid", lambda: env_file.stat().st_gid)
-    settings = load_settings(environ={})
-    assert settings.contact == "me@example.invalid"
-
-
-def test_load_settings_refuses_group_writable_env_file_in_foreign_group(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
-    env_file.chmod(0o664)
-    monkeypatch.chdir(tmp_path)
-    real_gid = env_file.stat().st_gid
-    monkeypatch.setattr(os, "getgid", lambda: real_gid + 1)
-    with pytest.raises(SettingsError):
-        load_settings(environ={})
-
-
-def test_load_settings_refuses_env_file_owned_by_another_user(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
-    monkeypatch.chdir(tmp_path)
-    real_uid = os.getuid()
-    monkeypatch.setattr(os, "getuid", lambda: real_uid + 1)
-    with pytest.raises(SettingsError):
-        load_settings(environ={})
+    discovered_env(mode, own_uid=own_uid, primary_gid=primary_gid)
+    if accepted:
+        assert load_settings(environ={}).contact == "me@example.invalid"
+    else:
+        with pytest.raises(SettingsError):
+            load_settings(environ={})
 
 
 def test_format_validation_error_lists_field_paths_never_input() -> None:
