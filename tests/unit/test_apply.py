@@ -33,6 +33,7 @@ from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import apply as apply_module
 from meshprovision.provisioning import apply_session as apply_session_module
 from meshprovision.provisioning import detect
+from meshprovision.provisioning import readback as readback_module
 from meshprovision.provisioning.apply import (
     DEFAULT_SETTLE_SECONDS,
     ApplyOutcome,
@@ -44,7 +45,6 @@ from meshprovision.provisioning.apply import (
     apply_plan,
     generate_ble_pin,
     persist_result,
-    verify_plan,
     write_default_channel,
     write_section,
 )
@@ -56,6 +56,7 @@ from meshprovision.provisioning.plan import (
     build_plan,
 )
 from meshprovision.provisioning.plan_admin_keys import KeyPlan
+from meshprovision.provisioning.readback import verify_plan
 from tests.unit.conftest import make_security
 
 pytestmark = pytest.mark.unit
@@ -493,10 +494,10 @@ def test_verify_plan_is_unmessagable_unconfirmed(make_live) -> None:
 
 
 def test_apply_reuses_plan_values_equal() -> None:
-    from meshprovision.provisioning import apply as apply_mod
     from meshprovision.provisioning import plan as plan_mod
+    from meshprovision.provisioning import readback as readback_mod
 
-    assert apply_mod.values_equal is plan_mod.values_equal
+    assert readback_mod.values_equal is plan_mod.values_equal
 
 
 def test_verify_plan_int_one_against_desired_true_is_unconfirmed(make_live) -> None:
@@ -605,7 +606,7 @@ def test_verify_key_material_nodedb_present_but_wrong_is_unconfirmed(make_live) 
     # LocalConfig confirms the right key...
     live_after = make_live(template, security=make_security(keypair=kp))
     # ...but NodeDB reports a different one entirely.
-    result = apply_module._verify_key_material(
+    result = readback_module._verify_key_material(
         plan, live_after, keypair=kp, device_public_key=encode_key(wrong_kp.public)
     )
 

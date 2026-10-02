@@ -9,8 +9,8 @@ file size) along the same seam already used for
 :class:`InPlaceSession` -- is self-contained, with no dependency on
 ``apply.py``'s field-writing/verification logic (:func:`~meshprovision.
 provisioning.apply.apply_field`, :func:`~meshprovision.provisioning.
-apply.write_section`, :func:`~meshprovision.provisioning.apply.
-verify_plan`, :func:`~meshprovision.provisioning.apply.apply_plan`,
+apply.write_section`, :func:`~meshprovision.provisioning.
+readback.verify_plan`, :func:`~meshprovision.provisioning.apply.apply_plan`,
 :func:`~meshprovision.provisioning.apply.persist_result`); only the
 reverse dependency exists. ``apply.py`` imports every name defined here
 and re-exports it in its own ``__all__`` unchanged, so no external
