@@ -18,10 +18,11 @@ disabled_options: [mqtt, serial, range_test, store_forward, remote_hardware, pax
 # '}}'. 'MT' is short for "Meshtastic" -- a deliberately generic prefix;
 # change it freely to suit your fleet.
 #
-# The rendered short_name must fit 4 UTF-8 BYTES and long_name 39 UTF-8
-# BYTES. The firmware truncates an over-length name SILENTLY rather than
-# rejecting it, so meshprovision refuses to load a template whose widest
-# possible rendering would overflow either limit. Non-ASCII characters
+# The rendered short_name must fit 4 UTF-8 BYTES and long_name 25 UTF-8
+# BYTES (firmware 2.8's limit; 2.7.x allowed 39). The firmware truncates
+# an over-length name SILENTLY rather than rejecting it, so meshprovision
+# refuses to load a template whose widest possible rendering would
+# overflow either limit. Non-ASCII characters
 # in a prefix or alphabet cost more than one byte each -- a single
 # accented or non-Latin character can consume the entire short_name
 # budget on its own.
