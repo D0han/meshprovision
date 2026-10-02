@@ -10,24 +10,22 @@ from pathlib import Path
 
 import pytest
 
-from meshprovision.db import atomic_writer
-from meshprovision.db.atomic_writer import (
+from meshprovision.db import atomic_writer, backups, fs_primitives
+from meshprovision.db.atomic_writer import atomic_write, restore_backup, write_bytes_atomic
+from meshprovision.db.backups import (
     BackupInfo,
     _backup_name_re,
     _backup_sort_key,
     _claim_backup_path,
     _parse_backup_timestamp,
-    atomic_write,
     backup_dir_for,
     backup_name,
     create_backup,
     legacy_backup_notice,
-    link_no_clobber,
     list_backups,
     prune_backups,
-    restore_backup,
-    write_bytes_atomic,
 )
+from meshprovision.db.fs_primitives import link_no_clobber
 from meshprovision.errors import AtomicWriteError
 
 pytestmark = pytest.mark.unit
@@ -627,7 +625,7 @@ def test_backup_sweeps_a_stale_orphan_temp(tmp_path: Path, monkeypatch: pytest.M
     )
     orphan.write_bytes(b"half-copied")
 
-    monkeypatch.setattr(atomic_writer, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
     info = create_backup(target, backup_dir=backup_dir)
 
     assert not orphan.exists()
@@ -664,7 +662,7 @@ def test_atomic_write_sweeps_a_stale_orphan_in_the_target_dir(
     orphan = tmp_path / f".{target.name}.tmp-999-deadbeef"
     orphan.write_bytes(b"half-written")
 
-    monkeypatch.setattr(atomic_writer, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
     with atomic_write(target, backup=False) as tmp:
         assert not orphan.exists()
         assert tmp.exists()
@@ -689,7 +687,7 @@ def test_sweep_leaves_real_backups_and_other_targets_alone(
     )
     other_temp.write_bytes(b"not mine")
 
-    monkeypatch.setattr(atomic_writer, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
     create_backup(target, backup_dir=backup_dir, retention=0)
 
     assert real_backup.exists()
@@ -715,7 +713,7 @@ def test_sweep_never_raises_on_an_undeletable_temp(
             raise PermissionError(f"refusing to unlink {self}")
         real_unlink(self, *args, **kwargs)
 
-    monkeypatch.setattr(atomic_writer, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
     monkeypatch.setattr(Path, "unlink", refusing_unlink)
 
     info = create_backup(target, backup_dir=backup_dir)
@@ -735,15 +733,15 @@ def test_prune_failure_during_create_backup_only_warns(
     def failing_prune(*args: object, **kwargs: object) -> tuple[Path, ...]:
         raise AtomicWriteError("simulated prune failure", path=str(target))
 
-    monkeypatch.setattr(atomic_writer, "prune_backups", failing_prune)
+    monkeypatch.setattr(backups, "prune_backups", failing_prune)
 
-    with caplog.at_level("WARNING", logger="meshprovision.db.atomic_writer"):
+    with caplog.at_level("WARNING", logger="meshprovision.db.backups"):
         write_bytes_atomic(target, b"v1", backup=True, backup_dir=backup_dir, retention=1)
 
     assert target.read_bytes() == b"v1"
-    backups = [p for p in backup_dir.iterdir() if p.name.startswith(f"{target.stem}-")]
-    assert len(backups) == 1
-    assert backups[0].read_bytes() == b"v0"
+    backup_files = [p for p in backup_dir.iterdir() if p.name.startswith(f"{target.stem}-")]
+    assert len(backup_files) == 1
+    assert backup_files[0].read_bytes() == b"v0"
     messages = [record.getMessage() for record in caplog.records]
     assert any("pruning old backups failed" in message for message in messages)
     stray = [p for p in tmp_path.iterdir() if p.name.startswith(f".{target.name}.tmp")]

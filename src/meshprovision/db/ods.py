@@ -40,7 +40,7 @@ from meshprovision.db import (
     schema,
     sorting,
 )
-from meshprovision.db.atomic_writer import DEFAULT_RETENTION
+from meshprovision.db.backups import DEFAULT_RETENTION
 from meshprovision.db.known_good import refresh_known_good
 from meshprovision.errors import (
     DbConcurrentModificationError,

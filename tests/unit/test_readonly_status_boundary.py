@@ -18,6 +18,8 @@ _CLI_STATUS_FORBIDDEN = frozenset(
         "NodeRepository",
         "KeyRepository",
         "atomic_writer",
+        "backups",
+        "fs_primitives",
         "known_good",
         "pending_keys",
         "open_database",
@@ -33,6 +35,8 @@ _CLI_STATUS_FORBIDDEN = frozenset(
 _REPORT_FORBIDDEN_ATTRS = frozenset({"save", "replace", "upsert", "delete"})
 _REPORT_FORBIDDEN_MODULES = (
     "meshprovision.db.atomic_writer",
+    "meshprovision.db.backups",
+    "meshprovision.db.fs_primitives",
     "meshprovision.db.known_good",
     "meshprovision.db.ods_write",
     "meshprovision.db.pending_keys",

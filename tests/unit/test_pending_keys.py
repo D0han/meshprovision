@@ -30,7 +30,7 @@ def test_pending_key_path_is_in_the_targets_backup_dir_and_never_collides(tmp_pa
     # Never matches atomic_writer's timestamped-backup regex/glob (stem
     # immediately followed by "." here, never the "-" a backup name
     # requires) -- see pending_key_path's own docstring.
-    from meshprovision.db.atomic_writer import _backup_name_re
+    from meshprovision.db.backups import _backup_name_re
 
     assert _backup_name_re(db_path).fullmatch(path.name) is None
 

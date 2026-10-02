@@ -397,7 +397,7 @@ def test_read_only_guarantee_across_run_modes(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    from meshprovision.db import atomic_writer
+    from meshprovision.db import backups
     from meshprovision.db.known_good import known_good_info
     from meshprovision.db.nodes import NodeRecord
 
@@ -434,7 +434,7 @@ def test_read_only_guarantee_across_run_modes(
         invoke(runner, ["status", "--watch", "--interval", "1"], env)
         assert db_fingerprint(db_path) == before
 
-    backups_dir = atomic_writer.backup_dir_for(db_path)
+    backups_dir = backups.backup_dir_for(db_path)
     assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
     # The known-good copy plus its provenance sidecar -- nothing else.
     sidecar = backups_dir / f"{db_path.stem}.known-good.json"

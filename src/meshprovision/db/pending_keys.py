@@ -16,9 +16,10 @@ later ``mesh provision`` of the same node loads it and, if the device's
 live-reported keypair still matches it exactly, recovers it automatically
 instead of losing the key or spuriously regenerating it again.
 
-Imports only :mod:`meshprovision.db.atomic_writer` (never
-:mod:`meshprovision.db.known_good`), keeping this module's place in the
-``db/`` dependency graph a leaf alongside it, not a dependent of it.
+Imports only :mod:`meshprovision.db.atomic_writer` and
+:mod:`meshprovision.db.backups` (never :mod:`meshprovision.db.known_good`),
+keeping this module's place in the ``db/`` dependency graph a leaf
+alongside it, not a dependent of it.
 """
 
 from __future__ import annotations
@@ -34,7 +35,8 @@ from typing import Final
 
 from meshprovision.crypto.keys import X25519_KEY_SIZE, KeyPair
 from meshprovision.crypto.redact import SecretBytes
-from meshprovision.db.atomic_writer import backup_dir_for, write_bytes_atomic
+from meshprovision.db.atomic_writer import write_bytes_atomic
+from meshprovision.db.backups import backup_dir_for
 from meshprovision.nodeid import NodeId
 
 __all__ = [
@@ -56,12 +58,12 @@ def pending_key_path(db_path: Path, node_id: NodeId) -> Path:
     Args:
         db_path: The database's own path (the sidecar sits in its
             resolved ``backups/`` directory, per
-            :func:`meshprovision.db.atomic_writer.backup_dir_for`).
+            :func:`meshprovision.db.backups.backup_dir_for`).
         node_id: The node the pending keypair belongs to.
 
     Returns:
         For example ``.../backups/nodes_db.pending-deadbe01.json``. This
-        matches neither :func:`meshprovision.db.atomic_writer.
+        matches neither :func:`meshprovision.db.backups.
         _backup_name_re` nor its prefiltering glob (the stem is followed
         by ``"."``, never the ``"-"`` a timestamped backup name requires
         immediately after the stem), so it is never listed, pruned, or

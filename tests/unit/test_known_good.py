@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision.db import known_good
-from meshprovision.db.atomic_writer import BackupInfo, create_backup, list_backups
+from meshprovision.db.backups import BackupInfo, create_backup, list_backups
 
 pytestmark = pytest.mark.unit
 

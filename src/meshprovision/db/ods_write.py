@@ -56,7 +56,8 @@ from odf import text as odf_text
 from odf.opendocument import OpenDocumentSpreadsheet
 
 from meshprovision.db import schema, sorting
-from meshprovision.db.atomic_writer import DEFAULT_RETENTION, atomic_write
+from meshprovision.db.atomic_writer import atomic_write
+from meshprovision.db.backups import DEFAULT_RETENTION
 
 __all__ = [
     "HEADER_CELL_STYLE_NAME",

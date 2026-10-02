@@ -3,7 +3,7 @@
 A single, stable-named copy of a target file -- refreshed on every
 successful load and save (see :func:`meshprovision.db.ods.load_database`
 and :meth:`meshprovision.db.ods.OdsDatabase.save`) -- kept outside the
-timestamped backup rotation in :mod:`meshprovision.db.atomic_writer` so
+timestamped backup rotation in :mod:`meshprovision.db.backups` so
 it is never pruned and never listed alongside it.
 
 Alongside the copy itself, a small JSON sidecar (``<stem>.known-good.json``)
@@ -11,7 +11,7 @@ records which database it was refreshed from and a content hash. Two
 different databases that happen to share a file name (two fleets, both
 ``nodes_db.ods``, one at each database's own resolved ``backups/``
 directory) never collide on this copy, since :func:`~meshprovision.db.
-atomic_writer.backup_dir_for` resolves per target -- but a directory
+backups.backup_dir_for` resolves per target -- but a directory
 *copied or renamed* wholesale still carries an old known-good copy that
 is no longer this database's, and the sidecar is what makes that
 detectable. See :func:`known_good_status`.
@@ -31,13 +31,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from meshprovision.db.atomic_writer import (
-    _BACKUP_DIR_MODE,
-    _FILE_MODE,
-    BackupInfo,
-    backup_dir_for,
-    write_bytes_atomic,
-)
+from meshprovision.db.atomic_writer import write_bytes_atomic
+from meshprovision.db.backups import BackupInfo, backup_dir_for
+from meshprovision.db.fs_primitives import _BACKUP_DIR_MODE, _FILE_MODE
 from meshprovision.errors import AtomicWriteError
 
 __all__ = [
@@ -61,8 +57,8 @@ KNOWN_GOOD_SUFFIX: Final[str] = ".known-good"
 
 Deliberately a ``.`` immediately after the stem, not a ``-``, so
 ``known_good_name``'s output never matches
-:func:`meshprovision.db.atomic_writer.list_backups`'/
-:func:`meshprovision.db.atomic_writer.prune_backups`'
+:func:`meshprovision.db.backups.list_backups`'/
+:func:`meshprovision.db.backups.prune_backups`'
 ``f"{target.stem}-*{target.suffix}"`` glob -- the known-good copy is a
 single stable slot outside the timestamped rotation, never pruned and
 never listed alongside it.
@@ -103,7 +99,7 @@ def known_good_info(target: Path, *, backup_dir: Path | None = None) -> BackupIn
     Args:
         target: The file to look up a known-good copy for.
         backup_dir: Directory the known-good copy is stored under.
-            Defaults to :func:`meshprovision.db.atomic_writer.backup_dir_for`'s
+            Defaults to :func:`meshprovision.db.backups.backup_dir_for`'s
             resolution.
 
     Returns:
@@ -136,7 +132,7 @@ def _sidecar_name(target: Path) -> str:
     Returns:
         For example ``"nodes_db.known-good.json"``. The ``.json``
         extension means this can never fullmatch
-        :func:`meshprovision.db.atomic_writer._backup_name_re`'s pattern
+        :func:`meshprovision.db.backups._backup_name_re`'s pattern
         or the glob that prefilters it, so it is never mistaken for a
         timestamped backup.
     """
@@ -250,7 +246,7 @@ def known_good_status(target: Path, *, backup_dir: Path | None = None) -> KnownG
     Args:
         target: The file to look up a known-good copy for.
         backup_dir: Directory the known-good copy is stored under.
-            Defaults to :func:`meshprovision.db.atomic_writer.backup_dir_for`'s
+            Defaults to :func:`meshprovision.db.backups.backup_dir_for`'s
             resolution.
 
     Returns:
@@ -387,7 +383,7 @@ def refresh_known_good(
             which uses ``fstat`` on the read fd so this describes exactly
             the inode ``content`` came from).
         backup_dir: Directory to store the known-good copy under.
-            Defaults to :func:`meshprovision.db.atomic_writer.backup_dir_for`'s
+            Defaults to :func:`meshprovision.db.backups.backup_dir_for`'s
             resolution.
 
     Returns:

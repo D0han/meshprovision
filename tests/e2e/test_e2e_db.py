@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.crypto.keys import generate_keypair
-from meshprovision.db import atomic_writer, ods, ods_write
+from meshprovision.db import backups, ods, ods_write
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.locking import lock_path_for
 from meshprovision.db.nodes import NodeRecord
@@ -582,7 +582,7 @@ def test_db_restore_overwrites_the_live_database(
     # the restore's own post-load verification also refreshes the
     # known-good copy here, since --backup-dir happens to coincide with
     # this database's own default-resolved backup directory.
-    assert len(atomic_writer.list_backups(db_path, backup_dir=backup_dir)) == 2
+    assert len(backups.list_backups(db_path, backup_dir=backup_dir)) == 2
 
 
 def test_db_restore_json_reports_target_and_source(
@@ -782,7 +782,7 @@ def test_db_restore_known_good_and_a_path_together_is_a_usage_error(
     seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
     invoke(runner, ["db", "verify"], env)
     db_path = Path(env["MESHPROVISION_DB_PATH"])
-    backup_dir = atomic_writer.backup_dir_for(db_path)
+    backup_dir = backups.backup_dir_for(db_path)
     known_good = backup_dir / f"{db_path.stem}.known-good.ods"
 
     result = invoke(runner, ["db", "restore", str(known_good), "--known-good", "--yes"], env)
@@ -1065,8 +1065,8 @@ def test_known_good_restore_never_crosses_two_same_named_databases(
     restored = ods.load_database(fleet_a_path)
     assert "FLEETB_pub" not in {row["key_ref"] for row in restored.keys}
 
-    fleet_a_backups = atomic_writer.backup_dir_for(fleet_a_path)
-    fleet_b_backups = atomic_writer.backup_dir_for(fleet_b_path)
+    fleet_a_backups = backups.backup_dir_for(fleet_a_path)
+    fleet_b_backups = backups.backup_dir_for(fleet_b_path)
     assert fleet_a_backups.is_dir()
     assert fleet_b_backups.is_dir()
     assert fleet_a_backups != fleet_b_backups
@@ -1088,8 +1088,8 @@ def test_prune_backups_never_shares_a_retention_budget_across_fleets(
     for _ in range(3):
         assert invoke(runner, ["db", "backup", "--retention", "1"], env_b).exit_code == 0
 
-    assert len(atomic_writer.list_backups(fleet_a_path)) == 1
-    assert len(atomic_writer.list_backups(fleet_b_path)) == 1
+    assert len(backups.list_backups(fleet_a_path)) == 1
+    assert len(backups.list_backups(fleet_b_path)) == 1
 
 
 def test_db_restore_known_good_refuses_an_unverified_copy_by_directory_copy(
@@ -1118,7 +1118,7 @@ def test_db_restore_known_good_refuses_an_unverified_copy_by_directory_copy(
     assert "could not be confirmed" in refused.stderr
     assert fleet_c_path.read_bytes() == before_bytes
 
-    known_good_file = atomic_writer.backup_dir_for(fleet_c_path) / "nodes_db.known-good.ods"
+    known_good_file = backups.backup_dir_for(fleet_c_path) / "nodes_db.known-good.ods"
     explicit = invoke(runner, ["db", "restore", str(known_good_file), "--yes"], env_c)
 
     assert explicit.exit_code == 0
@@ -1146,7 +1146,7 @@ def test_load_failure_hint_for_an_unverified_known_good_points_at_its_path(
     env_a = _fleet_env(tmp_path, "fleetA")
     assert invoke(runner, ["init", "--yes"], env_a).exit_code == 0
     fleet_a_path = Path(env_a["MESHPROVISION_DB_PATH"])
-    sidecar = atomic_writer.backup_dir_for(fleet_a_path) / "nodes_db.known-good.json"
+    sidecar = backups.backup_dir_for(fleet_a_path) / "nodes_db.known-good.json"
     sidecar.unlink()  # simulate a copy left by an older meshprovision
 
     fleet_a_path.write_bytes(b"not a zip file at all")
@@ -1227,7 +1227,7 @@ def test_write_through_a_symlinked_db_path_updates_the_real_file(
     assert lock_path_for(real_target).exists()
     assert not (link.parent / "nodes_db.ods.lock").exists()
 
-    assert atomic_writer.backup_dir_for(real_target).is_dir()
+    assert backups.backup_dir_for(real_target).is_dir()
     assert not (link.parent / "backups").exists()
 
 

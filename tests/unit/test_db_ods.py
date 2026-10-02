@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 
 from meshprovision.crypto.keys import encode_key
-from meshprovision.db import atomic_writer, cell_validation, ods, ods_read, ods_write, schema
+from meshprovision.db import backups, cell_validation, ods, ods_read, ods_write, schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.known_good import KnownGoodProvenance, known_good_info, known_good_status
 from meshprovision.db.nodes import NodeRecord
@@ -1097,7 +1097,7 @@ def test_ods_database_save_backup_true_creates_one_timestamped_backup(
     db.save(backup=True)
     assert db.dirty() is False
 
-    backups_dir = atomic_writer.backup_dir_for(path)
+    backups_dir = backups.backup_dir_for(path)
     assert backups_dir.is_dir()
     timestamped = list(backups_dir.glob(f"{path.stem}-*{path.suffix}"))
     assert len(timestamped) == 1
@@ -1189,7 +1189,7 @@ def test_ods_database_save_raises_on_concurrent_external_edit(tmp_path: Path) ->
     # independently refreshes (see known_good.refresh_known_good) lives
     # under a different, non-timestamped name and is not what this
     # guards against -- list_backups only ever matches the former.
-    assert atomic_writer.list_backups(path) == ()
+    assert backups.list_backups(path) == ()
 
 
 def test_ods_database_save_succeeds_after_a_touch_only_external_change(tmp_path: Path) -> None:

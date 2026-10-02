@@ -23,7 +23,7 @@ The three first-run artifacts, and how each is created:
 
 Every write here refuses to overwrite an existing file: :func:`write_new_file`
 writes to a sibling temp file first and publishes it at the final name via
-:func:`meshprovision.db.atomic_writer.link_no_clobber`, whose ``os.link``/
+:func:`meshprovision.db.fs_primitives.link_no_clobber`, whose ``os.link``/
 ``O_EXCL`` claim is what the no-clobber guarantee comes from -- not a
 check-then-write race, and not a partial file left at the final name if the
 write itself fails or is interrupted.
@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
 
 from meshprovision.config.settings import find_env_file
-from meshprovision.db import atomic_writer
+from meshprovision.db import fs_primitives
 from meshprovision.errors import ConfigError, SettingsError
 
 if TYPE_CHECKING:
@@ -327,7 +327,7 @@ def write_new_file(path: Path, text: str, *, mode: int = 0o644) -> None:
 
     Writes to a sibling temp file in ``path``'s own directory first, then
     publishes it at ``path`` via
-    :func:`meshprovision.db.atomic_writer.link_no_clobber` -- whose
+    :func:`meshprovision.db.fs_primitives.link_no_clobber` -- whose
     ``os.link``/``O_EXCL`` claim is what the no-clobber guarantee comes
     from, not a separate ``.exists()`` check racing the write. This also
     means a write that fails partway through, or is interrupted, never
@@ -353,7 +353,7 @@ def write_new_file(path: Path, text: str, *, mode: int = 0o644) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
-        atomic_writer.link_no_clobber(tmp_path, path)
+        fs_primitives.link_no_clobber(tmp_path, path)
     except FileExistsError as exc:
         with contextlib.suppress(OSError):
             tmp_path.unlink()

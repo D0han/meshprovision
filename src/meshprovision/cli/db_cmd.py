@@ -36,7 +36,7 @@ provenance sidecar (see :func:`~meshprovision.db.known_good
 .known_good_status`) confirms the copy actually belongs to this
 database; ``restore --known-good`` refuses otherwise. Both the backup
 directory and the known-good copy live next to the database itself (see
-:func:`~meshprovision.db.atomic_writer.backup_dir_for`), never at a
+:func:`~meshprovision.db.backups.backup_dir_for`), never at a
 single CWD-relative location shared by every same-named database.
 """
 
@@ -58,7 +58,7 @@ from meshprovision.cli.common import (
     pass_cli,
 )
 from meshprovision.cli.help_format import MeshGroup
-from meshprovision.db import atomic_writer, locking, ods, schema
+from meshprovision.db import atomic_writer, backups, locking, ods, schema
 from meshprovision.db.known_good import (
     KnownGoodProvenance,
     known_good_path,
@@ -185,7 +185,7 @@ def db_verify(ctx: CliContext, *, strict: bool, json_output: bool) -> None:
 @click.option(
     "--retention",
     type=click.IntRange(min=0),
-    default=atomic_writer.DEFAULT_RETENTION,
+    default=backups.DEFAULT_RETENTION,
     show_default=True,
     help="Number of backups to retain.",
 )
@@ -209,7 +209,7 @@ def db_backup(
     Writes only into the backup directory; never rewrites the database
     itself. Deliberately does not take the cross-process write lock (see
     :mod:`meshprovision.db.locking`): ``shutil.copy2`` (used by
-    :func:`~meshprovision.db.atomic_writer.create_backup`) reads whichever
+    :func:`~meshprovision.db.backups.create_backup`) reads whichever
     inode it opened through to completion even if a concurrent writer's
     ``os.replace`` re-points the path mid-copy, so the backup is always a
     consistent snapshot of some version of the database. Do not "fix"
@@ -223,7 +223,7 @@ def db_backup(
     unverified copy (see :func:`~meshprovision.db.known_good
     .known_good_status`) is visibly not one ``--known-good`` will accept.
     It also prints a one-line notice (see :func:`~meshprovision.db
-    .atomic_writer.legacy_backup_notice`) when matching backups are
+    .backups.legacy_backup_notice`) when matching backups are
     sitting in the old, pre-per-database ``data/backups`` location for a
     non-default ``--db-path``.
 
@@ -241,16 +241,16 @@ def db_backup(
             back up), or the backup copy fails.
     """
     path = ctx.settings.db_path
-    resolved_backup_dir = atomic_writer.backup_dir_for(path, backup_dir)
+    resolved_backup_dir = backups.backup_dir_for(path, backup_dir)
 
     if list_only:
-        infos = atomic_writer.list_backups(path, backup_dir=resolved_backup_dir)
+        infos = backups.list_backups(path, backup_dir=resolved_backup_dir)
         # Deliberately not resolved_backup_dir: the known-good copy always
         # lives at this database's own default-resolved location
         # (load_database() never sees a per-invocation --backup-dir
         # override), independent of what this specific --backup-dir names.
         status = known_good_status(path)
-        notice = atomic_writer.legacy_backup_notice(path, backup_dir=backup_dir)
+        notice = backups.legacy_backup_notice(path, backup_dir=backup_dir)
         if json_output:
             payload: dict[str, object] = {
                 "backups": [
@@ -295,9 +295,7 @@ def db_backup(
     if not path.is_file():
         raise AtomicWriteError(f"Nothing to back up: {path} does not exist.", path=str(path))
 
-    backup_info = atomic_writer.create_backup(
-        path, backup_dir=resolved_backup_dir, retention=retention
-    )
+    backup_info = backups.create_backup(path, backup_dir=resolved_backup_dir, retention=retention)
     if backup_info is None:
         raise AtomicWriteError(f"Nothing to back up: {path} does not exist.", path=str(path))
 
@@ -390,7 +388,7 @@ def db_restore(
             ``--backup-dir``. Never affects where the known-good copy
             itself is looked up -- that is always this database's own
             default-resolved location (see :func:`~meshprovision.db
-            .atomic_writer.backup_dir_for`), when ``--known-good`` is
+            .backups.backup_dir_for`), when ``--known-good`` is
             used.
         json_output: Whether to emit JSON, from ``--json``.
 
@@ -409,7 +407,7 @@ def db_restore(
     """
     ctx = ctx.with_assume_yes(yes)
     path = ctx.settings.db_path
-    resolved_backup_dir = atomic_writer.backup_dir_for(path, backup_dir)
+    resolved_backup_dir = backups.backup_dir_for(path, backup_dir)
 
     if use_known_good and backup is not None:
         raise click.UsageError("Pass either BACKUP or --known-good, not both.")
