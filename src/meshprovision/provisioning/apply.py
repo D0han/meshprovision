@@ -699,6 +699,24 @@ def verify_plan(
     if long_result is not None:
         results.append(long_result)
 
+    if plan.name_change.is_unmessagable_changed:
+        desired_is_unmessagable = plan.name_change.desired_is_unmessagable
+        if live_after.is_unmessagable == desired_is_unmessagable:
+            results.append(
+                WriteResult("owner", WriteStatus.CONFIRMED, "confirmed", field="is_unmessagable")
+            )
+        else:
+            results.append(
+                WriteResult(
+                    "owner",
+                    WriteStatus.UNCONFIRMED,
+                    "value mismatch after write",
+                    field="is_unmessagable",
+                    expected=str(desired_is_unmessagable),
+                    actual=str(live_after.is_unmessagable),
+                )
+            )
+
     for change in plan.sections:
         if attempted_sections is not None and change.section not in attempted_sections:
             continue
@@ -766,6 +784,15 @@ def verify_plan(
 def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | None:
     """Execute the name (owner) phase of a plan.
 
+    Always passes ``is_licensed=plan.name_change.desired_is_licensed``
+    (which always equals the device's current live value -- see
+    :class:`~meshprovision.provisioning.plan_types.NameChange`) so this
+    write never resets it to ``Node.setOwner``'s own ``False`` default.
+    ``is_unmessagable`` is passed through unconditionally too;
+    ``Node.setOwner`` only touches the device's value when it is not
+    ``None``, so this is a no-op whenever neither the template nor the
+    live device has ever set one.
+
     Args:
         iface: The connected interface to write through.
         plan: The plan whose ``name_change`` should be applied.
@@ -782,6 +809,8 @@ def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | Non
         iface.localNode.setOwner(
             long_name=plan.name_change.desired_long_name,
             short_name=plan.name_change.desired_short_name,
+            is_licensed=plan.name_change.desired_is_licensed,
+            is_unmessagable=plan.name_change.desired_is_unmessagable,
         )
     except (*_DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
         return WriteResult("owner", WriteStatus.FAILED, f"Failed to set owner: {exc}")

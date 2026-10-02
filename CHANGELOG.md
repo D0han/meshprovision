@@ -179,6 +179,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timestamp and `mesh db restore --known-good`, a new flag that restores
   it without needing to know its path. `mesh db backup --list` also
   reports its timestamp when one exists.
+- A template `is_unmessagable` field ("infrastructure node" -- a sensor or
+  repeater that should never show up as a target for direct messages),
+  written through the same `Node.setOwner()` admin message as
+  `short_name`/`long_name`. `User.is_unmessagable` is a protobuf field on
+  `meshtastic.protobuf.mesh_pb2.User`, not on `config.device`, so it has
+  no section of its own -- it slots into the existing name-write (owner)
+  phase instead, verified alongside `short_name`/`long_name`. Omitted or
+  `null` (the default) leaves the device's current value untouched; there
+  is no CLI override, unlike the names.
 
 ### Changed
 
@@ -802,3 +811,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   distinct canonical owner (a cloned key), an explicit `--node-id`
   overrides the tier outright, otherwise it raises `NodeIdentityError`
   naming every matching owner, regardless of `--force`.
+- The owner (name) write phase silently reset a device's `is_licensed`
+  flag to `false` on every single run that touched it, including a run
+  that only renamed the node. `iface.localNode.setOwner()` was called
+  with no `is_licensed` argument, and the real `Node.setOwner()` defaults
+  it to `False` -- and always applies that default whenever `long_name`
+  is set, which this project's owner-phase write always does. An amateur
+  radio operator's licensed status affects which LoRa regions/power
+  levels are legally permitted, making this a correctness/compliance bug,
+  not just cosmetic drift. `_run_name_phase` now always passes
+  `is_licensed=plan.name_change.desired_is_licensed`, which echoes back
+  whatever the device already reports (meshprovision has no template/CLI
+  control over this field) instead of letting it fall to the library's
+  default.

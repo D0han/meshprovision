@@ -331,6 +331,39 @@ def test_read_live_config_with_my_info() -> None:
     assert live.hw_model == "RAK4631"
 
 
+def test_read_live_config_is_unmessagable_present_true() -> None:
+    iface = _FakeIface()
+    iface._user["isUnmessagable"] = True
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert live.is_unmessagable is True
+
+
+def test_read_live_config_is_unmessagable_present_false() -> None:
+    iface = _FakeIface()
+    iface._user["isUnmessagable"] = False
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert live.is_unmessagable is False
+
+
+def test_read_live_config_is_unmessagable_absent_is_none() -> None:
+    iface = _FakeIface()
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert live.is_unmessagable is None
+
+
+def test_read_live_config_is_licensed_present_true() -> None:
+    iface = _FakeIface()
+    iface._user["isLicensed"] = True
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert live.is_licensed is True
+
+
+def test_read_live_config_is_licensed_absent_defaults_false() -> None:
+    iface = _FakeIface()
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+    assert live.is_licensed is False
+
+
 def test_read_live_config_hw_model_unrecognized_preserves_raw_value() -> None:
     """An hw_model the enum table doesn't recognize must still be captured raw.
 

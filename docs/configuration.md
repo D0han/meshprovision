@@ -83,6 +83,17 @@ warns at load time if the pattern yields fewer names than that;
 namespace is in use; exhaustion of the namespace is a clear error naming
 the offending pattern.
 
+```yaml
+is_unmessagable: false
+```
+
+An owner-identity field, sent through the same admin message as the names
+above (`Node.setOwner`'s `User.is_unmessagable`). `true` marks the node
+"infrastructure" -- a sensor or repeater that should never show up as a
+target for direct messages. Omitted or `null` (the default) leaves the
+device's current value untouched; there is no CLI override, unlike
+`short_name`/`long_name`.
+
 ### Admin nodes
 
 ```yaml

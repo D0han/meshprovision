@@ -254,6 +254,16 @@ def test_default_channel_section_round_trip() -> None:
     assert dumped == {"position_precision": 12, "is_muted": True}
 
 
+def test_is_unmessagable_round_trip() -> None:
+    template = TemplateConfig(is_unmessagable=True)
+    assert template.is_unmessagable is True
+
+
+def test_is_unmessagable_defaults_to_none() -> None:
+    template = TemplateConfig()
+    assert template.is_unmessagable is None
+
+
 def test_default_channel_section_negative_position_precision_rejected() -> None:
     with pytest.raises(TemplateValidationError):
         load_template_text(

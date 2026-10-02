@@ -148,6 +148,40 @@ def test_factory_provisioning_writes_default_channel_before_security(
     assert "No changes needed." in second.stderr
 
 
+def test_factory_provisioning_sets_is_unmessagable_from_template(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(is_unmessagable=True))
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert iface.user["isUnmessagable"] is True
+
+
+def test_factory_provisioning_preserves_an_already_licensed_owner(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """Regression test: the owner-phase write must never reset ``is_licensed``.
+
+    ``Node.setOwner`` defaults ``is_licensed`` to ``False`` whenever
+    ``long_name`` is set -- which the owner-phase write always does,
+    including on this factory run's initial name allocation. Covers the
+    fix end to end, not just at the unit level.
+    """
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.user["isLicensed"] = True
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert iface.user["isLicensed"] is True
+
+
 def test_no_reconnect_skips_the_reconnect_verify_connection(
     runner: CliRunner,
     env: dict[str, str],

@@ -178,6 +178,43 @@ def test_already_correct_node_plan_is_empty(make_live, template, keypair) -> Non
 
 
 # ---------------------------------------------------------------------------
+# is_unmessagable / is_licensed.
+# ---------------------------------------------------------------------------
+
+
+def test_is_unmessagable_from_template_wins_over_live(make_live, template) -> None:
+    live = make_live(template, is_unmessagable=False, security=make_security(empty=True))
+    template2 = template.model_copy(update={"is_unmessagable": True})
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+
+    assert plan.name_change.current_is_unmessagable is False
+    assert plan.name_change.desired_is_unmessagable is True
+    assert plan.name_change.is_unmessagable_changed is True
+
+
+def test_is_unmessagable_none_in_template_falls_back_to_live(make_live, template) -> None:
+    live = make_live(template, is_unmessagable=True, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+
+    assert plan.name_change.current_is_unmessagable is True
+    assert plan.name_change.desired_is_unmessagable is True
+    assert plan.name_change.is_unmessagable_changed is False
+
+
+def test_is_licensed_always_echoed_from_live_with_no_template_control(make_live, template) -> None:
+    live = make_live(template, is_licensed=True, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+
+    assert plan.name_change.current_is_licensed is True
+    assert plan.name_change.desired_is_licensed is True
+
+
+# ---------------------------------------------------------------------------
 # Drift repair.
 # ---------------------------------------------------------------------------
 

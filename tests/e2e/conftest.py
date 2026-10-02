@@ -228,23 +228,37 @@ class FakeNode:
         self.transaction_calls.append("<commit>")
 
     def setOwner(  # noqa: N802 -- must match meshtastic's own Node.setOwner spelling
-        self, long_name: str | None = None, short_name: str | None = None, **kwargs: object
+        self,
+        long_name: str | None = None,
+        short_name: str | None = None,
+        is_licensed: bool = False,
+        is_unmessagable: bool | None = None,
     ) -> None:
         """Record a name change onto the owning interface's ``user`` dict.
+
+        Mirrors the real ``Node.setOwner``'s own conditionals exactly:
+        ``is_licensed`` is only recorded when ``long_name`` is set (the
+        real admin message only ever carries it alongside a long_name
+        write), and ``is_unmessagable`` is only recorded when it is not
+        ``None`` (``None`` means "don't touch" in the real protocol).
 
         Args:
             long_name: The new long name, or ``None`` to leave it
                 unchanged.
             short_name: The new short name, or ``None`` to leave it
                 unchanged.
-            **kwargs: Ignored; accepted for signature compatibility with
-                the real ``Node.setOwner``.
+            is_licensed: The owner's licensed status, sent only when
+                ``long_name`` is set.
+            is_unmessagable: The owner's unmessagable flag, sent only
+                when not ``None``.
         """
-        del kwargs
         if short_name is not None:
             self._iface.user["shortName"] = short_name
         if long_name is not None:
             self._iface.user["longName"] = long_name
+            self._iface.user["isLicensed"] = is_licensed
+        if is_unmessagable is not None:
+            self._iface.user["isUnmessagable"] = is_unmessagable
 
 
 class FakeMeshInterface:
@@ -311,10 +325,11 @@ class FakeMeshInterface:
 
         resolved_short = short_name if short_name is not None else self.nid.hex[-4:]
         resolved_long = long_name if long_name is not None else f"Meshtastic {self.nid.hex[-4:]}"
-        self.user: dict[str, str] = {
+        self.user: dict[str, str | bool] = {
             "shortName": resolved_short,
             "longName": resolved_long,
             "hwModel": hw_model,
+            "isLicensed": False,
         }
 
         self.localNode = FakeNode(self)
@@ -327,7 +342,7 @@ class FakeMeshInterface:
         """
         return {"num": self.nid.num}
 
-    def getMyUser(self) -> dict[str, str]:  # noqa: N802 -- matches MeshInterface's spelling
+    def getMyUser(self) -> dict[str, str | bool]:  # noqa: N802 -- matches MeshInterface's spelling
         """Return a copy of this device's user/identity dict.
 
         Returns:
@@ -573,7 +588,11 @@ class _FakeConnectionNode:
         persisted.CopyFrom(staged)
 
     def setOwner(  # noqa: N802 -- must match meshtastic's own Node.setOwner spelling
-        self, long_name: str | None = None, short_name: str | None = None, **kwargs: object
+        self,
+        long_name: str | None = None,
+        short_name: str | None = None,
+        is_licensed: bool = False,
+        is_unmessagable: bool | None = None,
     ) -> None:
         """Push an owner (name) write straight to the device -- these persist immediately.
 
@@ -582,8 +601,10 @@ class _FakeConnectionNode:
                 unchanged.
             short_name: The new short name, or ``None`` to leave it
                 unchanged.
-            **kwargs: Ignored; accepted for signature compatibility with
-                the real ``Node.setOwner``.
+            is_licensed: The owner's licensed status, sent only when
+                ``long_name`` is set -- see :meth:`FakeNode.setOwner`.
+            is_unmessagable: The owner's unmessagable flag, sent only
+                when not ``None`` -- see :meth:`FakeNode.setOwner`.
 
         Raises:
             OSError: If this connection was already closed.
@@ -591,7 +612,10 @@ class _FakeConnectionNode:
         if self._connection.closed:
             raise OSError(errno.EBADF, "fake connection is closed")
         self._connection._device.localNode.setOwner(
-            long_name=long_name, short_name=short_name, **kwargs
+            long_name=long_name,
+            short_name=short_name,
+            is_licensed=is_licensed,
+            is_unmessagable=is_unmessagable,
         )
 
 

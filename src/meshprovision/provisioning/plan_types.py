@@ -205,21 +205,40 @@ class NameChange:
         desired_short_name: The ``short_name`` the plan intends.
         current_long_name: The live ``long_name``.
         desired_long_name: The ``long_name`` the plan intends.
+        current_is_unmessagable: The live ``User.is_unmessagable``.
+        desired_is_unmessagable: The ``is_unmessagable`` the plan
+            intends -- configurable: the template may set a desired
+            value, or leave it ``None`` to keep the device's current
+            value, the same "``None`` means don't touch" convention
+            used throughout this codebase's optional template fields.
+        current_is_licensed: The live ``User.is_licensed``.
+        desired_is_licensed: Always equal to :attr:`current_is_licensed`
+            -- **preserve-only**: meshprovision has no control surface
+            over this field (no template field, no CLI flag). These two
+            fields exist purely so the owner-phase write can echo back
+            whatever the device already reports instead of accidentally
+            resetting it (``Node.setOwner`` defaults ``is_licensed`` to
+            ``False`` whenever ``long_name`` is set, which this
+            project's owner-phase write always does).
     """
 
     current_short_name: str
     desired_short_name: str
     current_long_name: str
     desired_long_name: str
+    current_is_unmessagable: bool | None
+    desired_is_unmessagable: bool | None
+    current_is_licensed: bool
+    desired_is_licensed: bool
 
     @property
     def is_empty(self) -> bool:
         """Whether both names are already at their desired values.
 
         Returns:
-            ``True`` if neither name differs.
+            ``True`` if neither name nor ``is_unmessagable`` differs.
         """
-        return not self.short_changed and not self.long_changed
+        return not self.short_changed and not self.long_changed and not self.is_unmessagable_changed
 
     @property
     def short_changed(self) -> bool:
@@ -240,6 +259,16 @@ class NameChange:
             :attr:`desired_long_name`.
         """
         return self.current_long_name != self.desired_long_name
+
+    @property
+    def is_unmessagable_changed(self) -> bool:
+        """Whether ``is_unmessagable`` needs to change.
+
+        Returns:
+            ``True`` if :attr:`current_is_unmessagable` differs from
+            :attr:`desired_is_unmessagable`.
+        """
+        return self.current_is_unmessagable != self.desired_is_unmessagable
 
 
 class LockdownReason(StrEnum):

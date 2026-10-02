@@ -339,12 +339,16 @@ class _FakeLocalNode:
         self,
         long_name: str | None = None,
         short_name: str | None = None,
-        **_kw: object,
+        is_licensed: bool = False,
+        is_unmessagable: bool | None = None,
     ) -> None:
         if short_name is not None:
             self._iface.user["shortName"] = short_name
         if long_name is not None:
             self._iface.user["longName"] = long_name
+            self._iface.user["isLicensed"] = is_licensed
+        if is_unmessagable is not None:
+            self._iface.user["isUnmessagable"] = is_unmessagable
 
 
 _DEFAULT_NODE_NUM: Final = 0xDEADBE01
@@ -356,10 +360,14 @@ class _FakeIfaceForApply:
 
         self.myInfo = SimpleNamespace(my_node_num=node_num)
         self.metadata = SimpleNamespace(hw_model="RAK4631", firmware_version="2.7.11")
-        self.user: dict[str, str] = {"shortName": "MT00", "longName": "Meshtastic MT00"}
+        self.user: dict[str, str | bool] = {
+            "shortName": "MT00",
+            "longName": "Meshtastic MT00",
+            "isLicensed": False,
+        }
         self.localNode = _FakeLocalNode(self)
 
-    def getMyUser(self) -> dict[str, str]:  # noqa: N802 -- real MeshInterface method name
+    def getMyUser(self) -> dict[str, str | bool]:  # noqa: N802 -- real MeshInterface method name
         return dict(self.user)
 
     def getPublicKey(self) -> str | None:  # noqa: N802 -- real MeshInterface method name
@@ -442,6 +450,46 @@ def test_verify_plan_mismatch_unconfirmed_with_expected_actual(make_live) -> Non
     assert role_result.status == WriteStatus.UNCONFIRMED
     assert role_result.expected == "ROUTER"
     assert role_result.actual == "CLIENT"
+
+
+def test_verify_plan_is_unmessagable_confirmed(make_live) -> None:
+    template = _template().model_copy(update={"is_unmessagable": True})
+    live = make_live(template, is_unmessagable=None, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    assert plan.name_change.is_unmessagable_changed is True
+
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        is_unmessagable=True,
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    result = next(r for r in results if r.field == "is_unmessagable")
+    assert result.status == WriteStatus.CONFIRMED
+
+
+def test_verify_plan_is_unmessagable_unconfirmed(make_live) -> None:
+    template = _template().model_copy(update={"is_unmessagable": True})
+    live = make_live(template, is_unmessagable=None, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    assert plan.name_change.is_unmessagable_changed is True
+
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        is_unmessagable=False,
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    result = next(r for r in results if r.field == "is_unmessagable")
+    assert result.status == WriteStatus.UNCONFIRMED
+    assert result.expected == "True"
+    assert result.actual == "False"
 
 
 def test_apply_reuses_plan_values_equal() -> None:
@@ -1395,6 +1443,58 @@ def test_apply_plan_owner_write_failure_reports_failed_not_a_crash(make_live) ->
     owner_result = next(r for r in outcome.results if r.section == "owner")
     assert owner_result.status == WriteStatus.FAILED
     assert "Failed to set owner" in owner_result.message
+
+
+def test_apply_plan_preserves_is_licensed_when_only_short_name_changes(make_live) -> None:
+    """Regression test: the owner-phase write must never reset ``is_licensed``.
+
+    ``Node.setOwner`` defaults ``is_licensed`` to ``False`` whenever
+    ``long_name`` is set -- and ``_run_name_phase`` always passes a
+    concrete ``long_name`` whenever it runs at all, even when only
+    ``short_name`` actually changed. Before the fix, this silently reset
+    an already-licensed device's ``is_licensed`` flag to ``False`` on
+    every single run that touched the name phase.
+    """
+    template = _template()
+    live = make_live(template, is_licensed=True, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="MT01",
+    )
+    plan = build_plan(inputs)
+    assert plan.name_change.short_changed is True
+    assert plan.name_change.long_changed is False
+    assert plan.name_change.desired_is_licensed is True
+    kp = generate_keypair()
+
+    iface = _FakeIfaceForApply()
+    iface.user["isLicensed"] = True
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert outcome.ok is True, outcome.describe()
+    assert iface.user["isLicensed"] is True
+
+
+def test_apply_plan_writes_is_unmessagable_when_template_configures_it(make_live) -> None:
+    template = _template().model_copy(update={"is_unmessagable": True})
+    live = make_live(template, is_unmessagable=None, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    assert plan.name_change.is_unmessagable_changed is True
+    kp = generate_keypair()
+
+    iface = _FakeIfaceForApply()
+    session = InPlaceSession(iface)  # type: ignore[arg-type]
+    outcome = apply_plan(plan, session, keypair=kp)
+
+    assert outcome.ok is True, outcome.describe()
+    assert iface.user["isUnmessagable"] is True
+    is_unmessagable_result = next(r for r in outcome.results if r.field == "is_unmessagable")
+    assert is_unmessagable_result.status == WriteStatus.CONFIRMED
 
 
 class _FakeSessionTracksRefresh:
@@ -2542,7 +2642,7 @@ class _FakeIfaceRaisesOnUser(_FakeIfaceForApply):
     that must fail to reach the ``DetectionError`` branch under test.
     """
 
-    def getMyUser(self) -> dict[str, str]:  # noqa: N802 -- real MeshInterface method name
+    def getMyUser(self) -> dict[str, str | bool]:  # noqa: N802 -- real MeshInterface method name
         raise ValueError("serial read timed out")
 
 
@@ -2560,12 +2660,16 @@ class _FakeLocalNodeTruncatesLongName(_FakeLocalNode):
         self,
         long_name: str | None = None,
         short_name: str | None = None,
-        **_kw: object,
+        is_licensed: bool = False,
+        is_unmessagable: bool | None = None,
     ) -> None:
         if short_name is not None:
             self._iface.user["shortName"] = short_name
         if long_name is not None:
             self._iface.user["longName"] = long_name[:20]
+            self._iface.user["isLicensed"] = is_licensed
+        if is_unmessagable is not None:
+            self._iface.user["isUnmessagable"] = is_unmessagable
 
 
 class _FakeIfaceTruncatesLongName(_FakeIfaceForApply):

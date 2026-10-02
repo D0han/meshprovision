@@ -40,6 +40,8 @@ def live_config_from_template(
     node_id: str = "deadbe01",
     short_name: str = "MT00",
     long_name: str = "Meshtastic MT00",
+    is_unmessagable: bool | None = None,
+    is_licensed: bool = False,
     hw_model: str = "RAK4631",
     hw_model_raw: str | None = None,
     firmware_version: str = "2.7.11",
@@ -56,6 +58,8 @@ def live_config_from_template(
             :meth:`~meshprovision.nodeid.NodeId.from_hex` accepts.
         short_name: The device's current ``short_name``.
         long_name: The device's current ``long_name``.
+        is_unmessagable: The device's current ``User.is_unmessagable``.
+        is_licensed: The device's current ``User.is_licensed``.
         hw_model: The device's reported hardware model.
         hw_model_raw: The raw value ``hw_model`` was supposedly resolved
             from -- only meaningful (and normally only set) alongside
@@ -122,6 +126,8 @@ def live_config_from_template(
         node_id=NodeId.from_hex(node_id),
         short_name=short_name,
         long_name=long_name,
+        is_unmessagable=is_unmessagable,
+        is_licensed=is_licensed,
         hw_model=hw_model,
         hw_model_raw=hw_model_raw,
         firmware_version=firmware_version,

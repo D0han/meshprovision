@@ -117,7 +117,7 @@ _REBOOT_LORA_FIELDS: Final[frozenset[str]] = frozenset({"region", "modem_preset"
 
 
 def _plan_name_change(inputs: PlanInputs) -> NameChange:
-    """Resolve the desired ``short_name``/``long_name`` (step 1).
+    """Resolve the desired ``short_name``/``long_name``/``is_unmessagable`` (step 1).
 
     Args:
         inputs: The plan inputs.
@@ -126,7 +126,10 @@ def _plan_name_change(inputs: PlanInputs) -> NameChange:
         The :class:`NameChange`, computed from
         ``inputs.desired_short_name``/``desired_long_name`` when set,
         else the database entry's name when non-empty, else the live
-        name.
+        name. ``is_unmessagable`` is resolved from ``template.is_unmessagable``
+        when set, else the live value (template-only -- no CLI override,
+        unlike the names). ``is_licensed`` is always echoed from the live
+        value, preserve-only.
     """
     live = inputs.live
     db_entry = inputs.db_entry
@@ -139,11 +142,20 @@ def _plan_name_change(inputs: PlanInputs) -> NameChange:
     if desired_long is None:
         desired_long = db_entry.long_name if db_entry and db_entry.long_name else live.long_name
 
+    template_is_unmessagable = inputs.template.is_unmessagable
+    desired_is_unmessagable = (
+        template_is_unmessagable if template_is_unmessagable is not None else live.is_unmessagable
+    )
+
     return NameChange(
         current_short_name=live.short_name,
         desired_short_name=desired_short,
         current_long_name=live.long_name,
         desired_long_name=desired_long,
+        current_is_unmessagable=live.is_unmessagable,
+        desired_is_unmessagable=desired_is_unmessagable,
+        current_is_licensed=live.is_licensed,
+        desired_is_licensed=live.is_licensed,
     )
 
 

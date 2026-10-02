@@ -640,6 +640,12 @@ class TemplateConfig(BaseModel):
         name_capacity_strict: Whether falling below
             :attr:`name_min_capacity` is a hard error rather than a
             warning.
+        is_unmessagable: Owner-identity field for nodes that should
+            never receive direct messages (sensors/repeaters/
+            infrastructure devices) -- written through the same admin
+            message as :attr:`short_name_pattern`/:attr:`long_name_pattern`
+            (``Node.setOwner``'s ``User.is_unmessagable``). ``None``
+            (the default) leaves the device's current value untouched.
         admin_nodes: 0-3 admin node references. Each must resolve to a
             ``<ref>_pub`` row in the Keys sheet at provisioning time --
             that resolution is deliberately not attempted here, since
@@ -671,6 +677,7 @@ class TemplateConfig(BaseModel):
     name_min_capacity: int = Field(default=DEFAULT_MIN_CAPACITY, ge=1)
     name_capacity_warn_utilization: float = Field(default=DEFAULT_WARN_UTILIZATION, gt=0.0, le=1.0)
     name_capacity_strict: bool = False
+    is_unmessagable: bool | None = None
     admin_nodes: tuple[str, ...] = ()
     device: DeviceSection = Field(default_factory=DeviceSection)
     lora: LoraSection = Field(default_factory=LoraSection)

@@ -277,6 +277,19 @@ class LiveConfig:
         node_id: This device's node id.
         short_name: The device's current ``short_name``.
         long_name: The device's current ``long_name``.
+        is_unmessagable: The device's current ``User.is_unmessagable``
+            ("infrastructure node" -- never a target for direct
+            messages), or ``None`` when the device did not report it.
+            Written through the same admin message as
+            :attr:`short_name`/:attr:`long_name` (``Node.setOwner``).
+        is_licensed: The device's current ``User.is_licensed`` (amateur
+            radio operator status). Defaults to ``False`` when the
+            device did not report it, matching the protobuf's own
+            default. meshprovision has no control surface over this
+            field -- it is read only so the owner-phase write can echo
+            it back unchanged instead of resetting it (``Node.setOwner``
+            defaults ``is_licensed`` to ``False`` whenever ``long_name``
+            is set, which this project's owner-phase write always does).
         hw_model: Canonical ``HardwareModel`` enum name, or ``""`` when
             unknown.
         hw_model_raw: The device-reported hw_model value ``hw_model``
@@ -337,6 +350,8 @@ class LiveConfig:
     node_id: NodeId
     short_name: str = ""
     long_name: str = ""
+    is_unmessagable: bool | None = None
+    is_licensed: bool = False
     hw_model: str = ""
     hw_model_raw: str | None = None
     role_raw: str | None = None
@@ -629,6 +644,8 @@ def live_config_from_protobufs(
     node_id: NodeId,
     short_name: str = "",
     long_name: str = "",
+    is_unmessagable: bool | None = None,
+    is_licensed: bool = False,
     hw_model: str = "",
     hw_model_raw: str | None = None,
     role_raw: str | None = None,
@@ -644,6 +661,8 @@ def live_config_from_protobufs(
         node_id: The device's node id.
         short_name: The device's current ``short_name``.
         long_name: The device's current ``long_name``.
+        is_unmessagable: See :attr:`LiveConfig.is_unmessagable`.
+        is_licensed: See :attr:`LiveConfig.is_licensed`.
         hw_model: Canonical ``HardwareModel`` enum name, or ``""``.
         hw_model_raw: The raw value ``hw_model`` was resolved from, or
             ``None`` if the device reported nothing. See
@@ -691,6 +710,8 @@ def live_config_from_protobufs(
         node_id=node_id,
         short_name=short_name,
         long_name=long_name,
+        is_unmessagable=is_unmessagable,
+        is_licensed=is_licensed,
         hw_model=hw_model,
         hw_model_raw=hw_model_raw,
         role_raw=role_raw,
@@ -770,6 +791,11 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
         user = iface.getMyUser() or {}
         short_name = str(user.get("shortName", ""))
         long_name = str(user.get("longName", ""))
+        is_unmessagable_source = user.get("isUnmessagable")
+        is_unmessagable = (
+            bool(is_unmessagable_source) if is_unmessagable_source is not None else None
+        )
+        is_licensed = bool(user.get("isLicensed", False))
 
         hw_model_source = user.get("hwModel")
         if hw_model_source:
@@ -793,6 +819,8 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
             node_id=node_id,
             short_name=short_name,
             long_name=long_name,
+            is_unmessagable=is_unmessagable,
+            is_licensed=is_licensed,
             hw_model=hw_model,
             hw_model_raw=hw_model_raw,
             firmware_version=firmware_version,

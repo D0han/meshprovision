@@ -32,6 +32,12 @@ name_min_capacity: 100 # warn at template-load time if the pattern yields fewer 
 name_capacity_warn_utilization: 0.9 # warn on every run once 90% of the namespace is used
 name_capacity_strict: false # true turns the capacity-floor warning above into a hard load error
 
+# Owner-identity field, sent through the same admin message as the names
+# above. true marks this node "infrastructure" (sensors/repeaters) so it
+# never shows up as a target for direct messages. Leave unset (or
+# omitted entirely) to leave the device's current value untouched.
+# is_unmessagable: false
+
 # 0 to 3 admin node references (3 is the firmware's admin_key capacity
 # -- config.security.admin_key is a `repeated bytes` field limited to
 # three entries). Zero, or fewer than three, is a perfectly valid and
