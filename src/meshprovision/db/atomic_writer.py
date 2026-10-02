@@ -98,6 +98,15 @@ def atomic_write(
         target = target.resolve()
     except (OSError, RuntimeError) as exc:
         raise AtomicWriteError(f"Failed to resolve {target}: {exc}", path=str(target)) from exc
+    # Python 3.13+ no longer raises on a symlink loop in a non-strict
+    # resolve(); it hands back the unresolved path. A fully resolved path
+    # is never itself a symlink, so one that still is means a loop --
+    # refuse it rather than let os.replace swap the symlink for a file.
+    if target.is_symlink():
+        raise AtomicWriteError(
+            f"Failed to resolve {target}: symlink loop (too many levels of symbolic links)",
+            path=str(target),
+        )
 
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
