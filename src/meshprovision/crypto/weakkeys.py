@@ -53,7 +53,6 @@ checked.
 from __future__ import annotations
 
 import hmac
-import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -63,6 +62,7 @@ from meshprovision.crypto import keys
 from meshprovision.crypto.known_bad_keys import SMALL_ORDER_POINTS, load_known_bad_keys
 from meshprovision.crypto.redact import SecretBytes, fingerprint, reveal
 from meshprovision.errors import KeyMaterialError, WeakKeyError, WeakKeySeverity
+from meshprovision.firmware import parse_firmware_version
 
 __all__ = [
     "DUPLICATE_KEY_REASON",
@@ -111,8 +111,6 @@ MIN_DISTINCT_BYTES: Final[int] = 5
 
 Random 32 bytes have ~30 distinct values out of 256 possible.
 """
-
-_FIRMWARE_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 
 _SEVERITY_RANK: Final[dict[WeakKeySeverity, int]] = {
     WeakKeySeverity.CRITICAL: 0,
@@ -331,25 +329,6 @@ def _sort_findings(findings: list[WeakKeyFinding]) -> tuple[WeakKeyFinding, ...]
         An immutable, sorted tuple.
     """
     return tuple(sorted(findings, key=lambda f: (_SEVERITY_RANK[f.severity], f.check.value)))
-
-
-def parse_firmware_version(raw: str) -> tuple[int, int, int] | None:
-    """Parse a Meshtastic firmware version string.
-
-    Tolerates a leading ``v`` and a trailing build hash that Meshtastic
-    appends (for example ``"2.6.12.9861e82"``).
-
-    Args:
-        raw: The raw firmware version string.
-
-    Returns:
-        A ``(major, minor, patch)`` tuple, or ``None`` if ``raw`` does not
-        start with a recognizable ``[v]X.Y.Z`` prefix.
-    """
-    match = _FIRMWARE_VERSION_RE.match(raw)
-    if match is None:
-        return None
-    return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
 
 
 def is_vulnerable_firmware(version: str | tuple[int, int, int] | None) -> bool:

@@ -20,6 +20,7 @@ from meshprovision.provisioning.plan import (
     ChangePlan,
     FieldChange,
     PlanInputs,
+    PlanWarningCode,
     build_plan,
 )
 from tests.unit.conftest import make_security
@@ -1625,6 +1626,7 @@ def test_serial_and_debug_log_api_enabled_diffed_against_template(
 def test_packet_signature_policy_diffed_against_template(make_live, template, keypair) -> None:
     live = make_live(
         template,
+        firmware_version="2.8.0",
         security=make_security(
             keypair=keypair, packet_signature_policy="PACKET_SIGNATURE_POLICY_COMPATIBLE"
         ),
@@ -1652,6 +1654,110 @@ def test_packet_signature_policy_diffed_against_template(make_live, template, ke
     assert change.current == "PACKET_SIGNATURE_POLICY_COMPATIBLE"
     assert change.desired == "PACKET_SIGNATURE_POLICY_STRICT"
     assert change.reason == "template"
+    assert all(w.code != PlanWarningCode.FIELD_UNSUPPORTED_BY_FIRMWARE for w in plan.warnings)
+
+
+def _policy_plan(
+    make_live, template, keypair, *, firmware_version: str, live_policy: str, desired_policy: str
+) -> ChangePlan:
+    """Build a PROVISIONED plan diffing ``packet_signature_policy`` on the given firmware."""
+    live = make_live(
+        template,
+        firmware_version=firmware_version,
+        security=make_security(keypair=keypair, packet_signature_policy=live_policy),
+    )
+    opinionated_template = template.model_copy(
+        update={
+            "security": template.security.model_copy(
+                update={"packet_signature_policy": desired_policy}
+            )
+        }
+    )
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    return build_plan(
+        PlanInputs(
+            live=live,
+            template=opinionated_template,
+            db_entry=record,
+            state=detect.NodeState.PROVISIONED,
+        )
+    )
+
+
+def _assert_policy_not_planned(plan: ChangePlan) -> None:
+    security = plan.section("security")
+    planned = {c.field for c in security.changes} if security is not None else set()
+    assert "packet_signature_policy" not in planned
+
+
+def test_packet_signature_policy_skipped_with_warning_on_pre_2_8_firmware(
+    make_live, template, keypair
+) -> None:
+    """Pre-2.8 firmware drops the field, so the write could never verify.
+
+    Planning it anyway left the node unrecordable (read-back mismatch on
+    every run), so the change is dropped and surfaced as a warning.
+    """
+    plan = _policy_plan(
+        make_live,
+        template,
+        keypair,
+        firmware_version="2.7.15",
+        live_policy="PACKET_SIGNATURE_POLICY_COMPATIBLE",
+        desired_policy="PACKET_SIGNATURE_POLICY_STRICT",
+    )
+
+    _assert_policy_not_planned(plan)
+    gated = [w for w in plan.warnings if w.code == PlanWarningCode.FIELD_UNSUPPORTED_BY_FIRMWARE]
+    assert len(gated) == 1
+    assert gated[0].section == "security"
+    assert gated[0].field == "packet_signature_policy"
+    assert "firmware '2.7.15' predates 2.8" in gated[0].message
+    assert (
+        "(PACKET_SIGNATURE_POLICY_COMPATIBLE -> PACKET_SIGNATURE_POLICY_STRICT)" in gated[0].message
+    )
+
+
+@pytest.mark.parametrize(
+    ("firmware_version", "reason"),
+    [
+        ("", "the device reported no firmware version"),
+        ("unknown", "firmware version 'unknown' could not be parsed"),
+    ],
+)
+def test_packet_signature_policy_skipped_with_warning_when_firmware_version_unknown(
+    make_live, template, keypair, firmware_version: str, reason: str
+) -> None:
+    plan = _policy_plan(
+        make_live,
+        template,
+        keypair,
+        firmware_version=firmware_version,
+        live_policy="PACKET_SIGNATURE_POLICY_COMPATIBLE",
+        desired_policy="PACKET_SIGNATURE_POLICY_BALANCED",
+    )
+
+    _assert_policy_not_planned(plan)
+    gated = [w for w in plan.warnings if w.code == PlanWarningCode.FIELD_UNSUPPORTED_BY_FIRMWARE]
+    assert len(gated) == 1
+    assert reason in gated[0].message
+
+
+def test_packet_signature_policy_matching_live_value_on_pre_2_8_firmware_is_silent(
+    make_live, template, keypair
+) -> None:
+    """``COMPATIBLE`` is what pre-2.8 firmware always reads back: nothing to do, nothing to warn."""
+    plan = _policy_plan(
+        make_live,
+        template,
+        keypair,
+        firmware_version="2.7.15",
+        live_policy="PACKET_SIGNATURE_POLICY_COMPATIBLE",
+        desired_policy="PACKET_SIGNATURE_POLICY_COMPATIBLE",
+    )
+
+    _assert_policy_not_planned(plan)
+    assert all(w.code != PlanWarningCode.FIELD_UNSUPPORTED_BY_FIRMWARE for w in plan.warnings)
 
 
 def test_packet_signature_policy_omitted_from_diff_when_template_leaves_it_none(

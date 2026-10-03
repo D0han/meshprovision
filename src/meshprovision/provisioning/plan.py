@@ -3,7 +3,9 @@
 This module is **strictly pure**: zero I/O, zero device access, zero
 ``datetime.now()``, zero logging side effects, and it imports nothing
 from ``meshtastic``, ``httpx``, ``pathlib``, ``odfpy``, or
-:mod:`meshprovision.crypto`. :func:`build_plan` turns an already-read
+:mod:`meshprovision.crypto` itself (transitively, :mod:`~meshprovision.provisioning.detect`
+loads only :mod:`meshprovision.crypto.redact`, for ``SecretBytes``; never
+``crypto.keys``/``crypto.weakkeys``). :func:`build_plan` turns an already-read
 :class:`~meshprovision.provisioning.detect.LiveConfig`, an already-loaded
 :class:`~meshprovision.config.template.TemplateConfig`, an optional
 :class:`~meshprovision.db.nodes.NodeRecord`, and pre-resolved admin keys
@@ -58,6 +60,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from meshprovision.errors import AdminKeyRotationRefusedError, LockdownRefusedError
+from meshprovision.firmware import parse_firmware_version
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, _plan_admin_key_material
@@ -114,6 +117,13 @@ which stops writing at the first section that fails, so nothing after it
 (``security`` or otherwise) is ever sent."""
 
 _REBOOT_LORA_FIELDS: Final[frozenset[str]] = frozenset({"region", "modem_preset"})
+
+_PACKET_SIGNATURE_POLICY_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
+"""First firmware version whose ``Config.SecurityConfig`` has ``packet_signature_policy``.
+
+Older firmware's decoder drops the unknown field, so a write is silently
+lost and read-back keeps reporting the default -- see
+:func:`_firmware_supports_packet_signature_policy`."""
 
 
 def _plan_name_change(inputs: PlanInputs) -> NameChange:
@@ -632,6 +642,63 @@ def _evaluate_lockdown(
     return LockdownDecision(enable=True, reason=LockdownReason.AUTHORIZED, gates=gates)
 
 
+def _firmware_supports_packet_signature_policy(firmware_version: str) -> bool:
+    """Whether a device's firmware is known to carry ``packet_signature_policy``.
+
+    Conservative: an empty or unparseable version counts as unsupported,
+    since writing the field to firmware without it can never be verified
+    (read-back keeps the default), which leaves the node unrecordable and
+    replans the same change on every run.
+
+    Args:
+        firmware_version: The live firmware version string.
+
+    Returns:
+        ``True`` only for a parseable version ``>= 2.8.0``.
+    """
+    parsed = parse_firmware_version(firmware_version)
+    return parsed is not None and parsed >= _PACKET_SIGNATURE_POLICY_MIN_FIRMWARE
+
+
+def _packet_signature_policy_warning(inputs: PlanInputs) -> PlanWarning | None:
+    """Warn when a templated ``packet_signature_policy`` change was skipped for firmware.
+
+    Silent when the template leaves the field unset, when the live value
+    already matches (so a ``COMPATIBLE`` template on pre-2.8 firmware, which
+    always reads back as the ``COMPATIBLE`` default, never warns), or when
+    the firmware supports the field.
+
+    Args:
+        inputs: The plan inputs.
+
+    Returns:
+        A ``field_unsupported_by_firmware`` :class:`PlanWarning`, or ``None``.
+    """
+    desired = inputs.template.security.packet_signature_policy
+    current = inputs.live.security.packet_signature_policy
+    firmware = inputs.live.firmware_version
+    if (
+        desired is None
+        or values_equal(current, desired)
+        or _firmware_supports_packet_signature_policy(firmware)
+    ):
+        return None
+    if not firmware.strip():
+        reason = "the device reported no firmware version"
+    elif parse_firmware_version(firmware) is None:
+        reason = f"firmware version {firmware!r} could not be parsed"
+    else:
+        reason = f"firmware {firmware!r} predates 2.8"
+    return PlanWarning(
+        PlanWarningCode.FIELD_UNSUPPORTED_BY_FIRMWARE,
+        f"security.packet_signature_policy not changed ({current} -> {desired}): {reason}, "
+        "and only firmware 2.8+ has this field, so the write could never be verified. "
+        "Upgrade the firmware, or remove packet_signature_policy from the template.",
+        section="security",
+        field="packet_signature_policy",
+    )
+
+
 def _plan_security_section(
     inputs: PlanInputs, key_plan: KeyPlan, lockdown: LockdownDecision
 ) -> SectionChange | None:
@@ -650,6 +717,10 @@ def _plan_security_section(
         a :class:`FieldChange`) needs writing, since
         :mod:`meshprovision.provisioning.apply` only writes a section
         that is present in :attr:`~meshprovision.provisioning.plan_types.ChangePlan.sections`.
+        ``packet_signature_policy`` is only diffed when
+        :func:`_firmware_supports_packet_signature_policy` passes;
+        :func:`_packet_signature_policy_warning` reports a change skipped
+        that way.
     """
     live_sec = inputs.live.security
     template_sec = inputs.template.security
@@ -665,7 +736,9 @@ def _plan_security_section(
     if template_sec.debug_log_api_enabled is not None:
         desired["debug_log_api_enabled"] = template_sec.debug_log_api_enabled
         current["debug_log_api_enabled"] = live_sec.debug_log_api_enabled
-    if template_sec.packet_signature_policy is not None:
+    if template_sec.packet_signature_policy is not None and (
+        _firmware_supports_packet_signature_policy(inputs.live.firmware_version)
+    ):
         desired["packet_signature_policy"] = template_sec.packet_signature_policy
         current["packet_signature_policy"] = live_sec.packet_signature_policy
 
@@ -810,6 +883,10 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
                 field="is_managed",
             )
         )
+
+    policy_warning = _packet_signature_policy_warning(inputs)
+    if policy_warning is not None:
+        warnings.append(policy_warning)
 
     security_section = _plan_security_section(inputs, key_plan, lockdown)
 

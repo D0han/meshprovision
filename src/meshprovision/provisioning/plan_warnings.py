@@ -44,6 +44,7 @@ class PlanWarningCode(StrEnum):
     LIVE_ADMIN_KEY_REJECTED = "live_admin_key_rejected"
     PENDING_KEY_RECOVERED = "pending_key_recovered"
     DEFAULT_CHANNEL_REBOOT_UNKNOWN = "default_channel_reboot_unknown"
+    FIELD_UNSUPPORTED_BY_FIRMWARE = "field_unsupported_by_firmware"
 
 
 @dataclass(frozen=True, slots=True)

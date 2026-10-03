@@ -198,13 +198,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still the latest tagged release) -- the only way to get
   `Config.SecurityConfig.packet_signature_policy`, a firmware 2.8
   protobuf field not in any tagged release yet. Re-evaluate once an
-  official 2.8-compatible release lands.
+  official 2.8-compatible release lands. The pinned protobuf knowing the
+  field says nothing about the connected device's firmware: see the
+  firmware gate on the template field below.
 - A template `security.packet_signature_policy` field: firmware 2.8's
   XEdDSA packet-signing policy control
   (`PACKET_SIGNATURE_POLICY_COMPATIBLE`/`_BALANCED`/`_STRICT`), validated
   and canonicalized against the installed protobuf's own enum, following
   the same pattern as `device.role`/`lora.region`/etc. Omitted or `null`
-  (the default) leaves the device's current value untouched.
+  (the default) leaves the device's current value untouched. Only planned
+  when the device reports firmware 2.8 or newer: older firmware drops the
+  unknown field, so the write could never be verified and the node would
+  never be recorded. On firmware before 2.8, or an empty/unparseable
+  firmware version, a change is skipped with a
+  `field_unsupported_by_firmware` plan warning (shown by `--dry-run`, in
+  the `--json` plan's `warnings`, and before a real run); a template value
+  that already matches the device (e.g. `_COMPATIBLE`, the pre-2.8
+  default) is a silent no-op.
 
 ### Changed
 

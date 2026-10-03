@@ -180,13 +180,39 @@ def test_factory_provisioning_sets_and_confirms_packet_signature_policy(
     env["MESHPROVISION_TEMPLATE_PATH"] = str(
         write_template(security={"packet_signature_policy": "PACKET_SIGNATURE_POLICY_STRICT"})
     )
-    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface = bus.use(FakeMeshInterface("deadbe01", firmware_version="2.8.0"))
 
     result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
 
     assert result.exit_code == 0
     assert iface.localNode.localConfig.security.packet_signature_policy == 2
     assert "security" in iface.localNode.written_sections
+
+
+def test_factory_provisioning_on_pre_2_8_firmware_skips_packet_signature_policy(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """Pre-2.8 firmware: the policy is skipped with a warning, the node still gets recorded.
+
+    Planning it would have failed read-back on real 2.7.x firmware (it drops
+    the unknown field) and kept the node out of the database on every run.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(
+        write_template(security={"packet_signature_policy": "PACKET_SIGNATURE_POLICY_STRICT"})
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01", firmware_version="2.7.11"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    written_policy = iface.localNode.localConfig.security.packet_signature_policy
+    assert result.exit_code == 0
+    assert written_policy == 0
+    assert "firmware '2.7.11' predates 2.8" in result.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert [NodeRecord.from_row(row).node_id for row in loaded.nodes] == ["deadbe01"]
 
 
 def test_factory_provisioning_preserves_an_already_licensed_owner(

@@ -163,7 +163,10 @@ this project. `packet_signature_policy` is firmware 2.8's XEdDSA
 packet-signing policy control (`PACKET_SIGNATURE_POLICY_COMPATIBLE`,
 `_BALANCED`, or `_STRICT`) — not in any official `meshtastic` release yet;
 see the `meshtastic` dependency note in `CHANGELOG.md`. Omit it (or leave
-it unset) to leave the device's current value untouched.
+it unset) to leave the device's current value untouched. It is only
+written to a device reporting firmware 2.8 or newer: on older firmware (or
+an unknown firmware version) a change is skipped with a plan warning,
+since that firmware drops the field and the write could never be verified.
 
 ### Default channel
 
