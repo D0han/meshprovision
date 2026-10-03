@@ -640,6 +640,90 @@ def test_adopt_still_re_adopts_a_non_admin_node_with_a_different_key(
     assert keys_by_ref["deadbe01_priv"].secret().reveal() == new_kp.private.reveal()
 
 
+def test_adopt_refuses_to_strand_a_stale_private_key_and_writes_nothing(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Re-adopting a re-keyed node public-only must not keep the old ``_priv``.
+
+    Previously this exited 0 with the new ``_pub`` beside the old ``_priv``,
+    and ``mesh db verify`` then failed with an inconsistent keypair. Refused
+    on ``--dry-run`` too, and ``--force`` does not bypass it.
+    """
+    old_kp = keypair_factory()
+    new_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01")],
+        keys=[*KeyRecord.for_keypair("deadbe01", old_kp, origin=KeyOrigin.CAPTURED)],
+    )
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = new_kp.public
+
+    for args in (["--dry-run"], ["--yes", "--force"]):
+        result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", *args], env)
+
+        assert result.exit_code == ExitCode.PROVISIONING
+        assert "deadbe01_priv holds the private key of a different public key" in result.stderr
+        assert "There is no override flag" in result.stderr
+        assert db_fingerprint(db_path) == before
+
+
+def test_adopt_with_a_proven_private_key_replaces_a_stale_one_and_db_verify_stays_clean(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """The refusal's exemption: a proven private key replaces the old row, consistently."""
+    old_kp = keypair_factory()
+    new_kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01")],
+        keys=[*KeyRecord.for_keypair("deadbe01", old_kp, origin=KeyOrigin.CAPTURED)],
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = new_kp.public
+    iface.localNode.localConfig.security.private_key = new_kp.private.reveal()
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    verify_result = invoke(runner, ["db", "verify", "--json"], env)
+    assert verify_result.exit_code == 0, json.loads(verify_result.stdout)["problems"]
+
+
+def test_adopt_does_not_claim_to_overwrite_priv_with_an_unproven_private_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """Only a proven private key is ever written, so only it may be announced as overwriting."""
+    kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01")],
+        keys=[*KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)],
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = keypair_factory().private.reveal()
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "deadbe01_priv already holds different key material" not in result.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    keys_by_ref = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert keys_by_ref["deadbe01_priv"].secret().reveal() == kp.private.reveal()
+
+
 def test_unregistered_admin_key_default_hides_material(
     runner: CliRunner,
     env: dict[str, str],

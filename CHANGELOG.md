@@ -326,6 +326,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Re-adopting a node whose public key changed, from a source with no
+  proven private key (a `--from-backup` node-db export, a device that
+  reports only its public key, or one whose reported private key does not
+  derive its public key), recorded the new `<node_id>_pub` but left the
+  old `<node_id>_priv` in place: `mesh adopt` exited 0, `mesh db verify`
+  then failed on the inconsistent keypair, and `private_key_ref` pointed
+  at the wrong key. `mesh adopt` (including `--dry-run`; `--force` does
+  not bypass it) now refuses when an existing `_priv` row would not
+  derive the public key being recorded, and never deletes or overwrites
+  that row itself -- it may be the only copy of the old key. A source
+  that reports a proven private key still replaces both rows. The
+  "`_priv` already holds different key material" warning is also no
+  longer printed for an unproven private key, which is never written.
 - A `name_suffix_alphabet` with characters that differ only in case
   (e.g. `"aA"`) loaded fine, but names are compared case-insensitively,
   so each such pair yielded one usable name, not two: the reported

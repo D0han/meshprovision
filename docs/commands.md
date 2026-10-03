@@ -201,6 +201,15 @@ mesh adopt --from-backup profile.cfg --from-backup nodedb.json --yes
 always, and its private half too when the device exposes one — the same
 `<node_id>_pub`/`<node_id>_priv` shape `mesh provision` writes, so
 `public_key_ref`/`private_key_ref` on the Nodes row actually resolve.
+The private half is only recorded when it is proven to derive the
+reported public key. When it is not (a node-db `.json` backup, or a
+device that does not expose a matching private key) and an existing
+`<node_id>_priv` row does not belong to the public key being recorded,
+`mesh adopt` refuses, `--dry-run` and `--force` included, rather than
+leave a mismatched pair. It never deletes that row for you: back up the
+database (`mesh db backup`), remove the row from the `Keys` sheet by
+hand if the old key is really no longer needed, and re-run, or adopt
+from a source that reports the matching private key.
 
 Every admin key the device reports gets registered under a real or
 synthetic `Keys` sheet ref — see

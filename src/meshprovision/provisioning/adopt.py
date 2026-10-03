@@ -53,7 +53,7 @@ from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import BLE_PIN_LENGTH, KeyOrigin, KeyType, ManagementMode
-from meshprovision.errors import KeyMaterialError
+from meshprovision.errors import AdoptionRefusedError, KeyMaterialError
 from meshprovision.provisioning import detect, pipeline
 from meshprovision.provisioning.key_registry import adopt_canonical_ref, register_observed_key
 
@@ -74,6 +74,7 @@ __all__ = [
     "build_adoption_report",
     "capture_ble_pin",
     "check_name_pattern_fit",
+    "check_stale_private_key",
     "classify_live_admin_keys",
     "persist_adoption",
 ]
@@ -421,6 +422,114 @@ class AdoptionReport:
         }
 
 
+def _own_private_key_proven(live: detect.LiveConfig) -> bool:
+    """Whether the device reports a private key that derives its reported public key.
+
+    The single proof behind :attr:`AdoptionReport.own_private_key_captured`
+    (and so behind :func:`persist_adoption` writing ``<node_id>_priv``)
+    and :func:`check_stale_private_key`'s exemption -- one function, so
+    the two can never disagree about whether ``_priv`` is about to be
+    replaced.
+
+    Args:
+        live: The device's normalized live configuration.
+
+    Returns:
+        ``True`` only when both halves are present and
+        :func:`~meshprovision.crypto.keys.public_key_matches` confirms
+        them; ``False`` for absent or malformed material.
+    """
+    if not live.security.has_private_key:
+        return False
+    node_private = live.security.private_key
+    node_public = live.security.public_key
+    if node_private is None or node_public is None:
+        return False
+    try:
+        return crypto_keys.public_key_matches(node_private, node_public)
+    except KeyMaterialError:
+        return False
+
+
+def _refuse_stale_private_key(keys: KeyRepository, *, node_id: NodeId, node_public: bytes) -> None:
+    """Refuse when ``<node_id>_priv`` exists but does not derive ``node_public``.
+
+    Only meaningful when this adopt will record ``node_public`` without a
+    proven private key of its own: the existing ``_priv`` row would then
+    survive beside a ``_pub`` it does not belong to -- ``mesh db verify``
+    reports that as an inconsistent keypair, and ``private_key_ref`` would
+    point at the wrong key. The row is never deleted or overwritten here:
+    it may be the only copy of that private key anywhere.
+
+    Args:
+        keys: The open :class:`~meshprovision.db.keys.KeyRepository`.
+        node_id: The adopted node's id.
+        node_public: The public key this adopt is about to record.
+
+    Raises:
+        AdoptionRefusedError: If the ``_priv`` row exists and is malformed
+            or derives a different public key. Its hint names no override
+            flag: there is none.
+    """
+    ref = schema.ref_for(node_id.hex, KeyType.ADMIN_PRIVATE)
+    existing = keys.find(ref)
+    if existing is None:
+        return
+    try:
+        derived = crypto_keys.public_from_private(existing.secret())
+    except KeyMaterialError:
+        problem = f"{ref} holds malformed key material"
+    else:
+        if derived == node_public:
+            return
+        problem = (
+            f"{ref} holds the private key of a different public key "
+            f"({redact.fingerprint(derived)}) than the one {node_id.display} now reports "
+            f"({redact.fingerprint(node_public)})"
+        )
+    raise AdoptionRefusedError(
+        f"{problem}, and this adopt has no proven private key to replace it with. "
+        "Recording only the new public key would leave the old private key attached to "
+        "this node and the Keys sheet inconsistent.",
+        node_id=node_id.display,
+        hint=(
+            "There is no override flag. If the old key is no longer needed, back up the "
+            f"database (`mesh db backup`), delete the {ref} row from the Keys sheet by hand "
+            "(keep its value if it may still be needed -- it may be the only copy), and "
+            "re-run; or adopt from a source that reports the device's matching private key "
+            "(a live connection, or a --from-backup profile that includes it)."
+        ),
+    )
+
+
+def check_stale_private_key(keys: KeyRepository, live: detect.LiveConfig) -> None:
+    """Refuse an adopt that would strand a non-matching ``<node_id>_priv`` row.
+
+    :func:`persist_adoption` records the device's public key always, but
+    its private key only with proof (:func:`_own_private_key_proven`).
+    Without that proof an existing ``_priv`` row is left as-is, so it must
+    already derive the public key being recorded. Called by ``mesh adopt``
+    before any output, so ``--dry-run`` refuses too; ``persist_adoption``
+    re-checks the same invariant before writing.
+
+    Args:
+        keys: The open :class:`~meshprovision.db.keys.KeyRepository`.
+        live: The device's (or backup's) normalized live configuration.
+
+    Raises:
+        AdoptionRefusedError: See :func:`_refuse_stale_private_key`. Never
+            raised when the device reports no public key (nothing is
+            recorded), when no ``_priv`` row exists, or when the device's
+            own private key is proven and will replace the row.
+    """
+    node_public = live.security.public_key
+    if not live.security.has_public_key or node_public is None:
+        return
+    if _own_private_key_proven(live):
+        return
+    _refuse_stale_private_key(keys, node_id=live.node_id, node_public=node_public)
+
+
 def build_adoption_report(
     live: detect.LiveConfig,
     *,
@@ -530,20 +639,11 @@ def build_adoption_report(
                     "without a role value rather than guessing."
                 )
 
-    own_private_key_captured = False
-    if live.security.has_private_key:
-        node_private = live.security.private_key
-        node_public = live.security.public_key
-        if node_private is not None and node_public is not None:
-            try:
-                own_private_key_captured = crypto_keys.public_key_matches(node_private, node_public)
-            except KeyMaterialError:
-                own_private_key_captured = False
-        if not own_private_key_captured:
-            warnings.append(
-                "device-reported private key does not derive its public key; "
-                "recording public key only"
-            )
+    own_private_key_captured = _own_private_key_proven(live)
+    if live.security.has_private_key and not own_private_key_captured:
+        warnings.append(
+            "device-reported private key does not derive its public key; recording public key only"
+        )
 
     return AdoptionReport(
         node_id=live.node_id,
@@ -758,6 +858,12 @@ def persist_adoption(
 
     Returns:
         The upserted :class:`~meshprovision.db.nodes.NodeRecord`.
+
+    Raises:
+        AdoptionRefusedError: If the node's own key is recorded public-only
+            while an existing ``<node_id>_priv`` row does not derive it (see
+            :func:`check_stale_private_key`, which ``mesh adopt`` runs
+            first). Raised before anything is written.
     """
     node_id_hex = live.node_id.hex
 
@@ -781,6 +887,11 @@ def persist_adoption(
             keys.upsert(pub_record)
             keys.upsert(priv_record)
         else:
+            # Defense in depth behind the CLI's earlier check_stale_private_key
+            # call: no proven private key is written on this branch, so an
+            # existing _priv row must already belong to node_public. Raises
+            # before the first write of this function.
+            _refuse_stale_private_key(keys, node_id=live.node_id, node_public=node_public)
             keys.upsert(
                 KeyRecord.from_material(
                     node_id_hex,

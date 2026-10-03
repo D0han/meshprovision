@@ -212,8 +212,8 @@ def _key_overwrite_warnings(
 ) -> tuple[str, ...]:
     """Warn when this adopt would replace existing ``Keys`` sheet material.
 
-    ``adopt()``'s write phase always upserts ``<node_id>_pub``/``_priv``
-    (whichever the device reports) and, with ``--from-backup``, a
+    ``adopt()``'s write phase always upserts ``<node_id>_pub`` (and
+    ``_priv`` when the device's private key is proven) and, with ``--from-backup``, a
     ``<node_id>_psk`` -- a wholesale replace with no comparison against
     what is already stored. That is silent data loss for a re-keyed,
     re-flashed, or spoofed device (the old ``_priv`` row is the only copy
@@ -226,8 +226,11 @@ def _key_overwrite_warnings(
         db_keys: The open :class:`~meshprovision.db.keys.KeyRepository`.
         node_id_hex: The adopted device's own ``node_id`` (hex).
         node_public: The device's live public key, or ``None``.
-        node_private: The device's live private key, or ``None`` (never
-            logged; only ever reduced to a fingerprint below).
+        node_private: The device's live private key when it is proven to
+            derive ``node_public`` (``AdoptionReport.own_private_key_captured``
+            -- the only case ``persist_adoption`` writes ``_priv``), else
+            ``None``, so an unproven key is never claimed to overwrite the
+            row (never logged; only ever reduced to a fingerprint below).
         channel: The backup's decoded channel, or ``None``.
 
     Returns:
@@ -970,6 +973,7 @@ def adopt(
             live=live,
             own_private_secret=own_private_secret,
         )
+        adopt_mod.check_stale_private_key(db.keys, live)
 
         public_keys = db.keys.public_key_map()
         report = adopt_mod.build_adoption_report(
@@ -1005,7 +1009,11 @@ def adopt(
             db.keys,
             node_id_hex=live.node_id.hex,
             node_public=live.security.public_key if live.security.has_public_key else None,
-            node_private=own_private_secret.reveal() if own_private_secret is not None else None,
+            node_private=(
+                own_private_secret.reveal()
+                if own_private_secret is not None and report.own_private_key_captured
+                else None
+            ),
             channel=channel,
         )
 

@@ -10,11 +10,13 @@ from datetime import UTC, datetime
 import pytest
 
 from meshprovision.config.template import load_template_text
-from meshprovision.crypto.keys import encode_key
+from meshprovision.crypto.keys import KeyPair, encode_key
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
+from meshprovision.errors import AdoptionRefusedError
+from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning.adopt import (
     adopted_record,
     build_adoption_report,
@@ -23,6 +25,7 @@ from meshprovision.provisioning.adopt import (
     classify_live_admin_keys,
     persist_adoption,
 )
+from meshprovision.provisioning.detect import LiveSecurity
 from tests.unit.conftest import make_security
 
 pytestmark = pytest.mark.unit
@@ -1068,3 +1071,85 @@ def test_persist_adoption_admin_bearing_public_only_row_rejects_mismatched_priva
 
     assert keys.find(f"{node_id_hex}_priv") is None
     assert keys.get(f"{node_id_hex}_pub").material() == genuine.public
+
+
+# ---------------------------------------------------------------------------
+# check_stale_private_key / persist_adoption's stale-_priv guard
+# ---------------------------------------------------------------------------
+
+_STALE_NODE = "deadbe01"
+
+
+def _public_only(kp: KeyPair) -> LiveSecurity:
+    return dataclasses.replace(make_security(keypair=kp), private_key=None)
+
+
+def _seed_keypair(keys: KeyRepository, kp: KeyPair) -> None:
+    for record in KeyRecord.for_keypair(_STALE_NODE, kp, origin=KeyOrigin.CAPTURED):
+        keys.upsert(record)
+
+
+def test_check_stale_private_key_refuses_a_private_row_that_does_not_derive_the_live_key(
+    make_live, template, keys: KeyRepository, keypair_factory
+) -> None:
+    """A public-only re-adopt after a re-key must not strand the old ``_priv`` row.
+
+    Previously the new ``_pub`` was recorded beside the old ``_priv``, which
+    ``mesh db verify`` then rated an inconsistent keypair.
+    """
+    old, new = keypair_factory(), keypair_factory()
+    _seed_keypair(keys, old)
+    live = make_live(template, node_id=_STALE_NODE, security=_public_only(new))
+
+    with pytest.raises(AdoptionRefusedError) as exc_info:
+        adopt_mod.check_stale_private_key(keys, live)
+
+    message = str(exc_info.value)
+    assert f"{_STALE_NODE}_priv holds the private key of a different public key" in message
+    assert exc_info.value.node_id == live.node_id.display
+    assert exc_info.value.hint is not None
+    assert "mesh db backup" in exc_info.value.hint
+    assert "--force" not in exc_info.value.hint
+
+
+@pytest.mark.parametrize("case", ["no_private_row", "deriving_private_row", "proven_live_private"])
+def test_check_stale_private_key_allows(
+    make_live, template, keys: KeyRepository, keypair_factory, case: str
+) -> None:
+    old, new = keypair_factory(), keypair_factory()
+    if case == "no_private_row":
+        security = _public_only(new)
+    elif case == "deriving_private_row":
+        _seed_keypair(keys, new)
+        security = _public_only(new)
+    else:
+        _seed_keypair(keys, old)
+        security = make_security(keypair=new)
+    live = make_live(template, node_id=_STALE_NODE, security=security)
+
+    adopt_mod.check_stale_private_key(keys, live)
+
+
+def test_persist_adoption_refuses_a_stale_private_key_before_writing(
+    make_live, template, keys: KeyRepository, nodes: NodeRepository, keypair_factory
+) -> None:
+    """The invariant holds even for a caller that skipped ``check_stale_private_key``."""
+    old, new = keypair_factory(), keypair_factory()
+    _seed_keypair(keys, old)
+    live = make_live(template, node_id=_STALE_NODE, security=_public_only(new))
+    report = build_adoption_report(
+        live,
+        existing=None,
+        public_keys=keys.public_key_map(),
+        template=template,
+        known_bad=frozenset(),
+    )
+
+    with pytest.raises(AdoptionRefusedError):
+        persist_adoption(
+            report, live, nodes=nodes, keys=keys, channel=None, now=datetime(2026, 1, 1, tzinfo=UTC)
+        )
+
+    assert keys.get(f"{_STALE_NODE}_pub").material() == old.public
+    assert keys.get(f"{_STALE_NODE}_priv").secret().reveal() == old.private.reveal()
+    assert nodes.find(live.node_id) is None
