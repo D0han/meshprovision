@@ -914,10 +914,14 @@ def run_provision(
         # field is a bare 6-digit run indistinguishable from a BLE PIN by
         # this project's own stderr secret-hygiene check.
         pending_ts = pending.created_ts.strftime("%Y-%m-%dT%H:%M:%SZ")
+        # Not "kept": a regenerate later in this run overwrites the file
+        # (write_pending), and a successful persist removes it
+        # (clear_pending) -- it survives only a run that does neither.
         ctx.warn(
             f"A pending keypair from {pending_ts} for this node does not "
-            f"match the device; it was not used. Kept at "
-            f"{pending_keys.pending_key_path(db.path, live.node_id)}."
+            f"match the device; it was not used. It stays at "
+            f"{pending_keys.pending_key_path(db.path, live.node_id)} only until "
+            f"this run writes a new pending keypair or updates the database."
         )
 
     host_generated = is_host_generated_key(db.keys, live) or pending_matches

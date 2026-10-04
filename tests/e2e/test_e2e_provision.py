@@ -823,6 +823,9 @@ def test_mismatched_pending_keypair_is_never_adopted(
     assert second.exit_code == 0
     assert "does not match the device" in second.stderr
     assert "recovers it automatically" not in second.stderr
+    pending_path = pending_keys.pending_key_path(db_path, dev.nid)
+    assert f"It stays at {pending_path} only until this run" in second.stderr
+    assert not pending_path.exists()
 
     loaded = ods.load_database(db_path)
     rows = {row["key_ref"]: row for row in loaded.keys}
