@@ -23,12 +23,14 @@ from odf import opendocument
 from odf import table as odf_table
 from odf import text as odf_text
 
-from meshprovision.config.template import TemplateConfig
+from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.crypto import redact
 from meshprovision.crypto.keys import KeyPair, generate_keypair
 from meshprovision.db import schema
+from meshprovision.db.nodes import NodeRecord
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.detect import LiveConfig, LiveSecurity
+from meshprovision.provisioning.plan import ChangePlan, PlanInputs, build_plan
 from meshprovision.provisioning.plan_admin_keys import ResolvedAdminKey
 
 pytestmark = pytest.mark.unit
@@ -356,3 +358,23 @@ def factory_live(make_live: Callable[..., LiveConfig]) -> LiveConfig:
         long_name="Meshtastic be01",
         security=make_security(empty=True),
     )
+
+
+def adopt_device_key_plan(
+    make_live: Callable[..., LiveConfig], kp: KeyPair, other_kp: KeyPair
+) -> ChangePlan:
+    """Build a plan whose key_plan.adopt_device_key is True (db key differs from live)."""
+    template = load_template_text("version: 1\n")
+    live = make_live(template, security=make_security(keypair=kp))
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        db_public_key=other_kp.public,
+    )
+    plan = build_plan(inputs)
+    assert plan.key_plan.adopt_device_key is True
+    assert plan.key_plan.regenerate is False
+    return plan
