@@ -244,8 +244,75 @@ def test_write_default_channel_no_primary_channel_raises() -> None:
         ),
     )
 
-    with pytest.raises(ProvisioningError, match="not available"):
+    with pytest.raises(PlanConflictError, match="not available") as exc_info:
         write_default_channel(iface, change)  # type: ignore[arg-type]
+
+    assert exc_info.value.field == "default_channel"
+    assert iface.localNode.written_sections == []
+
+
+def test_write_default_channel_disabled_primary_channel_raises_before_any_write() -> None:
+    """A DISABLED channel 0 is refused pre-I/O and left exactly as it was.
+
+    ``writeChannel(0)`` sends the whole channel, so writing a disabled
+    one (the library's placeholder role) would overwrite the device's
+    primary channel with a near-empty one.
+    """
+    iface = _FakeIfaceForApply()
+    iface.localNode.channels[0].role = channel_pb2.Channel.Role.DISABLED
+    pre_call = channel_pb2.Channel()
+    pre_call.CopyFrom(iface.localNode.channels[0])
+    change = SectionChange(
+        section="default_channel",
+        kind=detect.SectionKind.CHANNEL,
+        changes=(
+            FieldChange(
+                section="default_channel", field="position_precision", current=0, desired=12
+            ),
+        ),
+    )
+
+    with pytest.raises(PlanConflictError, match="disabled") as exc_info:
+        write_default_channel(iface, change)  # type: ignore[arg-type]
+
+    assert exc_info.value.field == "default_channel"
+    assert iface.localNode.channels[0] == pre_call
+    assert iface.localNode.written_sections == []
+
+
+def test_write_default_channel_refuses_exactly_what_detect_reads_as_absent() -> None:
+    """The write path and detect agree on which channel 0 has no settings to write.
+
+    Round 39 E39-2: detect read a DISABLED channel 0 as ``{}`` while the
+    write path only refused a missing one -- so the plan kept proposing
+    a write that clobbered the channel and never verified.
+    """
+    change = SectionChange(section="default_channel", kind=detect.SectionKind.CHANNEL, changes=())
+    seen: dict[str, tuple[bool, bool]] = {}
+    for role in (None, *channel_pb2.Channel.Role.values()):
+        iface = _FakeIfaceForApply()
+        if role is None:
+            iface.localNode.channels = []
+        else:
+            iface.localNode.channels[0].role = role  # type: ignore[assignment]
+        reads_absent = detect.read_live_config(iface).default_channel == {}  # type: ignore[arg-type]
+        try:
+            write_default_channel(iface, change)  # type: ignore[arg-type]
+        except PlanConflictError:
+            refused = True
+        else:
+            refused = False
+        seen["absent" if role is None else channel_pb2.Channel.Role.Name(role)] = (
+            reads_absent,
+            refused,
+        )
+
+    assert seen == {
+        "absent": (True, True),
+        "DISABLED": (True, True),
+        "PRIMARY": (False, False),
+        "SECONDARY": (False, False),
+    }
 
 
 def test_write_default_channel_rejected_field_restores_snapshot() -> None:

@@ -367,20 +367,34 @@ def write_default_channel(iface: MeshInterface, change: SectionChange) -> None:
             ``"default_channel"`` section.
 
     Raises:
-        ProvisioningError: If the primary channel is unavailable, or the
-            device write itself fails.
-        PlanConflictError: If a field within ``change`` cannot be applied
-            -- propagated from :func:`apply_field`, before any device
-            write.
+        ProvisioningError: If the device write itself fails.
+        PlanConflictError: Before any device write, if the primary
+            channel is unavailable or disabled, or a field within
+            ``change`` cannot be applied (propagated from
+            :func:`apply_field`).
 
     On any failure the section's in-memory message is restored to its
     pre-call state (a snapshot taken before any field is applied), so an
     in-place read-back (``--no-reconnect``) never reports an unwritten
     value as confirmed -- the same contract :func:`write_section` offers.
     """
+    from meshtastic.protobuf import channel_pb2
+
+    # Refused before any I/O, so apply_plan never counts it as attempted.
+    # writeChannel(0) sends the whole channel: a DISABLED one (the role the
+    # library gives a channel the device never reported, and what detect
+    # reads as "no settings") would be overwritten with a near-empty one.
     channel = iface.localNode.getChannelByChannelIndex(0)
     if channel is None:
-        raise ProvisioningError("Primary channel (index 0) is not available on this device")
+        raise PlanConflictError(
+            "Primary channel (index 0) is not available on this device", field="default_channel"
+        )
+    if channel.role == channel_pb2.Channel.Role.DISABLED:
+        raise PlanConflictError(
+            "Primary channel (index 0) is disabled on this device; refusing to write "
+            "default_channel",
+            field="default_channel",
+        )
 
     msg = channel.settings.module_settings
     snapshot = type(msg)()

@@ -330,6 +330,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` wrote `default_channel` to a primary channel the
+  device reported as disabled -- the role the meshtastic library gives a
+  channel it never received, and one the plan already reads as having no
+  settings. The channel write sends the whole channel, so it could
+  overwrite the real primary channel with a near-empty one, and the
+  section never verified, so every run proposed it again. A missing or
+  disabled primary channel is now refused before anything is sent: the
+  section is reported failed ("not written"), `security` is not written
+  after it, and the node is not recorded. A missing primary channel was
+  also wrongly treated as a possibly-sent write; it is now "not written"
+  too.
 - Re-adopting a node whose public key changed, from a source with no
   proven private key (a `--from-backup` node-db export, a device that
   reports only its public key, or one whose reported private key does not

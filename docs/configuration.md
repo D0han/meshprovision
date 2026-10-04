@@ -188,3 +188,8 @@ protobuf container and are written through a different device mechanism
 (a channel write, not a config write). Its reboot behavior has not been
 verified against real firmware, so `mesh provision --dry-run` surfaces an
 explicit warning whenever this section would be written.
+
+If the device reports no primary channel, or reports it as disabled,
+the write is refused before anything is sent: the section is reported
+failed, nothing after it (including `security`) is written, and the node
+is not recorded.
