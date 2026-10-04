@@ -12,11 +12,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from meshprovision.cli.provision import (
-    ProvisionOptions,
-    _apply_and_persist,
-    _finalize_admin_key_rotation_error,
-)
+from meshprovision.cli.provision import ProvisionOptions, _apply_and_persist
+from meshprovision.cli.provision_keys import _finalize_admin_key_rotation_error
 from meshprovision.config.template import load_template_text
 from meshprovision.errors import AdminKeyRotationRefusedError
 from meshprovision.provisioning import apply, detect
