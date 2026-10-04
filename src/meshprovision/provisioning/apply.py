@@ -581,6 +581,101 @@ def _unconfirmed_after_failed_commit(
     ]
 
 
+def _stopped(
+    plan: ChangePlan, results: Sequence[WriteResult], *, security_attempted: bool
+) -> ApplyOutcome:
+    """Build the outcome of a real (non-dry-run) apply that carries no database record.
+
+    Every early return of :func:`apply_plan` and its final not-fully-confirmed
+    outcome share this shape; only a fully confirmed run adds a record.
+
+    Args:
+        plan: The plan being applied.
+        results: Every result recorded so far.
+        security_attempted: Whether the ``security`` write was sent.
+
+    Returns:
+        The :class:`ApplyOutcome`, with ``verified=True`` and no record.
+    """
+    return ApplyOutcome(
+        node_id=plan.node_id,
+        results=tuple(results),
+        dry_run=False,
+        verified=True,
+        security_attempted=security_attempted,
+    )
+
+
+def _write_in_order(
+    iface: MeshInterface,
+    changes: Iterable[SectionChange],
+    *,
+    key_plan: KeyPlan,
+    keypair: KeyPair | None,
+    stop_reason: str | None,
+) -> tuple[list[WriteResult], list[str], str | None]:
+    """Write ``changes`` in order, stopping at the first failure.
+
+    SECTION_ORDER's invariant ("security is always last") is enforced
+    here: once anything upstream has failed, nothing further is written
+    -- security included, since it is not the only section that can
+    restrict later management (e.g. serial_enabled). A re-run always
+    re-plans fresh from the device, so stopping loses no correctness,
+    only progress on a run that is already uncertain.
+
+    Args:
+        iface: The connected interface to write through.
+        changes: The sections to write, in order.
+        key_plan: The plan's key plan, passed to :func:`write_section`.
+        keypair: The freshly generated keypair, if any.
+        stop_reason: Why writing had already stopped before the first of
+            ``changes`` (every one is then skipped), or ``None``.
+
+    Returns:
+        ``(results, attempted, stop_reason)``: a result for every section
+        that failed or was skipped (none for one written successfully);
+        the sections whose write was sent -- successfully, or failing
+        after the bytes may have left the host -- in order; and the stop
+        reason after the last section.
+    """
+    results: list[WriteResult] = []
+    attempted: list[str] = []
+    for change in changes:
+        if stop_reason is not None:
+            results.extend(_skip_unwritten([change.section], f"stopped because {stop_reason}"))
+            continue
+
+        try:
+            if change.section == "default_channel":
+                write_default_channel(iface, change)
+            else:
+                write_section(iface, change, key_plan=key_plan, keypair=keypair)
+        except (PlanConflictError, EnumMappingError) as exc:
+            # Pre-I/O failure: apply_field rejected the plan before any
+            # device write was attempted, so this section was never even
+            # sent. PlanConflictError is a ProvisioningError subclass, so
+            # this arm must come first.
+            results.append(WriteResult(change.section, WriteStatus.FAILED, f"not written: {exc}"))
+            stop_reason = f"{change.section} could not be written"
+            continue
+        except ProvisioningError as exc:
+            # The write call itself failed -- the bytes may have left the
+            # host, so this section IS counted as attempted.
+            attempted.append(change.section)
+            results.append(
+                WriteResult(
+                    change.section,
+                    WriteStatus.FAILED,
+                    f"{exc} (the device may or may not have applied it)",
+                )
+            )
+            stop_reason = f"the {change.section} write failed"
+            continue
+
+        attempted.append(change.section)
+    return results, attempted, stop_reason
+
+
 def _possible_node_renumber(
     plan: ChangePlan, live_after: detect.LiveConfig, *, keypair: KeyPair | None
 ) -> WriteResult | None:
@@ -831,13 +926,7 @@ def apply_plan(
                     "could not begin a settings transaction",
                 )
             )
-            return ApplyOutcome(
-                node_id=plan.node_id,
-                results=tuple(results),
-                dry_run=False,
-                verified=True,
-                security_attempted=False,
-            )
+            return _stopped(plan, results, security_attempted=False)
 
     # Only a reconnecting session defers `security` to its own write,
     # after the transaction commits -- see this function's docstring for
@@ -848,11 +937,12 @@ def apply_plan(
     defer_security = needs_transaction and security_section is not None and session.reads_back
     sections_to_write = non_security_sections if defer_security else plan.sections
     # What a reconnecting session holds back until after the commit, in write order.
-    deferred = (
-        tuple(s.section for s in (channel_section, security_section) if s is not None)
+    deferred_changes = (
+        tuple(s for s in (channel_section, security_section) if s is not None)
         if defer_security
         else ()
     )
+    deferred = tuple(s.section for s in deferred_changes)
 
     commit_exc: BaseException | None = None
     body_finished = False
@@ -862,54 +952,15 @@ def apply_plan(
             results.append(name_failure)
             stop_reason = "the owner (name) write failed"
 
-        for change in sections_to_write:
-            if stop_reason is not None:
-                # SECTION_ORDER's invariant ("security is always last") is
-                # enforced here: once anything upstream has failed, nothing
-                # further is written -- security included, since it is not
-                # the only section that can restrict later management (e.g.
-                # serial_enabled). A re-run always re-plans fresh from the
-                # device, so stopping loses no correctness, only progress on
-                # a run that is already uncertain.
-                results.append(
-                    WriteResult(
-                        change.section,
-                        WriteStatus.SKIPPED,
-                        f"not written: stopped because {stop_reason}",
-                    )
-                )
-                continue
-
-            try:
-                if change.section == "default_channel":
-                    write_default_channel(iface, change)
-                else:
-                    write_section(iface, change, key_plan=plan.key_plan, keypair=keypair)
-            except (PlanConflictError, EnumMappingError) as exc:
-                # Pre-I/O failure: apply_field rejected the plan before any
-                # device write was attempted, so this section was never even
-                # sent. PlanConflictError is a ProvisioningError subclass, so
-                # this arm must come first.
-                results.append(
-                    WriteResult(change.section, WriteStatus.FAILED, f"not written: {exc}")
-                )
-                stop_reason = f"{change.section} could not be written"
-                continue
-            except ProvisioningError as exc:
-                # The write call itself failed -- the bytes may have left the
-                # host, so this section IS counted as attempted.
-                attempted.append(change.section)
-                results.append(
-                    WriteResult(
-                        change.section,
-                        WriteStatus.FAILED,
-                        f"{exc} (the device may or may not have applied it)",
-                    )
-                )
-                stop_reason = f"the {change.section} write failed"
-                continue
-
-            attempted.append(change.section)
+        section_results, sent, stop_reason = _write_in_order(
+            iface,
+            sections_to_write,
+            key_plan=plan.key_plan,
+            keypair=keypair,
+            stop_reason=stop_reason,
+        )
+        results.extend(section_results)
+        attempted.extend(sent)
         body_finished = True
     finally:
         # Unconditional once opened, even when a section above failed
@@ -940,14 +991,8 @@ def apply_plan(
                 deferred, "stopped because the settings transaction could not be committed"
             )
         )
-        return ApplyOutcome(
-            node_id=plan.node_id,
-            results=tuple(results),
-            dry_run=False,
-            verified=True,
-            # In-place, security was written inside the transaction.
-            security_attempted="security" in attempted,
-        )
+        # In-place, security was written inside the transaction.
+        return _stopped(plan, results, security_attempted="security" in attempted)
 
     if defer_security:
         if stop_reason is not None:
@@ -977,13 +1022,7 @@ def apply_plan(
                         "committing settings",
                     )
                 )
-                return ApplyOutcome(
-                    node_id=plan.node_id,
-                    results=tuple(results),
-                    dry_run=False,
-                    verified=True,
-                    security_attempted=False,
-                )
+                return _stopped(plan, results, security_attempted=False)
 
             # Confirm the device that answered this reconnect is still the
             # one this plan was built for, before `security` -- the freshly
@@ -1008,74 +1047,27 @@ def apply_plan(
                         "reconnecting",
                     )
                 )
-                return ApplyOutcome(
-                    node_id=plan.node_id,
-                    results=tuple(results),
-                    dry_run=False,
-                    verified=True,
-                    security_attempted=False,
-                )
+                return _stopped(plan, results, security_attempted=False)
             if got != plan.node_id:
                 results.append(_identity_mismatch(plan, got))
                 results.extend(
                     _skip_unwritten(deferred, "stopped after reconnecting to a different node")
                 )
-                return ApplyOutcome(
-                    node_id=plan.node_id,
-                    results=tuple(results),
-                    dry_run=False,
-                    verified=True,
-                    security_attempted=False,
-                )
+                return _stopped(plan, results, security_attempted=False)
 
             # default_channel also shares this reconnect rather than getting
             # its own: it lands here, immediately before security, so a
             # channel-write failure cascades into security being SKIPPED via
             # the same stop_reason mechanism every other section already uses.
-            if channel_section is not None:
-                try:
-                    write_default_channel(iface, channel_section)
-                except (PlanConflictError, EnumMappingError) as exc:
-                    results.append(
-                        WriteResult("default_channel", WriteStatus.FAILED, f"not written: {exc}")
-                    )
-                    stop_reason = "default_channel could not be written"
-                except ProvisioningError as exc:
-                    attempted.append("default_channel")
-                    results.append(
-                        WriteResult(
-                            "default_channel",
-                            WriteStatus.FAILED,
-                            f"{exc} (the device may or may not have applied it)",
-                        )
-                    )
-                    stop_reason = "the default_channel write failed"
-                else:
-                    attempted.append("default_channel")
-
-            if stop_reason is not None:
-                results.extend(_skip_unwritten(["security"], f"stopped because {stop_reason}"))
-            else:
-                assert security_section is not None  # noqa: S101 -- defer_security already guards this
-                try:
-                    write_section(iface, security_section, key_plan=plan.key_plan, keypair=keypair)
-                except (PlanConflictError, EnumMappingError) as exc:
-                    results.append(
-                        WriteResult("security", WriteStatus.FAILED, f"not written: {exc}")
-                    )
-                    stop_reason = "security could not be written"
-                except ProvisioningError as exc:
-                    attempted.append("security")
-                    results.append(
-                        WriteResult(
-                            "security",
-                            WriteStatus.FAILED,
-                            f"{exc} (the device may or may not have applied it)",
-                        )
-                    )
-                    stop_reason = "the security write failed"
-                else:
-                    attempted.append("security")
+            deferred_results, sent, _ = _write_in_order(
+                iface,
+                deferred_changes,
+                key_plan=plan.key_plan,
+                keypair=keypair,
+                stop_reason=None,
+            )
+            results.extend(deferred_results)
+            attempted.extend(sent)
 
     security_attempted = "security" in attempted
 
@@ -1092,13 +1084,7 @@ def apply_plan(
                 f"Could not reconnect to verify the writes: {_backend_error_detail(exc)}",
             )
         )
-        return ApplyOutcome(
-            node_id=plan.node_id,
-            results=tuple(results),
-            dry_run=False,
-            verified=True,
-            security_attempted=security_attempted,
-        )
+        return _stopped(plan, results, security_attempted=security_attempted)
 
     try:
         live_after = detect.read_live_config(fresh_iface)
@@ -1111,13 +1097,7 @@ def apply_plan(
                 f"Reconnected, but could not read back the device state to verify: {exc}",
             )
         )
-        return ApplyOutcome(
-            node_id=plan.node_id,
-            results=tuple(results),
-            dry_run=False,
-            verified=True,
-            security_attempted=security_attempted,
-        )
+        return _stopped(plan, results, security_attempted=security_attempted)
 
     if live_after.node_id != plan.node_id:
         # Never run verify_plan against another device: its comparisons
@@ -1131,13 +1111,7 @@ def apply_plan(
             _possible_node_renumber(plan, live_after, keypair=keypair)
             or _identity_mismatch(plan, live_after.node_id)
         )
-        return ApplyOutcome(
-            node_id=plan.node_id,
-            results=tuple(results),
-            dry_run=False,
-            verified=True,
-            security_attempted=security_attempted,
-        )
+        return _stopped(plan, results, security_attempted=security_attempted)
 
     results.extend(
         verify_plan(
@@ -1150,13 +1124,7 @@ def apply_plan(
         )
     )
 
-    outcome = ApplyOutcome(
-        node_id=plan.node_id,
-        results=tuple(results),
-        dry_run=False,
-        verified=True,
-        security_attempted=security_attempted,
-    )
+    outcome = _stopped(plan, results, security_attempted=security_attempted)
     if outcome.uncertain or not outcome.ok:
         _logger.warning(
             "Node %s left in an UNCERTAIN STATE: %s",
