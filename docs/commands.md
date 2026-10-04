@@ -146,7 +146,12 @@ for the out-of-band procedure a genuine rotation requires.
 is re-read and compared to intent; key writes are additionally verified
 by reading the public key back off the device. Any unconfirmed write
 marks the node `UNCERTAIN`, leaves the ODS **unchanged**, logs a warning,
-and exits non-zero.
+and exits non-zero. A run that stops early lists every section it never
+sent as "Not written". If committing the settings transaction fails,
+each section already sent is reported `unconfirmed` (the device may or
+may not have saved it) and is not re-read. Whenever a `security`
+section that sets `is_managed` was sent but never confirmed, the run
+warns that the node may now be locked to its admin keys.
 
 **Concurrent-write guarantee:** writers (`mesh provision`, `mesh admin
 bootstrap`/`import`) hold an exclusive lock on `<db>.lock` for the whole

@@ -330,6 +330,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When `mesh provision` stopped early, its report could leave sections
+  out or describe them wrongly. A failed settings-transaction begin or
+  commit printed a single failure line, with no word on which sections
+  were or were not written. A stop after the commit (a failed mid-plan
+  reconnect or identity check), or a failure before it, never mentioned
+  a held-back `default_channel` in the "Not written" list. Now every
+  section that was never sent is listed as not written. After a failed
+  commit, each section already sent is reported unconfirmed (the device
+  may or may not have saved it) and is not re-read. With
+  `--no-reconnect`, `security` is sent inside that transaction, so it is
+  now counted as possibly applied. Whenever `security` was sent but its
+  `is_managed` was never confirmed (that case, a failed security write,
+  or a failed final reconnect), a template that sets `is_managed` now
+  gets a warning that the node may be locked to its admin keys, instead
+  of nothing. A commit failure hidden by another error is now logged as
+  a warning.
 - `mesh provision` wrote `default_channel` to a primary channel the
   device reported as disabled -- the role the meshtastic library gives a
   channel it never received, and one the plan already reads as having no

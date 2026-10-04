@@ -49,7 +49,7 @@ import hmac
 import logging
 import secrets
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -528,6 +528,59 @@ def _identity_mismatch(plan: ChangePlan, got: NodeId) -> WriteResult:
     )
 
 
+def _skip_unwritten(sections: Iterable[str], reason: str) -> list[WriteResult]:
+    """Record each of ``sections`` as never sent to the device.
+
+    Only for sections no write was ever attempted for -- a section that
+    may have reached the device is never reported "not written" (see
+    :func:`_unconfirmed_after_failed_commit`).
+
+    Args:
+        sections: Section names (``"owner"`` for the name phase).
+        reason: Why they were not written, completing ``"not written: ..."``.
+
+    Returns:
+        One :attr:`WriteStatus.SKIPPED` result per section, in order.
+    """
+    return [WriteResult(s, WriteStatus.SKIPPED, f"not written: {reason}") for s in sections]
+
+
+def _unconfirmed_after_failed_commit(
+    plan: ChangePlan, results: Sequence[WriteResult], attempted: Sequence[str]
+) -> list[WriteResult]:
+    """Report everything sent before a failed commit as uncertain, never as unwritten.
+
+    The commit may have landed even though it raised (the bytes may have
+    left the host). Nothing is re-read either: an open transaction holds
+    its writes in memory only, so a reconnect could read back values a
+    reboot then discards.
+
+    Args:
+        plan: The plan being applied.
+        results: The results recorded so far; a section that already has
+            one (its own write failed) is not reported twice.
+        attempted: The sections whose write was sent, in order.
+
+    Returns:
+        One :attr:`WriteStatus.UNCONFIRMED` result per sent section with
+        no result yet, the owner phase first.
+    """
+    recorded = {r.section for r in results}
+    sent = ([] if plan.name_change.is_empty else ["owner"]) + list(attempted)
+    return [
+        WriteResult(
+            section,
+            WriteStatus.UNCONFIRMED,
+            "sent outside the settings transaction; not verified because the commit failed"
+            if section == "default_channel"
+            else "sent inside the settings transaction, but the commit failed; "
+            "the device may or may not have saved it",
+        )
+        for section in sent
+        if section not in recorded
+    ]
+
+
 def _possible_node_renumber(
     plan: ChangePlan, live_after: detect.LiveConfig, *, keypair: KeyPair | None
 ) -> WriteResult | None:
@@ -647,6 +700,21 @@ def apply_plan(
     :func:`~meshprovision.provisioning.readback.verify_plan`'s
     ``attempted_sections``).
 
+    Every way this function returns early still accounts for each part of
+    the plan that never reached the device: those sections (and the owner
+    phase) are recorded SKIPPED with a "not written: ..." message, so the
+    caller can list exactly what was not written. A failed
+    ``beginSettingsTransaction()`` skips the owner phase and every section.
+    A stop after the commit (a failed mid-plan reconnect or identity check)
+    skips whatever was deferred past it -- ``default_channel`` as well as
+    ``security``. Sections already committed by then carry no result of
+    their own; the ``"<verify>"`` failure stands for them. A failed
+    ``commitSettingsTransaction()`` is the exception: everything already
+    sent is recorded :attr:`WriteStatus.UNCONFIRMED` (the commit may or may
+    not have landed), anything deferred is SKIPPED, and nothing is re-read
+    -- an open transaction holds its writes in memory only, so a read-back
+    could confirm values a reboot then loses.
+
     Every reconnect (the one mid-plan refresh right after committing the
     transaction, when ``default_channel``/``security`` remain to be
     written on a reconnecting session, and the final verify) also confirms
@@ -754,6 +822,15 @@ def apply_plan(
                     "<verify>", WriteStatus.FAILED, f"Could not begin a settings transaction: {exc}"
                 )
             )
+            results.extend(
+                _skip_unwritten(
+                    [
+                        *([] if plan.name_change.is_empty else ["owner"]),
+                        *(s.section for s in plan.sections),
+                    ],
+                    "could not begin a settings transaction",
+                )
+            )
             return ApplyOutcome(
                 node_id=plan.node_id,
                 results=tuple(results),
@@ -770,8 +847,15 @@ def apply_plan(
     # security-only plan) or no `security` section at all.
     defer_security = needs_transaction and security_section is not None and session.reads_back
     sections_to_write = non_security_sections if defer_security else plan.sections
+    # What a reconnecting session holds back until after the commit, in write order.
+    deferred = (
+        tuple(s.section for s in (channel_section, security_section) if s is not None)
+        if defer_security
+        else ()
+    )
 
     commit_exc: BaseException | None = None
+    body_finished = False
     try:
         name_failure = _run_name_phase(iface, plan)
         if name_failure is not None:
@@ -826,6 +910,7 @@ def apply_plan(
                 continue
 
             attempted.append(change.section)
+        body_finished = True
     finally:
         # Unconditional once opened, even when a section above failed
         # partway through: an untransacted write saves (and reboots) after
@@ -836,6 +921,10 @@ def apply_plan(
                 iface.localNode.commitSettingsTransaction()
             except (*_DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
                 commit_exc = exc
+                if not body_finished:
+                    # Another exception is already propagating and wins;
+                    # without this the commit failure would vanish.
+                    _logger.warning("Could not commit the settings transaction: %s", exc)
 
     if commit_exc is not None:
         results.append(
@@ -845,23 +934,24 @@ def apply_plan(
                 f"Could not commit the settings transaction: {commit_exc}",
             )
         )
+        results.extend(_unconfirmed_after_failed_commit(plan, results, attempted))
+        results.extend(
+            _skip_unwritten(
+                deferred, "stopped because the settings transaction could not be committed"
+            )
+        )
         return ApplyOutcome(
             node_id=plan.node_id,
             results=tuple(results),
             dry_run=False,
             verified=True,
-            security_attempted=False,
+            # In-place, security was written inside the transaction.
+            security_attempted="security" in attempted,
         )
 
     if defer_security:
         if stop_reason is not None:
-            results.append(
-                WriteResult(
-                    "security",
-                    WriteStatus.SKIPPED,
-                    f"not written: stopped because {stop_reason}",
-                )
-            )
+            results.extend(_skip_unwritten(deferred, f"stopped because {stop_reason}"))
         else:
             # The commit above is what actually reboots the device (not any
             # individual section write any more) -- this is the one mid-plan
@@ -880,12 +970,11 @@ def apply_plan(
                         f"plan: {_backend_error_detail(exc)}; stopped",
                     )
                 )
-                results.append(
-                    WriteResult(
-                        "security",
-                        WriteStatus.SKIPPED,
-                        "not written: stopped because the device could not be reconnected "
-                        "after committing settings",
+                results.extend(
+                    _skip_unwritten(
+                        deferred,
+                        "stopped because the device could not be reconnected after "
+                        "committing settings",
                     )
                 )
                 return ApplyOutcome(
@@ -912,12 +1001,11 @@ def apply_plan(
                         f"continuing: {exc}; stopped",
                     )
                 )
-                results.append(
-                    WriteResult(
-                        "security",
-                        WriteStatus.SKIPPED,
-                        "not written: stopped because the node's identity could not be "
-                        "confirmed after reconnecting",
+                results.extend(
+                    _skip_unwritten(
+                        deferred,
+                        "stopped because the node's identity could not be confirmed after "
+                        "reconnecting",
                     )
                 )
                 return ApplyOutcome(
@@ -929,12 +1017,8 @@ def apply_plan(
                 )
             if got != plan.node_id:
                 results.append(_identity_mismatch(plan, got))
-                results.append(
-                    WriteResult(
-                        "security",
-                        WriteStatus.SKIPPED,
-                        "not written: stopped after reconnecting to a different node",
-                    )
+                results.extend(
+                    _skip_unwritten(deferred, "stopped after reconnecting to a different node")
                 )
                 return ApplyOutcome(
                     node_id=plan.node_id,
@@ -970,13 +1054,7 @@ def apply_plan(
                     attempted.append("default_channel")
 
             if stop_reason is not None:
-                results.append(
-                    WriteResult(
-                        "security",
-                        WriteStatus.SKIPPED,
-                        f"not written: stopped because {stop_reason}",
-                    )
-                )
+                results.extend(_skip_unwritten(["security"], f"stopped because {stop_reason}"))
             else:
                 assert security_section is not None  # noqa: S101 -- defer_security already guards this
                 try:

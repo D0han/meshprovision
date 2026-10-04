@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import errno
+import logging
 from collections.abc import Callable
 from typing import Final, Self
 
@@ -376,6 +377,10 @@ class _FakeLocalNode:
         every existing test that already asserts against it.) A subclass
         that overrides ``writeConfig`` does not necessarily append here
         too -- only the base implementation does."""
+        self.begin_error: BaseException | None = None
+        """Raised by beginSettingsTransaction() (after recording it) when set."""
+        self.commit_error: BaseException | None = None
+        """Raised by commitSettingsTransaction() (after recording it) when set."""
 
     def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
         self.written_sections.append(section)
@@ -399,9 +404,13 @@ class _FakeLocalNode:
 
     def beginSettingsTransaction(self) -> None:  # noqa: N802 -- real MeshInterface method name
         self.transaction_calls.append("<begin>")
+        if self.begin_error is not None:
+            raise self.begin_error
 
     def commitSettingsTransaction(self) -> None:  # noqa: N802 -- real MeshInterface method name
         self.transaction_calls.append("<commit>")
+        if self.commit_error is not None:
+            raise self.commit_error
 
     def setOwner(  # noqa: N802 -- real MeshInterface method name
         self,
@@ -3153,6 +3162,255 @@ def test_apply_plan_adopt_key_still_verified_when_security_is_skipped(
     key_result = next(r for r in outcome.results if r.field == "public_key")
     assert key_result.status == WriteStatus.CONFIRMED
     assert outcome.security_attempted is False
+
+
+# ---------------------------------------------------------------------------
+# Early exits (Round 39 E39-1/F4): every part of the plan that never reached
+# the device is recorded SKIPPED, and nothing that may have reached it is.
+# ---------------------------------------------------------------------------
+
+
+def _early_exit_plan(make_live: Callable[..., object]) -> ChangePlan:
+    """A FACTORY plan with an owner change, lora, device, default_channel and security."""
+    template = _template()
+    template2 = template.model_copy(
+        update={
+            "default_channel": template.default_channel.model_copy(
+                update={"position_precision": 12}
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+    lora = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="hop_limit", current=3, desired=5),),
+    )
+    device = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    channel = next(s for s in plan.sections if s.section == "default_channel")
+    security = next(s for s in plan.sections if s.section == "security")
+    return dataclasses.replace(
+        plan,
+        name_change=dataclasses.replace(plan.name_change, desired_short_name="ZZ01"),
+        sections=(lora, device, channel, security),
+    )
+
+
+_OK = WriteStatus.CONFIRMED
+_UNC = WriteStatus.UNCONFIRMED
+_FAIL = WriteStatus.FAILED
+_SKIP = WriteStatus.SKIPPED
+_NOT_SENT = [("owner", _SKIP), ("lora", _SKIP), ("device", _SKIP)]
+
+
+@pytest.mark.parametrize(
+    ("case", "expected", "security_attempted"),
+    [
+        (
+            "begin_fails",
+            [("<verify>", _FAIL), *_NOT_SENT, ("default_channel", _SKIP), ("security", _SKIP)],
+            False,
+        ),
+        (
+            "begin_fails_in_place",
+            [("<verify>", _FAIL), *_NOT_SENT, ("default_channel", _SKIP), ("security", _SKIP)],
+            False,
+        ),
+        (
+            "section_write_fails",
+            [("lora", _FAIL), ("device", _SKIP), ("default_channel", _SKIP), ("security", _SKIP)],
+            False,
+        ),
+        (
+            "commit_fails",
+            [
+                ("<verify>", _FAIL),
+                ("owner", _UNC),
+                ("lora", _UNC),
+                ("device", _UNC),
+                ("default_channel", _SKIP),
+                ("security", _SKIP),
+            ],
+            False,
+        ),
+        (
+            "commit_fails_in_place",
+            [
+                ("<verify>", _FAIL),
+                ("owner", _UNC),
+                ("lora", _UNC),
+                ("device", _UNC),
+                ("default_channel", _UNC),
+                ("security", _UNC),
+            ],
+            True,
+        ),
+        (
+            # The failed lora write keeps its own FAILED result -- never a
+            # second, UNCONFIRMED one -- and device was never sent at all.
+            "section_write_and_commit_fail",
+            [
+                ("lora", _FAIL),
+                ("device", _SKIP),
+                ("<verify>", _FAIL),
+                ("owner", _UNC),
+                ("default_channel", _SKIP),
+                ("security", _SKIP),
+            ],
+            False,
+        ),
+        (
+            "mid_plan_reconnect_fails",
+            [("<verify>", _FAIL), ("default_channel", _SKIP), ("security", _SKIP)],
+            False,
+        ),
+        (
+            "identity_unreadable",
+            [("<verify>", _FAIL), ("default_channel", _SKIP), ("security", _SKIP)],
+            False,
+        ),
+        (
+            "identity_mismatch",
+            [("<verify>", _FAIL), ("default_channel", _SKIP), ("security", _SKIP)],
+            False,
+        ),
+        ("channel_disabled", [("default_channel", _FAIL), ("security", _SKIP)], False),
+    ],
+)
+def test_apply_plan_early_exit_records_every_unsent_section(
+    make_live, case: str, expected: list[tuple[str, WriteStatus]], security_attempted: bool
+) -> None:
+    """Each early exit reports exactly what was and was not sent -- nothing goes missing.
+
+    Section-level results only (``field is None``): the final verify, when
+    it runs, adds per-field results for the sections it re-reads.
+    Sections already committed before a post-commit stop carry no result of
+    their own -- the ``"<verify>"`` failure stands for them.
+    """
+    plan = _early_exit_plan(make_live)
+    kp = generate_keypair()
+    first = _FakeIfaceForApply()
+    io_error = OSError(errno.EIO, "simulated transaction failure")
+    if case.startswith("section_write"):
+
+        def _write_config(section: str) -> None:
+            first.localNode.written_sections.append(section)
+            if section == "lora":
+                raise OSError(errno.EIO, "simulated lora write failure")
+
+        first.localNode.writeConfig = _write_config  # type: ignore[method-assign]
+    if case.startswith("begin_fails"):
+        first.localNode.begin_error = io_error
+    if case.startswith("commit_fails") or case.endswith("commit_fail"):
+        first.localNode.commit_error = io_error
+    if case == "channel_disabled":
+        first.localNode.channels[0].role = channel_pb2.Channel.Role.DISABLED
+
+    refreshed: list[_FakeIfaceForApply] = []
+    served = {
+        "identity_unreadable": _FakeIfaceUnreadableIdentity(),
+        "identity_mismatch": _FakeIfaceForApply(node_num=0xCAFE0002),
+    }
+
+    def _on_refresh(_n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+        fresh = served.get(case) or cur.reopened()
+        refreshed.append(fresh)
+        return fresh
+
+    session: object
+    if case.endswith("in_place"):
+        session = InPlaceSession(first)  # type: ignore[arg-type]
+    elif case == "mid_plan_reconnect_fails":
+        session = _FakeSessionRefreshFailsAfterFirstCall(first)
+    else:
+        session = _FakeSessionTracksRefresh(first, _on_refresh)
+
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert [(r.section, r.status) for r in outcome.results if r.field is None] == expected, (
+        outcome.describe()
+    )
+    assert outcome.security_attempted is security_attempted
+    assert outcome.may_update_database is False
+    assert outcome.exit_code == ExitCode.PROVISIONING
+    for iface in (first, *refreshed):
+        assert ("security" in iface.localNode.written_sections) is security_attempted
+    if case.startswith("begin_fails"):
+        assert first.localNode.written_sections == []
+        assert first.localNode.transaction_calls == ["<begin>"]
+        assert refreshed == []
+    if first.localNode.commit_error is not None:
+        # Never re-read after a failed commit: an open transaction holds its
+        # writes in memory only, so a read-back could confirm what a reboot loses.
+        assert refreshed == []
+
+
+def test_apply_plan_in_place_commit_failure_counts_security_as_attempted(
+    make_live, make_admin_key
+) -> None:
+    """In place, security is written inside the transaction, so a failed commit leaves it uncertain.
+
+    ``security_attempted`` used to be hardcoded ``False`` on this arm even
+    though ``is_managed``/admin keys had already been sent.
+    """
+    lockdown = _lockdown_regenerate_plan(make_live, make_admin_key)
+    lora = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="hop_limit", current=3, desired=5),),
+    )
+    # A security-only plan opens no transaction at all; lora makes it open one.
+    plan = dataclasses.replace(lockdown, sections=(lora, *lockdown.sections))
+    iface = _FakeIfaceForApply()
+    iface.localNode.commit_error = OSError(errno.EIO, "simulated commit failure")
+
+    outcome = apply_plan(plan, InPlaceSession(iface), keypair=generate_keypair())  # type: ignore[arg-type]
+
+    assert outcome.security_attempted is True
+    assert "security" in iface.localNode.written_sections
+    security = next(r for r in outcome.results if r.section == "security" and r.field is None)
+    assert security.status is WriteStatus.UNCONFIRMED
+    assert "commit failed" in security.message
+    assert "may or may not have saved it" in security.message
+    assert not any(r.status is WriteStatus.CONFIRMED for r in outcome.results)
+
+
+class _BodyError(Exception):
+    """Not a device error, so apply_plan lets it propagate out of the write loop."""
+
+
+def test_apply_plan_logs_a_commit_failure_that_another_exception_would_hide(
+    make_live, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A commit failing in ``finally`` while another exception propagates is logged, not lost."""
+    plan = _early_exit_plan(make_live)
+    iface = _FakeIfaceForApply()
+    iface.localNode.commit_error = OSError(errno.EIO, "simulated commit failure")
+
+    def _raise(_section: str) -> None:
+        raise _BodyError("unexpected")
+
+    iface.localNode.writeConfig = _raise  # type: ignore[method-assign]
+    session = _FakeSessionTracksRefresh(iface, _reopen_same_device)
+
+    with (
+        caplog.at_level(logging.WARNING, logger="meshprovision.provisioning.apply"),
+        pytest.raises(_BodyError),
+    ):
+        apply_plan(plan, session, keypair=generate_keypair())  # type: ignore[arg-type]
+
+    assert iface.localNode.transaction_calls[-1] == "<commit>"
+    assert [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING] == [
+        "Could not commit the settings transaction: [Errno 5] simulated commit failure"
+    ]
 
 
 class _ReadFailsAfterReconnectSession:

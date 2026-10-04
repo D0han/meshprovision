@@ -71,11 +71,18 @@ class WriteStatus(StrEnum):
 
     CONFIRMED = "confirmed"
     UNCONFIRMED = "unconfirmed"
-    """Written, but the post-write read-back did not match -- uncertain state."""
+    """Sent, but not confirmed: the post-write read-back did not match, or
+    it was sent before a settings-transaction commit that failed, so it
+    was never re-read -- uncertain state."""
     FAILED = "failed"
-    """The write call itself raised -- uncertain state."""
+    """Failed: the write call itself raised, or (as ``"<verify>"``) a
+    whole-plan step did -- the settings transaction, a reconnect, a
+    read-back, or the identity check -- uncertain state; or the write was
+    refused before anything was sent (the message then starts
+    ``"not written: "``)."""
     SKIPPED = "skipped"
-    """Dry-run, or nothing to do for this section."""
+    """Never sent: a dry run, or not written because an earlier step
+    failed (the message then starts ``"not written: "``)."""
 
 
 @dataclass(frozen=True, slots=True)

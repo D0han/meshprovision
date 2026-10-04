@@ -658,13 +658,27 @@ def _apply_and_persist(
         not_written = [r.section for r in outcome.results if r.status is apply.WriteStatus.SKIPPED]
         if not_written:
             ctx.error(f"Not written (stopped after the failure above): {', '.join(not_written)}")
+        security_change = next((c for c in change_plan.sections if c.section == "security"), None)
+        sets_is_managed = security_change is not None and any(
+            fc.field == "is_managed" and fc.desired is True for fc in security_change.changes
+        )
+        if (
+            sets_is_managed
+            and outcome.security_attempted
+            and not any(
+                r.section == "security"
+                and r.field == "is_managed"
+                and r.status is apply.WriteStatus.CONFIRMED
+                for r in outcome.results
+            )
+        ):
+            # E.g. an in-place run whose settings-transaction commit failed:
+            # security was sent but never read back.
+            ctx.error(
+                "The security section was sent but not confirmed: is_managed may have been "
+                "applied, so the node may now be locked to its admin keys."
+            )
         if "security" in not_written:
-            security_change = next(
-                (c for c in change_plan.sections if c.section == "security"), None
-            )
-            sets_is_managed = security_change is not None and any(
-                fc.field == "is_managed" and fc.desired is True for fc in security_change.changes
-            )
             if sets_is_managed:
                 ctx.info(
                     "The security section was not written: the node was not locked, "
