@@ -793,6 +793,38 @@ def test_lora_failure_before_security_clears_the_pending_keypair(
     _assert_no_secrets(result.stderr)
 
 
+def test_security_write_failure_keeps_the_pending_keypair(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """The mirror of the lora case: a security write that raised may have landed the key.
+
+    The deferred ``security`` write (after the commit and the mid-plan
+    reconnect) is what carries the regenerated keypair, so its failure
+    must count as attempted -- otherwise the CLI deletes the only copy of
+    a key the device may now hold.
+    """
+    dev = bus.use(FakeMeshInterface("deadbe01", fail_sections=frozenset({"security"})))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "UNCERTAIN" in result.stderr
+    assert "the database was NOT updated" in result.stderr
+    assert "security: failed" in result.stderr
+    assert "recovers it automatically" in result.stderr
+    assert "nothing to recover" not in result.stderr
+    assert "security" in dev.localNode.written_sections
+
+    pending_path = pending_keys.pending_key_path(db_path, dev.nid)
+    assert pending_path.exists()
+    assert ods.load_database(db_path).nodes == ()
+
+    _assert_no_secrets(result.stdout)
+    _assert_no_secrets(result.stderr)
+
+
 def test_mismatched_pending_keypair_is_never_adopted(
     runner: CliRunner,
     env: dict[str, str],

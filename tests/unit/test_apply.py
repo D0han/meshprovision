@@ -2298,6 +2298,86 @@ def test_apply_plan_default_channel_failure_skips_security_reconnecting(make_liv
     assert outcome.may_update_database is False
 
 
+def _lora_then_security_plan(make_live: Callable[..., object]) -> ChangePlan:
+    """A FACTORY plan with one lora change and the plan's own (deferred) security section."""
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    plan = build_plan(
+        PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    )
+    security_section = next(s for s in plan.sections if s.section == "security")
+    lora_change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
+    )
+    return dataclasses.replace(plan, sections=(lora_change, security_section))
+
+
+def test_apply_plan_deferred_security_write_failure_is_marked_attempted(make_live) -> None:
+    """A deferred security write that raises may have reached the device: it counts as attempted.
+
+    ``security_attempted`` is what keeps the CLI from deleting the pending
+    keypair file -- the regenerated key may now be on the device.
+    """
+    plan = _lora_then_security_plan(make_live)
+    first_iface = _FakeIfaceForApply()
+    failing_iface = _FakeIfaceRaisesOnWrite(OSError(errno.EIO, "fake I/O error"))
+    session = _FakeSessionTracksRefresh(first_iface, lambda _n, _cur: failing_iface)
+
+    outcome = apply_plan(plan, session, keypair=generate_keypair())  # type: ignore[arg-type]
+
+    # Security is written after the commit, on the reconnected interface.
+    assert first_iface.localNode.transaction_calls[-1] == "<commit>"
+    assert "security" not in first_iface.localNode.written_sections
+    assert failing_iface.localNode.written_sections == ["security"]
+    security_result = next(
+        r for r in outcome.results if r.section == "security" and r.field is None
+    )
+    assert security_result.status == WriteStatus.FAILED
+    assert "may or may not" in security_result.message
+    assert outcome.security_attempted is True
+    assert outcome.may_update_database is False
+
+
+def test_apply_plan_deferred_security_pre_io_failure_is_not_marked_attempted(
+    make_live, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deferred security write refused before any I/O never left the host: not attempted."""
+    plan = _lora_then_security_plan(make_live)
+    real_write_section = apply_module.write_section
+
+    def _refuse_security(iface: object, change: SectionChange, **kwargs: object) -> None:
+        if change.section == "security":
+            raise PlanConflictError("simulated pre-I/O refusal", field="security.is_managed")
+        real_write_section(iface, change, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(apply_module, "write_section", _refuse_security)
+    first_iface = _FakeIfaceForApply()
+    refreshed: list[_FakeIfaceForApply] = []
+
+    def _on_refresh(_n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+        refreshed.append(cur.reopened())
+        return refreshed[-1]
+
+    session = _FakeSessionTracksRefresh(first_iface, _on_refresh)
+
+    outcome = apply_plan(plan, session, keypair=generate_keypair())  # type: ignore[arg-type]
+
+    assert first_iface.localNode.written_sections == ["lora"]
+    assert all("security" not in iface.localNode.written_sections for iface in refreshed)
+    security_result = next(
+        r for r in outcome.results if r.section == "security" and r.field is None
+    )
+    assert security_result.status == WriteStatus.FAILED
+    assert security_result.message.startswith("not written: ")
+    assert "simulated pre-I/O refusal" in security_result.message
+    assert outcome.security_attempted is False
+    # Not attempted, so the final verify never checks security fields either.
+    assert not any(r.section == "security" and r.field is not None for r in outcome.results)
+    assert outcome.may_update_database is False
+
+
 def test_apply_plan_default_channel_in_place_lands_before_security(make_live) -> None:
     """Under --no-reconnect, default_channel writes in its natural order, no extra reconnect."""
     template = _template()
