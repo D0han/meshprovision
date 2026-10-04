@@ -517,6 +517,109 @@ def test_refresh_known_good_heals_a_copy_torn_by_interleaved_readers(tmp_path: P
     assert sidecar_payload["sha256"] == hashlib.sha256(b"version-two-content").hexdigest()
 
 
+def _replace_target(target: Path, data: bytes) -> None:
+    """Install ``data`` at ``target`` as a new inode, the way every real write does."""
+    tmp = target.with_name(f".{target.name}.writer-tmp")
+    tmp.write_bytes(data)
+    tmp.replace(target)
+
+
+def test_refresh_known_good_never_reverts_a_copy_already_mirroring_a_newer_target(
+    tmp_path: Path,
+) -> None:
+    """Regression for Round 39 aspect 3 (C39-1): a stale reader must not revert the copy.
+
+    An unlocked read-only load reads v1, a locked save then replaces
+    ``target`` with v2 and refreshes the copy from it, and only then
+    does the slow reader's own refresh run -- with v1's content and
+    stat. It must leave the v2 copy alone.
+    """
+    target = tmp_path / "nodes_db.ods"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    stale_stat = target.stat()
+
+    _replace_target(target, b"v2-longer")
+    _refresh(target, backup_dir=backup_dir)
+
+    info = known_good.refresh_known_good(
+        target, content=b"v1", source_stat=stale_stat, backup_dir=backup_dir
+    )
+
+    assert info is not None
+    assert info.path.read_bytes() == b"v2-longer"
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.VERIFIED
+    assert list(backup_dir.glob(".*.tmp-*")) == []
+
+
+def test_refresh_known_good_rechecks_the_target_right_before_replacing_the_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C39-1: the check runs after the temp copy is written, not only on entry.
+
+    A newer save-and-refresh is raced in from inside ``os.utime`` --
+    after this call's temp copy is already written, before it replaces
+    the known-good copy -- so a check placed only at the top of the
+    function would miss it.
+    """
+    target = tmp_path / "nodes_db.ods"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    stale_stat = target.stat()
+    real_utime = os.utime
+    raced = False
+
+    def racing_utime(path: Path, *, ns: tuple[int, int]) -> None:
+        nonlocal raced
+        real_utime(path, ns=ns)
+        if not raced:
+            raced = True
+            _replace_target(target, b"v2-longer")
+            _refresh(target, backup_dir=backup_dir)
+
+    monkeypatch.setattr(known_good.os, "utime", racing_utime)
+
+    known_good.refresh_known_good(
+        target, content=b"v1", source_stat=stale_stat, backup_dir=backup_dir
+    )
+
+    assert raced
+    assert (backup_dir / "nodes_db.known-good.ods").read_bytes() == b"v2-longer"
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.VERIFIED
+    assert list(backup_dir.glob(".*.tmp-*")) == []
+
+
+def test_refresh_known_good_still_captures_a_validated_read_when_target_then_breaks(
+    tmp_path: Path,
+) -> None:
+    """C39-1: a target that moved on does not by itself block the refresh.
+
+    Only a copy that already mirrors the newer ``target`` is protected.
+    Here ``target`` was broken by hand right after a validated read, and
+    the copy still holds an older version, so the validated read must
+    still become the known-good copy.
+    """
+    target = tmp_path / "nodes_db.ods"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+    _refresh(target, backup_dir=backup_dir)
+    _replace_target(target, b"v1-valid")
+    validated_stat = target.stat()
+
+    _replace_target(target, b"broken by hand")
+
+    info = known_good.refresh_known_good(
+        target, content=b"v1-valid", source_stat=validated_stat, backup_dir=backup_dir
+    )
+
+    assert info is not None
+    assert info.path.read_bytes() == b"v1-valid"
+
+
 def test_known_good_path_differs_for_two_same_named_databases_in_different_directories(
     tmp_path: Path,
 ) -> None:

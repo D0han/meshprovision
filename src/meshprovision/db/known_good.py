@@ -319,6 +319,46 @@ def provenance_reason(status: KnownGood) -> str:
     raise ValueError(f"{status.provenance} is already verified; there is no mismatch to explain")
 
 
+def _superseded(target: Path, source_stat: os.stat_result, destination: Path) -> bool:
+    """Whether a newer version of ``target`` already reached the known-good copy.
+
+    True only when both hold: ``target`` itself has moved on since the
+    read ``source_stat`` describes (a different device/inode/mtime/size
+    -- the same identity tuple :meth:`meshprovision.db.ods.OdsDatabase.
+    _check_not_concurrently_modified` uses), *and* the known-good copy
+    already mirrors that newer ``target`` by ``(mtime_ns, size)`` -- the
+    identity :func:`refresh_known_good` itself stamps onto every copy it
+    writes. That second condition is what keeps a validated read whose
+    ``target`` was then broken (by a hand-edit, say) still able to
+    refresh the copy: only a copy someone else already brought up to
+    date with the newer ``target`` is protected from being reverted.
+
+    Args:
+        target: The file the known-good copy is for.
+        source_stat: The ``stat`` result of the read whose content is
+            about to be written to the copy.
+        destination: The known-good copy's path.
+
+    Returns:
+        ``False`` whenever either file cannot be stat'd (including no
+        known-good copy yet), so the caller just goes ahead and writes.
+    """
+    try:
+        live = target.stat()
+        copy = destination.stat()
+    except OSError:
+        return False
+    source_identity = (
+        source_stat.st_dev,
+        source_stat.st_ino,
+        source_stat.st_mtime_ns,
+        source_stat.st_size,
+    )
+    if (live.st_dev, live.st_ino, live.st_mtime_ns, live.st_size) == source_identity:
+        return False
+    return (copy.st_mtime_ns, copy.st_size) == (live.st_mtime_ns, live.st_size)
+
+
 def refresh_known_good(
     target: Path,
     *,
@@ -374,6 +414,17 @@ def refresh_known_good(
     and never re-verify; requiring the hash to already agree makes the
     fast path self-heal that state on the very next load instead.
 
+    Never reverts a copy that already reflects a *newer* write (see
+    :func:`_superseded`). A read-only load holds no lock, so it can
+    finish validating after a locked ``save()`` already replaced
+    ``target`` and refreshed the copy from it; replacing that copy with
+    this older read would leave ``mesh db restore --known-good`` restoring
+    a version from before the save. Such a call keeps the copy as it is
+    and returns its metadata. The check runs immediately before the
+    replace but is not atomic with it: a competing refresh that lands
+    entirely between the two can still be reverted -- by one version,
+    which the next load's refresh corrects.
+
     Args:
         target: The file to refresh a known-good copy of.
         content: The exact bytes that were read and validated from
@@ -387,8 +438,8 @@ def refresh_known_good(
             resolution.
 
     Returns:
-        The refreshed (or already-current) copy's metadata, or ``None``
-        if the refresh itself failed.
+        The refreshed (or already-current, or already-newer) copy's
+        metadata, or ``None`` if the refresh itself failed.
     """
     resolved_dir = backup_dir_for(target, backup_dir)
     destination = resolved_dir / known_good_name(target)
@@ -423,6 +474,15 @@ def refresh_known_good(
         with os.fdopen(fd, "wb") as fh:
             fh.write(content)
         os.utime(tmp_destination, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
+        # Checked as late as possible -- after the temp copy is written,
+        # immediately before the replace -- to keep the window in which
+        # a newer refresh can still slip in behind this check as small
+        # as it can be made without a lock.
+        if _superseded(target, source_stat, destination):
+            _logger.debug("Known-good copy of %s already reflects a newer write; kept.", target)
+            with contextlib.suppress(OSError):
+                tmp_destination.unlink()
+            return known_good_info(target, backup_dir=backup_dir)
         tmp_destination.replace(destination)
         tmp_destination = None
         _write_sidecar(sidecar_path, source=current_source, sha256_hex=digest)

@@ -1728,6 +1728,57 @@ def test_load_database_known_good_fast_path_leaves_an_unchanged_copy_untouched(
     assert second.path.stat().st_mtime_ns == path.stat().st_mtime_ns
 
 
+def test_load_database_stale_reader_does_not_revert_known_good_after_concurrent_save(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for Round 39 aspect 3 (C39-1).
+
+    A read-only ``load_database`` takes no lock. If a locked
+    load-modify-save lands while it is still validating the old bytes,
+    the save refreshes the known-good copy first; the stale reader's own
+    refresh, running afterwards, used to put the copy back to the
+    pre-save version, so ``mesh db restore --known-good`` would then
+    silently drop the save. The writer is run synchronously from inside
+    the reader's last integrity check, so the interleaving is exact
+    without threads or sleeps.
+    """
+    path = tmp_path / "db.ods"
+    with ods.OdsDatabase.create(path) as db:
+        db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+        db.save()
+
+    real_check = ods._check_unique_key_refs
+    writer_ran = False
+
+    def writer_lands_mid_validation(keys: Any) -> None:
+        nonlocal writer_ran
+        real_check(keys)
+        if writer_ran:
+            return
+        writer_ran = True
+        with ods.OdsDatabase(path) as writer:
+            writer.lock()
+            writer.load()
+            writer.replace(
+                "Nodes", [*writer.rows("Nodes"), NodeRecord(node_id="deadbe02").to_row()]
+            )
+            writer.save()
+
+    monkeypatch.setattr(ods, "_check_unique_key_refs", writer_lands_mid_validation)
+
+    stale = ods.load_database(path)
+
+    assert writer_ran
+    assert len(stale.nodes) == 1  # the reader really did validate the pre-save bytes
+    known_good = known_good_info(path)
+    assert known_good is not None
+    assert known_good.path.read_bytes() == path.read_bytes()
+    assert len(ods.load_database(known_good.path).nodes) == 2
+    status = known_good_status(path)
+    assert status is not None
+    assert status.provenance is KnownGoodProvenance.VERIFIED
+
+
 def test_load_database_unreadable_file_raises_db_read_error(tmp_path: Path, keypair) -> None:
     if os.getuid() == 0:
         pytest.skip("root bypasses file permission checks")

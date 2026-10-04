@@ -323,6 +323,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a subsequent corruption. `save()`'s own pre-write backup (already
   taken on every call) always protected the immediately-preceding
   version regardless; this closes the gap for every save before that.
+  A read-only command that loaded the database just *before* such a
+  save, and finished after it, no longer puts the copy back to the
+  pre-save version: a refresh never replaces a copy that already
+  reflects a newer write to the database.
 
 ### Fixed
 

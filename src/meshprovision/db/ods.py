@@ -533,7 +533,10 @@ def load_database(path: Path) -> LoadedDatabase:
     copy is written from the exact bytes read and validated here, via
     :func:`meshprovision.db.ods_read._read_db_file`, never by re-opening
     ``path`` afterwards -- so a write landing between validation and the
-    refresh can never publish unvalidated content as "known-good". Never
+    refresh can never publish unvalidated content as "known-good". Nor
+    does a load that took no lock revert a copy a concurrent ``save()``
+    already refreshed while this load was still validating: the refresh
+    leaves a copy that already reflects a newer write in place. Never
     fails the load: a refresh failure (full disk, read-only backup
     directory) is logged and swallowed, not raised.
     """
