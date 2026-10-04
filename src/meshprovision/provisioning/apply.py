@@ -124,10 +124,9 @@ Every call site also catches
 :func:`~meshprovision.provisioning.connection.device_io_errors`, the
 shared tuple of library exception types (including a BLE write failure,
 ``BLEInterface.BLEError``/``BleakError``) a device read/write can raise
-besides ``OSError`` & co. That function does its own lazy import, since
-importing ``meshtastic``/``bleak`` at module level would violate this
-layer's protobuf-confinement rule for every *other* module that is not
-``detect.py``/``apply.py``/``connection.py``. ``SystemExit`` is *not*
+besides ``OSError`` & co. That function does its own lazy, cached
+import, so a serial/TCP-only run never loads ``bleak`` or
+``meshtastic.ble_interface`` (see its docstring). ``SystemExit`` is *not*
 part of ``device_io_errors()``: it is caught here, at write time, via
 this tuple instead, and deliberately stays out of
 :meth:`~meshprovision.provisioning.connection.BLEBackend.connect`'s own
