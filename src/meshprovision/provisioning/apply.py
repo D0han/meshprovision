@@ -725,6 +725,119 @@ def _possible_node_renumber(
     )
 
 
+def _verify_after_apply(
+    plan: ChangePlan,
+    session: DeviceSession,
+    prior_results: Sequence[WriteResult],
+    *,
+    attempted: Sequence[str],
+    keypair: KeyPair | None,
+    settle_seconds: float,
+    sleep: Callable[[float], None],
+    on_reconnect: Callable[[], None] | None,
+) -> ApplyOutcome:
+    """Reconnect, re-read the device, and verify every write :func:`apply_plan` sent.
+
+    The final phase of :func:`apply_plan`: every write has already been
+    sent or skipped, and nothing further is ever written. Only a fully
+    confirmed run returns an outcome with a database record.
+
+    Args:
+        plan: The plan being applied.
+        session: The device session to re-read through.
+        prior_results: Every result recorded by the write phases.
+        attempted: The sections whose write was sent, in order; also
+            what ``security_attempted`` is derived from.
+        keypair: The freshly generated (or adopted) keypair, if any.
+        settle_seconds: Pause before the verification reconnect.
+        sleep: Sleep function, injectable for tests.
+        on_reconnect: Called right before ``session.refresh()``.
+
+    Returns:
+        The final :class:`ApplyOutcome`.
+    """
+    results = list(prior_results)
+    security_attempted = "security" in attempted
+
+    sleep(settle_seconds)
+    if on_reconnect is not None:
+        on_reconnect()
+    try:
+        fresh_iface = session.refresh()
+    except ConnectionBackendError as exc:
+        results.append(
+            WriteResult(
+                "<verify>",
+                WriteStatus.FAILED,
+                f"Could not reconnect to verify the writes: {_backend_error_detail(exc)}",
+            )
+        )
+        return _stopped(plan, results, security_attempted=security_attempted)
+
+    try:
+        live_after = detect.read_live_config(fresh_iface)
+        device_pub = fresh_iface.getPublicKey()
+    except (*_VERIFY_READBACK_EXCEPTIONS, *connection.device_io_errors()) as exc:
+        results.append(
+            WriteResult(
+                "<verify>",
+                WriteStatus.FAILED,
+                f"Reconnected, but could not read back the device state to verify: {exc}",
+            )
+        )
+        return _stopped(plan, results, security_attempted=security_attempted)
+
+    if live_after.node_id != plan.node_id:
+        # Never run verify_plan against another device: its comparisons
+        # would be meaningless, and a CONFIRMED line would be actively
+        # misleading. 3b: when this run generated a keypair that the
+        # reconnected device -- despite the different node number --
+        # actually holds, that is the unverified firmware-2.8
+        # node-renumber case, not a swap; give it a distinct message, but
+        # the refusal to persist is identical either way.
+        results.append(
+            _possible_node_renumber(plan, live_after, keypair=keypair)
+            or _identity_mismatch(plan, live_after.node_id)
+        )
+        return _stopped(plan, results, security_attempted=security_attempted)
+
+    results.extend(
+        verify_plan(
+            plan,
+            live_after,
+            keypair=keypair,
+            device_public_key=device_pub,
+            attempted_sections=frozenset(attempted),
+            read_back=session.reads_back,
+        )
+    )
+
+    outcome = _stopped(plan, results, security_attempted=security_attempted)
+    if outcome.uncertain or not outcome.ok:
+        _logger.warning(
+            "Node %s left in an UNCERTAIN STATE: %s",
+            plan.node_id.display,
+            ", ".join(
+                f"{r.section}.{r.field}" if r.field else r.section for r in outcome.failures()
+            ),
+        )
+        return outcome
+
+    fingerprint = redact.fingerprint(keypair.public) if keypair is not None else None
+    return ApplyOutcome(
+        node_id=plan.node_id,
+        results=outcome.results,
+        dry_run=False,
+        verified=True,
+        public_key_fingerprint=fingerprint,
+        security_attempted=security_attempted,
+        record=plan.to_record(
+            confirmed_short_name=_confirmed_name(outcome.results, "short_name"),
+            confirmed_long_name=_confirmed_name(outcome.results, "long_name"),
+        ),
+    )
+
+
 def apply_plan(
     plan: ChangePlan,
     session: DeviceSession,
@@ -1069,84 +1182,15 @@ def apply_plan(
             results.extend(deferred_results)
             attempted.extend(sent)
 
-    security_attempted = "security" in attempted
-
-    sleep(settle_seconds)
-    if on_reconnect is not None:
-        on_reconnect()
-    try:
-        fresh_iface = session.refresh()
-    except ConnectionBackendError as exc:
-        results.append(
-            WriteResult(
-                "<verify>",
-                WriteStatus.FAILED,
-                f"Could not reconnect to verify the writes: {_backend_error_detail(exc)}",
-            )
-        )
-        return _stopped(plan, results, security_attempted=security_attempted)
-
-    try:
-        live_after = detect.read_live_config(fresh_iface)
-        device_pub = fresh_iface.getPublicKey()
-    except (*_VERIFY_READBACK_EXCEPTIONS, *connection.device_io_errors()) as exc:
-        results.append(
-            WriteResult(
-                "<verify>",
-                WriteStatus.FAILED,
-                f"Reconnected, but could not read back the device state to verify: {exc}",
-            )
-        )
-        return _stopped(plan, results, security_attempted=security_attempted)
-
-    if live_after.node_id != plan.node_id:
-        # Never run verify_plan against another device: its comparisons
-        # would be meaningless, and a CONFIRMED line would be actively
-        # misleading. 3b: when this run generated a keypair that the
-        # reconnected device -- despite the different node number --
-        # actually holds, that is the unverified firmware-2.8
-        # node-renumber case, not a swap; give it a distinct message, but
-        # the refusal to persist is identical either way.
-        results.append(
-            _possible_node_renumber(plan, live_after, keypair=keypair)
-            or _identity_mismatch(plan, live_after.node_id)
-        )
-        return _stopped(plan, results, security_attempted=security_attempted)
-
-    results.extend(
-        verify_plan(
-            plan,
-            live_after,
-            keypair=keypair,
-            device_public_key=device_pub,
-            attempted_sections=frozenset(attempted),
-            read_back=session.reads_back,
-        )
-    )
-
-    outcome = _stopped(plan, results, security_attempted=security_attempted)
-    if outcome.uncertain or not outcome.ok:
-        _logger.warning(
-            "Node %s left in an UNCERTAIN STATE: %s",
-            plan.node_id.display,
-            ", ".join(
-                f"{r.section}.{r.field}" if r.field else r.section for r in outcome.failures()
-            ),
-        )
-        return outcome
-
-    fingerprint = redact.fingerprint(keypair.public) if keypair is not None else None
-    return ApplyOutcome(
-        node_id=plan.node_id,
-        results=outcome.results,
-        dry_run=False,
-        verified=True,
-        public_key_fingerprint=fingerprint,
-        security_attempted=security_attempted,
-        record=plan.to_record(
-            confirmed_short_name=_confirmed_name(outcome.results, "short_name"),
-            confirmed_long_name=_confirmed_name(outcome.results, "long_name"),
-        ),
+    return _verify_after_apply(
+        plan,
+        session,
+        results,
+        attempted=attempted,
+        keypair=keypair,
+        settle_seconds=settle_seconds,
+        sleep=sleep,
+        on_reconnect=on_reconnect,
     )
 
 
