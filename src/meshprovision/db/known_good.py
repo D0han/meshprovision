@@ -33,7 +33,7 @@ from typing import Final
 
 from meshprovision.db.atomic_writer import write_bytes_atomic
 from meshprovision.db.backups import BackupInfo, backup_dir_for
-from meshprovision.db.fs_primitives import _BACKUP_DIR_MODE, _FILE_MODE
+from meshprovision.db.fs_primitives import _BACKUP_DIR_MODE, _FILE_MODE, resolve_path
 from meshprovision.errors import AtomicWriteError
 
 __all__ = [
@@ -266,8 +266,8 @@ def known_good_status(target: Path, *, backup_dir: Path | None = None) -> KnownG
         return KnownGood(info=info, provenance=KnownGoodProvenance.UNRECORDED, recorded_source=None)
 
     try:
-        current_source = str(target.resolve())
-    except OSError:
+        current_source = str(resolve_path(target))
+    except AtomicWriteError:
         current_source = str(target)
     if recorded_source != current_source:
         return KnownGood(
@@ -441,16 +441,16 @@ def refresh_known_good(
         The refreshed (or already-current, or already-newer) copy's
         metadata, or ``None`` if the refresh itself failed.
     """
-    resolved_dir = backup_dir_for(target, backup_dir)
-    destination = resolved_dir / known_good_name(target)
-    sidecar_path = _sidecar_path(target, backup_dir)
     try:
-        current_source = str(target.resolve())
-    except OSError:
+        current_source = str(resolve_path(target))
+    except AtomicWriteError:
         current_source = str(target)
     tmp_destination: Path | None = None
     digest = hashlib.sha256(content).hexdigest()
     try:
+        resolved_dir = backup_dir_for(target, backup_dir)
+        destination = resolved_dir / known_good_name(target)
+        sidecar_path = _sidecar_path(target, backup_dir)
         target_identity = (source_stat.st_mtime_ns, source_stat.st_size)
         if destination.is_file():
             dest_stat = destination.stat()

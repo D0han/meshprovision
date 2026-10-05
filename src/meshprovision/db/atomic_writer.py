@@ -94,19 +94,9 @@ def atomic_write(
             symlink loop), or if creating the temporary file, creating
             the backup, or replacing ``target`` fails.
     """
-    try:
-        target = target.resolve()
-    except (OSError, RuntimeError) as exc:
-        raise AtomicWriteError(f"Failed to resolve {target}: {exc}", path=str(target)) from exc
-    # Python 3.13+ no longer raises on a symlink loop in a non-strict
-    # resolve(); it hands back the unresolved path. A fully resolved path
-    # is never itself a symlink, so one that still is means a loop --
-    # refuse it rather than let os.replace swap the symlink for a file.
-    if target.is_symlink():
-        raise AtomicWriteError(
-            f"Failed to resolve {target}: symlink loop (too many levels of symbolic links)",
-            path=str(target),
-        )
+    # Refuses a symlink loop on every Python version, rather than let
+    # os.replace swap a looping symlink for a file (see resolve_path).
+    target = fs_primitives.resolve_path(target)
 
     try:
         target.parent.mkdir(parents=True, exist_ok=True)

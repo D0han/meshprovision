@@ -634,3 +634,31 @@ def test_known_good_path_differs_for_two_same_named_databases_in_different_direc
     fleet_b.parent.mkdir()
 
     assert known_good.known_good_path(fleet_a) != known_good.known_good_path(fleet_b)
+
+
+def test_known_good_status_falls_back_when_the_target_cannot_be_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """known_good_status never raises on an unresolvable target: it compares the path as given.
+
+    Forced to 3.11/3.12's behaviour (a non-strict resolve() raising
+    RuntimeError on a symlink loop) so it holds on every interpreter.
+    """
+    base = tmp_path.resolve()
+    target = base / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = base / "backups"
+    _refresh(target, backup_dir=backup_dir)
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, strict: bool = False) -> Path:
+        if self == target:
+            raise RuntimeError(f"Symlink loop from {str(self)!r}")
+        return real_resolve(self, strict=strict)
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.VERIFIED

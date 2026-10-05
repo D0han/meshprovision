@@ -334,6 +334,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A database path that is a symlink loop crashed `mesh db verify`,
+  `db list`, `db backup`, `db forget` and `db restore --known-good` with a
+  Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they
+  failed with a misleading message instead ("Node database not found",
+  "Nothing to back up"), and a loop in a parent directory slipped past
+  the earlier 3.13 guard on database writes. Every command now stops
+  first with "Failed to resolve <path>: symlink loop" and a hint, exit
+  code `4`, the same on every supported Python version.
 - When `mesh provision` stopped early, its report could leave sections
   out or describe them wrongly. A failed settings-transaction begin or
   commit printed a single failure line, with no word on which sections

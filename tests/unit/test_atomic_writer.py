@@ -1243,3 +1243,115 @@ def test_atomic_write_symlink_loop_raises_atomic_write_error(tmp_path: Path) -> 
 
     with pytest.raises(AtomicWriteError):
         write_bytes_atomic(a, b"hello", backup=False)
+
+
+_LOOP_MESSAGE = "symlink loop (too many levels of symbolic links)"
+
+
+def _loop_target(tmp_path: Path, form: str, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Build one symlink-loop form :func:`fs_primitives.resolve_path` must refuse.
+
+    ``file_loop``/``dir_loop`` are real loops, resolved natively by whichever
+    Python runs the test. The other three force one Python version's
+    ``Path.resolve()`` behaviour for the returned path, so every branch
+    runs on every interpreter: ``runtime_error`` is 3.11/3.12 (non-strict
+    resolve raises :class:`RuntimeError`), ``eloop_oserror`` a strict-style
+    :class:`OSError` ``ELOOP``, and ``unresolved`` is 3.13+ handing back a
+    parent-directory loop unresolved -- whose last component is no
+    symlink at all, so only the whole-path check catches it.
+    """
+    a = tmp_path / "a.ods"
+    a.symlink_to(tmp_path / "b.ods")
+    (tmp_path / "b.ods").symlink_to(a)
+    (tmp_path / "d1").symlink_to(tmp_path / "d2")
+    (tmp_path / "d2").symlink_to(tmp_path / "d1")
+    in_dir_loop = tmp_path / "d1" / "x.ods"
+    if form == "file_loop":
+        return a
+    if form == "dir_loop":
+        return in_dir_loop
+    target = in_dir_loop if form == "unresolved" else a
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, strict: bool = False) -> Path:
+        if self != target:
+            return real_resolve(self, strict=strict)
+        if form == "runtime_error":
+            raise RuntimeError(f"Symlink loop from {str(self)!r}")
+        if form == "eloop_oserror":
+            raise OSError(errno.ELOOP, "Too many levels of symbolic links", str(self))
+        return self.absolute()
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+    return target
+
+
+@pytest.mark.parametrize(
+    "form", ["file_loop", "dir_loop", "runtime_error", "eloop_oserror", "unresolved"]
+)
+def test_resolve_path_refuses_every_symlink_loop_form_alike(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, form: str
+) -> None:
+    """Every Python version's symlink-loop behaviour becomes the same AtomicWriteError.
+
+    3.11/3.12 used to escape as a raw RuntimeError traceback from the
+    unguarded resolve() sites (backup_dir_for, lock_path_for), and 3.13
+    returned the loop unresolved -- including a loop in a parent
+    directory, whose last component is no symlink at all.
+    """
+    path = _loop_target(tmp_path, form, monkeypatch)
+
+    with pytest.raises(AtomicWriteError) as excinfo:
+        fs_primitives.resolve_path(path)
+
+    assert str(excinfo.value) == f"Failed to resolve {path}: {_LOOP_MESSAGE}"
+    assert excinfo.value.path == str(path)
+    assert excinfo.value.hint is not None
+    assert "symlink" in excinfo.value.hint
+
+
+def test_resolve_path_reports_any_other_resolve_failure_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A non-loop OSError, from resolve() itself or from the symlink check, keeps its text."""
+    path = tmp_path / "nodes_db.ods"
+    resolve_error = FileNotFoundError(errno.ENOENT, "No such file or directory")
+    check_error = PermissionError(errno.EACCES, "Permission denied")
+
+    def fake_resolve(self: Path, strict: bool = False) -> Path:
+        raise resolve_error
+
+    def fake_is_symlink(self: Path) -> bool:
+        raise check_error
+
+    for error, attr, fake in (
+        (resolve_error, "resolve", fake_resolve),
+        (check_error, "is_symlink", fake_is_symlink),
+    ):
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, attr, fake)
+            with pytest.raises(AtomicWriteError) as excinfo:
+                fs_primitives.resolve_path(path)
+
+        assert str(excinfo.value) == f"Failed to resolve {path}: {error}"
+        assert excinfo.value.hint is None
+        assert excinfo.value.__cause__ is error
+
+
+@pytest.mark.parametrize("link", ["file_link", "dir_link"])
+def test_resolve_path_follows_a_good_symlink_without_reporting_a_loop(
+    tmp_path: Path, link: str
+) -> None:
+    """The whole-path symlink check never flags an ordinary, fully resolvable symlink."""
+    base = tmp_path.resolve()
+    real_dir = base / "real"
+    real_dir.mkdir()
+    if link == "file_link":
+        (real_dir / "nodes_db.ods").write_bytes(b"db")
+        (base / "nodes_db.ods").symlink_to(real_dir / "nodes_db.ods")
+        path = base / "nodes_db.ods"
+    else:
+        (base / "linked").symlink_to(real_dir)
+        path = base / "linked" / "nodes_db.ods"
+
+    assert fs_primitives.resolve_path(path) == real_dir / "nodes_db.ods"

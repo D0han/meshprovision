@@ -24,7 +24,7 @@ from tests.e2e.conftest import invoke
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from click.testing import CliRunner
+    from click.testing import CliRunner, Result
 
 pytestmark = pytest.mark.e2e
 
@@ -1243,3 +1243,78 @@ def test_write_through_a_dangling_symlinked_db_path_creates_the_real_file(
 
     assert link.is_symlink()
     assert real_target.is_file()
+
+
+# ---------------------------------------------------------------------------
+# Round 40 aspect 1 finding 3: a symlink-loop database path exits 4 cleanly on
+# every Python version, never with a raw traceback.
+# ---------------------------------------------------------------------------
+
+
+def _symlink_loop_db(tmp_path: Path, env: dict[str, str]) -> Path:
+    """Point ``MESHPROVISION_DB_PATH`` at a symlink loop (``a.ods -> b.ods -> a.ods``).
+
+    Returns:
+        The looping database path.
+    """
+    loop = tmp_path / "loop"
+    loop.mkdir()
+    db_path = loop / "a.ods"
+    db_path.symlink_to(loop / "b.ods")
+    (loop / "b.ods").symlink_to(db_path)
+    env["MESHPROVISION_DB_PATH"] = str(db_path)
+    return db_path
+
+
+def _assert_clean_symlink_loop_exit(result: Result, db_path: Path) -> None:
+    assert result.exit_code == 4, result.output
+    assert f"Failed to resolve {db_path}: symlink loop" in " ".join(result.stderr.split())
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["db", "verify"],
+        ["db", "list"],
+        ["db", "backup"],
+        ["db", "forget", "deadbe01", "--yes"],
+        ["db", "restore", "--known-good", "--yes"],
+    ],
+    ids=["verify", "list", "backup", "forget", "restore-known-good"],
+)
+def test_db_command_on_a_symlink_loop_db_path_exits_cleanly(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path, args: list[str]
+) -> None:
+    """Natively, on whichever Python runs it: 3.11/3.12 raised a RuntimeError traceback."""
+    db_path = _symlink_loop_db(tmp_path, env)
+
+    _assert_clean_symlink_loop_exit(invoke(runner, args, env), db_path)
+
+
+@pytest.mark.parametrize("behaviour", ["runtime_error", "unresolved"])
+def test_db_verify_on_a_symlink_loop_exits_cleanly_under_either_python_behaviour(
+    runner: CliRunner,
+    env: dict[str, str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    behaviour: str,
+) -> None:
+    """Forces the other Python versions' resolve() behaviour, so both run on every interpreter.
+
+    ``runtime_error`` is 3.11/3.12 (a non-strict resolve() raises
+    RuntimeError); ``unresolved`` is 3.13+ (the loop comes back unresolved).
+    """
+    db_path = _symlink_loop_db(tmp_path, env)
+    real_resolve = Path.resolve
+
+    def fake_resolve(self: Path, strict: bool = False) -> Path:
+        if self.absolute() != db_path:
+            return real_resolve(self, strict=strict)
+        if behaviour == "runtime_error":
+            raise RuntimeError(f"Symlink loop from {str(self)!r}")
+        return self.absolute()
+
+    monkeypatch.setattr(Path, "resolve", fake_resolve)
+
+    _assert_clean_symlink_loop_exit(invoke(runner, ["db", "verify"], env), db_path)

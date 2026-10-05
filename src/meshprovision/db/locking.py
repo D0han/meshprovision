@@ -50,6 +50,7 @@ import time
 from types import ModuleType
 from typing import TYPE_CHECKING, Final
 
+from meshprovision.db import fs_primitives
 from meshprovision.errors import AtomicWriteError, DatabaseLockedError, SettingsError
 
 if TYPE_CHECKING:
@@ -124,8 +125,13 @@ def lock_path_for(target: Path) -> Path:
         contend for the same lock -- consistent with
         :func:`~meshprovision.db.atomic_writer.atomic_write`, which
         resolves for the same reason.
+
+    Raises:
+        AtomicWriteError: If ``target`` cannot be resolved (for example a
+            symlink loop, see
+            :func:`~meshprovision.db.fs_primitives.resolve_path`).
     """
-    resolved = target.resolve()
+    resolved = fs_primitives.resolve_path(target)
     return resolved.with_name(resolved.name + LOCK_SUFFIX)
 
 

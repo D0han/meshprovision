@@ -130,10 +130,15 @@ def backup_dir_for(target: Path, backup_dir: Path | None = None) -> Path:
         ``<cwd>/data/backups`` -- the same directory used before this
         function considered ``target`` at all -- so default layouts see
         no change beyond messages now showing an absolute path.
+
+    Raises:
+        AtomicWriteError: If ``backup_dir`` is not given and ``target``
+            cannot be resolved (for example a symlink loop, see
+            :func:`~meshprovision.db.fs_primitives.resolve_path`).
     """
     if backup_dir is not None:
         return backup_dir
-    return target.resolve().parent / _BACKUP_DIR_NAME
+    return fs_primitives.resolve_path(target).parent / _BACKUP_DIR_NAME
 
 
 def backup_name(target: Path, when: datetime) -> str:
@@ -210,12 +215,11 @@ def legacy_backup_notice(target: Path, *, backup_dir: Path | None = None) -> str
     if not _LEGACY_BACKUP_DIR.is_dir():
         return None
 
-    resolved = backup_dir_for(target)
-    try:
-        if _LEGACY_BACKUP_DIR.resolve() == resolved.resolve():
+    # Best-effort: an unresolvable path just skips the "same directory" check.
+    with contextlib.suppress(AtomicWriteError):
+        resolved = backup_dir_for(target)
+        if fs_primitives.resolve_path(_LEGACY_BACKUP_DIR) == fs_primitives.resolve_path(resolved):
             return None
-    except OSError:
-        pass
 
     pattern = _backup_name_re(target)
     count = sum(

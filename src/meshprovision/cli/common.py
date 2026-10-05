@@ -29,6 +29,7 @@ command module -- only downward, from the earlier layers.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import json
 import logging
@@ -646,9 +647,11 @@ class CliContext:
         Args:
             path: The database path to check next to.
         """
+        from meshprovision.db.fs_primitives import resolve_path
+
         try:
-            resolved = path.resolve()
-        except (OSError, RuntimeError):
+            resolved = resolve_path(path)
+        except AtomicWriteError:
             return
         lock_marker = resolved.parent / f".~lock.{resolved.name}#"
         if lock_marker.exists():
@@ -713,9 +716,11 @@ class CliContext:
             DatabaseLockedError: If ``for_write`` is true or
                 ``must_exist`` is false, and another process holds the
                 write lock past its timeout.
-            AtomicWriteError: If ``for_write`` is true or ``must_exist``
-                is false, and the sidecar lock file cannot be created or
-                acquired.
+            AtomicWriteError: If the database path cannot be resolved
+                (for example a symlink loop, see
+                :func:`meshprovision.db.fs_primitives.resolve_path`), or
+                ``for_write`` is true or ``must_exist`` is false, and the
+                sidecar lock file cannot be created or acquired.
             SettingsError: If ``for_write`` is true or ``must_exist`` is
                 false, and ``MESHPROVISION_LOCK_TIMEOUT`` is set to a
                 malformed value.
@@ -739,6 +744,7 @@ class CliContext:
         a known-good copy isn't the relevant remedy.
         """
         from meshprovision.db import ods_write, schema
+        from meshprovision.db.fs_primitives import resolve_path
         from meshprovision.db.keys import KeyRepository
         from meshprovision.db.known_good import (
             KnownGoodProvenance,
@@ -749,6 +755,9 @@ class CliContext:
         from meshprovision.db.ods import OdsDatabase
 
         path = self.settings.db_path
+        # First, before any lock or load: a symlink loop is then the one
+        # error every command reports, on every Python version.
+        resolved = resolve_path(path)
         db = OdsDatabase(path)
         if for_write or not must_exist:
             if not must_exist:
@@ -757,13 +766,7 @@ class CliContext:
                 # itself when it is a symlink. On a first run,
                 # `create_empty`'s own `atomic_write` would otherwise be
                 # what creates this directory, but locking now happens
-                # first, so it is resolved and created the same way here.
-                try:
-                    resolved = path.resolve()
-                except (OSError, RuntimeError) as exc:
-                    raise AtomicWriteError(
-                        f"Failed to resolve {path}: {exc}", path=str(path)
-                    ) from exc
+                # first, so it is created here the same way.
                 try:
                     resolved.parent.mkdir(parents=True, exist_ok=True)
                 except OSError as exc:
@@ -789,7 +792,10 @@ class CliContext:
                 db.load(force=True)
         except DbError as exc:
             if not isinstance(exc, (DbReadError, AtomicWriteError)):
-                status = known_good_status(path)
+                # Only enriches the hint: never let it replace `exc`.
+                status = None
+                with contextlib.suppress(AtomicWriteError):
+                    status = known_good_status(path)
                 if status is not None:
                     if status.provenance is KnownGoodProvenance.VERIFIED:
                         remediation = (

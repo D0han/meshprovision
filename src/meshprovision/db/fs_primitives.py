@@ -1,7 +1,17 @@
 """Filesystem primitives shared by the backup and atomic-write layers.
 
-Two leaf-level building blocks live here, with no dependency on either
-:mod:`meshprovision.db.backups` or :mod:`meshprovision.db.atomic_writer`:
+Three leaf-level building blocks live here, with no dependency on either
+:mod:`meshprovision.db.backups` or :mod:`meshprovision.db.atomic_writer`
+(only on :mod:`meshprovision.errors`):
+
+- :func:`resolve_path`, the one place a database-related path is
+  resolved, so a symlink loop fails the same way on every supported
+  Python: 3.11/3.12 raise :class:`RuntimeError` from a non-strict
+  ``Path.resolve()``, while 3.13 hands back the path unresolved. Used by
+  :func:`~meshprovision.db.atomic_writer.atomic_write`,
+  :func:`~meshprovision.db.backups.backup_dir_for`,
+  :func:`~meshprovision.db.locking.lock_path_for`, and the CLI's
+  ``open_database``.
 
 - :func:`link_no_clobber`, a collision-safe "give this file a new name"
   primitive, used by both the backup-claiming logic and by
@@ -32,8 +42,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+from meshprovision.errors import AtomicWriteError
+
 __all__ = [
     "link_no_clobber",
+    "resolve_path",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -102,6 +115,68 @@ def _sweep_stale_temps(
             continue
         removed += 1
     return removed
+
+
+_SYMLINK_LOOP_HINT: Final[str] = (
+    "Fix or remove the looping symlink, or point --db-path/MESHPROVISION_DB_PATH at the real file."
+)
+
+
+def _symlink_loop_error(path: Path) -> AtomicWriteError:
+    """Build the one error every symlink-loop form of :func:`resolve_path` raises.
+
+    Args:
+        path: The path that could not be resolved.
+
+    Returns:
+        The :class:`AtomicWriteError` to raise.
+    """
+    return AtomicWriteError(
+        f"Failed to resolve {path}: symlink loop (too many levels of symbolic links)",
+        path=str(path),
+        hint=_SYMLINK_LOOP_HINT,
+    )
+
+
+def resolve_path(path: Path) -> Path:
+    """Resolve ``path`` (non-strict: it need not exist), refusing symlink loops.
+
+    A symlink loop surfaces differently per Python version: 3.11/3.12
+    raise :class:`RuntimeError` even from a non-strict ``resolve()``, a
+    strict resolve raises :class:`OSError` ``ELOOP``, and 3.13+ returns
+    the path *unresolved*. A fully resolved path contains no symlink
+    anywhere, so any component of the result that is still a symlink
+    means a loop -- checking every component, not just the last, also
+    catches a loop in a parent directory (``d1 -> d2 -> d1`` with the
+    file at ``d1/x.ods``), whose final component 3.13 reports as no
+    symlink at all.
+
+    Args:
+        path: The path to resolve.
+
+    Returns:
+        The resolved absolute path.
+
+    Raises:
+        AtomicWriteError: If ``path`` is part of a symlink loop, or
+            resolving it fails for another reason (for example the
+            working directory was removed).
+    """
+    try:
+        resolved = path.resolve()
+    except RuntimeError as exc:
+        raise _symlink_loop_error(path) from exc
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise _symlink_loop_error(path) from exc
+        raise AtomicWriteError(f"Failed to resolve {path}: {exc}", path=str(path)) from exc
+    try:
+        is_loop = any(part.is_symlink() for part in (resolved, *resolved.parents))
+    except OSError as exc:
+        raise AtomicWriteError(f"Failed to resolve {path}: {exc}", path=str(path)) from exc
+    if is_loop:
+        raise _symlink_loop_error(path)
+    return resolved
 
 
 def link_no_clobber(source: Path, destination: Path) -> None:
