@@ -1764,6 +1764,46 @@ def test_from_backup_dry_run_describes_every_key_row_a_real_run_would_write(
     assert payload["channel_name_to_record"] == "Primary"
 
 
+def test_from_backup_json_escapes_terminal_controls_in_the_channel_name(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    """A backup's channel name reaches ``--json`` with its C1/bidi controls escaped.
+
+    The name comes straight from the backup file, so a crafted one could
+    carry the single-byte CSI (U+009B) or a bidi override (U+202E); the
+    JSON on stdout must not contain them raw, yet still decode to the
+    exact name.
+    """
+    name = "Pri\x9bm\u202eŁódź"
+    channel_set = apponly_pb2.ChannelSet()
+    channel_set.settings.add(psk=bytes(range(32)), name=name)
+    frag = base64.urlsafe_b64encode(channel_set.SerializeToString()).decode().rstrip("=")
+    cfg = _write_profile_cfg(
+        tmp_path / "profile.cfg", channel_url=f"https://meshtastic.org/e/#{frag}"
+    )
+
+    result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(cfg),
+            "--node-id",
+            "!a0cb5cc4",
+            "--no-lookup",
+            "--dry-run",
+            "--json",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert "\x9b" not in result.stdout
+    assert "\u202e" not in result.stdout
+    assert '"channel_name_to_record": "Pri\\u009bm\\u202eŁódź"' in result.stdout
+    assert json.loads(result.stdout)["channel_name_to_record"] == name
+
+
 def test_from_backup_conflicts_with_a_transport_flag(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:

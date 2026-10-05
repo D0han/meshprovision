@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import io
+import json
 import logging
 import sys
 from collections.abc import Callable, Iterator
@@ -387,6 +388,19 @@ class TestEchoJson:
         out = capsys.readouterr().out
         assert '"path": "a/b.ods"' in out
         assert f'"when": "{moment}"' in out
+
+    def test_terminal_controls_are_escaped_and_round_trip(
+        self, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """C1/DEL/bidi controls never reach stdout raw; the JSON still decodes to the input."""
+        payload = {"name": "\x9b2J\x7f\u202eŁódź"}
+
+        echo_json(payload)
+
+        out = capsys.readouterr().out
+        assert not {"\x9b", "\x7f", "\u202e"} & set(out)
+        assert '"name": "\\u009b2J\\u007f\\u202eŁódź"' in out
+        assert json.loads(out) == payload
 
 
 class _StdinStub:

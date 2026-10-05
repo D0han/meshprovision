@@ -15,7 +15,6 @@ written to stdout.
 
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime
 from types import MappingProxyType
 from typing import Final
@@ -28,7 +27,7 @@ from rich.text import Text
 from meshprovision.status import timefmt
 from meshprovision.status.merge import Availability
 from meshprovision.status.report import StatusReport
-from meshprovision.termsafe import terminal_safe
+from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 __all__ = [
     "AVAILABILITY_LABELS",
@@ -338,14 +337,15 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
 
 
 def render_json(report: StatusReport, *, indent: int = 2) -> str:
-    """Render a status report as a stable, indented JSON string.
+    r"""Render a status report as a stable, indented JSON string.
 
     Args:
         report: The report to render.
         indent: ``json.dumps`` indent level.
 
     Returns:
-        ``json.dumps(report_to_json_dict(report), indent=indent, ensure_ascii=False)``,
-        with insertion-ordered (never sorted) keys.
+        ``json_dumps_safe(report_to_json_dict(report), indent=indent)`` --
+        non-ASCII names kept literal, terminal control characters
+        ``\uNNNN``-escaped -- with insertion-ordered (never sorted) keys.
     """
-    return json.dumps(report_to_json_dict(report), indent=indent, ensure_ascii=False)
+    return json_dumps_safe(report_to_json_dict(report), indent=indent)

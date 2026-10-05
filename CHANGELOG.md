@@ -900,7 +900,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   printing, closing a path where a maliciously crafted name could embed
   a terminal escape sequence (a clipboard write, a spoofed hyperlink, a
   cursor-repositioning sequence) that would otherwise reach the operator's
-  real terminal verbatim.
+  real terminal verbatim. `--json` output escapes the same characters
+  (DEL, the C1 controls such as the single-byte CSI, and the bidi
+  overrides) as standard `\uNNNN` JSON escapes, so the document still
+  decodes to the original strings while non-ASCII names stay readable.
 - `atomic_write`/`lock_path_for` now resolve symlinks before comparing or
   locking paths, and the known-good safety copy's refresh now reads and
   validates the same bytes it just wrote (closing a read-after-write

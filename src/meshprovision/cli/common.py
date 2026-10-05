@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import contextlib
 import functools
-import json
 import logging
 import sys
 from dataclasses import dataclass, replace
@@ -54,7 +53,7 @@ from meshprovision.errors import (
     SchemaError,
     exit_code_for,
 )
-from meshprovision.termsafe import terminal_safe
+from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -153,11 +152,12 @@ def build_settings(
 
 
 def echo_json(payload: object, *, indent: int = DEFAULT_JSON_INDENT) -> None:
-    """Print a JSON document to STDOUT.
+    r"""Print a JSON document to STDOUT.
 
     Always ``click.echo`` to STDOUT, never a rich ``Console`` -- so
     markup is never interpreted and lines are never wrapped, keeping the
-    output machine-parseable.
+    output machine-parseable. Terminal control characters in strings are
+    ``\uNNNN``-escaped (see :func:`~meshprovision.termsafe.json_dumps_safe`).
 
     Args:
         payload: The value to serialize. Anything ``json.dumps`` cannot
@@ -165,7 +165,7 @@ def echo_json(payload: object, *, indent: int = DEFAULT_JSON_INDENT) -> None:
             via ``str()`` rather than raising.
         indent: The indentation width to pass to ``json.dumps``.
     """
-    click.echo(json.dumps(payload, indent=indent, ensure_ascii=False, default=str))
+    click.echo(json_dumps_safe(payload, indent=indent, default=str))
 
 
 def _emit_error(text: str) -> None:

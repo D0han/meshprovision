@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from meshprovision.termsafe import terminal_safe
+from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 pytestmark = pytest.mark.unit
 
@@ -52,3 +55,40 @@ def test_other_control_characters_still_escaped_with_allow_newlines() -> None:
 
 def test_empty_string_unchanged() -> None:
     assert terminal_safe("") == ""
+
+
+@pytest.mark.parametrize(
+    "codepoint",
+    [0x7F, 0x80, 0x9B, 0x9F, *range(0x202A, 0x202F), *range(0x2066, 0x206A)],
+    ids=lambda codepoint: f"U+{codepoint:04X}",
+)
+def test_json_dumps_safe_escapes_del_c1_and_bidi_controls(codepoint: int) -> None:
+    assert json_dumps_safe(chr(codepoint)) == f'"\\u{codepoint:04x}"'
+
+
+def test_json_dumps_safe_round_trips_to_the_same_value() -> None:
+    value = {"name": "a\x9b[2J\x7f\u202eb\u2066c\x1b", "nested": ["\u2069", None, 1.5]}
+    assert json.loads(json_dumps_safe(value, indent=2)) == value
+
+
+def test_json_dumps_safe_keeps_non_ascii_printable_text_literal() -> None:
+    assert json_dumps_safe("Łódź 😀 日本") == '"Łódź 😀 日本"'
+
+
+def test_json_dumps_safe_escapes_controls_in_keys() -> None:
+    assert json_dumps_safe({"k\x9b\u202e": 1}) == '{"k\\u009b\\u202e": 1}'
+
+
+def test_json_dumps_safe_escapes_a_control_after_a_literal_backslash() -> None:
+    text = json_dumps_safe("\\\x9b")
+    assert text == '"\\\\\\u009b"'
+    assert json.loads(text) == "\\\x9b"
+
+
+def test_json_dumps_safe_passes_default_through() -> None:
+    assert json_dumps_safe({"path": Path("a/b.ods")}, default=str) == '{"path": "a/b.ods"}'
+
+
+def test_json_dumps_safe_without_default_raises_type_error() -> None:
+    with pytest.raises(TypeError):
+        json_dumps_safe({"path": Path("a/b.ods")})

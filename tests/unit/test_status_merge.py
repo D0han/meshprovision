@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta, timezone
@@ -807,6 +808,24 @@ def test_build_report_is_pure_and_deterministic() -> None:
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
     )
     assert render.render_json(report1) == render.render_json(report2)
+
+
+def test_render_json_escapes_terminal_controls_in_a_database_name() -> None:
+    """A stored name's bidi/C1 controls are escaped; non-ASCII text stays literal."""
+    name = "Ev\u202eil\x9b Łódź"
+    report = build_report(
+        records={NID: NodeRecord(node_id="deadbe01", long_name=name)},
+        observations_by_source={},
+        node_ids=[NID],
+        now=NOW,
+    )
+
+    text = render.render_json(report)
+
+    assert "\u202e" not in text
+    assert "\x9b" not in text
+    assert "Łódź" in text
+    assert json.loads(text)["nodes"][0]["database"]["long_name"] == name
 
 
 # ---------------------------------------------------------------------------
