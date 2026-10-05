@@ -342,6 +342,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the earlier 3.13 guard on database writes. Every command now stops
   first with "Failed to resolve <path>: symlink loop" and a hint, exit
   code `4`, the same on every supported Python version.
+- `mesh db restore` reported any failure during the restore as "<BACKUP>
+  is not a valid database; nothing was restored ... Pick a different
+  backup", even when the backup was fine and the write itself failed (a
+  read-only database directory, a full disk) -- sending the operator off
+  to discard a good backup while the real problem stayed unfixed. A
+  write failure after the backup validated now reads "Could not restore
+  <DB> from <BACKUP>: ..." and says the backup is fine and the database
+  was not replaced; a backup that can no longer be read reads "Nothing
+  was restored: ...". Only a backup whose content fails validation is
+  still called invalid. The exit code stays `4`.
 - When `mesh provision` stopped early, its report could leave sections
   out or describe them wrongly. A failed settings-transaction begin or
   commit printed a single failure line, with no word on which sections

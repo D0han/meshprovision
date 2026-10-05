@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import os
 import shutil
@@ -12,12 +13,13 @@ from typing import TYPE_CHECKING
 import pytest
 
 from meshprovision.crypto.keys import generate_keypair
-from meshprovision.db import backups, ods, ods_write
+from meshprovision.db import atomic_writer, backups, ods, ods_write
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.locking import lock_path_for
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.observed_keys import observed_key_ref
 from meshprovision.db.schema import KeyOrigin, KeyType
+from meshprovision.errors import AtomicWriteError
 from tests.conftest import WIDE_TERMINAL_COLUMNS
 from tests.e2e.conftest import invoke
 
@@ -1318,3 +1320,137 @@ def test_db_verify_on_a_symlink_loop_exits_cleanly_under_either_python_behaviour
     monkeypatch.setattr(Path, "resolve", fake_resolve)
 
     _assert_clean_symlink_loop_exit(invoke(runner, ["db", "verify"], env), db_path)
+
+
+# ---------------------------------------------------------------------------
+# Round 40 aspect 1 finding 4: `mesh db restore` blames a valid backup only
+# for its own content, never for a read or write failure.
+# ---------------------------------------------------------------------------
+
+
+def _valid_backup(tmp_path: Path, env: dict[str, str], seed_db: Callable[..., Path]) -> Path:
+    """Seed the live database and copy it, unchanged, to a backup outside its directory.
+
+    Returns:
+        The backup's path.
+    """
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    backup = tmp_path / "good.ods"
+    shutil.copyfile(Path(env["MESHPROVISION_DB_PATH"]), backup)
+    return backup
+
+
+def _restore_fails_with_a_hinted_error(
+    monkeypatch: pytest.MonkeyPatch, *, after_validation: bool
+) -> None:
+    """Make ``restore_backup`` raise an AtomicWriteError that carries its own hint.
+
+    Like the symlink-loop error :func:`~meshprovision.db.fs_primitives.resolve_path`
+    raises: the restore's own message must embed only the inner error's
+    message, or the output carries two "Hint:" lines.
+    """
+
+    def fake_restore_backup(
+        backup: Path,
+        target: Path,
+        *,
+        backup_dir: Path | None = None,
+        validate: Callable[[bytes], object] | None = None,
+    ) -> None:
+        if after_validation and validate is not None:
+            validate(backup.read_bytes())
+        raise AtomicWriteError("simulated failure", path=str(target), hint="inner hint")
+
+    monkeypatch.setattr(atomic_writer, "restore_backup", fake_restore_backup)
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or os.geteuid() == 0,
+    reason="needs POSIX permission bits that bind the current user (root ignores them)",
+)
+def test_db_restore_write_failure_does_not_blame_a_valid_backup(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write that fails after the backup validated blames the write, never the backup.
+
+    Before, every failure inside the restore -- here the temp file the
+    atomic replace needs, in a read-only database directory -- read
+    "<BACKUP> is not a valid database ... Pick a different backup",
+    sending the operator off to discard a good backup while the real
+    problem stayed unfixed.
+    """
+    backup = _valid_backup(tmp_path, env, seed_db)
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    # The sidecar lock is opened with O_CREAT: it must already exist, or
+    # the read-only directory fails the lock before the restore is reached.
+    lock_path_for(db_path).touch()
+    before = db_path.read_bytes()
+    args = ["db", "restore", str(backup), "--yes", "--backup-dir", str(tmp_path / "backups")]
+    data_dir = db_path.parent
+    data_dir.chmod(0o500)
+    try:
+        result = invoke(runner, args, env)
+    finally:
+        data_dir.chmod(0o700)  # so pytest can clean tmp_path up
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 4
+    assert f"Could not restore {db_path} from {backup}: Failed to create temporary file" in stderr
+    assert "the backup itself is fine" in stderr
+    assert "not a valid database" not in stderr
+    assert stderr.count("Hint:") == 1
+    assert db_path.read_bytes() == before
+
+    _restore_fails_with_a_hinted_error(monkeypatch, after_validation=True)
+    hinted = " ".join(invoke(runner, args, env).stderr.split())
+    assert f"Could not restore {db_path} from {backup}: simulated failure" in hinted
+    assert hinted.count("Hint:") == 1
+    assert "inner hint" not in hinted
+
+
+def test_db_restore_read_failure_says_nothing_was_restored(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A backup that can't be read once the restore starts is a read failure, not bad content.
+
+    Forced through ``Path.read_bytes`` for the backup only: click checks
+    BACKUP is readable up front, so a real unreadable file never gets this
+    far -- only one that changes or vanishes after that check (or a
+    known-good copy deleted after its provenance check) does.
+    """
+    backup = _valid_backup(tmp_path, env, seed_db)
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_path.read_bytes()
+    real_read_bytes = Path.read_bytes
+
+    def fake_read_bytes(self: Path) -> bytes:
+        if self == backup:
+            raise PermissionError(errno.EACCES, "Permission denied", str(self))
+        return real_read_bytes(self)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "read_bytes", fake_read_bytes)
+        result = invoke(runner, ["db", "restore", str(backup), "--yes"], env)
+
+    stderr = " ".join(result.stderr.split())
+    assert result.exit_code == 4
+    assert f"Nothing was restored: Failed to read backup {backup}:" in stderr
+    assert "still exists and is readable" in stderr
+    assert "mesh db backup --list" in stderr
+    assert "not a valid database" not in stderr
+    assert stderr.count("Hint:") == 1
+    assert db_path.read_bytes() == before
+
+    _restore_fails_with_a_hinted_error(monkeypatch, after_validation=False)
+    hinted = " ".join(invoke(runner, ["db", "restore", str(backup), "--yes"], env).stderr.split())
+    assert "Nothing was restored: simulated failure" in hinted
+    assert hinted.count("Hint:") == 1
+    assert "inner hint" not in hinted

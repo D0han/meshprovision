@@ -395,10 +395,12 @@ def db_restore(
     Raises:
         click.UsageError: If neither ``BACKUP`` nor ``--known-good`` is
             given, or both are.
-        AtomicWriteError: If the resolved backup file cannot be read, the
-            restore write fails, ``--known-good`` was given but no
-            known-good copy exists yet, or its provenance is not
-            verified.
+        AtomicWriteError: If the resolved backup file cannot be read
+            ("Nothing was restored", before validation), the restore
+            write fails after the backup validated ("Could not restore
+            ...": the live database was not replaced and the backup is
+            fine), ``--known-good`` was given but no known-good copy
+            exists yet, or its provenance is not verified.
         SchemaError: If ``BACKUP``'s content fails validation -- nothing
             is written, and the live database is untouched -- or, in the
             unlikely case that passes but the file on disk still does
@@ -449,14 +451,39 @@ def db_restore(
         else "mesh db backup --list"
     )
 
+    # Set once the backup's content validated, so a write failure after it
+    # is never blamed on the backup (no validation error is an
+    # AtomicWriteError; a read failure before it is).
+    validated = False
+
+    def _validate(data: bytes) -> None:
+        nonlocal validated
+        ods.parse_database(data, source=resolved_backup)
+        validated = True
+
     with locking.exclusive_lock(path):
         try:
             atomic_writer.restore_backup(
-                resolved_backup,
-                path,
-                backup_dir=resolved_backup_dir,
-                validate=lambda data: ods.parse_database(data, source=resolved_backup),
+                resolved_backup, path, backup_dir=resolved_backup_dir, validate=_validate
             )
+        except AtomicWriteError as exc:
+            if validated:
+                raise AtomicWriteError(
+                    f"Could not restore {path} from {resolved_backup}: {exc.message}",
+                    path=str(path),
+                    hint=(
+                        f"{path} was not replaced; the backup itself is fine. Fix the problem "
+                        "above (permissions, free space) and re-run."
+                    ),
+                ) from exc
+            raise AtomicWriteError(
+                f"Nothing was restored: {exc.message}",
+                path=str(path),
+                hint=(
+                    f"{path} was not touched. Check that {resolved_backup} still exists and is "
+                    f"readable, or pick another: `{list_hint}`."
+                ),
+            ) from exc
         except MeshprovisionError as exc:
             raise SchemaError(
                 f"{resolved_backup} is not a valid database; nothing was restored: "
