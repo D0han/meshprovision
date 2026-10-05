@@ -228,12 +228,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   groups). World-writable files, foreign-group group-writable files,
   files writable by a primary group shared with other users (e.g.
   `users`; on LDAP/sssd hosts without user enumeration only local
-  accounts are checked), files owned by another user, and anything that is
-  not a regular file are still refused; a symlinked `.env` is judged by
-  the file it points to. The check runs against the same open file that
-  is then parsed, so the file can't be swapped between check and read,
-  and the error lists each problem with the `chmod`/`chown` command that
-  fixes it.
+  accounts are checked), files whose POSIX ACL lets another user or group
+  write them (checked on Linux only; read-only ACL entries are fine),
+  files owned by another user, and anything that is not a regular file
+  are still refused; a symlinked `.env` is judged by the file it points
+  to. The check runs against the same open file that is then parsed, so
+  the file can't be swapped between check and read, and the error lists
+  each problem with the `chmod`/`chown` command that fixes it.
 - The `Nodes`/`Keys` sheets are now always sorted -- on load, on every
   in-memory mutation, and on write -- instead of preserving insertion/
   hand-editing order. `Nodes` sorts by `long_name` (falling back to

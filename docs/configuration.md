@@ -24,9 +24,13 @@ regular file owned by you and not world-writable (group-writable is fine
 when the group is your primary group and no one else is in it, the usual
 `rw-rw-r--` default with a per-user group; a file writable by any other
 group, or by a primary group shared with other users such as `users`, is
-refused). The error lists each problem with the `chmod`/`chown` command
-that fixes it. Pass `--env-file` explicitly to bypass the search (and
-this check) entirely.
+refused). On Linux the file's POSIX ACL counts too: an ACL entry that
+lets another user or group write the file (for example one inherited from
+a directory's default ACL) gets it refused, while read-only ACL entries
+are fine. The error lists each problem with the `chmod`/`chown` command
+that fixes it (for an ACL, `chmod g-w`, which takes write access away
+from every ACL entry at once). Pass `--env-file` explicitly to bypass the
+search (and this check) entirely.
 
 "No one else is in it" means the group lists no other members and no
 other account has it as its primary group. On hosts whose LDAP/sssd
@@ -34,6 +38,12 @@ directory doesn't allow enumerating users, only local accounts can be
 checked for the second part, so a directory user who shares your primary
 group without being listed as a member can go unnoticed -- use
 `chmod g-w .env` there if your primary group isn't private.
+
+ACLs are only read on Linux, from the `system.posix_acl_access`
+attribute. macOS ACLs and NFSv4 ACLs (`system.nfs4_acl`, e.g. on an
+NFSv4 home directory) are not inspected, so there a discovered `.env`
+can be writable by someone the check doesn't see -- keep such ACLs free
+of write entries for others, or use `--env-file`.
 
 `MESHPROVISION_CONTACT` has no default because lorastats.pl requires
 identifiable contact information in every request and bans IP addresses

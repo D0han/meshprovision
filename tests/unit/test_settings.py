@@ -7,6 +7,7 @@ import grp
 import os
 import pwd
 import shlex
+import struct
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -35,6 +36,36 @@ _GROUP_NAME = "mesh-test-group"
 _FALLBACK_HINT = (
     ", or pass the file explicitly with --env-file instead of relying on upward search."
 )
+_ACL_XATTR = "system.posix_acl_access"
+_USER_OBJ, _USER, _GROUP_OBJ, _GROUP, _MASK, _OTHER = 0x01, 0x02, 0x04, 0x08, 0x10, 0x20
+_R, _RW = 0o4, 0o6
+_NO_ID = 0xFFFFFFFF
+
+
+def _acl_blob(*entries: tuple[int, int, int]) -> bytes:
+    """Encode ``(tag, perm, id)`` entries as a ``system.posix_acl_access`` value."""
+    return struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *entry) for entry in entries)
+
+
+def _acl(*extra: tuple[int, int, int], group_obj: int = _R) -> bytes:
+    """Encode an ACL: owner rw, owning group ``group_obj``, other r, plus ``extra`` entries.
+
+    Entries are sorted by tag then id, the order the kernel requires.
+    """
+    base = ((_USER_OBJ, _RW, _NO_ID), (_GROUP_OBJ, group_obj, _NO_ID), (_OTHER, _R, _NO_ID))
+    return _acl_blob(*sorted((*base, *extra), key=lambda entry: (entry[0], entry[2])))
+
+
+def _fake_getxattr(acl: bytes | None) -> Callable[..., bytes]:
+    """Return an ``os.getxattr`` stand-in that reports ``acl`` (None: no ACL, ``ENODATA``)."""
+
+    def getxattr(path: object, attribute: str, *, follow_symlinks: bool = True) -> bytes:
+        assert attribute == _ACL_XATTR
+        if acl is None:
+            raise OSError(errno.ENODATA, os.strerror(errno.ENODATA))
+        return acl
+
+    return getxattr
 
 
 def _patch_accounts(
@@ -69,6 +100,19 @@ def _patch_accounts(
     monkeypatch.setattr(pwd, "getpwall", lambda: list(accounts))
 
 
+def _set_real_acl(target: Path, acl: bytes | None) -> None:
+    """Write ``acl`` as ``target``'s access ACL, or skip where the filesystem can't."""
+    if not hasattr(os, "setxattr"):
+        pytest.skip("os.setxattr is unavailable (POSIX ACLs are read on Linux only)")
+    assert acl is not None
+    try:
+        os.setxattr(target, _ACL_XATTR, acl)
+    except OSError as exc:
+        if exc.errno in {errno.ENOTSUP, errno.EOPNOTSUPP}:
+            pytest.skip(f"the tmp filesystem has no POSIX ACL support: {exc}")
+        raise
+
+
 @pytest.fixture
 def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..., Path]:
     """Write ``tmp_path/.env`` at an exact mode and pin the process identity to it.
@@ -85,6 +129,14 @@ def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[
     :data:`_GROUP_NAME` with ``group_members`` as its ``gr_mem``, the current
     user is :data:`_SELF_USER`, and ``private_group=False`` adds an
     :data:`_OTHER_USER` account whose primary group is the file's group.
+
+    ``os.getxattr`` is patched as well, to report ``acl`` as the file's POSIX
+    access ACL (``None``: no ACL), so a host whose tmp dir carries a default
+    ACL can't change the outcome. ``real_xattr=True`` instead writes ``acl``
+    to the file with ``os.setxattr`` (skipping the test where that's
+    unsupported) and leaves the real ``os.getxattr`` in place. Discovery tests
+    outside this fixture (CLI/init/setup/first-run) are deliberately not
+    patched: they read the real ACL, ``ENODATA`` on a normal tmp dir.
     """
     monkeypatch.chdir(tmp_path)
 
@@ -97,6 +149,8 @@ def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[
         symlink: bool = False,
         group_members: tuple[str, ...] = (),
         private_group: bool = True,
+        acl: bytes | None = None,
+        real_xattr: bool = False,
     ) -> Path:
         path = tmp_path / ".env"
         target = tmp_path / "real.env" if symlink else path
@@ -104,6 +158,10 @@ def discovered_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[
         target.chmod(mode)
         if symlink:
             path.symlink_to(target)
+        if real_xattr:
+            _set_real_acl(target, acl)
+        else:
+            monkeypatch.setattr(os, "getxattr", _fake_getxattr(acl), raising=False)
         st = target.stat()
         uid = st.st_uid if own_uid else st.st_uid + 1
         gid = st.st_gid if primary_gid else st.st_gid + 1
@@ -513,6 +571,226 @@ def test_discovered_env_is_not_checked_without_getuid(
     """On platforms without ``os.getuid`` (Windows) the file is read unchecked."""
     discovered_env(0o666, primary_gid=False)
     monkeypatch.delattr(os, "getuid")
+    assert load_settings(environ={}).contact == "me@example.invalid"
+
+
+def test_parse_posix_acl_decodes_every_entry() -> None:
+    blob = _acl((_USER, _RW, 1234), (_GROUP, _R, 99), (_MASK, _RW, _NO_ID))
+    assert settings_module._parse_posix_acl(blob) == (
+        (_USER_OBJ, _RW, _NO_ID),
+        (_USER, _RW, 1234),
+        (_GROUP_OBJ, _R, _NO_ID),
+        (_GROUP, _R, 99),
+        (_MASK, _RW, _NO_ID),
+        (_OTHER, _R, _NO_ID),
+    )
+
+
+@pytest.mark.parametrize(
+    "blob",
+    [
+        pytest.param(b"\x02\x00", id="truncated-header"),
+        pytest.param(_acl() + b"\x01\x00", id="partial-entry"),
+        pytest.param(b"\x01" + _acl()[1:], id="wrong-version"),
+        pytest.param(_acl((0x40, _RW, _NO_ID)), id="unknown-tag"),
+        pytest.param(
+            _acl_blob((_USER_OBJ, _RW, _NO_ID), (_OTHER, _R, _NO_ID)), id="no-owning-group-entry"
+        ),
+        pytest.param(_acl((_USER, _R, 1234)), id="named-entry-without-mask"),
+    ],
+)
+def test_parse_posix_acl_rejects_a_malformed_blob(blob: bytes) -> None:
+    with pytest.raises(ValueError, match=r"."):
+        settings_module._parse_posix_acl(blob)
+
+
+_ACL_REASON = "an ACL grants write access to another user or group"
+_OWNER = -1
+"""Stands for the file owner's uid in an ACL entry; anything else is another user."""
+
+
+@pytest.mark.parametrize(
+    ("mode", "group_obj", "named", "mask", "primary_gid", "reasons"),
+    [
+        pytest.param(
+            0o664, _R, ((_USER, _RW, 1),), _RW, True, (_ACL_REASON,), id="named-user-write-refused"
+        ),
+        pytest.param(
+            0o644, _R, ((_USER, _RW, 1),), _R, True, (), id="named-user-write-masked-accepted"
+        ),
+        pytest.param(
+            0o664,
+            _R,
+            ((_GROUP, _RW, 1),),
+            _RW,
+            True,
+            (_ACL_REASON,),
+            id="named-group-write-refused",
+        ),
+        pytest.param(
+            0o664, _R, ((_USER, _RW, _OWNER),), _RW, True, (), id="owner-named-entry-accepted"
+        ),
+        pytest.param(
+            0o664,
+            _R,
+            ((_USER, _R, 1), (_GROUP, _R, 1)),
+            _RW,
+            False,
+            (),
+            id="read-only-entries-with-writable-mask-accepted",
+        ),
+        pytest.param(
+            0o664,
+            _RW,
+            ((_USER, _R, 1),),
+            _RW,
+            True,
+            (),
+            id="owning-group-write-private-primary-accepted",
+        ),
+        pytest.param(
+            0o664,
+            _RW,
+            ((_USER, _R, 1),),
+            _RW,
+            False,
+            (_FOREIGN_REASON,),
+            id="owning-group-write-foreign-group-refused",
+        ),
+        pytest.param(
+            0o644, _RW, ((_USER, _R, 1),), _R, False, (), id="owning-group-write-masked-accepted"
+        ),
+        pytest.param(
+            0o664,
+            _RW,
+            ((_USER, _RW, 1),),
+            _RW,
+            False,
+            (_FOREIGN_REASON, _ACL_REASON),
+            id="foreign-group-and-acl-write-refused-with-one-fix",
+        ),
+    ],
+)
+def test_discovered_env_acl_trust_matrix(
+    discovered_env: Callable[..., Path],
+    tmp_path: Path,
+    mode: int,
+    group_obj: int,
+    named: tuple[tuple[int, int, int], ...],
+    mask: int,
+    primary_gid: bool,
+    reasons: tuple[str, ...],
+) -> None:
+    """Group-class write access comes from the ACL entries through the mask, not the mode."""
+    owner = tmp_path.stat().st_uid
+    entries = tuple(
+        (tag, perm, owner if qualifier == _OWNER else owner + qualifier)
+        for tag, perm, qualifier in named
+    )
+    path = discovered_env(
+        mode,
+        primary_gid=primary_gid,
+        acl=_acl(*entries, (_MASK, mask, _NO_ID), group_obj=group_obj),
+    )
+    if not reasons:
+        assert load_settings(environ={}).contact == "me@example.invalid"
+        return
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={})
+    assert str(exc_info.value) == (
+        f"Refusing to load discovered .env file {path}: {'; '.join(reasons)}."
+    )
+    assert exc_info.value.hint == _expected_hint(path, "chmod g-w")
+
+
+@pytest.mark.parametrize(
+    ("code", "loads"),
+    [
+        pytest.param(errno.ENODATA, True, id="ENODATA-no-acl-loads"),
+        pytest.param(errno.ENOTSUP, True, id="ENOTSUP-no-acl-support-loads"),
+        pytest.param(errno.EACCES, False, id="EACCES-refused"),
+        pytest.param(errno.EIO, False, id="EIO-refused"),
+    ],
+)
+def test_discovered_env_acl_read_failure_refuses_unless_there_is_no_acl(
+    discovered_env: Callable[..., Path], monkeypatch: pytest.MonkeyPatch, code: int, loads: bool
+) -> None:
+    path = discovered_env(0o644)
+
+    def failing_getxattr(*args: object, **kwargs: object) -> bytes:
+        raise OSError(code, os.strerror(code))
+
+    monkeypatch.setattr(os, "getxattr", failing_getxattr, raising=False)
+    if loads:
+        assert load_settings(environ={}).contact == "me@example.invalid"
+        return
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={})
+    assert str(exc_info.value) == (
+        f"Could not read the ACL of discovered .env file {path}: {os.strerror(code)}"
+    )
+    assert exc_info.value.hint == (
+        "Pass the file explicitly with --env-file instead of relying on upward search."
+    )
+
+
+def test_discovered_env_malformed_acl_is_refused(discovered_env: Callable[..., Path]) -> None:
+    path = discovered_env(0o644, acl=b"\x02\x00\x00\x00\x01")
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={})
+    assert str(exc_info.value).startswith(
+        f"Refusing to load discovered .env file {path}: its ACL could not be decoded ("
+    )
+    assert exc_info.value.hint == (
+        f"Remove the ACL with `setfacl -b {shlex.quote(str(path))}`" + _FALLBACK_HINT
+    )
+
+
+def test_discovered_env_acl_is_not_checked_without_getxattr(
+    discovered_env: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Where ``os.getxattr`` doesn't exist (macOS, the BSDs) only the mode bits are checked."""
+    discovered_env(0o644, acl=_acl((_USER, _RW, 12345), (_MASK, _RW, _NO_ID)))
+    monkeypatch.delattr(os, "getxattr")
+    assert load_settings(environ={}).contact == "me@example.invalid"
+
+
+def test_discovered_env_acl_is_read_from_the_checked_open_file(
+    discovered_env: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ACL comes from the open descriptor of the symlink's target, not a re-resolved path."""
+    path = discovered_env(0o600, symlink=True)
+    seen: list[object] = []
+
+    def recording_getxattr(target: object, attribute: str, **kwargs: object) -> bytes:
+        seen.append(target)
+        assert isinstance(target, int)
+        assert os.fstat(target).st_ino == path.resolve().stat().st_ino
+        raise OSError(errno.ENODATA, os.strerror(errno.ENODATA))
+
+    monkeypatch.setattr(os, "getxattr", recording_getxattr, raising=False)
+    assert load_settings(environ={}).contact == "me@example.invalid"
+    assert len(seen) == 1
+
+
+@pytest.mark.skipif(os.name != "posix", reason="runs the hint's chmod through sh")
+@pytest.mark.parametrize("symlink", [False, True], ids=["file", "symlink"])
+def test_discovered_env_real_acl_write_entry_is_refused_until_the_hint_runs(
+    discovered_env: Callable[..., Path], tmp_path: Path, symlink: bool
+) -> None:
+    """A real ``setfacl -m u:<other>:rw`` ACL is refused, and ``chmod g-w`` makes it loadable."""
+    other = tmp_path.stat().st_uid + 1
+    path = discovered_env(
+        0o644,
+        symlink=symlink,
+        acl=_acl((_USER, _RW, other), (_MASK, _RW, _NO_ID)),
+        real_xattr=True,
+    )
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={})
+    assert str(exc_info.value) == f"Refusing to load discovered .env file {path}: {_ACL_REASON}."
+    command = (exc_info.value.hint or "").split("`")[1]
+    subprocess.run(["/bin/sh", "-c", command], check=True)
     assert load_settings(environ={}).contact == "me@example.invalid"
 
 
