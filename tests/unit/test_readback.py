@@ -11,7 +11,7 @@ from meshprovision.crypto.keys import encode_key, generate_keypair
 from meshprovision.provisioning import detect
 from meshprovision.provisioning import readback as readback_module
 from meshprovision.provisioning.apply import WriteStatus
-from meshprovision.provisioning.plan import PlanInputs, build_plan
+from meshprovision.provisioning.plan import ChangePlan, PlanInputs, build_plan
 from meshprovision.provisioning.readback import verify_plan
 from tests.unit.conftest import adopt_device_key_plan, make_security
 
@@ -103,6 +103,62 @@ def test_verify_plan_is_unmessagable_unconfirmed(make_live) -> None:
     assert result.status == WriteStatus.UNCONFIRMED
     assert result.expected == "True"
     assert result.actual == "False"
+
+
+def _is_unmessagable_plan_and_stale_after(make_live) -> tuple[ChangePlan, detect.LiveConfig]:
+    """Build a plan turning is_unmessagable on, plus a post-write state still showing it off.
+
+    The stale state is what a ``--no-reconnect`` session re-reads: the real
+    ``Node.setOwner()`` never updates the interface's cached user. The plan
+    renames the node too, so all three owner fields go out in one write.
+    """
+    template = _template().model_copy(update={"is_unmessagable": True})
+    live = make_live(template, is_unmessagable=False, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="MT01",
+        desired_long_name="Meshtastic MT01",
+    )
+    plan = build_plan(inputs)
+    assert plan.name_change.is_unmessagable_changed is True
+    return plan, live
+
+
+def test_verify_plan_is_unmessagable_mismatch_without_read_back_is_reported_not_read_back(
+    make_live,
+) -> None:
+    """--no-reconnect: a stale is_unmessagable is "not read back", never UNCONFIRMED.
+
+    Before, it was the one owner field that ignored ``read_back``, so every
+    --no-reconnect run changing it ended UNCERTAIN and never recorded the node.
+    """
+    plan, stale_after = _is_unmessagable_plan_and_stale_after(make_live)
+
+    results = verify_plan(plan, stale_after, keypair=None, read_back=False)
+
+    result = next(r for r in results if r.field == "is_unmessagable")
+    assert (result.status, result.message) == (
+        WriteStatus.CONFIRMED,
+        "written; not read back (--no-reconnect)",
+    )
+    assert (result.expected, result.actual) == (None, None)
+
+
+def test_verify_plan_without_read_back_reports_every_owner_field_alike(make_live) -> None:
+    """Names and is_unmessagable go out in one setOwner() write, so they verify alike."""
+    plan, stale_after = _is_unmessagable_plan_and_stale_after(make_live)
+    assert plan.name_change.short_changed and plan.name_change.long_changed
+
+    results = verify_plan(plan, stale_after, keypair=None, read_back=False)
+
+    owner = sorted((r.field, r.status, r.message) for r in results if r.section == "owner")
+    assert owner == [
+        (field, WriteStatus.CONFIRMED, "written; not read back (--no-reconnect)")
+        for field in ("is_unmessagable", "long_name", "short_name")
+    ]
 
 
 def test_apply_reuses_plan_values_equal() -> None:

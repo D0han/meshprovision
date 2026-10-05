@@ -251,7 +251,12 @@ class FakeNode:
                 ``long_name`` is set.
             is_unmessagable: The owner's unmessagable flag, sent only
                 when not ``None``.
+
+        A no-op on ``user`` when the interface was built with
+        ``owner_write_echoed=False`` (see :class:`FakeMeshInterface`).
         """
+        if not self._iface.owner_write_echoed:
+            return
         if short_name is not None:
             self._iface.user["shortName"] = short_name
         if long_name is not None:
@@ -282,6 +287,7 @@ class FakeMeshInterface:
         fail_sections: frozenset[str] = frozenset(),
         fail_exc: Callable[[str], BaseException] | None = None,
         fail_reads_after_write: bool = False,
+        owner_write_echoed: bool = True,
     ) -> None:
         """Initialize a fake device at factory or custom naming defaults.
 
@@ -312,12 +318,20 @@ class FakeMeshInterface:
                 post-write verify reconnect. Gated on a write having
                 already happened so the *initial* detection pass (before
                 any write) is unaffected.
+            owner_write_echoed: When ``False``, ``setOwner()`` leaves
+                ``user`` untouched -- what the real ``Node.setOwner()``
+                does to the interface a ``--no-reconnect`` session keeps
+                re-reading: it only sends the admin message and never
+                updates the cached user. Only meaningful with
+                ``--no-reconnect``: a reconnect here re-reads the same
+                unchanged ``user``, unlike a real device.
         """
         self.nid = NodeId.from_hex(node_id)
         self.drop_security_keys = drop_security_keys
         self.fail_sections = fail_sections
         self.fail_exc = fail_exc
         self.fail_reads_after_write = fail_reads_after_write
+        self.owner_write_echoed = owner_write_echoed
         self.closed = 0
 
         self.myInfo = SimpleNamespace(my_node_num=self.nid.num)

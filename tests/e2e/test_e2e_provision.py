@@ -350,6 +350,45 @@ def test_no_reconnect_skips_the_reconnect_verify_connection(
     assert len(loaded.nodes) == 1
 
 
+def test_no_reconnect_records_a_node_whose_is_unmessagable_change_is_not_echoed(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+    write_template: Callable[..., Path],
+) -> None:
+    """--no-reconnect: an is_unmessagable change the in-memory user never shows still records.
+
+    The real ``Node.setOwner()`` never updates the cached user a
+    --no-reconnect session re-reads (``owner_write_echoed=False`` models
+    that), so the flag is reported written but not read back, like the
+    names -- before, it was UNCONFIRMED and the run ended UNCERTAIN.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(is_unmessagable=True))
+    kp = keypair_factory()
+    node_record = NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE)
+    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
+    seed_db(nodes=[node_record], keys=[pub_record, priv_record])
+    iface = bus.use(FakeMeshInterface("deadbe01", owner_write_echoed=False))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(
+        runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--no-reconnect"], env
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert (
+        "owner.is_unmessagable: confirmed -- written; not read back (--no-reconnect)"
+        in result.stderr
+    )
+    assert "isUnmessagable" not in iface.user
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    (node,) = [NodeRecord.from_row(row) for row in loaded.nodes]
+    assert node.last_updated_ts is not None
+
+
 def test_no_reconnect_refuses_a_key_regenerating_plan_before_any_write(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

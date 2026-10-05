@@ -191,7 +191,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the names: an `owner.is_unmessagable: <current> -> <desired>` line in
   `mesh provision --dry-run`, `current_is_unmessagable`/
   `desired_is_unmessagable` under `name_change` in the `--json` plan, and
-  an `owner: N field(s)` count (names included) in the plan summary.
+  an `owner: N field(s)` count (names included) in the plan summary. With
+  `--no-reconnect` it is reported written but not read back, like the
+  names: the meshtastic library never updates the in-memory user a
+  non-reconnecting run re-reads, so the change could otherwise never be
+  confirmed and the node would never be recorded.
 - The `meshtastic` dependency now pins to a specific commit
   (`be366660828b5a54469e703209a10aa954927791`) on `meshtastic/python`'s
   unreleased `master` branch instead of the PyPI release (`>=2.7.11`,

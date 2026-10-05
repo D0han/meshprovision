@@ -3,7 +3,8 @@
 Split out of ``apply.py`` (which had grown past the project's ~400-line
 typical file size) along the same kind of seam already used for
 :mod:`~meshprovision.provisioning.apply_session`: everything here --
-:func:`_render_value`, :func:`_verify_name`, :func:`_verify_key_material`,
+:func:`_render_value`, :func:`_not_read_back`, :func:`_verify_name`,
+:func:`_verify_is_unmessagable`, :func:`_verify_key_material`,
 :func:`_verify_admin_keys`, and :func:`verify_plan` -- only ever compares a
 freshly re-read live device state against a plan's intent; it never writes
 anything. ``apply.py`` imports :func:`verify_plan` from here and calls it
@@ -49,6 +50,29 @@ def _render_value(value: object, *, secret: bool) -> str:
     if secret:
         return "<redacted>"
     return str(value)
+
+
+def _not_read_back(field: str) -> WriteResult:
+    """Report an owner-phase field as written but not read back (``--no-reconnect``).
+
+    ``Node.setOwner()`` only sends the admin message: it never updates the
+    interface's cached user, so the in-memory state a non-reconnecting
+    session re-reads keeps the pre-write value. A mismatch there is
+    imprecision, not failure (see :func:`_verify_name`).
+
+    Args:
+        field: The owner field (``"short_name"``, ``"long_name"`` or
+            ``"is_unmessagable"``).
+
+    Returns:
+        A :attr:`WriteStatus.CONFIRMED` :class:`WriteResult` saying so.
+    """
+    return WriteResult(
+        "owner",
+        WriteStatus.CONFIRMED,
+        "written; not read back (--no-reconnect)",
+        field=field,
+    )
 
 
 def _verify_name(
@@ -102,12 +126,7 @@ def _verify_name(
             actual=actual,
         )
     if not read_back:
-        return WriteResult(
-            "owner",
-            WriteStatus.CONFIRMED,
-            "written; not read back (--no-reconnect)",
-            field=field,
-        )
+        return _not_read_back(field)
     return WriteResult(
         "owner",
         WriteStatus.UNCONFIRMED,
@@ -115,6 +134,39 @@ def _verify_name(
         field=field,
         expected=desired,
         actual=actual,
+    )
+
+
+def _verify_is_unmessagable(
+    plan: ChangePlan, live_after: detect.LiveConfig, *, read_back: bool
+) -> WriteResult | None:
+    """Verify the owner's ``is_unmessagable`` flag against the plan.
+
+    Args:
+        plan: The executed plan.
+        live_after: The freshly re-read live configuration.
+        read_back: Whether the session genuinely re-read from the device;
+            when ``False`` a mismatch is reported via :func:`_not_read_back`,
+            exactly as for the names (see :func:`_verify_name`).
+
+    Returns:
+        ``None`` when the plan does not change the flag; otherwise its
+        :class:`WriteResult`.
+    """
+    if not plan.name_change.is_unmessagable_changed:
+        return None
+    desired = plan.name_change.desired_is_unmessagable
+    if live_after.is_unmessagable == desired:
+        return WriteResult("owner", WriteStatus.CONFIRMED, "confirmed", field="is_unmessagable")
+    if not read_back:
+        return _not_read_back("is_unmessagable")
+    return WriteResult(
+        "owner",
+        WriteStatus.UNCONFIRMED,
+        "value mismatch after write",
+        field="is_unmessagable",
+        expected=str(desired),
+        actual=str(live_after.is_unmessagable),
     )
 
 
@@ -253,10 +305,11 @@ def verify_plan(
         read_back: Whether the session that produced ``live_after``
             genuinely re-read from the device (see
             :attr:`~meshprovision.provisioning.apply_session.DeviceSession.reads_back`).
-            Threaded only to the two name-field verifications (see
-            :func:`_verify_name`) -- the one case where the in-memory
-            interface a non-reconnecting session re-reads may not reflect
-            the same post-write state a real reconnect would. Ordinary
+            Threaded only to the owner-phase verifications (see
+            :func:`_verify_name` and :func:`_verify_is_unmessagable`) --
+            the one case where the in-memory interface a non-reconnecting
+            session re-reads may not reflect the same post-write state a
+            real reconnect would. Ordinary
             field verification, :func:`_verify_key_material`, and
             :func:`_verify_admin_keys` compare directly against the
             in-memory interface either way, and the CLI refuses
@@ -303,23 +356,9 @@ def verify_plan(
     if long_result is not None:
         results.append(long_result)
 
-    if plan.name_change.is_unmessagable_changed:
-        desired_is_unmessagable = plan.name_change.desired_is_unmessagable
-        if live_after.is_unmessagable == desired_is_unmessagable:
-            results.append(
-                WriteResult("owner", WriteStatus.CONFIRMED, "confirmed", field="is_unmessagable")
-            )
-        else:
-            results.append(
-                WriteResult(
-                    "owner",
-                    WriteStatus.UNCONFIRMED,
-                    "value mismatch after write",
-                    field="is_unmessagable",
-                    expected=str(desired_is_unmessagable),
-                    actual=str(live_after.is_unmessagable),
-                )
-            )
+    unmessagable_result = _verify_is_unmessagable(plan, live_after, read_back=read_back)
+    if unmessagable_result is not None:
+        results.append(unmessagable_result)
 
     for change in plan.sections:
         if attempted_sections is not None and change.section not in attempted_sections:
