@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -1454,3 +1455,62 @@ def test_db_restore_read_failure_says_nothing_was_restored(
     assert "Nothing was restored: simulated failure" in hinted
     assert hinted.count("Hint:") == 1
     assert "inner hint" not in hinted
+
+
+def _seed_future_backups(db_path: Path, backup_dir: Path) -> None:
+    """Fill ``backup_dir`` to the default retention with backups named ahead of the clock."""
+    future = datetime.now(tz=UTC) + timedelta(hours=1)
+    for i in range(backups.DEFAULT_RETENTION):
+        backups.create_backup(
+            db_path, backup_dir=backup_dir, retention=0, now=future + timedelta(seconds=i)
+        )
+
+
+def test_db_backup_behind_the_clock_reports_a_backup_that_exists(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A clock behind existing backup names must not make the new backup prune itself."""
+    monkeypatch.setattr(backups, "_warned_clock_behind", False)
+    db_path = seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    backup_dir = tmp_path / "custom-backups"
+    _seed_future_backups(db_path, backup_dir)
+
+    result = invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir), "--json"], env)
+
+    assert result.exit_code == 0
+    reported = Path(json.loads(result.stdout)["backup"])
+    assert reported.exists()
+    listed = backups.list_backups(db_path, backup_dir=backup_dir)
+    assert listed[0].path == reported
+    assert len(listed) == backups.DEFAULT_RETENTION
+
+
+def test_db_restore_behind_the_clock_keeps_the_pre_restore_backup(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pre-restore backup a restore promises must survive its own prune."""
+    monkeypatch.setattr(backups, "_warned_clock_behind", False)
+    db_path = seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="OLD1", region="EU_868")])
+    backup_dir = tmp_path / "backups"
+    _seed_future_backups(db_path, backup_dir)
+    restore_from = backups.list_backups(db_path, backup_dir=backup_dir)[0].path
+    seed_db(nodes=[NodeRecord(node_id="deadbe02", short_name="NEW2", region="EU_868")])
+    before_restore = db_path.read_bytes()
+
+    result = invoke(
+        runner, ["db", "restore", str(restore_from), "--yes", "--backup-dir", str(backup_dir)], env
+    )
+
+    assert result.exit_code == 0
+    assert db_path.read_bytes() == restore_from.read_bytes()
+    listed = backups.list_backups(db_path, backup_dir=backup_dir)
+    assert listed[0].path.read_bytes() == before_restore
+    assert len(listed) == backups.DEFAULT_RETENTION

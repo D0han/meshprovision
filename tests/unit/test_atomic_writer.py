@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1355,3 +1356,105 @@ def test_resolve_path_follows_a_good_symlink_without_reporting_a_loop(
         path = base / "linked" / "nodes_db.ods"
 
     assert fs_primitives.resolve_path(path) == real_dir / "nodes_db.ods"
+
+
+def _seed_future_backups(target: Path, backup_dir: Path, count: int) -> list[Path]:
+    """Create ``count`` backups of ``target`` named an hour or more ahead of the clock.
+
+    Returns:
+        Their paths, newest first.
+    """
+    future = datetime.now(tz=UTC) + timedelta(hours=1)
+    for i in range(count):
+        create_backup(target, backup_dir=backup_dir, retention=0, now=future + timedelta(seconds=i))
+    return [info.path for info in list_backups(target, backup_dir=backup_dir)]
+
+
+def _clock_warnings(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        r.getMessage() for r in caplog.records if "is behind the newest backup" in r.getMessage()
+    ]
+
+
+def test_create_backup_behind_the_clock_keeps_the_new_backup_and_lists_it_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(backups, "_warned_clock_behind", False)
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"old")
+    seeded = _seed_future_backups(target, backup_dir, 3)
+    target.write_bytes(b"new")
+
+    info = create_backup(target, backup_dir=backup_dir, retention=3)
+
+    assert info is not None
+    assert info.path.read_bytes() == b"new"
+    listed = list_backups(target, backup_dir=backup_dir)
+    assert [entry.path for entry in listed] == [info.path, *seeded[:2]]
+    assert listed[0].created_at == info.created_at
+    assert info.created_at == listed[1].created_at + timedelta(microseconds=1)
+    assert not seeded[-1].exists()
+
+
+def test_create_backup_behind_the_clock_warns_once_per_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(backups, "_warned_clock_behind", False)
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v")
+    _seed_future_backups(target, backup_dir, 2)
+
+    with caplog.at_level(logging.WARNING, logger="meshprovision.db.backups"):
+        create_backup(target, backup_dir=backup_dir)
+        create_backup(target, backup_dir=backup_dir)
+
+    warnings = _clock_warnings(caplog)
+    assert len(warnings) == 1
+    assert str(target) in warnings[0]
+
+
+def test_create_backup_with_an_explicit_earlier_now_sorts_newest_without_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(backups, "_warned_clock_behind", False)
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    target.write_bytes(b"v")
+    legacy = backup_dir / "data-20991231T000000Z.txt"
+    legacy.write_bytes(b"legacy")
+
+    with caplog.at_level(logging.WARNING, logger="meshprovision.db.backups"):
+        info = create_backup(target, backup_dir=backup_dir, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert info is not None
+    assert info.path.name == "data-20991231T000000.000001Z.txt"
+    assert [entry.path for entry in list_backups(target, backup_dir=backup_dir)] == [
+        info.path,
+        legacy,
+    ]
+    assert _clock_warnings(caplog) == []
+
+
+def test_prune_backups_never_deletes_the_kept_backup(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v")
+    for i in range(4):
+        create_backup(
+            target,
+            backup_dir=backup_dir,
+            retention=0,
+            now=datetime(2026, 1, 1, 0, 0, i, tzinfo=UTC),
+        )
+    paths = [info.path for info in list_backups(target, backup_dir=backup_dir)]
+
+    removed = prune_backups(target, backup_dir=backup_dir, retention=2, keep=paths[-1])
+
+    assert sorted(removed) == sorted(paths[1:3])
+    assert [info.path for info in list_backups(target, backup_dir=backup_dir)] == [
+        paths[0],
+        paths[-1],
+    ]

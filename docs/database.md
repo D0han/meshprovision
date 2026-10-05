@@ -127,7 +127,11 @@ otherwise reported by fingerprint only, never its raw material;
 - `mesh db backup` before a risky edit; every save also writes a
   timestamped backup into a `backups/` directory next to the database
   (`data/backups/` for the default `data/nodes_db.ods` path) with a
-  retention limit.
+  retention limit. Retention keeps the most recently created backups and
+  never deletes the one just made: if the system clock is behind the
+  newest backup's name (a Raspberry Pi without a real-time clock after a
+  power cut), new backup names continue just after it, and a warning
+  says so.
 - Opening the database in LibreOffice Calc, resizing columns, and saving
   is safe — including adding your own comments to a cell, which will not
   corrupt that cell's value. Every header cell carries its column's

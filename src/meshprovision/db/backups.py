@@ -27,7 +27,7 @@ import re
 import shutil
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -76,6 +76,12 @@ Still parsed by :func:`_parse_backup_timestamp` so backups already on
 disk keep listing with their real creation time rather than falling
 back to mtime; never written.
 """
+
+_NAME_TIMESTAMP_STEP: Final[timedelta] = timedelta(microseconds=1)
+"""How far past the newest existing backup a behind-the-clock name is placed."""
+
+_warned_clock_behind = False
+"""Whether the clock-behind warning has already been logged in this process."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -285,6 +291,52 @@ def _claim_backup_path(directory: Path, name: str, source: Path) -> Path:
         return candidate
 
 
+def _monotonic_backup_time(
+    target: Path, directory: Path, when: datetime, *, from_clock: bool
+) -> datetime:
+    """Pick the timestamp for a new backup's name, never older than an existing one.
+
+    Backups are ordered -- and pruned -- by the timestamp in their names.
+    A system clock behind the newest existing name (a Raspberry Pi
+    without a real-time clock after a power cut, a dead clock battery, a
+    restored VM snapshot) would otherwise name each new backup as the
+    *oldest*, and its own prune would delete it straight away once
+    ``retention`` newer-named backups exist. Instead the new name goes
+    one microsecond past the newest existing one, so name order stays
+    creation order. Legacy second-resolution names count with their
+    parsed timestamp, like everywhere else.
+
+    Logs a ``WARNING`` the first time per process that the system clock
+    (``from_clock``) is found behind; an explicit ``now=`` is bumped the
+    same way, without the warning.
+
+    Args:
+        target: The file being backed up.
+        directory: The resolved backup directory.
+        when: The UTC timestamp the caller asked for.
+        from_clock: Whether ``when`` came from the system clock.
+
+    Returns:
+        ``when``, unless it is not later than the newest existing
+        backup's timestamp; then that timestamp plus one microsecond.
+    """
+    global _warned_clock_behind
+    existing = list_backups(target, backup_dir=directory)
+    if not existing or when > existing[0].created_at:
+        return when
+    newest = existing[0].created_at
+    if from_clock and not _warned_clock_behind:
+        _warned_clock_behind = True
+        _logger.warning(
+            "The system clock (%s) is behind the newest backup of %s (%s); new backup names "
+            "continue after it to keep them in creation order.",
+            when.isoformat(),
+            target,
+            newest.isoformat(),
+        )
+    return newest + _NAME_TIMESTAMP_STEP
+
+
 def create_backup(
     target: Path,
     *,
@@ -299,7 +351,12 @@ def create_backup(
     down to ``retention`` after the copy succeeds; pruning is best-effort
     -- a failure there is logged at ``WARNING`` and never aborts an
     otherwise-successful backup, since the new backup is already safely
-    in place by the time pruning runs.
+    in place by the time pruning runs. Pruning never deletes the backup
+    this call just created (see :func:`prune_backups`'s ``keep``), so the
+    returned path always exists when this returns.
+
+    The backup's name never sorts before an existing backup's, even when
+    the system clock is behind (see :func:`_monotonic_backup_time`).
 
     Args:
         target: The file to back up.
@@ -308,11 +365,13 @@ def create_backup(
         retention: Number of backups to retain for ``target`` after this
             one is created. ``<= 0`` keeps everything.
         now: Timestamp to embed in the backup's name. Defaults to the
-            current time.
+            current time. Moved forward past the newest existing backup's
+            timestamp when it is not later than it.
 
     Returns:
-        Metadata about the created backup, or ``None`` if ``target`` does
-        not exist.
+        Metadata about the created backup -- its ``created_at`` is the
+        timestamp actually embedded in its name -- or ``None`` if
+        ``target`` does not exist.
 
     Raises:
         AtomicWriteError: If the backup directory cannot be created, or
@@ -342,7 +401,7 @@ def create_backup(
         min_age_seconds=fs_primitives._STALE_TEMP_MIN_AGE_SECONDS,
     )
 
-    when = _normalize_utc(now)
+    when = _monotonic_backup_time(target, resolved_dir, _normalize_utc(now), from_clock=now is None)
     name = backup_name(target, when)
     tmp_destination = resolved_dir / f".{name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
     try:
@@ -362,13 +421,12 @@ def create_backup(
             f"Failed to back up {target} into {resolved_dir} as {name}: {exc}", path=str(target)
         ) from exc
 
-    # Captured before pruning: two backups can share the same embedded
-    # timestamp when the caller passes an explicit `now=`, so the one just
-    # created is not guaranteed to survive a subsequent prune -- see
-    # _backup_sort_key.
+    # Captured before pruning. keep= protects this backup from its own
+    # prune, but not from a concurrent writer's prune (possible only when
+    # that one's retention is 1).
     size_bytes = destination.stat().st_size
     try:
-        prune_backups(target, backup_dir=resolved_dir, retention=retention)
+        prune_backups(target, backup_dir=resolved_dir, retention=retention, keep=destination)
     except AtomicWriteError as exc:
         _logger.warning("Backup created, but pruning old backups failed: %s", exc)
 
@@ -410,8 +468,10 @@ def _parse_backup_timestamp(name: str, target: Path) -> datetime | None:
 def _backup_sort_key(path: Path, target: Path) -> tuple[datetime, float]:
     """Build a newest-first sort key for one backup file.
 
-    The embedded timestamp now has microsecond resolution, so two
-    backups share one only when the caller passes an explicit ``now=``
+    The embedded timestamp has microsecond resolution and
+    :func:`create_backup` never names a new backup at or before the
+    newest existing one, so two backups share a timestamp only when two
+    writers race for the same name (one then carries a ``-N`` suffix)
     or a backup carries the legacy second-resolution format;
     ``shutil.copy2`` (used by :func:`create_backup`) preserves
     ``target``'s mtime onto each backup, and since ``target``'s mtime
@@ -488,7 +548,11 @@ def list_backups(target: Path, *, backup_dir: Path | None = None) -> tuple[Backu
 
 
 def prune_backups(
-    target: Path, *, backup_dir: Path | None = None, retention: int = DEFAULT_RETENTION
+    target: Path,
+    *,
+    backup_dir: Path | None = None,
+    retention: int = DEFAULT_RETENTION,
+    keep: Path | None = None,
 ) -> tuple[Path, ...]:
     """Delete the oldest backups of ``target`` beyond ``retention``.
 
@@ -498,6 +562,11 @@ def prune_backups(
             :func:`backup_dir_for`'s resolution.
         retention: Number of newest backups to keep. ``<= 0`` keeps
             everything (no pruning).
+        keep: A backup that must survive, whatever its position -- the
+            one :func:`create_backup` just made. It counts towards
+            ``retention``: ``keep`` plus the ``retention - 1`` newest
+            others survive. Ignored when it is not among the listed
+            backups.
 
     Returns:
         Paths of the backups that were deleted, in no particular order.
@@ -513,8 +582,12 @@ def prune_backups(
         return ()
 
     backups = list_backups(target, backup_dir=backup_dir)
+    survivors = retention
+    if keep is not None and any(info.path == keep for info in backups):
+        backups = tuple(info for info in backups if info.path != keep)
+        survivors -= 1
     removed: list[Path] = []
-    for info in backups[retention:]:
+    for info in backups[survivors:]:
         try:
             info.path.unlink()
         except FileNotFoundError:

@@ -353,6 +353,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was not replaced; a backup that can no longer be read reads "Nothing
   was restored: ...". Only a backup whose content fails validation is
   still called invalid. The exit code stays `4`.
+- A system clock behind the newest backup's name (a Raspberry Pi without
+  a real-time clock after a power cut, a dead clock battery, a restored
+  VM snapshot) made each new backup sort as the oldest, so once the
+  retention limit (20 by default) was reached, every save, restore and
+  `mesh db backup` deleted the backup it had just made -- `mesh db
+  backup` still printed its path as if it existed, and `mesh db restore`
+  pointed at a pre-restore backup that was already gone. A new backup is
+  now never pruned by its own run, and its name continues just after the
+  newest existing one, so backups list and prune in the order they were
+  created; a warning says when the clock is behind.
 - When `mesh provision` stopped early, its report could leave sections
   out or describe them wrongly. A failed settings-transaction begin or
   commit printed a single failure line, with no word on which sections
