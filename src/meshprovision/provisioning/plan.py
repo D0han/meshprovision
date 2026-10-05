@@ -404,10 +404,29 @@ def _plan_default_channel_section(
         :attr:`~meshprovision.provisioning.detect.SectionKind.CHANNEL`)
         plus one warning -- writing this section has not been verified
         against real firmware as reboot-free, so the operator is told
-        explicitly.
+        explicitly. When the template sets default_channel fields but the
+        device reports no enabled primary channel (``live.default_channel``
+        is ``{}``, see
+        :attr:`~meshprovision.provisioning.detect.LiveConfig.default_channel`),
+        ``None`` plus one ``primary_channel_unavailable`` warning instead:
+        the channel write sends the whole channel, so
+        :func:`~meshprovision.provisioning.apply.write_default_channel`
+        refuses it, and planning it would stop the run before ``security``.
     """
     live = inputs.live
     template = inputs.template
+    desired_fields = template.default_channel.model_dump(exclude_none=True)
+    if desired_fields and not live.default_channel:
+        return None, (
+            PlanWarning(
+                PlanWarningCode.PRIMARY_CHANNEL_UNAVAILABLE,
+                "default_channel not changed: the device reports no enabled primary "
+                "channel (index 0), and a channel write would replace the whole channel. "
+                "Enable the primary channel on the device, or remove default_channel from "
+                "the template.",
+                section="default_channel",
+            ),
+        )
     changes = [
         FieldChange(
             section="default_channel",
@@ -415,7 +434,7 @@ def _plan_default_channel_section(
             current=live.default_channel.get(name),
             desired=desired,
         )
-        for name, desired in template.default_channel.model_dump(exclude_none=True).items()
+        for name, desired in desired_fields.items()
         if not values_equal(live.default_channel.get(name), desired)
     ]
     if not changes:

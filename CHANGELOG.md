@@ -351,12 +351,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   channel it never received, and one the plan already reads as having no
   settings. The channel write sends the whole channel, so it could
   overwrite the real primary channel with a near-empty one, and the
-  section never verified, so every run proposed it again. A missing or
-  disabled primary channel is now refused before anything is sent: the
-  section is reported failed ("not written"), `security` is not written
-  after it, and the node is not recorded. A missing primary channel was
-  also wrongly treated as a possibly-sent write; it is now "not written"
-  too.
+  section never verified, so every run proposed it again. When the
+  device reports a missing or disabled primary channel, the plan now
+  leaves `default_channel` out with a `primary_channel_unavailable`
+  warning (shown by `--dry-run`, in the `--json` plan's `warnings`, and
+  before a real run); everything else, including `security`, is still
+  written and the node is recorded. The channel write itself also
+  refuses such a channel before anything is sent, as a backstop. A
+  missing primary channel was also wrongly treated as a possibly-sent
+  write; it is now "not written" too.
 - Re-adopting a node whose public key changed, from a source with no
   proven private key (a `--from-backup` node-db export, a device that
   reports only its public key, or one whose reported private key does not

@@ -1930,6 +1930,61 @@ def test_default_channel_section_sorts_before_security(make_live, make_admin_key
     assert section_names[-1] == "security"
 
 
+_PRIMARY_CHANNEL_UNAVAILABLE_MESSAGE = (
+    "default_channel not changed: the device reports no enabled primary channel (index 0), "
+    "and a channel write would replace the whole channel. Enable the primary channel on the "
+    "device, or remove default_channel from the template."
+)
+
+
+def test_default_channel_is_skipped_with_a_warning_when_no_primary_channel_is_enabled(
+    make_live, template
+) -> None:
+    """A templated default_channel against an absent/DISABLED channel 0 is left out of the plan.
+
+    Planned, it would only be refused by apply's pre-send check -- after
+    every earlier section was already committed, and stopping the run
+    before ``security``. Skipping it here keeps --dry-run, --json and the
+    real run in agreement, and lets the rest of the plan apply.
+    """
+    template2 = template.model_copy(
+        update={
+            "default_channel": template.default_channel.model_copy(
+                update={"position_precision": 13, "is_muted": False}
+            )
+        }
+    )
+    live = make_live(template, security=make_security(empty=True), primary_channel_enabled=False)
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+
+    plan = build_plan(inputs)
+
+    assert plan.section("default_channel") is None
+    assert plan.section("security") is not None
+    channel_warnings = [w for w in plan.warnings if w.section == "default_channel"]
+    assert [(w.code, w.message) for w in channel_warnings] == [
+        (PlanWarningCode.PRIMARY_CHANNEL_UNAVAILABLE, _PRIMARY_CHANNEL_UNAVAILABLE_MESSAGE)
+    ]
+    document = plan.to_json_dict()
+    assert "default_channel" not in [s["section"] for s in document["sections"]]
+    assert "primary_channel_unavailable" in [w["code"] for w in document["warnings"]]
+
+
+def test_no_primary_channel_warning_when_the_template_sets_no_default_channel(
+    make_live, template
+) -> None:
+    """A device without a primary channel is fine when the template doesn't touch it."""
+    live = make_live(template, security=make_security(empty=True), primary_channel_enabled=False)
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+
+    plan = build_plan(inputs)
+
+    assert plan.section("default_channel") is None
+    assert not any(w.section == "default_channel" for w in plan.warnings)
+
+
 def test_values_equal_bool_vs_int_and_float_tolerance() -> None:
     from meshprovision.provisioning.plan import values_equal
 

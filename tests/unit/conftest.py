@@ -17,6 +17,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 import pytest
+from meshtastic.protobuf import channel_pb2
 from odf import dc as odf_dc
 from odf import office as odf_office
 from odf import opendocument
@@ -51,6 +52,7 @@ def live_config_from_template(
     section_overrides: Mapping[str, Mapping[str, object]] | None = None,
     module_enabled_overrides: Mapping[str, bool | None] | None = None,
     default_channel_overrides: Mapping[str, object] | None = None,
+    primary_channel_enabled: bool = True,
 ) -> LiveConfig:
     """Build a :class:`LiveConfig` that is already correct against ``template``.
 
@@ -74,10 +76,15 @@ def live_config_from_template(
         module_enabled_overrides: ``module_enabled`` overrides, applied
             last directly onto the computed mapping.
         default_channel_overrides: ``default_channel`` overrides, applied
-            last directly onto the computed mapping (which defaults to
-            exactly ``template.default_channel``'s own non-``None``
-            fields, so a template that sets no default_channel fields
-            produces an empty, already-matching live default_channel).
+            last directly onto the computed mapping -- which models an
+            enabled primary channel the way detect reads one: every
+            ``ModuleSettings`` scalar at its default, overlaid with
+            ``template.default_channel``'s own non-``None`` fields (so
+            it already matches the template, and is never ``{}``).
+        primary_channel_enabled: ``False`` models a device with no
+            enabled primary channel (absent or ``DISABLED``): the live
+            ``default_channel`` is then ``{}``, and
+            ``default_channel_overrides`` is ignored.
 
     Returns:
         The constructed, immutable :class:`LiveConfig`.
@@ -109,11 +116,13 @@ def live_config_from_template(
     if module_enabled_overrides:
         module_enabled.update(module_enabled_overrides)
 
-    default_channel: dict[str, object] = dict(
-        template.default_channel.model_dump(exclude_none=True)
-    )
-    if default_channel_overrides:
-        default_channel.update(default_channel_overrides)
+    default_channel: dict[str, object] = {}
+    if primary_channel_enabled:
+        default_channel = {
+            **detect._message_fields(channel_pb2.ModuleSettings()),
+            **template.default_channel.model_dump(exclude_none=True),
+            **(default_channel_overrides or {}),
+        }
 
     frozen_sections = MappingProxyType(
         {name: MappingProxyType(dict(values)) for name, values in sections.items()}

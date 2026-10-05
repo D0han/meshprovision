@@ -45,6 +45,7 @@ class PlanWarningCode(StrEnum):
     PENDING_KEY_RECOVERED = "pending_key_recovered"
     DEFAULT_CHANNEL_REBOOT_UNKNOWN = "default_channel_reboot_unknown"
     FIELD_UNSUPPORTED_BY_FIRMWARE = "field_unsupported_by_firmware"
+    PRIMARY_CHANNEL_UNAVAILABLE = "primary_channel_unavailable"
 
 
 @dataclass(frozen=True, slots=True)

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
+from meshtastic.protobuf import channel_pb2
 
 from meshprovision.crypto import known_bad_keys, weakkeys
 from meshprovision.crypto.keys import KeyPair
@@ -146,6 +147,77 @@ def test_factory_provisioning_writes_default_channel_before_security(
     assert second.exit_code == 0
     assert "default_channel" not in iface.localNode.written_sections
     assert "No changes needed." in second.stderr
+
+
+_PRIMARY_CHANNEL_WARNING = "default_channel not changed: the device reports no enabled primary"
+
+
+def _disable_primary_channel(iface: FakeMeshInterface, how: str) -> None:
+    """Make ``iface`` report no enabled primary channel, before any connect stages it.
+
+    Args:
+        iface: The fake device.
+        how: ``"absent"`` (no channel 0 at all) or ``"disabled"`` (channel
+            0 present with ``role=DISABLED``).
+    """
+    if how == "absent":
+        iface.localNode.channels = []
+    else:
+        iface.localNode.channels[0].role = channel_pb2.Channel.Role.DISABLED
+
+
+@pytest.mark.parametrize("how", ["absent", "disabled"])
+def test_provisioning_without_a_primary_channel_skips_default_channel_and_records_the_node(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    how: str,
+) -> None:
+    """No enabled primary channel: default_channel is skipped with a warning, the rest applies.
+
+    Before the plan skipped it, the section was planned, then refused by
+    apply after everything else was committed: ``security`` was never
+    written, the node was never recorded, and every rerun did the same.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(
+        write_template(default_channel={"position_precision": 13, "is_muted": False})
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    _disable_primary_channel(iface, how)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert _PRIMARY_CHANNEL_WARNING in result.stderr, result.stderr
+    assert "default_channel" not in iface.localNode.written_sections
+    assert iface.localNode.written_sections[-1] == "security"
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert [NodeRecord.from_row(row).node_id for row in loaded.nodes] == ["deadbe01"]
+
+
+def test_dry_run_json_without_a_primary_channel_shows_the_warning_not_the_section(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """--dry-run --json previews exactly what the real run does: warning, no section."""
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(
+        write_template(default_channel={"position_precision": 13, "is_muted": False})
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    _disable_primary_channel(iface, "absent")
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--dry-run", "--json"], env)
+
+    assert result.exit_code == 0, result.stderr
+    plan = json.loads(result.stdout)["plan"]
+    assert "default_channel" not in [section["section"] for section in plan["sections"]]
+    assert [w["code"] for w in plan["warnings"] if w["section"] == "default_channel"] == [
+        "primary_channel_unavailable"
+    ]
+    assert iface.localNode.written_sections == []
 
 
 def test_factory_provisioning_sets_is_unmessagable_from_template(

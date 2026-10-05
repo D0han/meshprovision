@@ -336,7 +336,13 @@ class LiveConfig:
         default_channel: ``{"position_precision": int, "is_muted": bool}``
             read from the primary (index-0) channel's ``ModuleSettings``,
             when that channel exists and its role is not ``DISABLED``;
-            ``{}`` otherwise. Deliberately not folded into
+            ``{}`` when channel 0 is absent or ``DISABLED``, or was not
+            read at all (a backup-derived config, see
+            :func:`live_config_from_protobufs`). An enabled channel always
+            yields every ``ModuleSettings`` scalar, so ``{}`` read from a
+            device is an exact "no writable primary channel" signal --
+            :mod:`meshprovision.provisioning.plan` relies on it to skip
+            ``default_channel``. Deliberately not folded into
             :attr:`sections`/:attr:`module_sections` -- those are typed
             strictly around :data:`CONFIG_SECTIONS`/:data:`MODULE_SECTIONS`,
             and this is backed by a structurally different container
@@ -630,11 +636,12 @@ def _read_default_channel(iface: MeshInterface) -> Mapping[str, object]:
 
     Returns:
         ``{}`` when channel 0 is absent or reports ``role == DISABLED``
-        -- treated as "nothing to diff" rather than surfacing
-        meaningless zero-value defaults as real device state. Otherwise,
-        the channel's ``ModuleSettings`` fields via :func:`_message_fields`
+        -- never meaningless zero-value defaults surfaced as real device
+        state; the planner reads ``{}`` as "no writable primary channel"
+        and skips ``default_channel`` with a warning. Otherwise, the
+        channel's ``ModuleSettings`` fields via :func:`_message_fields`
         (both ``position_precision``/``is_muted`` are plain scalars, so
-        no special-casing is needed).
+        no special-casing is needed) -- every scalar, so never ``{}``.
     """
     from meshtastic.protobuf import channel_pb2
 

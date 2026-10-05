@@ -190,6 +190,10 @@ verified against real firmware, so `mesh provision --dry-run` surfaces an
 explicit warning whenever this section would be written.
 
 If the device reports no primary channel, or reports it as disabled,
-the write is refused before anything is sent: the section is reported
-failed, nothing after it (including `security`) is written, and the node
-is not recorded.
+`default_channel` is left out of the plan with a
+`primary_channel_unavailable` warning (shown by `--dry-run` and in the
+`--json` plan): a channel write sends the whole channel, so it would
+replace the device's channel with a near-empty one. Everything else,
+including `security`, is still applied and the node is recorded; the
+warning repeats on every run until the primary channel is enabled or
+`default_channel` is removed from the template.
