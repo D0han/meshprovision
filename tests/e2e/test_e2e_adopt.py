@@ -2305,6 +2305,61 @@ def test_from_backup_unrecognized_file_format_refuses(
     assert "not a recognized backup format" in result.stderr
 
 
+def _profile_cfg_with_latitude_i(latitude_i: int) -> bytes:
+    """A ``.cfg`` ``DeviceProfile`` whose fixed position has ``latitude_i``."""
+    profile = clientonly_pb2.DeviceProfile()
+    profile.long_name = "Meshtastic MT01"
+    profile.short_name = "MT01"
+    profile.fixed_position.latitude_i = latitude_i
+    profile.fixed_position.longitude_i = 210_000_000
+    return bytes(profile.SerializeToString())
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "field"),
+    [
+        (
+            "nodedb.json",
+            b'{"nodes": [{"num": 3735928321}], "myNodeNum": Infinity}',
+            "myNodeNum",
+        ),
+        ("profile.cfg", _profile_cfg_with_latitude_i(2_000_000_000), "fixed_position.latitude_i"),
+    ],
+    ids=["nodedb_infinite_my_node_num", "cfg_latitude_out_of_range"],
+)
+def test_from_backup_with_an_invalid_number_refuses_cleanly(
+    runner: CliRunner,
+    env: dict[str, str],
+    tmp_path: Path,
+    name: str,
+    content: bytes,
+    field: str,
+) -> None:
+    backup_file = tmp_path / name
+    backup_file.write_bytes(content)
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(backup_file),
+            "--node-id",
+            "!deadbe01",
+            "--no-lookup",
+            "--yes",
+        ],
+        env,
+    )
+
+    assert result.exit_code == int(ExitCode.CONFIG)
+    assert field in result.stderr
+    assert "Traceback" not in result.output
+    assert db_fingerprint(db_path) == before
+
+
 def test_from_backup_preserves_hw_model_on_re_adopt_without_nodedb(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:

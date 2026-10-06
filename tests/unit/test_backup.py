@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import traceback
 from typing import TYPE_CHECKING
 
@@ -135,6 +136,25 @@ def test_parse_profile_cfg_extracts_fixed_position() -> None:
     assert parsed.fixed_position.latitude == pytest.approx(52.0)
     assert parsed.fixed_position.longitude == pytest.approx(21.0)
     assert parsed.fixed_position.altitude == 100
+
+
+@pytest.mark.parametrize(
+    ("latitude_i", "longitude_i", "field"),
+    [
+        (900_000_001, 0, "fixed_position.latitude_i"),
+        (-2_000_000_000, 0, "fixed_position.latitude_i"),
+        (0, 1_800_000_001, "fixed_position.longitude_i"),
+    ],
+)
+def test_parse_profile_cfg_rejects_an_out_of_range_fixed_position(
+    latitude_i: int, longitude_i: int, field: str
+) -> None:
+    profile = clientonly_pb2.DeviceProfile()
+    profile.fixed_position.latitude_i = latitude_i
+    profile.fixed_position.longitude_i = longitude_i
+
+    with pytest.raises(BackupParseError, match=rf"^bad\.cfg: {re.escape(field)} .* outside"):
+        backup.parse_profile_cfg(profile.SerializeToString(), source="bad.cfg")
 
 
 def test_parse_profile_cfg_rejects_garbage() -> None:
@@ -341,6 +361,39 @@ def test_parse_profile_yaml_rejects_invalid_config_shape() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("location", "field"),
+    [
+        ("{lat: abc, lon: 21.0}", "location.lat"),
+        ("{lat: [1], lon: 21.0}", "location.lat"),
+        ("{lat: true, lon: 21.0}", "location.lat"),
+        ("{lat: .inf, lon: 21.0}", "location.lat"),
+        ("{lat: .nan, lon: 21.0}", "location.lat"),
+        ("{lat: 1000.0, lon: 21.0}", "location.lat"),
+        ("{lat: 52.0, lon: 200.0}", "location.lon"),
+        ("{lat: 52.0, lon: 21.0, alt: high}", "location.alt"),
+        ("{lat: 52.0, lon: 21.0, alt: .inf}", "location.alt"),
+        ("{lat: 52.0, lon: 21.0, alt: .nan}", "location.alt"),
+        ("{lat: 52.0, lon: 21.0, alt: 99999999999999999999}", "location.alt"),
+    ],
+)
+def test_parse_profile_yaml_rejects_an_invalid_location(location: str, field: str) -> None:
+    text = f"owner: Test\nlocation: {location}\n"
+
+    with pytest.raises(BackupParseError, match=rf"^s\.yaml: {re.escape(field)} "):
+        backup.parse_profile_yaml(text, source="s.yaml")
+
+
+def test_parse_profile_yaml_accepts_quoted_and_boundary_location_values() -> None:
+    text = "owner: Test\nlocation: {lat: '-90', lon: 180, alt: 120.7}\n"
+
+    parsed = backup.parse_profile_yaml(text, source="s.yaml")
+
+    assert parsed.fixed_position == backup.FixedPosition(
+        latitude=-90.0, longitude=180.0, altitude=120
+    )
+
+
 # --- parse_nodedb_json ---------------------------------------------------
 
 
@@ -432,6 +485,42 @@ def test_parse_nodedb_json_skips_malformed_entries() -> None:
     parsed = backup.parse_nodedb_json(json.dumps(payload).encode(), source="nodedb.json")
     assert len(parsed.entries) == 1
     assert parsed.entries[0].num == 42
+
+
+@pytest.mark.parametrize(
+    "literal", ["Infinity", "-Infinity", "NaN", "1e400", "3.7", "-5", "4294967296"]
+)
+def test_parse_nodedb_json_rejects_an_invalid_my_node_num(literal: str) -> None:
+    raw = f'{{"nodes": [], "myNodeNum": {literal}}}'.encode()
+
+    with pytest.raises(BackupParseError, match=r"^nodedb\.json: myNodeNum "):
+        backup.parse_nodedb_json(raw, source="nodedb.json")
+
+
+@pytest.mark.parametrize("literal", ["Infinity", "NaN", "1e400", "3.7", "-5", "4294967296"])
+def test_parse_nodedb_json_refuses_the_whole_file_for_an_invalid_node_num(literal: str) -> None:
+    raw = f'{{"nodes": [{{"num": 42}}, {{"num": {literal}}}]}}'.encode()
+
+    with pytest.raises(BackupParseError, match=r"^nodedb\.json: nodes\[1\]\.num "):
+        backup.parse_nodedb_json(raw, source="nodedb.json")
+
+
+def test_parse_nodedb_json_accepts_whole_number_floats_and_the_range_ends() -> None:
+    raw = b'{"nodes": [{"num": 0}, {"num": 4294967295}, {"num": 42.0}], "myNodeNum": 42.0}'
+
+    parsed = backup.parse_nodedb_json(raw, source="nodedb.json")
+
+    assert parsed.my_node_num == 42
+    assert [entry.num for entry in parsed.entries] == [0, 0xFFFFFFFF, 42]
+
+
+def test_parse_nodedb_json_treats_a_boolean_num_as_absent() -> None:
+    raw = b'{"nodes": [{"num": true}], "myNodeNum": true}'
+
+    parsed = backup.parse_nodedb_json(raw, source="nodedb.json")
+
+    assert parsed.entries == ()
+    assert parsed.my_node_num is None
 
 
 def test_parse_nodedb_json_warns_on_unrecognized_schema_version() -> None:

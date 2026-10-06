@@ -48,6 +48,7 @@ from __future__ import annotations
 import base64
 import binascii
 import json
+import math
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from pathlib import Path
@@ -99,6 +100,18 @@ _PROFILE_YAML_MARKER_KEYS: frozenset[str] = frozenset(
 
 _B64_PREFIX: str = "base64:"
 """The Meshtastic CLI YAML export's marker for a base64-encoded bytes field."""
+
+_NODE_NUM_MAX: int = 0xFFFFFFFF
+"""The largest node number: Meshtastic node numbers are unsigned 32-bit."""
+
+_LATITUDE_LIMIT: int = 90
+"""The largest latitude magnitude, in decimal degrees."""
+
+_LONGITUDE_LIMIT: int = 180
+"""The largest longitude magnitude, in decimal degrees."""
+
+_ALTITUDE_LIMIT: int = 2**31 - 1
+"""The largest altitude magnitude, in meters: ``Position.altitude`` is an ``int32``."""
 
 
 class BackupFormat(StrEnum):
@@ -585,7 +598,7 @@ def parse_profile_cfg(raw: bytes, *, source: str) -> ProfileBackup:
 
     Raises:
         BackupParseError: If ``raw`` does not parse as a ``DeviceProfile``
-            protobuf.
+            protobuf, or its fixed position is out of range.
     """
     profile = clientonly_pb2.DeviceProfile()
     try:
@@ -624,8 +637,18 @@ def _profile_backup_from_message(
     if profile.HasField("fixed_position"):
         fp = profile.fixed_position
         fixed_position = FixedPosition(
-            latitude=fp.latitude_i / 1e7,
-            longitude=fp.longitude_i / 1e7,
+            latitude=_location_number(
+                fp.latitude_i / 1e7,
+                field="fixed_position.latitude_i",
+                source=source,
+                limit=_LATITUDE_LIMIT,
+            ),
+            longitude=_location_number(
+                fp.longitude_i / 1e7,
+                field="fixed_position.longitude_i",
+                source=source,
+                limit=_LONGITUDE_LIMIT,
+            ),
             altitude=fp.altitude or None,
         )
 
@@ -708,8 +731,9 @@ def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
 
     Raises:
         BackupParseError: If ``text`` is not valid YAML, its top level is
-            not a mapping, or a ``config``/``module_config`` section does
-            not match the expected protobuf shape.
+            not a mapping, a ``config``/``module_config`` section does
+            not match the expected protobuf shape, or a ``location``
+            value is not a number in range.
     """
     try:
         doc = yaml.safe_load(text)
@@ -754,16 +778,7 @@ def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
             "will be recorded.",
         )
 
-    fixed_position: FixedPosition | None = None
-    location = doc.get("location")
-    if isinstance(location, dict):
-        lat = float(location.get("lat") or 0)
-        lon = float(location.get("lon") or 0)
-        alt = location.get("alt")
-        if lat or lon:
-            fixed_position = FixedPosition(
-                latitude=lat, longitude=lon, altitude=int(alt) if alt else None
-            )
+    fixed_position = _yaml_fixed_position(doc.get("location"), source=source)
 
     sec = local_config.security
     public_key = bytes(sec.public_key) or None
@@ -781,6 +796,107 @@ def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
         module_config=module_config,
         warnings=warnings,
     )
+
+
+def _location_number(value: object, *, field: str, source: str, limit: int) -> float:
+    """Convert one position value to a finite float within ``[-limit, limit]``.
+
+    Args:
+        value: The raw value: a number, or a string holding one (a quoted
+            YAML scalar). An absent or empty value means 0, as it always has.
+        field: The value's name in the file, for the error message.
+        source: A label for the file, used in error messages.
+        limit: The largest magnitude allowed.
+
+    Returns:
+        The converted value.
+
+    Raises:
+        BackupParseError: If ``value`` is not a number (a boolean included),
+            is ``NaN`` or infinite, or lies outside ``[-limit, limit]``.
+    """
+    if not value:
+        return 0.0
+    if isinstance(value, bool) or not isinstance(value, int | float | str):
+        raise BackupParseError(
+            f"{source}: {field} must be a number, not {type(value).__name__}.", source=source
+        )
+    try:
+        number = float(value)
+    except (OverflowError, ValueError):
+        raise BackupParseError(
+            f"{source}: {field} {value!r} is not a number.", source=source
+        ) from None
+    if not math.isfinite(number):
+        raise BackupParseError(
+            f"{source}: {field} {value!r} is not a finite number.", source=source
+        )
+    if abs(number) > limit:
+        raise BackupParseError(
+            f"{source}: {field} {value!r} is outside the range -{limit}..{limit}.", source=source
+        )
+    return number
+
+
+def _yaml_fixed_position(location: object, *, source: str) -> FixedPosition | None:
+    """Build a YAML profile's fixed position from its ``location`` mapping.
+
+    Args:
+        location: The document's ``location`` value (``None`` when absent).
+        source: A label for the file, used in error messages.
+
+    Returns:
+        The position, or ``None`` when ``location`` is not a mapping or
+        both coordinates are 0. A fractional altitude is truncated to
+        whole meters, as before.
+
+    Raises:
+        BackupParseError: If a coordinate or the altitude is not a
+            number in range.
+    """
+    if not isinstance(location, dict):
+        return None
+    lat = _location_number(
+        location.get("lat"), field="location.lat", source=source, limit=_LATITUDE_LIMIT
+    )
+    lon = _location_number(
+        location.get("lon"), field="location.lon", source=source, limit=_LONGITUDE_LIMIT
+    )
+    if not (lat or lon):
+        return None
+    alt = _location_number(
+        location.get("alt"), field="location.alt", source=source, limit=_ALTITUDE_LIMIT
+    )
+    return FixedPosition(latitude=lat, longitude=lon, altitude=int(alt) if alt else None)
+
+
+def _node_number(value: object, *, field: str, source: str) -> int | None:
+    """Convert a node-db JSON node number, refusing one that cannot be a node.
+
+    Args:
+        value: The raw JSON value.
+        field: The value's name in the file, for the error message.
+        source: A label for the file, used in error messages.
+
+    Returns:
+        The node number, or ``None`` when ``value`` is absent or not a
+        number at all (a boolean included), which callers treat as missing.
+
+    Raises:
+        BackupParseError: If ``value`` is a number but not a whole one
+            (``NaN`` and ``Infinity`` included), or lies outside
+            ``0..0xFFFFFFFF``.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    if isinstance(value, float) and not (math.isfinite(value) and value.is_integer()):
+        raise BackupParseError(f"{source}: {field} {value!r} is not a whole number.", source=source)
+    number = int(value)
+    if not 0 <= number <= _NODE_NUM_MAX:
+        raise BackupParseError(
+            f"{source}: {field} {value!r} is outside the 32-bit node-number range.", source=source
+        )
+    return number
 
 
 def _clean_str(value: object) -> str | None:
@@ -804,15 +920,19 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
         source: A label for the file, used in error messages.
 
     Returns:
-        The parsed :class:`NodeDbBackup`. A malformed individual entry
-        (missing/non-numeric ``num``) is skipped rather than failing the
-        whole file, mirroring
+        The parsed :class:`NodeDbBackup`. An individual entry that is not
+        an object, or whose ``num`` is missing or not a number, is skipped
+        rather than failing the whole file, mirroring
         :meth:`~meshprovision.datasources.loranet.LoranetSource.fetch_all`'s
         one-bad-entry tolerance.
 
     Raises:
-        BackupParseError: If ``raw`` is not valid UTF-8 JSON, or its top
-            level is not an object with a ``"nodes"`` array.
+        BackupParseError: If ``raw`` is not valid UTF-8 JSON, its top
+            level is not an object with a ``"nodes"`` array, or
+            ``myNodeNum`` or any entry's ``num`` is a number that cannot
+            be a node number (fractional, ``NaN``/``Infinity``, or outside
+            ``0..0xFFFFFFFF``) -- a node's identity is never guessed, so
+            the whole file is refused.
     """
     try:
         text = raw.decode("utf-8")
@@ -836,17 +956,15 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
             "parsing anyway, on a best-effort basis."
         )
 
-    raw_my_node_num = doc.get("myNodeNum")
-    my_node_num = int(raw_my_node_num) if isinstance(raw_my_node_num, int | float) else None
+    my_node_num = _node_number(doc.get("myNodeNum"), field="myNodeNum", source=source)
 
     entries: list[NodeDbEntry] = []
-    for item in nodes:
+    for index, item in enumerate(nodes):
         if not isinstance(item, dict):
             continue
-        num = item.get("num")
-        if not isinstance(num, int | float):
+        num_int = _node_number(item.get("num"), field=f"nodes[{index}].num", source=source)
+        if num_int is None:
             continue
-        num_int = int(num)
 
         public_key: bytes | None = None
         raw_public_key = item.get("publicKey")

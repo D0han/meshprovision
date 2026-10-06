@@ -391,6 +391,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   succeeds; a failed save says that the node's row was saved but its
   private key still is not, that re-running `mesh provision` records it
   without changing the device, and exits with code `4`.
+- `mesh adopt --from-backup` crashed with a Python traceback (exit code
+  `1`) on a backup holding a number it could not use: a node-db export's
+  `myNodeNum` or a node's `num` written as `NaN`, `Infinity` or a huge
+  value, a YAML profile's `location` value that is not a number, or a
+  latitude/longitude out of range in a YAML or `.cfg` profile's
+  position. Other bad node numbers were silently changed instead (`-5`
+  wrapped to `!fffffffb`, `3.7` cut to `3`). Such a file is now refused
+  before anything is written, with a message naming the value (for
+  example `nodes[2].num`) and **exit code `2`**; an entry with no number
+  at all is still skipped, and a fractional altitude is still truncated
+  to whole meters.
 - When `mesh provision` stopped early, its report could leave sections
   out or describe them wrongly. A failed settings-transaction begin or
   commit printed a single failure line, with no word on which sections
