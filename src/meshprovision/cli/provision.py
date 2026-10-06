@@ -62,6 +62,7 @@ from meshprovision.db import pending_keys, schema
 from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import (
     AdminKeyRotationRefusedError,
+    AtomicWriteError,
     ExitCode,
     NodeArchivedError,
     NodeNotEnrolledError,
@@ -70,6 +71,7 @@ from meshprovision.errors import (
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import apply, connection, detect, plan_render, repair
 from meshprovision.provisioning import plan as plan_mod
+from meshprovision.provisioning.persist import save_failure_opening
 from meshprovision.provisioning.pipeline import (
     alias_would_rotate_admin_key,
     allocate_names,
@@ -86,6 +88,7 @@ from meshprovision.provisioning.pipeline import (
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext, DbSession
     from meshprovision.config.template import TemplateConfig
+    from meshprovision.crypto.redact import SecretBytes
 
 __all__ = [
     "ProvisionOptions",
@@ -275,6 +278,58 @@ def render_plan(
             ctx.info(line.text)
 
 
+def _record_proven_private_key(
+    ctx: CliContext,
+    db: DbSession,
+    *,
+    node_id: NodeId,
+    live_private_key: SecretBytes | None,
+    now: datetime,
+) -> None:
+    """Capture a device-proven private key after a successful persist, and save it.
+
+    Runs only once :func:`~meshprovision.provisioning.persist.persist_result`
+    has saved the node's row, so its own save is a second, separate one:
+    each "Recorded ..." line is printed only after that save succeeds.
+
+    Args:
+        ctx: The shared CLI context.
+        db: The already-open database session, already saved once.
+        node_id: The node just provisioned.
+        live_private_key: The device's live-reported private key, or
+            ``None``.
+        now: Timestamp to record on any row written.
+
+    Raises:
+        AtomicWriteError: If that second save fails (exit code 4), in place
+            of the underlying error -- including a
+            :class:`~meshprovision.errors.DbConcurrentModificationError`
+            and a bare ``OSError`` from serializing -- saying that the
+            node's row is saved and only the private key is missing.
+    """
+    recorded = _capture_proven_private_key(
+        db, node_id=node_id, live_private_key=live_private_key, now=now
+    )
+    if not recorded:
+        return
+    try:
+        db.db.save()
+    except (AtomicWriteError, OSError) as exc:
+        raise AtomicWriteError(
+            f"Node {node_id.display} was provisioned and its database row saved, but "
+            f"saving the device's proven private key failed ({exc}); the Keys sheet still "
+            "has no private key for it.",
+            path=str(db.path),
+            hint=(
+                f"{save_failure_opening(exc)} and re-run `mesh provision` for this node: "
+                "it re-checks the device's key and records the private key then. The "
+                "device needs no changes."
+            ),
+        ) from exc
+    for line in recorded:
+        ctx.info(line)
+
+
 def _apply_and_persist(
     ctx: CliContext,
     db: DbSession,
@@ -295,7 +350,7 @@ def _apply_and_persist(
         change_plan: The plan to apply.
         keypair: The keypair selected by :func:`_select_keypair`.
         live: The device's live-read configuration, consulted by
-            :func:`_capture_proven_private_key` for the device's live
+            :func:`_record_proven_private_key` for the device's live
             private key -- read before this apply, but unchanged by it
             whenever ``keypair`` is ``None``, the case that matters.
         opts: The operator's provisioning flags.
@@ -376,14 +431,13 @@ def _apply_and_persist(
         # keypair recorded for this node -- from this run or an earlier
         # interrupted one -- is provably no longer needed.
         pending_keys.clear_pending(db.path, change_plan.node_id)
-        if _capture_proven_private_key(
+        _record_proven_private_key(
             ctx,
             db,
             node_id=change_plan.node_id,
             live_private_key=live.security.private_key,
             now=now,
-        ):
-            db.db.save()
+        )
     else:
         if change_plan.key_plan.regenerate and not outcome.security_attempted:
             # Hygiene: the freshly generated key never reached the device

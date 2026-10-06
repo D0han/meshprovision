@@ -188,13 +188,12 @@ def _register_admin_alias(
 
 
 def _capture_proven_private_key(
-    ctx: CliContext,
     db: DbSession,
     *,
     node_id: NodeId,
     live_private_key: SecretBytes | None,
     now: datetime,
-) -> bool:
+) -> tuple[str, ...]:
     """Record a device-proven private key into the database (CC-D1 Option A).
 
     Completes the out-of-band admin-key-rotation flow (``mesh admin import
@@ -212,7 +211,6 @@ def _capture_proven_private_key(
     step (an out-of-band import, or an earlier ``persist_result`` write).
 
     Args:
-        ctx: The shared CLI context, for the info line.
         db: The already-open database session. Writes land in the
             in-memory session only; the caller must save.
         node_id: The node whose own ``<hex>_pub``/``_priv`` pair to check.
@@ -221,22 +219,30 @@ def _capture_proven_private_key(
         now: Timestamp to record on any row written.
 
     Returns:
-        Whether any row was written (the caller must persist).
+        One operator-facing line per row written, in order; empty when
+        nothing was written. The caller must save, and print the lines
+        only once that save has succeeded -- they say the key is recorded.
     """
     if live_private_key is None:
-        return False
+        return ()
     pub_record = db.keys.find(schema.ref_for(node_id.hex, KeyType.ADMIN_PUBLIC))
     if pub_record is None:
-        return False
+        return ()
     try:
         pub_material = pub_record.material()
         proven = crypto_keys.public_key_matches(live_private_key, pub_material)
     except KeyMaterialError:
-        return False
+        # Nothing to capture, and nothing to warn about: the recorded
+        # public key already passed field validation when the database
+        # loaded, so only a live private key that is not 32 bytes gets
+        # here -- and build_plan regenerates over such a key
+        # ("missing_key_material"), so persist_result has just recorded
+        # the new pair and this pre-apply private key is moot.
+        return ()
     if not proven:
-        return False
+        return ()
 
-    wrote = False
+    recorded: list[str] = []
     if not db.keys.has_private(node_id.hex):
         db.keys.upsert(
             KeyRecord.from_material(
@@ -247,11 +253,10 @@ def _capture_proven_private_key(
                 created_ts=now,
             )
         )
-        ctx.info(
+        recorded.append(
             f"Recorded the device's private key for {node_id.display} "
             "(proof of possession of the recorded public key)."
         )
-        wrote = True
 
     # Also fill any OTHER existing reference (an admin alias) holding the
     # same proven public material whose own private row is missing or
@@ -277,10 +282,9 @@ def _capture_proven_private_key(
                 created_ts=now,
             )
         )
-        ctx.info(f"Filled the stale private key recorded for alias {alias_ref!r}.")
-        wrote = True
+        recorded.append(f"Filled the stale private key recorded for alias {alias_ref!r}.")
 
-    return wrote
+    return tuple(recorded)
 
 
 _ADMIN_KEY_ROTATION_DOC_HINT: Final[str] = (

@@ -383,6 +383,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `1`**); when that happens on the reconnect in the middle of `mesh
   provision`, the run stops with the usual UNCERTAIN report instead of
   ending without one.
+- When `mesh provision` recorded a device's proven private key for a node
+  whose `Keys` sheet held only its public key, and that second database
+  save failed, the run had already printed "Recorded the device's private
+  key" and then ended with only the underlying error (a bare `OSError`
+  exited with code `1`). The line is now printed only after the save
+  succeeds; a failed save says that the node's row was saved but its
+  private key still is not, that re-running `mesh provision` records it
+  without changing the device, and exits with code `4`.
 - When `mesh provision` stopped early, its report could leave sections
   out or describe them wrongly. A failed settings-transaction begin or
   commit printed a single failure line, with no word on which sections

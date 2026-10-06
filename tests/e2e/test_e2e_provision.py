@@ -1747,6 +1747,150 @@ def test_provision_captures_a_proven_private_key_for_an_ordinary_node(
     assert priv.origin is KeyOrigin.CAPTURED
 
 
+def _fail_the_next_database_write(fault: pytest.MonkeyPatch, db_path: Path) -> None:
+    """Make the run's second save fail: a full disk while serializing."""
+    del db_path
+    real_write = ods_write.write_database
+    calls = 0
+
+    def _write(*args: object, **kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError(28, "No space left on device")
+        return real_write(*args, **kwargs)  # type: ignore[arg-type]
+
+    fault.setattr(ods_write, "write_database", _write)
+
+
+def _edit_the_database_externally_after_the_first_save(
+    fault: pytest.MonkeyPatch, db_path: Path
+) -> None:
+    """Make the run's second save find the file changed: a LibreOffice save in between."""
+    real_clear = pending_keys.clear_pending
+
+    def _clear_then_edit(*args: object, **kwargs: object) -> None:
+        real_clear(*args, **kwargs)  # type: ignore[arg-type]
+        loaded = ods.load_database(db_path)
+        node_row = {**loaded.nodes[0], "notes": "edited in LibreOffice"}
+        ods_write.write_database(db_path, nodes=[node_row], keys=list(loaded.keys), backup=False)
+
+    fault.setattr(pending_keys, "clear_pending", _clear_then_edit)
+
+
+@pytest.mark.parametrize(
+    ("inject_fault", "opening"),
+    [
+        pytest.param(
+            _fail_the_next_database_write,
+            "Fix the write problem (free space, permissions)",
+            id="disk-full",
+        ),
+        pytest.param(
+            _edit_the_database_externally_after_the_first_save,
+            "The database file changed on disk since mesh read it",
+            id="concurrent-edit",
+        ),
+    ],
+)
+def test_failed_save_of_a_proven_private_key_reports_what_is_missing(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    inject_fault: Callable[[pytest.MonkeyPatch, Path], None],
+    opening: str,
+) -> None:
+    """The private-key capture's own save failing must say the row is saved, the key is not.
+
+    The capture runs after ``persist_result`` already saved the node's
+    row, in a second save: when that one fails, the run must not have
+    claimed the key was recorded, and a plain re-run must finish the job.
+    """
+    dev = bus.use(FakeMeshInterface("deadbe01"))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+    assert invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env).exit_code == 0
+
+    loaded = ods.load_database(db_path)
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    ods_write.write_database(
+        db_path, nodes=[loaded.nodes[0]], keys=[rows["deadbe01_pub"]], backup=False
+    )
+
+    # A context of its own: undoing the test's ``monkeypatch`` would also
+    # undo the ``bus`` fixture's patches and leave the re-run no device.
+    bus.use(dev)
+    with pytest.MonkeyPatch.context() as fault:
+        inject_fault(fault, db_path)
+        failed = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert failed.exit_code == int(ExitCode.DB)
+    assert "Database updated" in failed.stderr
+    assert (
+        "Node !deadbe01 was provisioned and its database row saved, but saving the device's "
+        "proven private key failed" in failed.stderr
+    )
+    assert f"Hint: {opening}" in failed.stderr
+    assert (
+        "it re-checks the device's key and records the private key then. The device needs "
+        "no changes." in failed.stderr
+    )
+    assert "Recorded the device's private key" not in failed.stderr
+    assert "--force-regenerate-key" not in failed.stderr
+    assert "Traceback" not in failed.stderr
+    after_failure = ods.load_database(db_path)
+    assert [row["node_id"] for row in after_failure.nodes] == ["deadbe01"]
+    assert [row["key_ref"] for row in after_failure.keys] == ["deadbe01_pub"]
+    _assert_no_secrets(failed.stderr)
+
+    bus.use(dev)
+    rerun = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert rerun.exit_code == 0
+    assert "Recorded the device's private key for !deadbe01" in rerun.stderr
+    rows_after = {row["key_ref"]: row for row in ods.load_database(db_path).keys}
+    private = KeyRecord.from_row(rows_after["deadbe01_priv"])
+    assert private.secret().reveal() == bytes(dev.localNode.localConfig.security.private_key)
+    assert private.origin is KeyOrigin.CAPTURED
+    _assert_no_secrets(rerun.stderr)
+
+
+def test_regenerate_over_a_malformed_live_private_key_records_the_new_pair(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """A live private key that is not 32 bytes is regenerated over, never captured or warned on.
+
+    Pins why ``_capture_proven_private_key``'s ``KeyMaterialError`` branch
+    returns quietly: the only way to reach it is a malformed pre-apply
+    private key, and the plan has already replaced that key.
+    """
+    dev = bus.use(FakeMeshInterface("deadbe01"))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    assert invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env).exit_code == 0
+    loaded = ods.load_database(db_path)
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    ods_write.write_database(
+        db_path, nodes=[loaded.nodes[0]], keys=[rows["deadbe01_pub"]], backup=False
+    )
+    old_public = bytes(dev.localNode.localConfig.security.public_key)
+    dev.localNode.localConfig.security.private_key = b"\x01" * 16
+
+    bus.use(dev)
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "keys: regenerate" in result.stderr
+    assert "Recorded the device's private key" not in result.stderr
+    new_public = bytes(dev.localNode.localConfig.security.public_key)
+    assert new_public != old_public
+    rows_after = {row["key_ref"]: row for row in ods.load_database(db_path).keys}
+    assert KeyRecord.from_row(rows_after["deadbe01_pub"]).material() == new_public
+    assert KeyRecord.from_row(rows_after["deadbe01_pub"]).origin is KeyOrigin.GENERATED
+    private = KeyRecord.from_row(rows_after["deadbe01_priv"]).secret().reveal()
+    assert private == bytes(dev.localNode.localConfig.security.private_key)
+    _assert_no_secrets(result.stderr)
+
+
 def test_provision_fills_a_stale_alias_private_key_when_proven(
     runner: CliRunner,
     env: dict[str, str],
