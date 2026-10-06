@@ -31,6 +31,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
+from meshprovision.db import fs_primitives
 from meshprovision.db.atomic_writer import write_bytes_atomic
 from meshprovision.db.backups import BackupInfo, backup_dir_for
 from meshprovision.db.fs_primitives import _BACKUP_DIR_MODE, _FILE_MODE, resolve_path
@@ -473,6 +474,8 @@ def refresh_known_good(
         fd = os.open(tmp_destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, _FILE_MODE)
         with os.fdopen(fd, "wb") as fh:
             fh.write(content)
+            fh.flush()
+            fs_primitives._fsync_fd(fh.fileno())
         os.utime(tmp_destination, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
         # Checked as late as possible -- after the temp copy is written,
         # immediately before the replace -- to keep the window in which
@@ -485,6 +488,7 @@ def refresh_known_good(
             return known_good_info(target, backup_dir=backup_dir)
         tmp_destination.replace(destination)
         tmp_destination = None
+        fs_primitives._fsync_dir(resolved_dir)
         _write_sidecar(sidecar_path, source=current_source, sha256_hex=digest)
     except (OSError, AtomicWriteError) as exc:
         _logger.warning("Failed to refresh known-good copy of %s: %s", target, exc)

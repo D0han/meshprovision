@@ -71,6 +71,11 @@ def atomic_write(
     this function's own replace step), the temp file is removed and the
     exception propagates; ``target`` is left untouched.
 
+    The temp file is flushed to disk before the backup and the replace,
+    and ``target``'s directory after the replace (see
+    :func:`~meshprovision.db.fs_primitives._fsync_file`), so a power cut
+    right after this returns cannot leave ``target`` empty or torn.
+
     Args:
         target: The file to atomically write.
         backup: Whether to back up the current ``target`` before
@@ -91,8 +96,9 @@ def atomic_write(
 
     Raises:
         AtomicWriteError: If ``target`` cannot be resolved (for example a
-            symlink loop), or if creating the temporary file, creating
-            the backup, or replacing ``target`` fails.
+            symlink loop), or if creating the temporary file, flushing
+            it to disk, creating the backup, or replacing ``target``
+            fails.
     """
     # Refuses a symlink loop on every Python version, rather than let
     # os.replace swap a looping symlink for a file (see resolve_path).
@@ -121,6 +127,12 @@ def atomic_write(
         ) from exc
     try:
         yield tmp_path
+        try:
+            fs_primitives._fsync_file(tmp_path)
+        except OSError as exc:
+            raise AtomicWriteError(
+                f"Failed to flush {tmp_path} to disk: {exc}", path=str(target)
+            ) from exc
         if backup:
             create_backup(target, backup_dir=backup_dir, retention=retention, now=now)
         try:
@@ -129,6 +141,7 @@ def atomic_write(
             raise AtomicWriteError(
                 f"Failed to replace {target} with {tmp_path}: {exc}", path=str(target)
             ) from exc
+        fs_primitives._fsync_dir(target.parent)
     except BaseException:
         with contextlib.suppress(OSError):
             tmp_path.unlink()

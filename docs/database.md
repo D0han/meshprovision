@@ -131,7 +131,9 @@ otherwise reported by fingerprint only, never its raw material;
   never deletes the one just made: if the system clock is behind the
   newest backup's name (a Raspberry Pi without a real-time clock after a
   power cut), new backup names continue just after it, and a warning
-  says so.
+  says so. Every write -- the database, each backup, the known-good copy
+  and the pending-key file -- is flushed to disk before it takes its
+  final name, so a power cut cannot leave any of them empty or torn.
 - Opening the database in LibreOffice Calc, resizing columns, and saving
   is safe — including adding your own comments to a cell, which will not
   corrupt that cell's value. Every header cell carries its column's

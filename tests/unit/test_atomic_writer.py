@@ -6,6 +6,8 @@ import errno
 import logging
 import os
 import shutil
+import stat
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -28,6 +30,7 @@ from meshprovision.db.backups import (
 )
 from meshprovision.db.fs_primitives import link_no_clobber
 from meshprovision.errors import AtomicWriteError
+from tests.unit.conftest import FsyncEvent
 
 pytestmark = pytest.mark.unit
 
@@ -1458,3 +1461,92 @@ def test_prune_backups_never_deletes_the_kept_backup(tmp_path: Path) -> None:
         paths[0],
         paths[-1],
     ]
+
+
+def _fail_fsync(
+    monkeypatch: pytest.MonkeyPatch, *, file_errno: int | None, dir_errno: int | None
+) -> None:
+    """Make ``os.fsync`` raise ``file_errno`` for files and ``dir_errno`` for directories."""
+
+    def fsync(fd: int) -> None:
+        code = dir_errno if stat.S_ISDIR(os.fstat(fd).st_mode) else file_errno
+        if code is not None:
+            raise OSError(code, os.strerror(code))
+
+    monkeypatch.setattr(os, "fsync", fsync)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no directory fsync on Windows")
+def test_write_bytes_atomic_flushes_the_temp_before_replacing_and_the_directory_after(
+    tmp_path: Path, fsync_recorder: list[FsyncEvent]
+) -> None:
+    target = tmp_path / "data.txt"
+
+    write_bytes_atomic(target, b"v1", backup=False)
+
+    ino = target.stat().st_ino
+    assert fsync_recorder == [
+        ("fsync", ino, False),
+        ("replace", ino, False),
+        ("fsync", tmp_path.stat().st_ino, True),
+    ]
+
+
+def test_write_bytes_atomic_refuses_to_replace_when_the_file_flush_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    target.write_bytes(b"v0")
+    _fail_fsync(monkeypatch, file_errno=errno.EIO, dir_errno=None)
+
+    with pytest.raises(AtomicWriteError, match=r"Failed to flush .* to disk"):
+        write_bytes_atomic(target, b"v1", backup=False)
+
+    assert target.read_bytes() == b"v0"
+    assert sorted(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize(
+    ("file_errno", "dir_errno"),
+    [(errno.EINVAL, None), (None, errno.EIO)],
+    ids=["file-flush-unsupported", "directory-flush-fails"],
+)
+def test_write_bytes_atomic_tolerates_an_unsupported_file_flush_or_a_failed_directory_flush(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, file_errno: int | None, dir_errno: int | None
+) -> None:
+    target = tmp_path / "data.txt"
+    _fail_fsync(monkeypatch, file_errno=file_errno, dir_errno=dir_errno)
+
+    write_bytes_atomic(target, b"v1", backup=False)
+
+    assert target.read_bytes() == b"v1"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no directory fsync on Windows")
+def test_create_backup_flushes_the_copy_before_linking_it_and_the_directory_after(
+    tmp_path: Path, fsync_recorder: list[FsyncEvent]
+) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v0")
+    backup_dir.mkdir()
+
+    info = create_backup(target, backup_dir=backup_dir)
+
+    assert info is not None
+    ino = info.path.stat().st_ino
+    assert fsync_recorder == [
+        ("fsync", ino, False),
+        ("link", ino, False),
+        ("fsync", backup_dir.stat().st_ino, True),
+    ]
+
+
+def test_fsync_dir_is_a_no_op_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    opened: list[object] = []
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(os, "open", lambda *args, **_kwargs: opened.append(args))
+
+    fs_primitives._fsync_dir(tmp_path)
+
+    assert opened == []

@@ -222,6 +222,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Database writes are now flushed to disk (`fsync`) before they take
+  their final name: the database itself, each timestamped backup, the
+  known-good copy and its provenance file, and the pending-key file
+  written ahead of a key change. Previously a power cut within the
+  kernel's write-back window (typically up to 30 seconds) could leave
+  the database empty on XFS, f2fs or vfat, and a new backup or
+  pending-key file empty even on ext4. A save now fails with "Failed to
+  flush ... to disk" when the disk reports a write error, instead of
+  replacing the database with data that may not be there; a filesystem
+  that cannot flush at all is used as before. Each save takes a few
+  milliseconds longer per file (more on an SD card).
 - A discovered `.env` is no longer refused for being group-writable when
   its group is the user's primary group and no other user is in that
   group (the default permissions under umask 002 on distros with per-user

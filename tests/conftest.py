@@ -28,7 +28,11 @@ environment variable, which is what keeps
 see ``meshprovision.db.backups.backup_dir_for``) and
 ``meshprovision.config.settings.load_settings()``'s upward ``.env``
 search from ever touching this repository's real files, and what keeps a
-developer's shell environment from leaking into a test run.
+developer's shell environment from leaking into a test run. It also
+stubs ``os.fsync`` to a no-op: every database write flushes its file and
+directory to disk (see ``meshprovision.db.fs_primitives._fsync_file``),
+which on a real disk would add tens of seconds across the suite; the
+tests of that flushing install their own recorder over the stub.
 """
 
 from __future__ import annotations
@@ -72,7 +76,7 @@ WIDE_TERMINAL_COLUMNS: Final[str] = "100000"
 
 @pytest.fixture(autouse=True)
 def _isolated_cwd_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Isolate every test's working directory, environment, and ``time.sleep``.
+    """Isolate every test's working directory, environment, ``time.sleep`` and ``os.fsync``.
 
     Args:
         tmp_path: Pytest's per-test temporary directory.
@@ -83,6 +87,7 @@ def _isolated_cwd_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         if name.startswith("MESHPROVISION_"):
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
+    monkeypatch.setattr(os, "fsync", lambda *_a, **_k: None)
 
 
 @pytest.fixture

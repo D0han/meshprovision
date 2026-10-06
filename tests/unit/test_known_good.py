@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import logging
 import os
 import shutil
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -13,6 +16,7 @@ import pytest
 
 from meshprovision.db import known_good
 from meshprovision.db.backups import BackupInfo, create_backup, list_backups
+from tests.unit.conftest import FsyncEvent
 
 pytestmark = pytest.mark.unit
 
@@ -662,3 +666,50 @@ def test_known_good_status_falls_back_when_the_target_cannot_be_resolved(
 
     assert status is not None
     assert status.provenance is known_good.KnownGoodProvenance.VERIFIED
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="no directory fsync on Windows")
+def test_refresh_known_good_flushes_the_copy_before_replacing_it_and_the_directory_after(
+    tmp_path: Path, fsync_recorder: list[FsyncEvent]
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"content")
+    backup_dir = tmp_path / "backups"
+
+    known_good.refresh_known_good(
+        target, content=b"content", source_stat=target.stat(), backup_dir=backup_dir
+    )
+
+    copy_ino = known_good.known_good_path(target, backup_dir).stat().st_ino
+    sidecar_ino = known_good._sidecar_path(target, backup_dir).stat().st_ino
+    dir_event = ("fsync", backup_dir.stat().st_ino, True)
+    assert fsync_recorder == [
+        ("fsync", copy_ino, False),
+        ("replace", copy_ino, False),
+        dir_event,
+        ("fsync", sidecar_ino, False),
+        ("replace", sidecar_ino, False),
+        dir_event,
+    ]
+
+
+def test_refresh_known_good_flush_failure_is_logged_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"content")
+    backup_dir = tmp_path / "backups"
+
+    def failing_fsync(_fd: int) -> None:
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(os, "fsync", failing_fsync)
+
+    with caplog.at_level(logging.WARNING, logger="meshprovision.db.known_good"):
+        result = known_good.refresh_known_good(
+            target, content=b"content", source_stat=target.stat(), backup_dir=backup_dir
+        )
+
+    assert result is None
+    assert "Failed to refresh known-good copy" in caplog.text
+    assert list(backup_dir.iterdir()) == []

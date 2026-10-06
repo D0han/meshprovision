@@ -12,6 +12,8 @@ artifact of a hand-built fixture drifting from the template.
 
 from __future__ import annotations
 
+import os
+import stat
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from types import MappingProxyType
@@ -387,3 +389,46 @@ def adopt_device_key_plan(
     assert plan.key_plan.adopt_device_key is True
     assert plan.key_plan.regenerate is False
     return plan
+
+
+FsyncEvent = tuple[str, int, bool]
+"""One recorded durability step: ``(operation, inode, is_directory)``."""
+
+
+@pytest.fixture
+def fsync_recorder(monkeypatch: pytest.MonkeyPatch) -> list[FsyncEvent]:
+    """Record every ``os.fsync``, ``os.replace`` and ``os.link``, in order.
+
+    Replaces the root conftest's no-op ``os.fsync`` stub with a recorder
+    (it still does not flush). Files are identified by inode, so a temp
+    file and the final name it was renamed or linked to compare equal.
+    ``Path.replace`` delegates to ``os.replace`` on every supported
+    Python, so both are seen.
+
+    Args:
+        monkeypatch: Pytest's monkeypatch fixture.
+
+    Returns:
+        The event list, appended to as the test runs: ``("fsync", ino,
+        is_dir)`` for a flush, ``("replace", ino, False)`` and ``("link",
+        ino, False)`` for the source file of a rename or link.
+    """
+    events: list[FsyncEvent] = []
+    real_replace, real_link = os.replace, os.link
+
+    def record_fsync(fd: int) -> None:
+        st = os.fstat(fd)
+        events.append(("fsync", st.st_ino, stat.S_ISDIR(st.st_mode)))
+
+    def record_replace(src: str | Path, dst: str | Path) -> None:
+        events.append(("replace", Path(src).stat().st_ino, False))
+        real_replace(src, dst)
+
+    def record_link(src: str | Path, dst: str | Path) -> None:
+        events.append(("link", Path(src).stat().st_ino, False))
+        real_link(src, dst)
+
+    monkeypatch.setattr(os, "fsync", record_fsync)
+    monkeypatch.setattr(os, "replace", record_replace)
+    monkeypatch.setattr(os, "link", record_link)
+    return events

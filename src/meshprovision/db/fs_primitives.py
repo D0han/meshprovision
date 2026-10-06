@@ -1,6 +1,6 @@
 """Filesystem primitives shared by the backup and atomic-write layers.
 
-Three leaf-level building blocks live here, with no dependency on either
+Four leaf-level building blocks live here, with no dependency on either
 :mod:`meshprovision.db.backups` or :mod:`meshprovision.db.atomic_writer`
 (only on :mod:`meshprovision.errors`):
 
@@ -19,6 +19,15 @@ Three leaf-level building blocks live here, with no dependency on either
 - :func:`_sweep_stale_temps`, a best-effort cleanup of orphaned temp
   files left by a killed writer, called from both the backup-creation
   path and the target-replace path.
+- :func:`_fsync_file`/:func:`_fsync_fd` and :func:`_fsync_dir`, the
+  durability step of every write: a temp file's data is flushed to disk
+  before it is renamed or linked into place, and its directory after, so
+  a power cut cannot leave a final name pointing at an empty or torn
+  file (XFS, f2fs and vfat -- and ext4 for a brand-new file -- can
+  otherwise commit the rename before the data). Used by
+  :func:`~meshprovision.db.atomic_writer.atomic_write`,
+  :func:`~meshprovision.db.backups.create_backup` and
+  :func:`~meshprovision.db.known_good.refresh_known_good`.
 
 Both classes of temp file -- a backup's temp copy and a target's own
 write temp -- are swept opportunistically at their creation sites, since
@@ -38,6 +47,7 @@ import contextlib
 import errno
 import logging
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -67,6 +77,16 @@ Seen on FAT/exFAT and some SMB/FUSE mounts. ``EOPNOTSUPP`` and ``ENOTSUP``
 are the same value on Linux; both are named because POSIX allows either.
 Anything else (for example ``EIO``, ``ENOSPC``) is a genuine failure and
 must not fall back.
+"""
+
+_FSYNC_UNSUPPORTED_ERRNOS: Final[frozenset[int]] = frozenset(
+    {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS}
+)
+"""``fsync`` errnos meaning "this file cannot be synchronized here", not a failure.
+
+``EINVAL`` is POSIX's own "does not support synchronization"; some
+FUSE/SMB/old NFS mounts return the others. Anything else (``EIO``,
+``ENOSPC``, ...) means the data may not have reached the disk.
 """
 
 
@@ -228,3 +248,69 @@ def link_no_clobber(source: Path, destination: Path) -> None:
             raise
         return
     source.unlink()
+
+
+def _fsync_fd(fd: int) -> None:
+    """Flush an open file's data to disk.
+
+    Calls ``os.fsync`` through the module attribute (never a ``from os
+    import fsync`` binding), so the test suite's autouse no-op stub and
+    the durability tests' recorders both reach it.
+
+    Args:
+        fd: An open file descriptor. A buffered writer must be flushed
+            first.
+
+    Raises:
+        OSError: If the flush fails for any reason other than one of
+            :data:`_FSYNC_UNSUPPORTED_ERRNOS`, which is logged at debug
+            and otherwise ignored.
+    """
+    try:
+        os.fsync(fd)
+    except OSError as exc:
+        if exc.errno not in _FSYNC_UNSUPPORTED_ERRNOS:
+            raise
+        _logger.debug("fsync is not supported here: %s", exc)
+
+
+def _fsync_file(path: Path) -> None:
+    """Flush a closed file's data to disk, by path.
+
+    Opened read-write rather than read-only, since Windows refuses to
+    flush a descriptor without write access.
+
+    Args:
+        path: The file to flush.
+
+    Raises:
+        OSError: If ``path`` cannot be opened, or :func:`_fsync_fd` fails.
+    """
+    fd = os.open(path, os.O_RDWR | getattr(os, "O_BINARY", 0))
+    try:
+        _fsync_fd(fd)
+    finally:
+        os.close(fd)
+
+
+def _fsync_dir(directory: Path) -> None:
+    """Best-effort flush of a directory, so a rename or link into it is durable.
+
+    Never raises: by the time this runs the rename or link has already
+    happened, so a failure here cannot be undone and must not fail the
+    write -- it is logged at debug, like SQLite does. A no-op on Windows,
+    which cannot open a directory at all (and needs no directory flush).
+
+    Args:
+        directory: The directory a file was just renamed or linked into.
+    """
+    if sys.platform == "win32":
+        return
+    try:
+        fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError as exc:
+        _logger.debug("could not fsync directory %s: %s", directory, exc)

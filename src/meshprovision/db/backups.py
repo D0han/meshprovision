@@ -375,8 +375,8 @@ def create_backup(
 
     Raises:
         AtomicWriteError: If the backup directory cannot be created, or
-            the copy fails. A failure to prune old backups afterwards is
-            logged, not raised.
+            the copy (or flushing it to disk) fails. A failure to prune
+            old backups afterwards is logged, not raised.
     """
     if not target.exists():
         return None
@@ -413,6 +413,9 @@ def create_backup(
             tmp_destination.chmod(_FILE_MODE)
         except OSError as chmod_exc:
             _logger.debug("Failed to chmod backup %s: %s", tmp_destination, chmod_exc)
+        # Flushed before it gets its final name, so that name never points
+        # at a copy the disk does not hold yet.
+        fs_primitives._fsync_file(tmp_destination)
         destination = _claim_backup_path(resolved_dir, name, tmp_destination)
     except OSError as exc:
         with contextlib.suppress(OSError):
@@ -420,6 +423,8 @@ def create_backup(
         raise AtomicWriteError(
             f"Failed to back up {target} into {resolved_dir} as {name}: {exc}", path=str(target)
         ) from exc
+
+    fs_primitives._fsync_dir(resolved_dir)
 
     # Captured before pruning. keep= protects this backup from its own
     # prune, but not from a concurrent writer's prune (possible only when
