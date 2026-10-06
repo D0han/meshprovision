@@ -277,3 +277,37 @@ def device_io_error(request: pytest.FixtureRequest) -> Callable[[], BaseExceptio
         "serial": _serial,
     }
     return factories[exc_id]
+
+
+def real_write_config_or_exit(section: str) -> None:
+    """Run the pinned meshtastic library's own ``Node.writeConfig(section)``, sending nothing.
+
+    The real method is a hard-coded ``if``/``elif`` on the section name and
+    calls ``meshtastic.util.our_exit`` (prints to stdout, then raises
+    ``SystemExit(1)``) for any name it does not know. Every fake
+    ``writeConfig`` calls this first, so a fake rejects exactly the
+    sections the real library rejects -- checked against the library
+    itself, never against
+    :data:`~meshprovision.provisioning.detect.CONFIG_SECTIONS`/
+    :data:`~meshprovision.provisioning.detect.MODULE_SECTIONS`, the lists
+    ``tests/unit/test_writable_sections_contract.py`` pins. The node has no
+    device behind it: ``_sendAdmin`` is replaced by a recorder, so the
+    admin message is built but never sent.
+
+    Args:
+        section: The config or module-config section name being written.
+
+    Raises:
+        SystemExit: Exactly when the real library exits for ``section``.
+    """
+    from types import SimpleNamespace
+
+    from meshtastic.node import Node
+
+    iface = SimpleNamespace(localNode=None)
+    node = Node(iface, 1, noProto=True)
+    iface.localNode = node
+    sent: list[object] = []
+    node._sendAdmin = lambda message, **_kw: sent.append(message)  # type: ignore[method-assign]
+    node.writeConfig(section)
+    assert len(sent) == 1, f"Node.writeConfig({section!r}) sent {len(sent)} admin messages"

@@ -87,6 +87,17 @@ def test_fake_connection_writeconfig_persists_and_is_visible_to_the_next_connect
     assert next_connection.localNode.localConfig.lora.hop_limit == 7
 
 
+def test_fake_connection_writeconfig_rejects_what_the_real_library_rejects() -> None:
+    device = FakeMeshInterface("deadbe01")
+    connection = device.connect()
+
+    with pytest.raises(SystemExit):
+        connection.localNode.writeConfig("statusmessage")
+
+    assert device.localNode.written_sections == []
+    assert device.localNode.transaction_calls == []
+
+
 def test_fake_connection_fail_sections_logs_the_attempt_but_does_not_persist() -> None:
     device = FakeMeshInterface("deadbe01", fail_sections=frozenset({"lora"}))
     connection = device.connect()

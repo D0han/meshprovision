@@ -22,9 +22,11 @@ documented on :func:`classify`.
 Verified against the installed ``meshtastic==2.7.11`` protobufs
 (``meshtastic.protobuf.localonly_pb2``, ``config_pb2``,
 ``module_config_pb2``) directly in ``.venv``: ``LocalConfig``'s fields are
-exactly :data:`CONFIG_SECTIONS`, ``LocalModuleConfig``'s fields are a
+:data:`CONFIG_SECTIONS` plus ``version``, ``LocalModuleConfig``'s fields are a
 superset of :data:`MODULE_SECTIONS` restricted to the names
-``Node.writeConfig`` accepts, ``Config.SecurityConfig.admin_key`` is
+``Node.writeConfig`` accepts (``tests/unit/test_writable_sections_contract.py``
+checks both lists against the pinned library's own ``Node.writeConfig``),
+``Config.SecurityConfig.admin_key`` is
 ``repeated bytes`` field 3 (snake_case on the generated Python class --
 ``adminKey`` is only the JSON/CLI spelling and does not exist as a Python
 attribute), and ``ModuleConfig.TelemetryConfig`` has no ``enabled`` field.

@@ -55,6 +55,7 @@ from meshprovision.provisioning.plan import (
     build_plan,
 )
 from meshprovision.provisioning.plan_admin_keys import KeyPlan
+from tests.conftest import real_write_config_or_exit
 from tests.unit.conftest import adopt_device_key_plan, make_security
 
 pytestmark = pytest.mark.unit
@@ -380,6 +381,7 @@ class _FakeLocalNode:
         """Raised by commitSettingsTransaction() (after recording it) when set."""
 
     def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
+        real_write_config_or_exit(section)
         self.written_sections.append(section)
         self.transaction_calls.append(section)
 
@@ -472,6 +474,16 @@ def test_fake_iface_node_num_is_what_detect_reads() -> None:
     """Guards against ``node_num=`` silently not reaching ``detect``."""
     live = detect.read_live_config(_FakeIfaceForApply(node_num=0xCAFE0002))  # type: ignore[arg-type]
     assert live.node_id.hex == "cafe0002"
+
+
+def test_fake_local_node_write_config_rejects_what_the_real_library_rejects() -> None:
+    iface = _FakeIfaceForApply()
+
+    with pytest.raises(SystemExit):
+        iface.localNode.writeConfig("statusmessage")
+
+    assert iface.localNode.written_sections == []
+    assert iface.localNode.transaction_calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -2157,6 +2169,7 @@ class _FakeLocalNodeRaisesOnWrite(_FakeLocalNode):
         self._exc = exc
 
     def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
+        real_write_config_or_exit(section)
         self.written_sections.append(section)
         raise self._exc
 
@@ -2192,6 +2205,7 @@ class _FakeLocalNodeFailsOnSections(_FakeLocalNode):
         self._exc = exc
 
     def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
+        real_write_config_or_exit(section)
         self.written_sections.append(section)
         if section in self._fail_sections:
             raise (

@@ -49,6 +49,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import ConnectionFailedError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import connection, discovery
+from tests.conftest import real_write_config_or_exit
 
 if TYPE_CHECKING:
     from meshtastic.mesh_interface import MeshInterface
@@ -140,6 +141,9 @@ class FakeNode:
                 written.
 
         Raises:
+            SystemExit: If the real ``Node.writeConfig`` rejects ``section``
+                (see :func:`tests.conftest.real_write_config_or_exit`) --
+                nothing is recorded, exactly as the library sends nothing.
             BaseException: If ``section`` is listed in the owning
                 interface's ``fail_sections`` -- simulates a device-side
                 write failure. The exception type is
@@ -148,6 +152,7 @@ class FakeNode:
                 owning interface's ``fail_exc(section)`` returns when
                 set.
         """
+        real_write_config_or_exit(section)
         self.written_sections.append(section)
         self.transaction_calls.append(section)
         if section in self._iface.fail_sections:
