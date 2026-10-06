@@ -1279,6 +1279,31 @@ def test_apply_plan_mid_plan_reconnect_with_unreadable_identity_is_a_hard_stop(m
     assert outcome.record is None
 
 
+def test_apply_plan_mid_plan_reconnect_with_an_invalid_node_id_is_a_hard_stop(make_live) -> None:
+    """A reconnect reporting a node number that is not a node id stops like an unreadable one.
+
+    ``read_node_id`` now maps the ``NodeIdError`` to a ``DetectionError``,
+    which this check already catches; before, it escaped ``apply_plan``
+    altogether, with no UNCERTAIN report for the sections already written.
+    """
+    plan = _factory_plan_with_reboot_then_security(make_live)
+    kp = generate_keypair()
+
+    first_iface = _FakeIfaceForApply()
+    invalid = _FakeIfaceForApply(node_num=2**32)
+    session = _FakeSessionTracksRefresh(first_iface, _serve(invalid))
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.status == WriteStatus.FAILED
+    assert "could not confirm the node's identity" in verify_result.message
+    assert first_iface.localNode.written_sections == ["lora", "device"]
+    assert invalid.localNode.written_sections == []
+    assert outcome.security_attempted is False
+    assert outcome.may_update_database is False
+    assert outcome.exit_code == int(ExitCode.PROVISIONING)
+
+
 def test_apply_plan_final_verify_reconnect_to_a_different_node_never_runs_verify_plan(
     make_live,
 ) -> None:

@@ -49,10 +49,12 @@ from meshprovision.errors import (
     DbReadError,
     ExitCode,
     MeshprovisionError,
+    NodeIdError,
     NonInteractiveError,
     SchemaError,
     exit_code_for,
 )
+from meshprovision.nodeid import NodeId
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -73,6 +75,8 @@ __all__ = [
     "build_settings",
     "echo_json",
     "handle_cli_errors",
+    "node_id_callback",
+    "node_ids_callback",
     "pass_cli",
     "resolve_non_interactive",
 ]
@@ -166,6 +170,80 @@ def echo_json(payload: object, *, indent: int = DEFAULT_JSON_INDENT) -> None:
         indent: The indentation width to pass to ``json.dumps``.
     """
     click.echo(json_dumps_safe(payload, indent=indent, default=str))
+
+
+def _parse_node_id_param(value: str, param: click.Parameter) -> NodeId:
+    """Parse one operator-typed node id, failing as a click usage error.
+
+    Args:
+        value: The raw command-line value.
+        param: The option or argument it was given for, named in the
+            error.
+
+    Returns:
+        The parsed node id.
+
+    Raises:
+        click.BadParameter: If ``value`` is not a node id in any accepted
+            form -- a usage error (exit code 2), not the unexpected-error
+            exit code 1 a :class:`~meshprovision.errors.NodeIdError`
+            escaping a command body would get.
+    """
+    try:
+        return NodeId.parse(value)
+    except NodeIdError as exc:
+        message = f"{exc.message}. {exc.hint}" if exc.hint else exc.message
+        raise click.BadParameter(terminal_safe(message), param=param) from exc
+
+
+def node_id_callback(
+    ctx: click.Context, param: click.Parameter, value: str | None
+) -> NodeId | None:
+    """Click callback parsing a single node-id option or argument at the CLI boundary.
+
+    A callback rather than a :class:`click.ParamType`: ``ParamType`` is
+    generic only from click 8.4 on, and this package does not pin click.
+    Data-path parsing (a device's own node number, database cells) stays
+    with :meth:`~meshprovision.nodeid.NodeId.parse` and its
+    :class:`~meshprovision.errors.NodeIdError`.
+
+    Args:
+        ctx: The click context (unused).
+        param: The option or argument being parsed.
+        value: The raw value, or ``None`` when an option was not given.
+
+    Returns:
+        The parsed node id, or ``None`` when ``value`` is ``None``.
+
+    Raises:
+        click.BadParameter: If ``value`` is not a node id (exit code 2).
+    """
+    del ctx
+    return None if value is None else _parse_node_id_param(value, param)
+
+
+def node_ids_callback(
+    ctx: click.Context, param: click.Parameter, value: tuple[str, ...]
+) -> tuple[NodeId, ...]:
+    """Click callback parsing a repeatable node-id option at the CLI boundary.
+
+    See :func:`node_id_callback`. Duplicates are kept: de-duplicating
+    equivalent spellings is the command's own job.
+
+    Args:
+        ctx: The click context (unused).
+        param: The option being parsed.
+        value: Every raw value given, in order.
+
+    Returns:
+        The parsed node ids, in the same order.
+
+    Raises:
+        click.BadParameter: On the first value that is not a node id
+            (exit code 2).
+    """
+    del ctx
+    return tuple(_parse_node_id_param(item, param) for item in value)
 
 
 def _emit_error(text: str) -> None:

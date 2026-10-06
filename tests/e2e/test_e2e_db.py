@@ -1002,6 +1002,19 @@ def test_db_forget_unknown_node_id_fails(
     assert "not found" in result.stderr
 
 
+def test_db_forget_rejects_an_unparseable_node_id_before_opening_the_database(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    missing = tmp_path / "no-such-db.ods"
+    env["MESHPROVISION_DB_PATH"] = str(missing)
+
+    result = invoke(runner, ["db", "forget", "zzz", "--yes"], env)
+
+    assert result.exit_code == 2
+    assert "Invalid value for 'NODE_ID': Cannot parse node id: 'zzz'" in result.stderr
+    assert not missing.exists()
+
+
 def test_db_list_shows_the_archived_timestamp(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:

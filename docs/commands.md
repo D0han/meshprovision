@@ -518,6 +518,11 @@ there is no separate override specific to this command.
 
 (From `meshprovision.errors.ExitCode`.)
 
+Exit code 2 (`CONFIG`) also covers command-line usage errors, which
+click reports with a `Usage:` line: an unknown option, a missing
+argument, or a node id that does not parse (`mesh status --node`,
+`mesh adopt --node-id`, `mesh db forget`).
+
 Exit code 4 (`DB`) also covers "another mesh command is running": a
 write command that could not acquire the database's write lock within
 `MESHPROVISION_LOCK_TIMEOUT` raises `DatabaseLockedError`, distinct from

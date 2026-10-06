@@ -55,6 +55,7 @@ from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
     echo_json,
     handle_cli_errors,
+    node_id_callback,
     pass_cli,
 )
 from meshprovision.cli.help_format import MeshGroup
@@ -78,6 +79,7 @@ from meshprovision.termsafe import terminal_safe
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
     from meshprovision.config.template import TemplateConfig
+    from meshprovision.nodeid import NodeId
 
 __all__ = [
     "db",
@@ -590,14 +592,14 @@ def db_list(ctx: CliContext, *, json_output: bool) -> None:
 
 
 @db.command(name="forget")
-@click.argument("node_id")
+@click.argument("node_id", callback=node_id_callback)
 @click.option("-y", "--yes", is_flag=True, default=False, help="Assume yes to the confirmation.")
 @click.option(
     "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of human text."
 )
 @pass_cli
 @handle_cli_errors
-def db_forget(ctx: CliContext, *, node_id: str, yes: bool, json_output: bool) -> None:
+def db_forget(ctx: CliContext, *, node_id: NodeId, yes: bool, json_output: bool) -> None:
     """Archive (soft-delete) a node -- exclude it from mesh status/provision/adopt/admin bootstrap.
 
     Never deletes the row: every field, including ``authorized_admin_keys``
@@ -608,8 +610,10 @@ def db_forget(ctx: CliContext, *, node_id: str, yes: bool, json_output: bool) ->
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
             cli.common.pass_cli`.
-        node_id: The node id to archive, in any form
-            :meth:`~meshprovision.nodeid.NodeId.parse` accepts.
+        node_id: The node id to archive, already parsed by
+            :func:`~meshprovision.cli.common.node_id_callback` (so a
+            malformed id is a usage error, exit code 2, before the
+            database is opened).
         yes: Whether to assume yes to the confirmation, from ``-y``/``--yes``.
         json_output: Whether to emit JSON, from ``--json``.
 

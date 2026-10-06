@@ -1822,6 +1822,21 @@ def test_node_id_without_from_backup_is_rejected(runner: CliRunner, env: dict[st
     assert "--node-id only applies together with --from-backup" in result.stderr
 
 
+def test_from_backup_rejects_an_unparseable_node_id_as_a_usage_error(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    cfg = _write_profile_cfg(tmp_path / "profile.cfg")
+    before = db_fingerprint(Path(env["MESHPROVISION_DB_PATH"]))
+
+    result = invoke(
+        runner, ["adopt", "--from-backup", str(cfg), "--node-id", "zzz", "--no-lookup"], env
+    )
+
+    assert result.exit_code == 2
+    assert "Invalid value for '--node-id': Cannot parse node id: 'zzz'" in result.stderr
+    assert db_fingerprint(Path(env["MESHPROVISION_DB_PATH"])) == before
+
+
 def test_from_backup_without_any_identity_evidence_refuses(
     runner: CliRunner,
     env: dict[str, str],

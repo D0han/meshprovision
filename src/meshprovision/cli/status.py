@@ -25,7 +25,12 @@ from typing import TYPE_CHECKING
 
 import click
 
-from meshprovision.cli.common import CONTEXT_SETTINGS, handle_cli_errors, pass_cli
+from meshprovision.cli.common import (
+    CONTEXT_SETTINGS,
+    handle_cli_errors,
+    node_ids_callback,
+    pass_cli,
+)
 from meshprovision.cli.help_format import MeshCommand
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.lorastats import DEFAULT_REGIONS
@@ -63,7 +68,7 @@ in silence."""
 
 def _build_options(
     *,
-    nodes: tuple[str, ...],
+    nodes: tuple[NodeId, ...],
     sources: tuple[str, ...],
     regions: tuple[str, ...],
     stale_after: float | None,
@@ -74,9 +79,9 @@ def _build_options(
     """Build a validated :class:`StatusOptions` from raw CLI values.
 
     Args:
-        nodes: Node id strings from ``--node`` (any accepted
-            :class:`~meshprovision.nodeid.NodeId` form). Empty means every
-            node in the database.
+        nodes: Node ids from ``--node``, already parsed by
+            :func:`~meshprovision.cli.common.node_ids_callback`. Empty
+            means every node in the database.
         sources: Data source names from ``--source``. Empty means every
             configured source.
         regions: lorastats region codes from ``--region``. Empty means
@@ -96,8 +101,6 @@ def _build_options(
     Raises:
         SettingsError: If the resolved thresholds are not strictly
             ordered (``stale_after < offline_after``).
-        NodeIdError: If any value in ``nodes`` cannot be parsed as a node
-            id.
 
     A duplicate or equivalently-spelled id (``--node deadbe01 --node
     '!deadbe01'``) is de-duplicated here, preserving first-seen order --
@@ -120,7 +123,7 @@ def _build_options(
             str(exc), hint="--stale-after must be strictly less than --offline-after."
         ) from exc
 
-    node_ids = tuple(dict.fromkeys(NodeId.parse(value) for value in nodes))
+    node_ids = tuple(dict.fromkeys(nodes))
 
     return StatusOptions(
         thresholds=thresholds,
@@ -178,7 +181,12 @@ def _run_once(ctx: CliContext, options: StatusOptions, client: CachedHTTPClient)
     help="Poll interval, in seconds (--watch only). Defaults to the cache TTL.",
 )
 @click.option(
-    "--node", "nodes", multiple=True, metavar="ID", help="Report on this node only (repeatable)."
+    "--node",
+    "nodes",
+    multiple=True,
+    callback=node_ids_callback,
+    metavar="ID",
+    help="Report on this node only (repeatable).",
 )
 @click.option(
     "--source",
@@ -221,7 +229,7 @@ def status(
     json_output: bool,
     watch: bool,
     interval: float | None,
-    nodes: tuple[str, ...],
+    nodes: tuple[NodeId, ...],
     sources: tuple[str, ...],
     regions: tuple[str, ...],
     stale_after: float | None,

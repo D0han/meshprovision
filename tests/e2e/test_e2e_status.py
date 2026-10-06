@@ -558,6 +558,23 @@ def test_duplicate_node_spellings_are_reported_once(
     assert [n["node_id"] for n in document["nodes"]] == ["deadbe01"]
 
 
+@pytest.mark.parametrize(
+    "node_args",
+    [
+        pytest.param(["--node", "zzz"], id="alone"),
+        pytest.param(["--node", "!deadbe01", "--node", "zzz"], id="after-a-valid-one"),
+    ],
+)
+def test_status_rejects_an_unparseable_node_id_as_a_usage_error(
+    runner: CliRunner, env: dict[str, str], node_args: list[str]
+) -> None:
+    result = invoke(runner, ["status", "--json", *node_args], env)
+
+    assert result.exit_code == 2
+    assert "Invalid value for '--node': Cannot parse node id: 'zzz'" in result.stderr
+    assert result.stdout == ""
+
+
 def test_archived_node_is_excluded_by_default_but_shown_if_explicitly_requested(
     runner: CliRunner,
     env: dict[str, str],

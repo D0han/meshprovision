@@ -37,6 +37,7 @@ from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
     echo_json,
     handle_cli_errors,
+    node_id_callback,
     pass_cli,
 )
 from meshprovision.cli.help_format import MeshCommand
@@ -430,7 +431,7 @@ def resolve_node_id(
     ctx: CliContext,
     bundle: backup_mod.BackupBundle,
     *,
-    node_id_opt: str | None,
+    node_id_opt: NodeId | None,
     db_keys: KeyRepository,
     no_lookup: bool,
     force: bool,
@@ -468,7 +469,8 @@ def resolve_node_id(
     Args:
         ctx: The shared CLI context.
         bundle: The merged backup bundle.
-        node_id_opt: The raw ``--node-id`` value, or ``None``.
+        node_id_opt: The ``--node-id`` value, already parsed by
+            :func:`~meshprovision.cli.common.node_id_callback`, or ``None``.
         db_keys: The open ``Keys`` sheet repository.
         no_lookup: Whether to skip the loranet long-name suggestion.
         force: Whether to proceed despite conflicting evidence, per the
@@ -486,7 +488,7 @@ def resolve_node_id(
             evidence -- not a conflict between tiers -- is what is
             ambiguous).
     """
-    explicit = NodeId.parse(node_id_opt) if node_id_opt is not None else None
+    explicit = node_id_opt
 
     pubkey_match: NodeId | None = None
     if bundle.public_key is not None:
@@ -566,7 +568,7 @@ def _load_backup_bundle(
     paths: tuple[Path, ...],
     *,
     db_keys: KeyRepository,
-    node_id_opt: str | None,
+    node_id_opt: NodeId | None,
     no_lookup: bool,
     force: bool,
 ) -> tuple[backup_mod.BackupBundle, NodeId]:
@@ -576,7 +578,8 @@ def _load_backup_bundle(
         ctx: The shared CLI context.
         paths: Every ``--from-backup`` path, in the order given.
         db_keys: The open ``Keys`` sheet repository.
-        node_id_opt: The raw ``--node-id`` value, or ``None``.
+        node_id_opt: The ``--node-id`` value, already parsed by
+            :func:`~meshprovision.cli.common.node_id_callback`, or ``None``.
         no_lookup: Whether to skip the loranet long-name suggestion.
         force: Whether to proceed despite conflicting node-id evidence.
 
@@ -767,6 +770,7 @@ def _refuse_admin_key_rotation(
     "--node-id",
     "node_id_opt",
     default=None,
+    callback=node_id_callback,
     metavar="ID",
     help="Authoritative node id for --from-backup (any form NodeId.parse accepts).",
 )
@@ -819,7 +823,7 @@ def adopt(
     timeout: int,
     ble_scan_timeout: float,
     backup_paths: tuple[Path, ...],
-    node_id_opt: str | None,
+    node_id_opt: NodeId | None,
     no_lookup: bool,
     no_channel_psk: bool,
     dry_run: bool,
@@ -858,7 +862,8 @@ def adopt(
         ble_scan_timeout: BLE scan duration, from ``--ble-scan-timeout``.
         backup_paths: Backup file(s) to adopt from, from ``--from-backup``.
             Empty means adopt from a live device, as before.
-        node_id_opt: The raw ``--node-id`` value, or ``None``.
+        node_id_opt: The ``--node-id`` value, already parsed by
+            :func:`~meshprovision.cli.common.node_id_callback`, or ``None``.
         no_lookup: Whether to skip the loranet long-name suggestion, from
             ``--no-lookup``.
         no_channel_psk: Whether to skip recording a decoded channel PSK,

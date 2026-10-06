@@ -8,7 +8,7 @@ import pytest
 from meshtastic.protobuf import localonly_pb2
 
 from meshprovision.db.nodes import NodeRecord
-from meshprovision.errors import DetectionError, PlanConflictError
+from meshprovision.errors import DetectionError, NodeIdError, PlanConflictError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect, repair
 
@@ -494,6 +494,31 @@ def test_read_node_id_detection_error_when_nothing_reported() -> None:
     iface._info_fallback = None
     with pytest.raises(DetectionError):
         detect.read_node_id(iface)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "via_my_info",
+    [
+        pytest.param(True, id="my-info-out-of-range"),
+        pytest.param(False, id="node-info-unparseable"),
+    ],
+)
+def test_read_node_id_maps_an_invalid_device_node_id_to_a_detection_error(
+    via_my_info: bool,
+) -> None:
+    """A device-reported node number that is not a node id is a detection failure, not a crash.
+
+    ``NodeIdError`` is not a ``ValueError``, so it used to escape this
+    function's own wrapper -- exit code 1 instead of 5, and an uncaught
+    error out of ``apply_plan``'s reconnect identity check.
+    """
+    iface = _FakeIface(my_info=via_my_info, num=2**32)
+    iface._info_fallback = {"num": "not-a-node"}  # type: ignore[dict-item]
+
+    with pytest.raises(DetectionError, match="Failed to read the device's node id") as excinfo:
+        detect.read_node_id(iface)  # type: ignore[arg-type]
+
+    assert isinstance(excinfo.value.__cause__, NodeIdError)
 
 
 # ---------------------------------------------------------------------------

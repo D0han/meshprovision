@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from meshprovision import enums
 from meshprovision.crypto.redact import SecretBytes, fingerprint
-from meshprovision.errors import DetectionError, PlanConflictError
+from meshprovision.errors import DetectionError, NodeIdError, PlanConflictError
 from meshprovision.nodeid import NodeId
 
 if TYPE_CHECKING:
@@ -771,7 +771,8 @@ def read_node_id(iface: MeshInterface) -> NodeId:
     Raises:
         DetectionError: If the device did not report its node id, or if
             probing the interface fails in an expected way (a missing
-            attribute, a malformed value). Unexpected exception types are
+            attribute, a malformed value, a node number that is not a
+            valid node id). Unexpected exception types are
             not caught and propagate as-is.
     """
     try:
@@ -786,7 +787,7 @@ def read_node_id(iface: MeshInterface) -> NodeId:
         return NodeId.parse(info["num"])
     except DetectionError:
         raise
-    except (AttributeError, TypeError, ValueError, KeyError) as exc:
+    except (AttributeError, TypeError, ValueError, KeyError, NodeIdError) as exc:
         raise DetectionError(
             f"Failed to read the device's node id: {exc}",
             hint="Reconnect; the config handshake may not have completed.",
@@ -811,7 +812,8 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
     Raises:
         DetectionError: If the device did not report its node id, or if
             probing the interface fails in an expected way (a missing
-            attribute, a malformed value). Unexpected exception types are
+            attribute, a malformed value, a node number that is not a
+            valid node id). Unexpected exception types are
             not caught and propagate as-is.
     """
     node_id = read_node_id(iface)

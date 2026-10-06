@@ -374,6 +374,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now never pruned by its own run, and its name continues just after the
   newest existing one, so backups list and prune in the order they were
   created; a warning says when the clock is behind.
+- A node id typed on the command line that does not parse (`mesh status
+  --node`, `mesh adopt --node-id`, `mesh db forget`) is now a usage error
+  that names the option, **exiting with code `2` instead of `1`** (the
+  code for an unexpected error); `mesh db forget` now rejects it before
+  opening the database. A device that reports a node number which is not
+  a valid node id is now a detection error (**exit code `5` instead of
+  `1`**); when that happens on the reconnect in the middle of `mesh
+  provision`, the run stops with the usual UNCERTAIN report instead of
+  ending without one.
 - When `mesh provision` stopped early, its report could leave sections
   out or describe them wrongly. A failed settings-transaction begin or
   commit printed a single failure line, with no word on which sections
