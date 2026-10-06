@@ -149,7 +149,7 @@ class ChannelInfo:
             a firmware-side table -- not a real key), ``16`` (AES128), or
             ``32`` (AES256). Only the 32-byte form is real, standalone
             key material this project's ``Keys`` sheet can hold -- see
-            :mod:`meshprovision.cli.adopt`.
+            :mod:`meshprovision.cli.adopt_backup`.
     """
 
     name: str
@@ -1077,7 +1077,7 @@ def live_config_from_backup(bundle: BackupBundle, *, node_id: NodeId) -> detect.
     Args:
         bundle: The merged backup bundle.
         node_id: The already-resolved node id (see
-            :mod:`meshprovision.cli.adopt`'s ``resolve_node_id`` --
+            :func:`meshprovision.cli.adopt_backup.resolve_node_id` --
             never inferred here).
 
     Returns:

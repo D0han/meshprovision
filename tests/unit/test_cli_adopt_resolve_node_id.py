@@ -1,4 +1,4 @@
-"""Tests for :func:`meshprovision.cli.adopt.resolve_node_id`'s public-key tier.
+"""Tests for :func:`meshprovision.cli.adopt_backup.resolve_node_id`'s public-key tier.
 
 Exercises ``resolve_node_id`` directly against a ``KeyRepository`` built
 over a throwaway :func:`empty_ods` file -- never the project's own
@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from meshprovision.cli.adopt import resolve_node_id
+from meshprovision.cli.adopt_backup import resolve_node_id
 from meshprovision.cli.common import CliContext
 from meshprovision.config.settings import Settings
 from meshprovision.db.keys import KeyRecord, KeyRepository

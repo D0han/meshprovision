@@ -47,6 +47,7 @@ CLI_COMMAND_MODULES: Final[frozenset[str]] = frozenset(
 CLI_HELPER_MODULES: Final[frozenset[str]] = frozenset(
     {
         "__init__",
+        "adopt_backup",
         "common",
         "help_format",
         "logging_setup",
@@ -71,6 +72,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("config/settings.py", ("meshprovision.config.template",)),
     ("cli/help_format.py", ("meshprovision",)),
     ("cli/logging_setup.py", ("meshprovision.cli",)),
+    ("cli/adopt_backup.py", _CLI_COMMANDS),
     ("cli/common.py", _CLI_COMMANDS),
     ("cli/provision_keys.py", _CLI_COMMANDS),
     (

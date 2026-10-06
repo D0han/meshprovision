@@ -45,3 +45,10 @@ def test_cli_adopt_never_names_a_device_write_symbol() -> None:
     code = source_without_docstring(SRC / "cli" / "adopt.py")
     found = sorted(name for name in _CLI_ADOPT_FORBIDDEN if name in code)
     assert found == [], f"cli/adopt.py must not reference: {found}"
+
+
+def test_cli_adopt_backup_never_names_a_device_write_symbol() -> None:
+    """``cli/adopt_backup.py`` (split out of ``cli/adopt.py``) keeps the same guarantee."""
+    code = source_without_docstring(SRC / "cli" / "adopt_backup.py")
+    found = sorted(name for name in _CLI_ADOPT_FORBIDDEN if name in code)
+    assert found == [], f"cli/adopt_backup.py must not reference: {found}"
