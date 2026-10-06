@@ -356,7 +356,6 @@ def _apply_and_persist(
             keys=db.keys,
             keypair=keypair,
             origin=node_origin,
-            admin_key_refs=change_plan.key_plan.desired_admin_key_refs,
             now=now,
         )
     except BaseException:

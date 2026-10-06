@@ -28,6 +28,7 @@ _CLI_STATUS_FORBIDDEN = frozenset(
         "ods_write",
         "write_database",
         "meshprovision.provisioning.apply",
+        "meshprovision.provisioning.persist",
         "meshprovision.provisioning.repair",
     }
 )
@@ -43,6 +44,7 @@ _REPORT_FORBIDDEN_MODULES = (
     "meshprovision.db.ods_write",
     "meshprovision.db.pending_keys",
     "meshprovision.provisioning.apply",
+    "meshprovision.provisioning.persist",
     "meshprovision.provisioning.repair",
 )
 

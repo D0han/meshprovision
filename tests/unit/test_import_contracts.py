@@ -85,6 +85,15 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
         ),
     ),
     ("db/verify.py", ("meshprovision.cli",)),
+    (
+        "provisioning/persist.py",
+        (
+            "meshtastic",
+            "meshprovision.provisioning.connection",
+            "meshprovision.provisioning.detect",
+            "meshprovision.cli",
+        ),
+    ),
 )
 """``(module path under the package, forbidden import prefixes)``, from each docstring."""
 

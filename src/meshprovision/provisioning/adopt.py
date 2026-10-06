@@ -27,7 +27,7 @@ an explicit argument, exactly like
 the rest of this module, :func:`persist_adoption` is not side-effect
 free -- it is the write phase, kept here (rather than in the CLI layer)
 so it stays unit-testable against in-memory repositories, the same
-convention as :func:`meshprovision.provisioning.apply.persist_result`.
+convention as :func:`meshprovision.provisioning.persist.persist_result`.
 
 Secret hygiene: nothing here ever prints or logs raw key bytes or the raw
 BLE PIN. Admin-key identification goes through
@@ -841,7 +841,7 @@ def persist_adoption(
     output -- the caller (``cli/adopt.py``) is responsible for that, and
     for deciding *whether* to call this at all. It does call
     ``nodes.db.save()`` itself, below, matching
-    :func:`meshprovision.provisioning.apply.persist_result`'s convention.
+    :func:`meshprovision.provisioning.persist.persist_result`'s convention.
 
     Args:
         report: The adoption report to persist.

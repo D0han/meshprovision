@@ -11,7 +11,7 @@ file size) along the same seam already used for
 provisioning.apply.apply_field`, :func:`~meshprovision.provisioning.
 apply.write_section`, :func:`~meshprovision.provisioning.
 readback.verify_plan`, :func:`~meshprovision.provisioning.apply.apply_plan`,
-:func:`~meshprovision.provisioning.apply.persist_result`); only the
+:func:`~meshprovision.provisioning.persist.persist_result`); only the
 reverse dependency exists. ``apply.py`` imports every name defined here
 and re-exports it in its own ``__all__`` unchanged, so no external
 caller needs to change which module it imports from.
@@ -200,7 +200,7 @@ class ApplyOutcome:
     def may_update_database(self) -> bool:
         """Whether ``persist_result`` is allowed to write the ODS.
 
-        See :func:`meshprovision.provisioning.apply.persist_result`.
+        See :func:`meshprovision.provisioning.persist.persist_result`.
 
         Returns:
             ``True`` when this outcome is not uncertain, every result is

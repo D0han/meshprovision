@@ -1,7 +1,7 @@
 """Write-ahead pending keypair: recovers a freshly generated key across an interrupted run.
 
 Between the moment ``mesh provision`` generates a fresh node keypair and
-the moment :func:`meshprovision.provisioning.apply.persist_result`
+the moment :func:`meshprovision.provisioning.persist.persist_result`
 records it, the key exists only in host process memory -- persistence
 happens only *after* the device write, the settle delay, the reconnect,
 and the read-back verification all succeed. If the outcome is

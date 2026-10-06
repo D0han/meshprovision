@@ -1213,7 +1213,7 @@ def test_ods_database_save_succeeds_after_a_touch_only_external_change(tmp_path:
 def test_ods_database_two_saves_in_one_session_both_succeed(tmp_path: Path) -> None:
     """A session calling `save()` twice must not have its own second save refused.
 
-    Mirrors ``persist_result`` (``provisioning/apply.py``) followed by
+    Mirrors ``persist_result`` (``provisioning/persist.py``) followed by
     ``_capture_proven_private_key``'s own ``db.db.save()``
     (``cli/provision.py``) -- a single session legitimately saves twice
     in one run, and the second save must not be a false-positive
