@@ -2875,3 +2875,38 @@ def test_verify_reports_uncertain_when_get_public_key_raises(tmp_path, make_live
     assert persisted is False
     assert db_path.stat().st_mtime_ns == mtime_before
     assert nodes.exists("deadbe01") is False
+
+
+_NODEDB_ONLY_PUBLIC_KEY: Final = bytes(range(32))
+
+
+class _FakeIfaceNodeDbReportsAnotherKey(_FakeIfaceForApply):
+    """An interface whose own NodeDB entry disagrees with ``localConfig.security``.
+
+    The real ``getPublicKey`` reads the node's NodeDB entry, a store separate
+    from ``localConfig``; the base fake derives both from the same bytes, so
+    the final verification's NodeDB cross-check could never see them differ.
+    """
+
+    def getPublicKey(self) -> str | None:  # noqa: N802 -- real MeshInterface method name
+        return base64.b64encode(_NODEDB_ONLY_PUBLIC_KEY).decode("ascii")
+
+
+def test_verify_flags_a_regenerated_key_the_nodedb_still_reports_differently(make_live) -> None:
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    plan = build_plan(
+        PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    )
+    # reopened() keeps type(self), so every reconnect serves the stale NodeDB key.
+    session = _FakeSessionTracksRefresh(_FakeIfaceNodeDbReportsAnotherKey(), _reopen_same_device)
+
+    outcome = apply_plan(plan, session, keypair=generate_keypair())  # type: ignore[arg-type]
+
+    key_results = [
+        r for r in outcome.results if r.section == "security" and r.field == "public_key"
+    ]
+    assert len(key_results) == 1
+    assert key_results[0].status is WriteStatus.UNCONFIRMED
+    assert key_results[0].actual == redact.fingerprint(_NODEDB_ONLY_PUBLIC_KEY)
+    assert outcome.may_update_database is False

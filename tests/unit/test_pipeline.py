@@ -19,6 +19,7 @@ from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.pipeline import (
+    adopt_would_rotate_admin_key,
     allocate_names,
     audit_live_admin_keys,
     audit_node_key,
@@ -925,3 +926,45 @@ def test_node_key_admin_refs_ignores_an_archived_nodes_authorization(
         template=_template_with_admin(),
     )
     assert refs == ()
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("live_public_differs", True),
+        ("live_private_proves_db_public", False),
+        ("live_private_unrelated_with_db_private", True),
+        ("public_hidden_private_unrelated_with_db_private", True),
+        ("live_private_malformed_with_db_private", True),
+        ("live_private_unrelated_without_db_private", False),
+        ("nothing_reported", False),
+    ],
+)
+def test_adopt_would_rotate_admin_key_truth_table(
+    keypair_factory: Callable[[], KeyPair], case: str, expected: bool
+) -> None:
+    recorded, other = keypair_factory(), keypair_factory()
+    # (db_has_private_key, live_public_key, live_private_key)
+    reports: dict[str, tuple[bool, bytes | None, bytes | None]] = {
+        "live_public_differs": (True, other.public, None),
+        "live_private_proves_db_public": (True, recorded.public, recorded.private.reveal()),
+        "live_private_unrelated_with_db_private": (True, recorded.public, other.private.reveal()),
+        "public_hidden_private_unrelated_with_db_private": (True, None, other.private.reveal()),
+        "live_private_malformed_with_db_private": (True, recorded.public, b"\x01" * 31),
+        "live_private_unrelated_without_db_private": (
+            False,
+            recorded.public,
+            other.private.reveal(),
+        ),
+        "nothing_reported": (True, None, None),
+    }
+    db_has_private_key, live_public_key, live_private_key = reports[case]
+
+    rotates = adopt_would_rotate_admin_key(
+        db_public_key=recorded.public,
+        db_has_private_key=db_has_private_key,
+        live_public_key=live_public_key,
+        live_private_key=live_private_key,
+    )
+
+    assert rotates is expected

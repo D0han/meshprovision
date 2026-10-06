@@ -15,7 +15,7 @@ from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
-from meshprovision.errors import AdoptionRefusedError
+from meshprovision.errors import AdoptionRefusedError, KeyMaterialError
 from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning.adopt import (
     adopted_record,
@@ -1110,6 +1110,30 @@ def test_check_stale_private_key_refuses_a_private_row_that_does_not_derive_the_
     assert exc_info.value.hint is not None
     assert "mesh db backup" in exc_info.value.hint
     assert "--force" not in exc_info.value.hint
+
+
+def test_check_stale_private_key_refuses_when_the_private_row_cannot_be_derived(
+    make_live, template, keys: KeyRepository, keypair_factory, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``_priv`` row whose public key cannot be derived is refused, never trusted.
+
+    Unreachable through the product today (every admitted row is 32 bytes,
+    and any 32 bytes is a valid X25519 private key), so the derivation is
+    forced to fail.
+    """
+    old, new = keypair_factory(), keypair_factory()
+    _seed_keypair(keys, old)
+
+    def _undecodable(_private: object) -> bytes:
+        raise KeyMaterialError("simulated undecodable private key", reason="simulated")
+
+    monkeypatch.setattr(adopt_mod.crypto_keys, "public_from_private", _undecodable)
+    live = make_live(template, node_id=_STALE_NODE, security=_public_only(new))
+
+    with pytest.raises(AdoptionRefusedError) as exc_info:
+        adopt_mod.check_stale_private_key(keys, live)
+
+    assert f"{_STALE_NODE}_priv holds malformed key material" in str(exc_info.value)
 
 
 @pytest.mark.parametrize("case", ["no_private_row", "deriving_private_row", "proven_live_private"])

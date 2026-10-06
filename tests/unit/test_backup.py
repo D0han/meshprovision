@@ -609,6 +609,36 @@ def test_merge_backups_name_conflict_with_matching_keys_warns_instead_of_raising
     assert bundle.long_name == "New Name"
 
 
+def test_merge_backups_conflicting_short_name_raises() -> None:
+    # long_name must match the payload's, or the long_name check raises first.
+    profile = backup.parse_profile_cfg(
+        _make_cfg_bytes(long_name="Meshtastic MT02", short_name="AAAA"), source="p.cfg"
+    )
+    payload = _nodedb_payload()
+    payload["nodes"][0]["shortName"] = "BBBB"
+    nodedb = backup.parse_nodedb_json(json.dumps(payload).encode(), source="n.json")
+
+    with pytest.raises(BackupParseError, match="Conflicting short_name"):
+        backup.merge_backups(profile=profile, nodedb=nodedb)
+
+
+def test_merge_backups_short_name_conflict_with_matching_keys_warns_instead_of_raising() -> None:
+    kp_material = bytes(range(32))
+    profile = backup.parse_profile_cfg(
+        _make_cfg_bytes(long_name="Meshtastic MT02", short_name="NEW1", public_key=kp_material),
+        source="fresh.cfg",
+    )
+    payload = _nodedb_payload()
+    payload["nodes"][0]["shortName"] = "OLD1"
+    payload["nodes"][0]["publicKey"] = base64.b64encode(kp_material).decode()
+    nodedb = backup.parse_nodedb_json(json.dumps(payload).encode(), source="stale.json")
+
+    bundle = backup.merge_backups(profile=profile, nodedb=nodedb)
+
+    assert any("short_name 'NEW1'" in w and "looks like a rename" in w for w in bundle.warnings)
+    assert bundle.short_name == "NEW1"
+
+
 def test_merge_backups_conflicting_public_key_raises() -> None:
     profile = backup.parse_profile_cfg(
         _make_cfg_bytes(
