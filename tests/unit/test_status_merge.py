@@ -1015,6 +1015,44 @@ def test_timestamp_cell_disambiguates_the_repeated_dst_fallback_hour(local_tz: N
     assert rendered_after == "2026-10-25 02:30:00"  # matches the header's CET, stays bare
 
 
+@pytest.mark.parametrize(
+    ("age", "expected"),
+    [
+        (None, "dim"),
+        (timedelta(0), "green"),
+        (timedelta(hours=24), "green"),
+        (timedelta(hours=24, seconds=1), "yellow"),
+        (timedelta(days=2), "yellow"),
+        (timedelta(days=2, seconds=1), "dark_orange"),
+        (timedelta(days=7), "dark_orange"),
+        (timedelta(days=7, seconds=1), "red"),
+    ],
+    ids=["never", "now", "24h", "just-over-24h", "2d", "just-over-2d", "7d", "just-over-7d"],
+)
+def test_age_style_colors_by_how_long_ago_the_node_was_seen(
+    age: timedelta | None, expected: str
+) -> None:
+    assert render.age_style(age) == expected
+
+
+def test_build_table_colors_each_row_by_its_age(local_tz: None) -> None:
+    ages = {
+        NodeId.from_hex("deadbe01"): timedelta(hours=3),
+        NodeId.from_hex("deadbe02"): timedelta(hours=30),
+        NodeId.from_hex("deadbe03"): timedelta(days=4),
+        NodeId.from_hex("deadbe04"): timedelta(days=9),
+    }
+    observations = {nid: _obs(SOURCE_LORANET, last_seen=NOW - age) for nid, age in ages.items()}
+    report = build_report(
+        records={},
+        observations_by_source={SOURCE_LORANET: observations},
+        node_ids=list(ages),
+        now=NOW,
+    )
+    table = render.build_table(report)
+    assert [row.style for row in table.rows] == ["green", "yellow", "dark_orange", "red"]
+
+
 def test_build_table_returns_expected_columns(local_tz: None) -> None:
     obs = _obs(SOURCE_LORANET, last_seen=NOW)
     report = build_report(

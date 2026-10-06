@@ -222,6 +222,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh status` now colors each row by how long ago the node was last
+  seen: green within 24 hours, yellow within 2 days, orange within a
+  week, red beyond that, and dim when it was never seen. Previously the
+  color followed the online/stale/offline label (2 and 24 hour
+  defaults). The `Status` label, `--stale-after`/`--offline-after` and
+  the exit code are unchanged.
 - Database writes are now flushed to disk (`fsync`) before they take
   their final name: the database itself, each timestamped backup, the
   known-good copy and its provenance file, and the pending-key file

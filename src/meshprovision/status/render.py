@@ -15,7 +15,7 @@ written to stdout.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 from typing import Final
 
@@ -30,23 +30,54 @@ from meshprovision.status.report import StatusReport
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 __all__ = [
+    "AGE_STYLES",
     "AVAILABILITY_LABELS",
-    "AVAILABILITY_STYLES",
+    "age_style",
     "build_table",
     "render_console",
     "render_json",
     "report_to_json_dict",
 ]
 
-AVAILABILITY_STYLES: Final[MappingProxyType[Availability, str]] = MappingProxyType(
-    {
-        Availability.ONLINE: "green",
-        Availability.STALE: "yellow",
-        Availability.OFFLINE: "red",
-        Availability.UNKNOWN: "dim",
-    }
+AGE_STYLES: Final[tuple[tuple[timedelta, str], ...]] = (
+    (timedelta(hours=24), "green"),
+    (timedelta(days=2), "yellow"),
+    (timedelta(days=7), "dark_orange"),
 )
-"""``rich`` style name applied to a node's table row, by availability."""
+"""``rich`` style by how recently a node was last seen: ``(max_age, style)``, ascending.
+
+A node last seen within ``max_age`` (inclusive) gets that row's style; the
+first matching tier wins.
+"""
+
+_OLDEST_STYLE: Final[str] = "red"
+"""Style for a node last seen longer ago than the last tier of :data:`AGE_STYLES`."""
+
+_NEVER_SEEN_STYLE: Final[str] = "dim"
+"""Style for a node no source has ever seen."""
+
+
+def age_style(age: timedelta | None) -> str:
+    """Pick a table row's ``rich`` style from how long ago the node was last seen.
+
+    Independent of the ``Status`` column and the ``--stale-after`` /
+    ``--offline-after`` thresholds: those drive the label and the exit
+    code, this only colors the row.
+
+    Args:
+        age: ``now - last_seen``, or ``None`` when the node was never seen.
+
+    Returns:
+        ``green`` within 24 hours, ``yellow`` within 2 days, ``dark_orange``
+        within a week, ``red`` beyond that, and ``dim`` for ``None``.
+    """
+    if age is None:
+        return _NEVER_SEEN_STYLE
+    for max_age, style in AGE_STYLES:
+        if age <= max_age:
+            return style
+    return _OLDEST_STYLE
+
 
 AVAILABILITY_LABELS: Final[MappingProxyType[Availability, str]] = MappingProxyType(
     {
@@ -173,8 +204,8 @@ def build_table(report: StatusReport) -> Table:
 
     Every ``None`` field renders as a single dim hyphen, never the
     literal ``"None"``. Numeric columns are right-justified. Each row's
-    style comes from :data:`AVAILABILITY_STYLES`, keyed by the node's
-    availability. A caption is attached below the table:
+    style comes from :func:`age_style`, keyed by how long ago the
+    node was last seen. A caption is attached below the table:
     :meth:`~meshprovision.status.report.StatusReport.summary`, plus --
     when the report has any source failures -- one dim red line per
     failure, plus -- when any source skipped an unparsable entry -- one
@@ -231,7 +262,7 @@ def build_table(report: StatusReport) -> Table:
             _percent_cell(node.air_util_tx),
             _int_cell(node.neighbor_count),
             _sources_cell(node.sources),
-            style=AVAILABILITY_STYLES[node.availability],
+            style=age_style(node.age),
         )
 
     caption = Text(report.summary())
