@@ -30,7 +30,7 @@ def tracked_files(root: Path) -> tuple[str, ...]:
     """
     git_exe = shutil.which("git")
     if git_exe is None:
-        pytest.skip("git is unavailable")
+        pytest.skip("git is not installed")
     result = subprocess.run(
         [git_exe, "-C", str(root), "ls-files", "-z"],
         capture_output=True,
@@ -38,7 +38,8 @@ def tracked_files(root: Path) -> tuple[str, ...]:
         check=False,
     )
     if result.returncode != 0:
-        pytest.skip("git is unavailable")
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+        pytest.skip(f"git ls-files failed in {root} (not a git checkout?): {detail}")
     parts = result.stdout.split(b"\x00")
     return tuple(p.decode("utf-8") for p in parts if p)
 

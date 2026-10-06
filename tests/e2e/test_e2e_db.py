@@ -61,7 +61,10 @@ def test_db_verify_survives_a_real_libreoffice_save(
     saving must not break ``mesh db verify`` -- simulated everywhere else
     in the suite (``tests.unit.conftest.libreoffice_round_trip``, kept
     deterministic and soffice-free) but exercised here against the real
-    binary, skipped where it isn't installed.
+    binary, skipped where it isn't installed. ``soffice`` gets a fresh
+    profile and a ``HOME``/``XDG_CACHE_HOME`` under ``tmp_path``, so it
+    never reads or writes the operator's own LibreOffice profile, and two
+    runs at once never share one.
     """
     kp = generate_keypair()
     node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
@@ -73,6 +76,7 @@ def test_db_verify_survives_a_real_libreoffice_save(
         [
             _SOFFICE,
             "--headless",
+            f"-env:UserInstallation={(tmp_path / 'lo_profile').as_uri()}",
             "--convert-to",
             "ods",
             "--outdir",
@@ -82,6 +86,11 @@ def test_db_verify_survives_a_real_libreoffice_save(
         check=True,
         capture_output=True,
         timeout=120,
+        env={
+            **os.environ,
+            "HOME": str(tmp_path / "home"),
+            "XDG_CACHE_HOME": str(tmp_path / "cache"),
+        },
     )
     resaved = out_dir / db_path.name
     assert resaved.is_file()
