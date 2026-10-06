@@ -11,7 +11,6 @@ import dataclasses
 
 import pytest
 
-from meshprovision.config.template import load_template_text
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan import ChangePlan, PlanInputs, build_plan
@@ -25,11 +24,6 @@ from meshprovision.provisioning.repair import Drift, DriftKind
 from tests.unit.conftest import make_security
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.fixture
-def template():
-    return load_template_text("version: 1\n")
 
 
 def _empty_plan(make_live, template, keypair) -> ChangePlan:

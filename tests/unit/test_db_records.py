@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
-from pathlib import Path
 
 import pytest
 
@@ -280,23 +279,6 @@ def test_from_material_records_the_caller_supplied_created_ts(keypair) -> None:
 # ---------------------------------------------------------------------------
 # Repositories over one shared OdsDatabase.
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def db(empty_ods: Path) -> OdsDatabase:
-    session = OdsDatabase(empty_ods)
-    session.load()
-    return session
-
-
-@pytest.fixture
-def nodes(db: OdsDatabase) -> NodeRepository:
-    return NodeRepository(db)
-
-
-@pytest.fixture
-def keys(db: OdsDatabase) -> KeyRepository:
-    return KeyRepository(db)
 
 
 def test_node_repo_upsert_find_get_exists_delete(nodes: NodeRepository, db: OdsDatabase) -> None:

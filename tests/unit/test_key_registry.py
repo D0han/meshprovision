@@ -2,8 +2,8 @@
 
 Exercises :func:`register_observed_key`/:func:`adopt_canonical_ref`
 directly against a ``NodeRepository``/``KeyRepository`` pair, independent
-of the CLI -- mirroring :mod:`tests.unit.test_admin_custody`'s own
-fixtures for the same reason.
+of the CLI, through the shared ``nodes``/``keys`` fixtures of
+``tests/unit/conftest.py`` (one database session, as in production).
 """
 
 from __future__ import annotations
@@ -18,36 +18,16 @@ from meshprovision.crypto.keys import encode_key
 from meshprovision.db import observed_keys
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
-from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import DbIntegrityError
 from meshprovision.provisioning.key_registry import adopt_canonical_ref, register_observed_key
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from meshprovision.crypto.keys import KeyPair
 
 pytestmark = pytest.mark.unit
 
 _NOW = datetime(2026, 1, 1, tzinfo=UTC)
-
-
-@pytest.fixture
-def db(empty_ods: Path) -> OdsDatabase:
-    session = OdsDatabase(empty_ods)
-    session.load()
-    return session
-
-
-@pytest.fixture
-def nodes(db: OdsDatabase) -> NodeRepository:
-    return NodeRepository(db)
-
-
-@pytest.fixture
-def keys(db: OdsDatabase) -> KeyRepository:
-    return KeyRepository(db)
 
 
 # ---------------------------------------------------------------------------

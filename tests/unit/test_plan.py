@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from meshprovision.config.template import TemplateConfig, load_template_text
+from meshprovision.config.template import TemplateConfig
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import (
@@ -26,11 +26,6 @@ from meshprovision.provisioning.plan import (
 from tests.unit.conftest import make_security
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.fixture
-def template():
-    return load_template_text("version: 1\n")
 
 
 def _with_admin_and_lockdown(template: TemplateConfig, *refs: str) -> TemplateConfig:

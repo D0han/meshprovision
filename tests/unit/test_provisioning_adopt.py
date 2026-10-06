@@ -9,11 +9,9 @@ from datetime import UTC, datetime
 
 import pytest
 
-from meshprovision.config.template import load_template_text
 from meshprovision.crypto.keys import KeyPair, encode_key
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
-from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import AdoptionRefusedError, KeyMaterialError
 from meshprovision.provisioning import adopt as adopt_mod
@@ -31,23 +29,6 @@ from tests.unit.conftest import make_security
 pytestmark = pytest.mark.unit
 
 _BASE64_KEY_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])")
-
-
-@pytest.fixture
-def template():
-    return load_template_text("version: 1\n")
-
-
-@pytest.fixture
-def keys(empty_ods) -> KeyRepository:
-    db = OdsDatabase(empty_ods)
-    db.load()
-    return KeyRepository(db)
-
-
-@pytest.fixture
-def nodes(keys: KeyRepository) -> NodeRepository:
-    return NodeRepository(keys.db)
 
 
 # ---------------------------------------------------------------------------

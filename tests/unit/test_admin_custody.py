@@ -13,41 +13,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from meshprovision.config.template import load_template_text
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
-from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.provisioning.admin_custody import collect_admins
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from meshprovision.crypto.keys import KeyPair
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.fixture
-def db(empty_ods: Path) -> OdsDatabase:
-    session = OdsDatabase(empty_ods)
-    session.load()
-    return session
-
-
-@pytest.fixture
-def nodes(db: OdsDatabase) -> NodeRepository:
-    return NodeRepository(db)
-
-
-@pytest.fixture
-def keys(db: OdsDatabase) -> KeyRepository:
-    return KeyRepository(db)
-
-
-@pytest.fixture
-def template():
-    return load_template_text("version: 1\n")
 
 
 def test_collect_admins_discovers_a_fleet_admin_not_in_template(

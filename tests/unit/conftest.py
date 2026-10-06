@@ -31,7 +31,9 @@ from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.crypto import redact
 from meshprovision.crypto.keys import KeyPair, generate_keypair
 from meshprovision.db import schema
-from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.keys import KeyRepository
+from meshprovision.db.nodes import NodeRecord, NodeRepository
+from meshprovision.db.ods import OdsDatabase
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.detect import LiveConfig, LiveSecurity
 from meshprovision.provisioning.plan import ChangePlan, PlanInputs, build_plan
@@ -459,3 +461,58 @@ def fsync_recorder(monkeypatch: pytest.MonkeyPatch) -> list[FsyncEvent]:
     monkeypatch.setattr(os, "replace", record_replace)
     monkeypatch.setattr(os, "link", record_link)
     return events
+
+
+@pytest.fixture
+def db(empty_ods: Path) -> OdsDatabase:
+    """A loaded session over a fresh, empty database.
+
+    Args:
+        empty_ods: The root conftest's empty database file.
+
+    Returns:
+        The loaded session that :func:`nodes` and :func:`keys` share.
+    """
+    session = OdsDatabase(empty_ods)
+    session.load()
+    return session
+
+
+@pytest.fixture
+def nodes(db: OdsDatabase) -> NodeRepository:
+    """The node repository over :func:`db`.
+
+    It shares one session with :func:`keys`, as every command's database
+    session does, so each sees the other's writes and a ``save()`` writes
+    both sheets together.
+
+    Args:
+        db: The shared session.
+
+    Returns:
+        A :class:`~meshprovision.db.nodes.NodeRepository` over ``db``.
+    """
+    return NodeRepository(db)
+
+
+@pytest.fixture
+def keys(db: OdsDatabase) -> KeyRepository:
+    """The key repository over :func:`db`, sharing its session with :func:`nodes`.
+
+    Args:
+        db: The shared session.
+
+    Returns:
+        A :class:`~meshprovision.db.keys.KeyRepository` over ``db``.
+    """
+    return KeyRepository(db)
+
+
+@pytest.fixture
+def template() -> TemplateConfig:
+    """The minimal valid template: ``version: 1`` and nothing else.
+
+    Returns:
+        The parsed template.
+    """
+    return load_template_text("version: 1\n")

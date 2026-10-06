@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import SecretStr
 
-from meshprovision.config.template import load_template_text
 from meshprovision.crypto.keys import encode_key
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
@@ -43,28 +42,6 @@ if TYPE_CHECKING:
     from meshprovision.crypto.keys import KeyPair
 
 pytestmark = pytest.mark.unit
-
-
-@pytest.fixture
-def db(empty_ods: Path) -> OdsDatabase:
-    session = OdsDatabase(empty_ods)
-    session.load()
-    return session
-
-
-@pytest.fixture
-def nodes(db: OdsDatabase) -> NodeRepository:
-    return NodeRepository(db)
-
-
-@pytest.fixture
-def keys(db: OdsDatabase) -> KeyRepository:
-    return KeyRepository(db)
-
-
-@pytest.fixture
-def template():
-    return load_template_text("version: 1\n")
 
 
 class _KeysAllOnly:
