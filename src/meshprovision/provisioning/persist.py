@@ -26,13 +26,91 @@ from datetime import datetime
 from meshprovision.crypto.keys import KeyPair
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRepository
-from meshprovision.db.schema import KeyOrigin
+from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode, ref_for
 from meshprovision.errors import AtomicWriteError, DbConcurrentModificationError
 from meshprovision.provisioning.apply_session import ApplyOutcome
 
-__all__ = ["persist_result"]
+__all__ = ["persist_result", "save_failure_opening"]
 
 _logger = logging.getLogger(__name__)
+
+
+def save_failure_opening(exc: BaseException) -> str:
+    """The first clause of a database-save-failure hint: what to fix before re-running.
+
+    Shared by every hint that follows a failed save of the database, so
+    the concurrent-edit advice reads the same everywhere.
+
+    Args:
+        exc: The exception the failed save raised.
+
+    Returns:
+        The LibreOffice advice for a
+        :class:`~meshprovision.errors.DbConcurrentModificationError`;
+        otherwise the generic write-problem advice. Either one reads as
+        the start of a sentence continued with " and re-run ...".
+    """
+    if isinstance(exc, DbConcurrentModificationError):
+        return (
+            "The database file changed on disk since mesh read it (close/save it in "
+            "LibreOffice first)"
+        )
+    return "Fix the write problem (free space, permissions)"
+
+
+def _unrecorded_keypair_hint(origin: KeyOrigin, *, had_row: bool, had_key: bool) -> str:
+    """Say how the next run records a keypair that a failed save left unrecorded.
+
+    Args:
+        origin: :attr:`~meshprovision.db.schema.KeyOrigin.GENERATED`
+            exactly when the node's pending-keypair file holds the key --
+            written ahead by this run's regenerate, or the one this run
+            recovered from -- since a failed save never clears it (see
+            ``cli/provision.py``'s ``_apply_and_persist``). Otherwise the
+            key is the device's own, adopted or captured.
+        had_row: Whether the node had a ``Nodes`` row before this run.
+            Without one, the re-run sees a FOREIGN node and asks for
+            confirmation again.
+        had_key: Whether the ``Keys`` sheet held the node's public key
+            before this run. With one, a re-run that adopts the device's
+            key reports it as differing (firmware issue #7449).
+
+    Returns:
+        The hint's keypair sentences, without a leading space.
+    """
+    if origin is KeyOrigin.GENERATED:
+        text = (
+            "The node's new keypair was not recorded either, but it is still in this "
+            "node's pending-keypair file: the next `mesh provision` recovers it "
+            "automatically, without writing a new key to the device."
+        )
+        if had_key:
+            text = (
+                f"{text} If that file is lost, the next run instead reports the device's "
+                "key as differing from the Keys sheet and adopts it -- expected here."
+            )
+        else:
+            text = (
+                f"{text} If that file is lost, the next run instead records the device's "
+                "current key as captured."
+            )
+    elif had_key:
+        text = (
+            "The device's keypair was not recorded either; the next `mesh provision` "
+            "reports it as differing from the Keys sheet again and adopts it -- "
+            "expected here."
+        )
+    else:
+        text = (
+            "The device's own keypair was not recorded either; the next "
+            "`mesh provision` captures it again."
+        )
+    if had_row:
+        return text
+    return (
+        f"{text} That run sees the node as FOREIGN (not in the database) and asks for "
+        "confirmation: answer yes, or pass --yes on a non-interactive run."
+    )
 
 
 def persist_result(
@@ -83,7 +161,11 @@ def persist_result(
             from serializing into the temp file, which ``atomic_write``
             does not itself wrap -- so the operator is told that the
             device and the database now disagree for this node, rather
-            than only that a file could not be written.
+            than only that a file could not be written. Its hint says how
+            the re-run records what was lost: by the node's own history
+            before this run (no row, an observed row, a recorded public
+            key) and by ``origin`` (a pending-keypair file to recover from,
+            or the device's own key to adopt again).
     """
     if not outcome.may_update_database or outcome.record is None:
         _logger.warning(
@@ -92,6 +174,13 @@ def persist_result(
         )
         return False
 
+    # Both read before this function's own upserts, which would otherwise
+    # always find the row and the key it is about to write -- this is what
+    # lets the save-failure hint tell a first provision (no row, no key)
+    # apart from an already-recorded node, and an observed (`mesh adopt`)
+    # row, which the re-run must --enroll again, from a managed one.
+    prior = nodes.find(outcome.record.node_id)
+    had_key = keys.find(ref_for(outcome.record.node_id, KeyType.ADMIN_PUBLIC)) is not None
     if keypair is not None:
         public_record, private_record = KeyRecord.for_keypair(
             outcome.record.node_id, keypair, origin=origin, created_ts=now
@@ -99,43 +188,24 @@ def persist_result(
         keys.upsert(public_record)
         keys.upsert(private_record)
 
-    # Captured before the upsert below, which would otherwise always find
-    # a row (the one it is about to write) -- this is what lets the
-    # save-failure hint tell a first provision/bootstrap (no prior row)
-    # apart from an already-provisioned node's key change.
-    had_row = nodes.find(outcome.record.node_id) is not None
     nodes.upsert(outcome.record, now=now)
     try:
         nodes.db.save()
     except (AtomicWriteError, OSError) as exc:
-        if isinstance(exc, DbConcurrentModificationError):
-            opening = (
-                "The database file changed on disk since mesh read it (close/save it in "
-                "LibreOffice first)"
-            )
-        else:
-            opening = "Fix the write problem (free space, permissions)"
         hint = (
-            f"{opening} and re-run "
-            "`mesh provision` for this node: the next run re-reads the device's "
-            "live configuration and rewrites the row. Because that row was never "
-            "saved, a node `mesh adopt` first recorded is still marked observed -- "
-            "pass --enroll again on the re-run."
+            f"{save_failure_opening(exc)} and re-run `mesh provision` for this node: "
+            "the next run re-reads the device's live configuration and rewrites the row."
         )
-        if keypair is not None and had_row:
+        if prior is not None and prior.management is ManagementMode.OBSERVED:
             hint = (
-                f"{hint} This run also generated a new node keypair that was never "
-                "recorded; the next `mesh provision` re-reads the device's key and "
-                "records it (it will be reported as differing from the Keys sheet -- "
-                "expected here)."
+                f"{hint} Because that row was never saved, the node is still marked "
+                "observed -- pass --enroll again on the re-run."
             )
-        elif keypair is not None:
-            hint = (
-                f"{hint} This run also generated a new node keypair that was never "
-                "recorded, and a later run will not adopt a device key the database "
-                "has never seen -- pass --force-regenerate-key on the re-run to put "
-                "a recorded key back on the device."
+        if keypair is not None:
+            keypair_hint = _unrecorded_keypair_hint(
+                origin, had_row=prior is not None, had_key=had_key
             )
+            hint = f"{hint} {keypair_hint}"
         raise AtomicWriteError(
             f"Node {outcome.node_id.display} was written and verified on the "
             f"device, but the database could not be saved ({exc}); the device and "

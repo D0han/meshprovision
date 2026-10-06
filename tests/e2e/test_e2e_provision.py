@@ -614,6 +614,70 @@ def test_provision_reports_a_failed_database_save_as_divergence(
     _assert_no_secrets(result.stderr)
 
 
+def test_failed_save_on_a_first_provision_is_recovered_from_the_pending_keypair(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """A first provision whose save fails is finished by a plain re-run, not a new key.
+
+    The device holds the freshly generated key and the database has no row
+    and no key: the hint must send the operator to the pending-keypair
+    file (which the re-run recovers automatically) rather than to
+    ``--force-regenerate-key``, which would write yet another key and
+    reboot the device again. The re-run sees a FOREIGN node, so it needs
+    confirming: a non-interactive run without ``--yes`` stops before any
+    device write, and one with ``--yes`` records the pending keypair.
+    """
+    dev = bus.use(FakeMeshInterface("deadbe01"))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+    pending_path = pending_keys.pending_key_path(db_path, dev.nid)
+
+    def _raise(*args: object, **kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    # A context of its own: undoing the test's ``monkeypatch`` would also
+    # undo the ``bus`` fixture's patches and leave the re-runs no device.
+    with pytest.MonkeyPatch.context() as save_fails:
+        save_fails.setattr(ods_write, "write_database", _raise)
+        first = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert first.exit_code == int(ExitCode.DB)
+    assert "recovers it automatically" in first.stderr
+    assert "pending-keypair file" in first.stderr
+    assert "pass --yes on a non-interactive run" in first.stderr
+    assert "--force-regenerate-key" not in first.stderr
+    assert pending_path.is_file()
+    assert ods.load_database(db_path).nodes == ()
+    device_public = bytes(dev.localNode.localConfig.security.public_key)
+    device_private = bytes(dev.localNode.localConfig.security.private_key)
+    _assert_no_secrets(first.stderr)
+
+    bus.use(dev)
+    unconfirmed = invoke(runner, ["--non-interactive", "provision", "--port", "/dev/ttyFAKE0"], env)
+
+    assert unconfirmed.exit_code == int(ExitCode.PROVISIONING)
+    assert "Pass --yes" in unconfirmed.stderr
+    assert pending_path.is_file()
+    assert ods.load_database(db_path).nodes == ()
+
+    bus.use(dev)
+    rerun = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert rerun.exit_code == 0
+    assert "interrupted `mesh provision` run" in rerun.stderr
+    assert bytes(dev.localNode.localConfig.security.public_key) == device_public
+    assert bytes(dev.localNode.localConfig.security.private_key) == device_private
+    loaded = ods.load_database(db_path)
+    assert len(loaded.nodes) == 1
+    rows = {row["key_ref"]: row for row in loaded.keys}
+    assert KeyRecord.from_row(rows["deadbe01_pub"]).material() == device_public
+    assert KeyRecord.from_row(rows["deadbe01_priv"]).secret().reveal() == device_private
+    assert KeyRecord.from_row(rows["deadbe01_pub"]).origin is KeyOrigin.GENERATED
+    assert not pending_path.exists()
+    _assert_no_secrets(unconfirmed.stderr)
+    _assert_no_secrets(rerun.stderr)
+
+
 def test_ble_write_failure_reports_uncertain_not_a_traceback(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

@@ -599,10 +599,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports that the device and the database disagree for that node, rather
   than surfacing only the underlying `OSError`. The message states plainly
   that the device write was confirmed, the database was not saved, and the
-  two now disagree; when the run also generated a new node keypair, the
-  message additionally names `--force-regenerate-key`, since a later run
-  will never adopt a device key the database has never seen. **This save
-  failure now exits with code `4` instead of `1`.**
+  two now disagree. Its hint says how the re-run records what the failed
+  save lost: a newly generated keypair is still in the node's
+  pending-keypair file and is recovered from there (never by writing
+  another key to the device); a keypair adopted from the device is
+  adopted again; a node that was not yet in the database is shown as
+  FOREIGN on the re-run and needs confirming (`--yes` on a
+  non-interactive run); and `--enroll` is asked for only when the node's
+  row was one `mesh adopt` recorded as observed. **This save failure now
+  exits with code `4` instead of `1`.**
 - Template warnings (for example, an option named in both
   `enabled_options` and `disabled_options`) are now routed through the
   same styled warning path as database integrity warnings, instead of

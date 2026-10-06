@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 
 from meshprovision.crypto.keys import KeyPair, generate_keypair
-from meshprovision.db.keys import KeyRepository
+from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
-from meshprovision.db.schema import KeyOrigin
+from meshprovision.db.schema import KeyOrigin, ManagementMode
 from meshprovision.errors import AtomicWriteError, ExitCode
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.apply import apply_plan
@@ -113,7 +113,8 @@ def test_persist_result_reports_divergence_when_the_save_fails(
     assert "deadbe01" in excinfo.value.message
     assert excinfo.value.__cause__ is not None
     assert excinfo.value.exit_code == ExitCode.DB
-    assert "--force-regenerate-key" in excinfo.value.user_message
+    assert "--force-regenerate-key" not in excinfo.value.user_message
+    assert "The device's own keypair was not recorded either" in excinfo.value.user_message
     assert db_path.stat().st_mtime_ns == mtime_before
 
 
@@ -160,4 +161,164 @@ def test_persist_result_omits_the_keypair_hint_when_no_key_was_generated(
 
     assert "--force-regenerate-key" not in excinfo.value.user_message
     assert "re-run `mesh provision`" in excinfo.value.user_message
-    assert "--enroll" in excinfo.value.user_message
+    assert "--enroll" not in excinfo.value.user_message
+
+
+_SAVE_FAILURE_HINT_BASE = (
+    "Fix the write problem (free space, permissions) and re-run `mesh provision` for "
+    "this node: the next run re-reads the device's live configuration and rewrites the row."
+)
+_PENDING_RECOVERY = (
+    "The node's new keypair was not recorded either, but it is still in this node's "
+    "pending-keypair file: the next `mesh provision` recovers it automatically, without "
+    "writing a new key to the device."
+)
+_FOREIGN_CONFIRMATION = (
+    "That run sees the node as FOREIGN (not in the database) and asks for confirmation: "
+    "answer yes, or pass --yes on a non-interactive run."
+)
+
+
+def _failed_save_hint(
+    tmp_path,
+    make_live,
+    monkeypatch,
+    *,
+    origin: KeyOrigin,
+    keypair: bool = True,
+    prior_management: ManagementMode | None = None,
+    prior_key: bool = False,
+) -> tuple[str, KeyRepository]:
+    """Run persist_result into a failing save; return the hint and the session's keys."""
+    outcome, kp = _confirmed_outcome(make_live)
+    db_path = tmp_path / "db.ods"
+    db = OdsDatabase.create(db_path)
+    nodes = NodeRepository(db)
+    keys = KeyRepository(db)
+    if prior_management is not None:
+        nodes.upsert(NodeRecord(node_id="deadbe01", management=prior_management))
+    if prior_key:
+        for record in KeyRecord.for_keypair("deadbe01", generate_keypair(), origin=origin):
+            keys.upsert(record)
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AtomicWriteError("disk went away", path=str(db_path))
+
+    monkeypatch.setattr(db, "save", _boom)
+    with pytest.raises(AtomicWriteError) as excinfo:
+        persist_result(
+            outcome,
+            nodes=nodes,
+            keys=keys,
+            keypair=kp if keypair else None,
+            origin=origin,
+        )
+    assert excinfo.value.hint is not None
+    return excinfo.value.hint, keys
+
+
+@pytest.mark.parametrize(
+    ("origin", "prior_management", "prior_key", "expected"),
+    [
+        pytest.param(
+            KeyOrigin.GENERATED,
+            None,
+            False,
+            f"{_PENDING_RECOVERY} If that file is lost, the next run instead records the "
+            f"device's current key as captured. {_FOREIGN_CONFIRMATION}",
+            id="generated-first-provision",
+        ),
+        pytest.param(
+            KeyOrigin.GENERATED,
+            ManagementMode.TEMPLATE,
+            True,
+            f"{_PENDING_RECOVERY} If that file is lost, the next run instead reports the "
+            "device's key as differing from the Keys sheet and adopts it -- expected here.",
+            id="generated-recorded-node",
+        ),
+        pytest.param(
+            KeyOrigin.GENERATED,
+            ManagementMode.TEMPLATE,
+            False,
+            f"{_PENDING_RECOVERY} If that file is lost, the next run instead records the "
+            "device's current key as captured.",
+            id="generated-row-without-a-key",
+        ),
+        pytest.param(
+            KeyOrigin.CAPTURED,
+            None,
+            False,
+            "The device's own keypair was not recorded either; the next `mesh provision` "
+            f"captures it again. {_FOREIGN_CONFIRMATION}",
+            id="captured-first-capture",
+        ),
+        pytest.param(
+            KeyOrigin.CAPTURED,
+            ManagementMode.TEMPLATE,
+            True,
+            "The device's keypair was not recorded either; the next `mesh provision` "
+            "reports it as differing from the Keys sheet again and adopts it -- expected here.",
+            id="captured-recorded-node",
+        ),
+    ],
+)
+def test_persist_result_save_failure_hint_says_how_the_next_run_records_the_keypair(
+    tmp_path, make_live, monkeypatch, origin, prior_management, prior_key, expected
+) -> None:
+    hint, _ = _failed_save_hint(
+        tmp_path,
+        make_live,
+        monkeypatch,
+        origin=origin,
+        prior_management=prior_management,
+        prior_key=prior_key,
+    )
+
+    assert hint == f"{_SAVE_FAILURE_HINT_BASE} {expected}"
+    assert "--force-regenerate-key" not in hint
+
+
+def test_persist_result_save_failure_hint_reads_the_prior_key_before_this_runs_upsert(
+    tmp_path, make_live, monkeypatch
+) -> None:
+    """A first provision has no prior public key, though its own upsert just added one.
+
+    The hint must come from the state *before* this run: reading the
+    ``Keys`` sheet after the upsert would always find the key, and turn
+    a first provision's "recorded as captured" fallback into a bogus
+    "reported as differing".
+    """
+    hint, keys = _failed_save_hint(tmp_path, make_live, monkeypatch, origin=KeyOrigin.GENERATED)
+
+    assert keys.find("deadbe01_pub") is not None
+    assert "records the device's current key as captured" in hint
+    assert "differing" not in hint
+    assert _FOREIGN_CONFIRMATION in hint
+
+
+@pytest.mark.parametrize(
+    ("prior_management", "asks_for_enroll"),
+    [
+        pytest.param(ManagementMode.OBSERVED, True, id="observed-row"),
+        pytest.param(ManagementMode.TEMPLATE, False, id="template-row"),
+        pytest.param(None, False, id="no-row"),
+    ],
+)
+def test_persist_result_save_failure_hint_asks_for_enroll_only_for_an_observed_row(
+    tmp_path, make_live, monkeypatch, prior_management, asks_for_enroll
+) -> None:
+    hint, _ = _failed_save_hint(
+        tmp_path,
+        make_live,
+        monkeypatch,
+        origin=KeyOrigin.CAPTURED,
+        keypair=False,
+        prior_management=prior_management,
+    )
+
+    enroll = (
+        "Because that row was never saved, the node is still marked observed -- "
+        "pass --enroll again on the re-run."
+    )
+    assert (hint == f"{_SAVE_FAILURE_HINT_BASE} {enroll}") is asks_for_enroll
+    assert (hint == _SAVE_FAILURE_HINT_BASE) is not asks_for_enroll
