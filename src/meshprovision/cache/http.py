@@ -538,6 +538,91 @@ def _parse_retry_after(value: str | None, *, clock: Callable[[], float]) -> floa
     return max(0.0, parsed.timestamp() - clock())
 
 
+def _request_error_hint(exc: httpx.RequestError) -> str | None:
+    """Explain a non-retried request failure, when there is more to say.
+
+    Args:
+        exc: The ``httpx.RequestError`` (not a ``TransportError``) that
+            ended the fetch.
+
+    Returns:
+        A hint for a ``TooManyRedirects`` redirect loop or a refused
+        HTTPS -> non-HTTPS redirect, else ``None``.
+    """
+    if isinstance(exc, httpx.TooManyRedirects):
+        last_url = None
+        with contextlib.suppress(RuntimeError):
+            # Drop the query string: it is the last hop of a
+            # redirect loop and may not be this request's own
+            # `params`, so it is not ours to display in full.
+            last_url = _display_url(str(exc.request.url.copy_with(query=None)), None)
+        return "the server (or a proxy/captive portal) is redirecting in a loop" + (
+            f" (last URL: {last_url})" if last_url else ""
+        )
+    if isinstance(exc, _InsecureRedirectError):
+        return (
+            f"the server (or a proxy/captive portal) redirected to {exc.target}, "
+            "which would drop HTTPS; check the URL and your network"
+        )
+    return None
+
+
+def _status_error(
+    response: httpx.Response,
+    *,
+    url: str,
+    source: str | None,
+    clock: Callable[[], float],
+) -> HttpError | None:
+    """Build the error for a response status that is neither success nor retried.
+
+    Called only for a status below :data:`RETRY_STATUS_MIN` (a 5xx is
+    retried by the caller first).
+
+    Args:
+        response: The server's response.
+        url: The request URL, for the message.
+        source: A short label identifying the calling datasource.
+        clock: Callable returning the current unix epoch seconds, for
+            an HTTP-date ``Retry-After``.
+
+    Returns:
+        A :class:`RateLimitError` for HTTP 429, an :class:`HttpError` for
+        any other 4xx or a non-2xx status, or ``None`` for a 2xx.
+    """
+    status = response.status_code
+
+    if status == _HTTP_RATE_LIMITED:
+        return RateLimitError(
+            f"{url} returned HTTP 429 (rate limited)",
+            url=str(response.url),
+            status_code=status,
+            source=source,
+            retry_after=_parse_retry_after(response.headers.get("retry-after"), clock=clock),
+            hint=(
+                "lorastats.pl bans IP addresses for misuse; wait before retrying "
+                "and check MESHPROVISION_CONTACT."
+            ),
+        )
+
+    if _HTTP_CLIENT_ERROR_MIN <= status < _HTTP_CLIENT_ERROR_MAX:
+        return HttpError(
+            f"{url} returned HTTP {status}",
+            url=str(response.url),
+            status_code=status,
+            source=source,
+        )
+
+    if not (_HTTP_SUCCESS_MIN <= status < _HTTP_SUCCESS_MAX):
+        return HttpError(
+            f"{url} returned unexpected HTTP {status}",
+            url=str(response.url),
+            status_code=status,
+            source=source,
+        )
+    return None
+
+
 class CachedHTTPClient:
     """Disk-backed TTL cache wrapping ``httpx.Client``.
 
@@ -1034,50 +1119,14 @@ class CachedHTTPClient:
                 # `TransportError` above -- so this is not retried. Must stay
                 # after the `TransportError` arm, since `TransportError` is
                 # itself a `RequestError` subclass.
-                hint = None
-                if isinstance(exc, httpx.TooManyRedirects):
-                    last_url = None
-                    with contextlib.suppress(RuntimeError):
-                        # Drop the query string: it is the last hop of a
-                        # redirect loop and may not be this request's own
-                        # `params`, so it is not ours to display in full.
-                        last_url = _display_url(str(exc.request.url.copy_with(query=None)), None)
-                    hint = "the server (or a proxy/captive portal) is redirecting in a loop" + (
-                        f" (last URL: {last_url})" if last_url else ""
-                    )
-                elif isinstance(exc, _InsecureRedirectError):
-                    hint = (
-                        f"the server (or a proxy/captive portal) redirected to {exc.target}, "
-                        "which would drop HTTPS; check the URL and your network"
-                    )
                 raise HttpError(
-                    f"Request to {url} failed: {exc}", url=url, source=source, hint=hint
+                    f"Request to {url} failed: {exc}",
+                    url=url,
+                    source=source,
+                    hint=_request_error_hint(exc),
                 ) from exc
 
             status = response.status_code
-
-            if status == _HTTP_RATE_LIMITED:
-                raise RateLimitError(
-                    f"{url} returned HTTP 429 (rate limited)",
-                    url=str(response.url),
-                    status_code=status,
-                    source=source,
-                    retry_after=_parse_retry_after(
-                        response.headers.get("retry-after"), clock=self._clock
-                    ),
-                    hint=(
-                        "lorastats.pl bans IP addresses for misuse; wait before retrying "
-                        "and check MESHPROVISION_CONTACT."
-                    ),
-                )
-
-            if _HTTP_CLIENT_ERROR_MIN <= status < _HTTP_CLIENT_ERROR_MAX:
-                raise HttpError(
-                    f"{url} returned HTTP {status}",
-                    url=str(response.url),
-                    status_code=status,
-                    source=source,
-                )
 
             if status >= RETRY_STATUS_MIN:
                 if attempt == self._max_retries:
@@ -1091,13 +1140,9 @@ class CachedHTTPClient:
                 self._backoff(attempt, url=url)
                 continue
 
-            if not (_HTTP_SUCCESS_MIN <= status < _HTTP_SUCCESS_MAX):
-                raise HttpError(
-                    f"{url} returned unexpected HTTP {status}",
-                    url=str(response.url),
-                    status_code=status,
-                    source=source,
-                )
+            status_error = _status_error(response, url=url, source=source, clock=self._clock)
+            if status_error is not None:
+                raise status_error
 
             return CachedResponse(
                 status_code=status,

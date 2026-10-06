@@ -819,6 +819,118 @@ def audit_keypair(
     )
 
 
+def _firmware_window_finding(
+    firmware_version: str,
+    *,
+    fingerprint: str | None,
+    node_id: str | None,
+    key_ref: str | None,
+) -> WeakKeyFinding | None:
+    """Check a reported firmware version against the CVE-2025-52464 window.
+
+    Args:
+        firmware_version: The node's reported firmware version string.
+        fingerprint: Redacted digest of the audited key, for the finding.
+        node_id: The node id, in display form, when known.
+        key_ref: The key reference in the ``Keys`` sheet, when known.
+
+    Returns:
+        A ``WARNING`` finding if the version cannot be parsed, a
+        ``CRITICAL`` one if it is inside the window, else ``None``.
+    """
+    # A blank/whitespace-only string takes the same "could not be
+    # evaluated" path as an unparseable one below -- parse_firmware_
+    # version("") already returns None, so this used to be the only
+    # thing standing between the two; short-circuiting it here meant
+    # a device reporting an empty firmware string produced zero
+    # findings at all, indistinguishable from firmware_version=None
+    # (genuinely not reported), when it is equally a "CVE status
+    # unknown, not confirmed safe" case. See Round 35's weakkey-drift
+    # review, Finding 3.
+    parsed = parse_firmware_version(firmware_version)
+    if parsed is None:
+        return WeakKeyFinding(
+            check=WeakKeyCheck.FIRMWARE_WINDOW,
+            severity=WeakKeySeverity.WARNING,
+            reason=(
+                "firmware version could not be parsed; the CVE-2025-52464 window "
+                "could not be evaluated"
+            ),
+            detail=f"firmware_version={firmware_version!r}",
+            fingerprint=fingerprint,
+            node_id=node_id,
+            key_ref=key_ref,
+        )
+    if is_vulnerable_firmware(parsed):
+        return WeakKeyFinding(
+            check=WeakKeyCheck.FIRMWARE_WINDOW,
+            severity=WeakKeySeverity.CRITICAL,
+            reason=(
+                f"firmware {firmware_version} is inside the CVE-2025-52464 window "
+                "[2.5.0, 2.6.11); the key is presumptively compromised regardless "
+                "of its contents"
+            ),
+            fingerprint=fingerprint,
+            node_id=node_id,
+            key_ref=key_ref,
+        )
+    return None
+
+
+def _duplicate_key_finding(
+    public: bytes,
+    known_public_keys: Mapping[str, bytes],
+    *,
+    fingerprint: str | None,
+    node_id: str | None,
+    key_ref: str | None,
+) -> WeakKeyFinding | None:
+    """Check ``public`` against every other public key in the fleet.
+
+    Args:
+        public: The node's raw 32-byte public key.
+        known_public_keys: Every other public key in the fleet, keyed by
+            key reference; the entry whose ref equals ``key_ref`` is
+            skipped. See :func:`audit_node` for the alias caveat.
+        fingerprint: Redacted digest of the audited key, for the finding.
+        node_id: The node id, in display form, when known.
+        key_ref: The node's own key reference. Required.
+
+    Returns:
+        A ``CRITICAL`` duplicate finding naming every matching ref, or
+        ``None`` if no other ref holds the same key.
+
+    Raises:
+        KeyMaterialError: If ``key_ref`` is ``None``.
+    """
+    if key_ref is None:
+        raise KeyMaterialError(
+            "audit_node requires key_ref when known_public_keys is supplied and public "
+            "is known, so the node's own entry (if present in known_public_keys) can be "
+            "excluded from the cross-fleet duplicate check -- without it, a node whose own "
+            "key happens to be present in known_public_keys would be flagged as a duplicate "
+            "of itself",
+            reason="key_ref missing with known_public_keys",
+        )
+    raw_public = bytes(public)
+    matches = sorted(
+        ref
+        for ref, candidate in known_public_keys.items()
+        if ref != key_ref and hmac.compare_digest(raw_public, bytes(candidate))
+    )
+    if not matches:
+        return None
+    return WeakKeyFinding(
+        check=WeakKeyCheck.DUPLICATE,
+        severity=WeakKeySeverity.CRITICAL,
+        reason=DUPLICATE_KEY_REASON,
+        detail=f"matching_refs={', '.join(matches)}",
+        fingerprint=fingerprint,
+        node_id=node_id,
+        key_ref=key_ref,
+    )
+
+
 def audit_node(
     *,
     public: bytes | None = None,
@@ -928,75 +1040,22 @@ def audit_node(
     findings = list(result.findings)
 
     if firmware_version is not None:
-        # A blank/whitespace-only string takes the same "could not be
-        # evaluated" path as an unparseable one below -- parse_firmware_
-        # version("") already returns None, so this used to be the only
-        # thing standing between the two; short-circuiting it here meant
-        # a device reporting an empty firmware string produced zero
-        # findings at all, indistinguishable from firmware_version=None
-        # (genuinely not reported), when it is equally a "CVE status
-        # unknown, not confirmed safe" case. See Round 35's weakkey-drift
-        # review, Finding 3.
-        parsed = parse_firmware_version(firmware_version)
-        if parsed is None:
-            findings.append(
-                WeakKeyFinding(
-                    check=WeakKeyCheck.FIRMWARE_WINDOW,
-                    severity=WeakKeySeverity.WARNING,
-                    reason=(
-                        "firmware version could not be parsed; the CVE-2025-52464 window "
-                        "could not be evaluated"
-                    ),
-                    detail=f"firmware_version={firmware_version!r}",
-                    fingerprint=result.fingerprint,
-                    node_id=node_id,
-                    key_ref=key_ref,
-                )
-            )
-        elif is_vulnerable_firmware(parsed):
-            findings.append(
-                WeakKeyFinding(
-                    check=WeakKeyCheck.FIRMWARE_WINDOW,
-                    severity=WeakKeySeverity.CRITICAL,
-                    reason=(
-                        f"firmware {firmware_version} is inside the CVE-2025-52464 window "
-                        "[2.5.0, 2.6.11); the key is presumptively compromised regardless "
-                        "of its contents"
-                    ),
-                    fingerprint=result.fingerprint,
-                    node_id=node_id,
-                    key_ref=key_ref,
-                )
-            )
+        firmware_finding = _firmware_window_finding(
+            firmware_version, fingerprint=result.fingerprint, node_id=node_id, key_ref=key_ref
+        )
+        if firmware_finding is not None:
+            findings.append(firmware_finding)
 
     if known_public_keys and public is not None:
-        if key_ref is None:
-            raise KeyMaterialError(
-                "audit_node requires key_ref when known_public_keys is supplied and public "
-                "is known, so the node's own entry (if present in known_public_keys) can be "
-                "excluded from the cross-fleet duplicate check -- without it, a node whose own "
-                "key happens to be present in known_public_keys would be flagged as a duplicate "
-                "of itself",
-                reason="key_ref missing with known_public_keys",
-            )
-        raw_public = bytes(public)
-        matches = sorted(
-            ref
-            for ref, candidate in known_public_keys.items()
-            if ref != key_ref and hmac.compare_digest(raw_public, bytes(candidate))
+        duplicate_finding = _duplicate_key_finding(
+            public,
+            known_public_keys,
+            fingerprint=result.fingerprint,
+            node_id=node_id,
+            key_ref=key_ref,
         )
-        if matches:
-            findings.append(
-                WeakKeyFinding(
-                    check=WeakKeyCheck.DUPLICATE,
-                    severity=WeakKeySeverity.CRITICAL,
-                    reason=DUPLICATE_KEY_REASON,
-                    detail=f"matching_refs={', '.join(matches)}",
-                    fingerprint=result.fingerprint,
-                    node_id=node_id,
-                    key_ref=key_ref,
-                )
-            )
+        if duplicate_finding is not None:
+            findings.append(duplicate_finding)
 
     return AuditResult(
         findings=_sort_findings(findings),
