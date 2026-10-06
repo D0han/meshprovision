@@ -107,10 +107,13 @@ BLE_PIN_LENGTH: Final[int] = 6
 """Exact digit count of a BLE pairing PIN (``bluetooth.fixed_pin``)."""
 
 REF_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-"""Shape shared with ``config/template.py``'s admin-node reference pattern.
+"""The one shape every ``owner_node_id``/``key_ref`` value must have.
 
 Matches both a bare ``node_id`` hex value and a template ``admin_nodes``
 reference name -- both are valid ``owner_node_id``/``key_ref`` values.
+This is the only copy of the pattern: ``config/template.py`` checks
+``admin_nodes`` refs through
+:func:`meshprovision.db.observed_keys.owner_ref_problem`, which uses it.
 """
 
 

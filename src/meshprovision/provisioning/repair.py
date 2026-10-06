@@ -171,7 +171,7 @@ def diff_record(
     # detect.read_live_config's own "cannot evaluate" sentinel, not a
     # genuine observation of "no hardware model." Comparing it against a
     # real recorded value would report phantom drift, and the caller
-    # (plan.py's to_record) must not let it erase what is already
+    # (plan_types.py's ChangePlan.to_record) must not let it erase what is already
     # recorded either -- see that module for the matching guard.
     if not (live.hw_model_raw is not None and not live.hw_model):
         hw_drift = _drift_if_differs(DriftKind.HARDWARE, "hw_model", record.hw_model, live.hw_model)
@@ -223,7 +223,7 @@ def diff_record(
         )
 
     # The node's own key material is not compared here: record.public_key_ref
-    # (db/nodes.py) is `schema.ref_for(node_id, ...)`, derived from node_id,
+    # (db/node_record.py) is `schema.ref_for(node_id, ...)`, derived from node_id,
     # which is a required field -- it can never be empty for a valid
     # NodeRecord, so a check for "recorded ref empty but device has a real
     # key" can never fire.

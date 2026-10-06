@@ -152,7 +152,7 @@ points from libsodium's `has_small_order()` blocklist in
 `0x01`-then-zeros, the two order-8 points, and `p-1`/`p`/`p+1`
 (`p = 2**255-19`). Each carries a provenance comment, so the file is
 auditable rather than a magic list. The same 7 values are also compiled
-into `crypto/weakkeys.py:SMALL_ORDER_POINTS`, so they still apply if the
+into `crypto/known_bad_keys.py:SMALL_ORDER_POINTS`, so they still apply if the
 file is absent. The file was deliberately **not** padded with invented
 entries — a padded blocklist gives false assurance, which is worse than
 an honest short one.

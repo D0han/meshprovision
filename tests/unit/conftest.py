@@ -12,6 +12,7 @@ artifact of a hand-built fixture drifting from the template.
 
 from __future__ import annotations
 
+import ast
 import os
 import stat
 from collections.abc import Callable, Mapping
@@ -346,6 +347,32 @@ def libreoffice_round_trip(path: Path) -> None:
 
     with path.open("wb") as fh:
         doc.write(fh)
+
+
+def source_without_docstring(path: Path) -> str:
+    """Return a module's code with its own docstring and comments stripped.
+
+    A module guarded by one of the ``test_readonly_*_boundary.py`` tests
+    *names* every forbidden token inside its own module docstring, so a
+    naive text search matches the very rule it is checking. Round-tripping
+    through :mod:`ast` removes the docstring and all comments, leaving only
+    executable code.
+
+    Args:
+        path: The module to read.
+
+    Returns:
+        The module's source, re-rendered by :func:`ast.unparse` without its
+        docstring.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    if (
+        tree.body
+        and isinstance(tree.body[0], ast.Expr)
+        and isinstance(tree.body[0].value, ast.Constant)
+    ):
+        del tree.body[0]
+    return ast.unparse(tree)
 
 
 @pytest.fixture

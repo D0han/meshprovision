@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.unit.conftest import source_without_docstring
+
 pytestmark = pytest.mark.unit
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "meshprovision"
@@ -45,26 +47,8 @@ _REPORT_FORBIDDEN_MODULES = (
 )
 
 
-def _source_without_docstring(path: Path) -> str:
-    """Return a module's code with its own docstring and comments stripped.
-
-    Both guarded modules *name* every forbidden token inside their own
-    module docstring, so a naive text search matches the very rule it is
-    checking. Round-tripping through :mod:`ast` removes the docstring and
-    all comments, leaving only executable code.
-    """
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    if (
-        tree.body
-        and isinstance(tree.body[0], ast.Expr)
-        and isinstance(tree.body[0].value, ast.Constant)
-    ):
-        del tree.body[0]
-    return ast.unparse(tree)
-
-
 def test_cli_status_never_names_a_write_capable_symbol() -> None:
-    code = _source_without_docstring(SRC / "cli" / "status.py")
+    code = source_without_docstring(SRC / "cli" / "status.py")
     found = sorted(name for name in _CLI_STATUS_FORBIDDEN if name in code)
     assert found == [], f"cli/status.py must not reference: {found}"
 

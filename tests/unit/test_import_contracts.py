@@ -73,14 +73,35 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("cli/logging_setup.py", ("meshprovision.cli",)),
     ("cli/common.py", _CLI_COMMANDS),
     ("cli/provision_keys.py", _CLI_COMMANDS),
+    (
+        "status/merge.py",
+        (
+            "meshtastic",
+            "httpx",
+            "pathlib",
+            "meshprovision.db.nodes",
+            "meshprovision.db.ods",
+            "meshprovision.cache",
+        ),
+    ),
+    ("db/verify.py", ("meshprovision.cli",)),
 )
 """``(module path under the package, forbidden import prefixes)``, from each docstring."""
 
 STDLIB_ONLY: Final[tuple[str, ...]] = (
     "firmware.py",
     "provisioning/plan_warnings.py",
+    "termsafe.py",
+    "status/timefmt.py",
 )
 """Modules documented as importing nothing but the standard library."""
+
+STDLIB_PLUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
+    ("name_pattern.py", ("meshprovision.errors",)),
+    ("crypto/redact.py", ("meshprovision.termsafe",)),
+)
+"""``(module, allowed meshprovision prefixes)`` for leaves documented as importing
+only the standard library plus those modules."""
 
 NO_IMPORT_TIME_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("enums.py", ("meshtastic",)),
@@ -160,6 +181,18 @@ def test_module_imports_only_the_standard_library(relpath: str) -> None:
         f"{relpath}:{line}: {name}"
         for line, name in _imports(PACKAGE / relpath)
         if name.split(".", 1)[0] not in sys.stdlib_module_names
+    ]
+    assert offending == []
+
+
+@pytest.mark.parametrize(("relpath", "allowed"), STDLIB_PLUS, ids=[row[0] for row in STDLIB_PLUS])
+def test_module_imports_only_the_standard_library_plus_its_documented_leaves(
+    relpath: str, allowed: tuple[str, ...]
+) -> None:
+    offending = [
+        f"{relpath}:{line}: {name}"
+        for line, name in _imports(PACKAGE / relpath)
+        if name.split(".", 1)[0] not in sys.stdlib_module_names and not _matches(name, allowed)
     ]
     assert offending == []
 

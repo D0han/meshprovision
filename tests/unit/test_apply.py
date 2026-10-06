@@ -117,7 +117,7 @@ def test_apply_field_bad_numeric_string_raises() -> None:
 def test_apply_field_out_of_range_int_raises_plan_conflict_not_value_error() -> None:
     """Protobuf's own range check raises a bare ValueError -- must be converted.
 
-    node_info_broadcast_secs is one of several config.template.py fields
+    node_info_broadcast_secs is one of several config/template_sections.py fields
     declared with only a lower bound (``ge=0``), so an operator typo with
     an extra digit reaches this call unvalidated by pydantic.
     """

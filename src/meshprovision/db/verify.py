@@ -17,8 +17,9 @@ Takes a :class:`~meshprovision.db.nodes.NodeRepository`/
 :class:`~meshprovision.db.keys.KeyRepository` pair directly (mirroring
 :func:`meshprovision.provisioning.admin_custody.collect_admins`'s same
 choice) rather than the whole :class:`~meshprovision.cli.common.
-DbSession`, so this module depends only on :mod:`meshprovision.db` and
-:mod:`meshprovision.config.template`, never on :mod:`meshprovision.cli`.
+DbSession`, so this module never depends on :mod:`meshprovision.cli` (it
+imports :mod:`meshprovision.db`, :mod:`meshprovision.crypto`, and -- for
+type hints only -- :mod:`meshprovision.config.template`).
 """
 
 from __future__ import annotations

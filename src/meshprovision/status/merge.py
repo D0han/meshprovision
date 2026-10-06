@@ -24,7 +24,7 @@ from typing import Final, TypeVar
 
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.models import NodeObservation
-from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.node_record import NodeRecord
 from meshprovision.nodeid import NodeId
 from meshprovision.status.timefmt import isoformat_z as _isoformat_z
 
