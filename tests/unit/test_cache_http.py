@@ -607,6 +607,64 @@ def test_version_bump_is_treated_as_miss(tmp_path: Path) -> None:
     assert route.call_count == 2
 
 
+_NOW = 1_700_000_000.0
+_A_YEAR = 365 * 86400.0
+
+
+def _set_fetched_at(client: CachedHTTPClient, value: float) -> Path:
+    path = client.path_for_key(cache_key("GET", URL))
+    entry = json.loads(path.read_text())
+    entry["fetched_at"] = value
+    path.write_text(json.dumps(entry))
+    return path
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    "fetched_at",
+    [float("inf"), float("nan"), 1e300, -1.0, _NOW + _A_YEAR],
+    ids=["inf", "nan", "1e300", "before-the-epoch", "a-year-ahead"],
+)
+def test_out_of_range_fetched_at_is_never_fresh_and_is_refetched(
+    tmp_path: Path, fetched_at: float
+) -> None:
+    """An unusable or future ``fetched_at`` must never keep an entry fresh, or crash a reader.
+
+    A TTL of a century makes every finite one of these "fresh" by age alone.
+    """
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [_NOW]
+    client = _make_client(tmp_path, now=now, ttl=100 * _A_YEAR)
+    client.get(URL)
+    path = _set_fetched_at(client, fetched_at)
+
+    response = client.get(URL)
+
+    assert response.from_cache is False
+    assert response.fetched_at == _NOW
+    assert route.call_count == 2
+    assert json.loads(path.read_text())["fetched_at"] == _NOW
+
+
+@respx.mock
+@pytest.mark.parametrize("ahead", [60.0, 300.0], ids=["a-minute-ahead", "at-the-skew-limit"])
+def test_fetched_at_slightly_ahead_of_the_clock_is_still_a_hit(
+    tmp_path: Path, ahead: float
+) -> None:
+    """A small backwards clock correction (an NTP step) must not discard the cache."""
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    now = [_NOW]
+    client = _make_client(tmp_path, now=now)
+    client.get(URL)
+    _set_fetched_at(client, _NOW + ahead)
+
+    response = client.get(URL)
+
+    assert response.from_cache is True
+    assert response.fetched_at == _NOW + ahead
+    assert route.call_count == 1
+
+
 @respx.mock
 def test_500_response_never_written_to_disk(tmp_path: Path) -> None:
     respx.get(URL).mock(return_value=httpx.Response(500))

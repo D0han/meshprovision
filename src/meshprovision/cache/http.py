@@ -141,6 +141,15 @@ _CACHE_SHARD_WIDTH: Final[int] = 2
 _CACHE_ROOT_MODE: Final[int] = 0o700
 """Permission bits applied to the cache root on first write (contains node data)."""
 
+_FETCHED_AT_FUTURE_SKEW_SECONDS: Final[float] = 300.0
+"""How far ahead of the clock a cached ``fetched_at`` may be and still count as fresh.
+
+Absorbs a small backwards clock correction (an NTP step) and minor skew
+between hosts sharing one cache directory. An entry further ahead was
+written under a wrong clock, or edited, and would otherwise stay fresh
+until the clock caught up with it.
+"""
+
 _HTTP_RATE_LIMITED: Final[int] = 429
 _HTTP_CLIENT_ERROR_MIN: Final[int] = 400
 _HTTP_CLIENT_ERROR_MAX: Final[int] = 500
@@ -407,9 +416,19 @@ class CachedResponse:
                 ``time.time()``.
 
         Returns:
-            ``True`` if :meth:`age` is less than or equal to ``ttl``.
+            ``True`` if :meth:`age` is less than or equal to ``ttl`` and
+            :attr:`fetched_at` is a plausible fetch time: not before the
+            epoch and at most :data:`_FETCHED_AT_FUTURE_SKEW_SECONDS` ahead
+            of ``now``. A non-finite, pre-epoch or far-future value (a
+            corrupted or hand-edited entry, or one written while the clock
+            was wrong) is never fresh, so it is refetched rather than
+            served for years or handed to a datetime conversion that
+            cannot represent it.
         """
-        return self.age(now=now) <= ttl
+        current = time.time() if now is None else now
+        if not 0.0 <= self.fetched_at <= current + _FETCHED_AT_FUTURE_SKEW_SECONDS:
+            return False
+        return self.age(now=current) <= ttl
 
     def text(self, *, encoding: str = "utf-8") -> str:
         """Decode the response body as text.

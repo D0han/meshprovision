@@ -429,6 +429,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--no-reconnect` the new name is reported written but not read back and
   recorded as is, and with a reconnect an unapplied rename is reported
   unconfirmed (**exit code `5`**) without touching the database.
+- A damaged or hand-edited HTTP cache entry whose fetch time was huge or
+  infinite (`1e300`, `Infinity`) made every later `mesh status` (and
+  `--watch` on its first poll) crash with a Python traceback (exit code
+  1) until the cache directory was deleted. An entry written while the
+  clock was far ahead was served as fresh, with a future "data as of",
+  until the clock caught up with it. A cached fetch time that is infinite
+  or not a number, is before 1970, or is more than five minutes ahead of the
+  clock now counts as stale, and the data is fetched again.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

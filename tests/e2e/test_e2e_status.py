@@ -847,3 +847,35 @@ def test_watch_caps_the_cache_ttl_default_poll_at_one_week(
     assert slept == [604_800.0]
     assert result.exit_code == 0
     assert result.stderr.rstrip().endswith("Stopped.")
+
+
+def test_a_cache_entry_with_an_out_of_range_fetch_time_is_refetched(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """A hand-edited ``fetched_at`` of 1e300 crashed every later run with OverflowError."""
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}) as router:
+        loranet_route = next(r for r in router.routes if "loranet.pl" in str(r.pattern))
+        assert invoke(runner, ["status", "--json"], env).exit_code == 0
+        entries = list(Path(env["MESHPROVISION_CACHE_DIR"]).rglob("*.json"))
+        assert entries
+        for entry_path in entries:
+            entry = json.loads(entry_path.read_text())
+            entry["fetched_at"] = 1e300
+            entry_path.write_text(json.dumps(entry))
+
+        result = invoke(runner, ["status", "--json"], env)
+
+        assert loranet_route.call_count == 2
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert document["cache"]["hits"] == 0
+    assert document["cache"]["network_requests"] > 0
