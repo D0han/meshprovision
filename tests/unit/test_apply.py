@@ -715,8 +715,8 @@ def test_apply_plan_persists_the_truncated_name_not_the_desired_one(tmp_path, ma
     kp = generate_keypair()
 
     iface = _FakeIfaceTruncatesLongName()
-    session = InPlaceSession(iface)  # type: ignore[arg-type]
-    outcome = apply_plan(plan, session, keypair=kp)
+    session = _FakeSessionTracksRefresh(iface, _reopen_same_device)
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
     assert outcome.ok is True, outcome.describe()
     long_result = next(r for r in outcome.results if r.field == "long_name")
@@ -724,7 +724,7 @@ def test_apply_plan_persists_the_truncated_name_not_the_desired_one(tmp_path, ma
     assert "truncated" in long_result.message
 
     assert outcome.record is not None
-    assert outcome.record.long_name == plan.name_change.desired_long_name[:20]
+    assert outcome.record.long_name == plan.name_change.desired_long_name[:24]
     assert outcome.record.long_name != plan.name_change.desired_long_name
 
 
@@ -2127,14 +2127,14 @@ class _FakeLocalNodeTruncatesLongName(_FakeLocalNode):
         if short_name is not None:
             self._iface.user["shortName"] = short_name
         if long_name is not None:
-            self._iface.user["longName"] = long_name[:20]
+            self._iface.user["longName"] = long_name[:24]
             self._iface.user["isLicensed"] = is_licensed
         if is_unmessagable is not None:
             self._iface.user["isUnmessagable"] = is_unmessagable
 
 
 class _FakeIfaceTruncatesLongName(_FakeIfaceForApply):
-    """An interface whose firmware truncates every long_name write to 20 bytes."""
+    """An interface whose firmware truncates every long_name write to 24 bytes."""
 
     def __init__(self, node_num: int = _DEFAULT_NODE_NUM) -> None:
         super().__init__(node_num)

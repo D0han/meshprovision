@@ -389,6 +389,50 @@ def test_no_reconnect_records_a_node_whose_is_unmessagable_change_is_not_echoed(
     assert node.last_updated_ts is not None
 
 
+def test_no_reconnect_keeps_a_rename_that_only_extends_the_old_name(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """--no-reconnect: a new name that starts with the old one is not "truncated" back to it.
+
+    The in-memory user a --no-reconnect session re-reads still holds the
+    old name ("Base"), a prefix of the new one ("Base 2"). That used to be
+    reported as a firmware truncation and written back to the database,
+    silently reverting the operator's rename while the device kept
+    "Base 2". Round 41's logic review, Finding 4.
+    """
+    kp = keypair_factory()
+    node_record = NodeRecord(
+        node_id="deadbe01",
+        short_name="Bs1",
+        long_name="Base 2",
+        management=ManagementMode.TEMPLATE,
+    )
+    pub_record, priv_record = KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)
+    seed_db(nodes=[node_record], keys=[pub_record, priv_record])
+    iface = bus.use(
+        FakeMeshInterface("deadbe01", short_name="Bs1", long_name="Base", owner_write_echoed=False)
+    )
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(
+        runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--no-reconnect"], env
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert "owner.long_name: confirmed -- written; not read back (--no-reconnect)" in (
+        result.stderr
+    )
+    assert "truncated" not in result.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    (node,) = [NodeRecord.from_row(row) for row in loaded.nodes]
+    assert node.long_name == "Base 2"
+
+
 def test_no_reconnect_refuses_a_key_regenerating_plan_before_any_write(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

@@ -563,6 +563,92 @@ def test_verify_plan_name_truncated_confirmed(make_live) -> None:
     assert "truncated" in short_result.message
 
 
+def _prefix_rename_plan(
+    make_live, desired_long_name: str, *, old_long_name: str = "Gateway"
+) -> tuple[TemplateConfig, ChangePlan]:
+    """Plan a long_name change from ``old_long_name`` to ``desired_long_name``."""
+    template = _template()
+    live = make_live(template, long_name=old_long_name, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_long_name=desired_long_name,
+    )
+    plan = build_plan(inputs)
+    assert plan.name_change.long_changed
+    return template, plan
+
+
+def test_verify_plan_without_read_back_never_takes_a_stale_prefix_for_truncation(
+    make_live,
+) -> None:
+    """--no-reconnect re-reads the PRE-write name; a prefix of the new one proves nothing.
+
+    A stale read-back used to be taken for a firmware truncation whenever
+    it was a prefix of the new name, which then wrote the old name back
+    into the database. Even a new name over the 25-byte limit, with an old
+    name long enough to pass for its truncation, must not be: under
+    --no-reconnect the read-back is checked before truncation. Round 41's
+    logic review, Finding 4.
+    """
+    old = "Gateway number one 12345"  # 24 bytes: a plausible truncation length
+    template, plan = _prefix_rename_plan(make_live, f"{old} X", old_long_name=old)
+    stale = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=old,
+        security=make_security(empty=True),
+    )
+
+    results = verify_plan(plan, stale, keypair=None, read_back=False)
+
+    long_result = next(r for r in results if r.field == "long_name")
+    assert long_result.status == WriteStatus.CONFIRMED
+    assert long_result.message == "written; not read back (--no-reconnect)"
+    assert long_result.actual is None
+
+
+def test_verify_plan_prefix_of_a_name_within_the_limit_is_unconfirmed(make_live) -> None:
+    """A name that fits the limit cannot be truncated: a prefix read-back is a lost write.
+
+    Even when the old name is long enough to pass for a truncation (23 of
+    the 24 bytes here), the firmware only cuts names over its 25-byte limit.
+    """
+    old = "Gateway number one 1234"
+    template, plan = _prefix_rename_plan(make_live, f"{old}5", old_long_name=old)
+    stale = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=old,
+        security=make_security(empty=True),
+    )
+
+    results = verify_plan(plan, stale, keypair=None)
+
+    long_result = next(r for r in results if r.field == "long_name")
+    assert long_result.status == WriteStatus.UNCONFIRMED
+    assert long_result.actual == old
+
+
+def test_verify_plan_short_stale_prefix_of_an_over_limit_name_is_unconfirmed(make_live) -> None:
+    """Truncation keeps as much as fits: 7 of 25 bytes is the old name, not a truncation."""
+    template, plan = _prefix_rename_plan(make_live, "Gateway with a much longer name")
+    stale = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name="Gateway",
+        security=make_security(empty=True),
+    )
+
+    results = verify_plan(plan, stale, keypair=None)
+
+    long_result = next(r for r in results if r.field == "long_name")
+    assert long_result.status == WriteStatus.UNCONFIRMED
+    assert "truncated" not in long_result.message
+
+
 def test_verify_plan_empty_name_readback_is_unconfirmed_not_truncated(make_live) -> None:
     """An empty read-back is not truncation -- it's an unavailable NodeDB read.
 

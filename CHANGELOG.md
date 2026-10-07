@@ -417,6 +417,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to one week and the thresholds up to 1000000 hours, anything else
   (including `nan`) is a usage error naming the option, **exit code `2`**,
   and the cache-TTL default poll interval is capped at one week.
+- `mesh provision` took a renamed node's old name for a firmware
+  truncation of the new one whenever the new name merely extended the old
+  (`Base` -> `Base 2`, `MT1` -> `MT1A`). With `--no-reconnect`, which
+  re-reads the name from before the write, it then wrote the old name back
+  into the database, silently reverting the rename while the device kept
+  the new one (the next run renamed the device back). With a reconnect,
+  a rename the device never applied was reported as confirmed. A name is
+  now treated as truncated only when the desired name is over the
+  firmware's byte limit and the device kept almost all of it; with
+  `--no-reconnect` the new name is reported written but not read back and
+  recorded as is, and with a reconnect an unapplied rename is reported
+  unconfirmed (**exit code `5`**) without touching the database.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

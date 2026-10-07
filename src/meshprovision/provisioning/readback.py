@@ -24,6 +24,7 @@ from collections.abc import Collection
 from meshprovision.crypto import redact
 from meshprovision.crypto.keys import KeyPair, decode_key
 from meshprovision.errors import KeyMaterialError
+from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.apply_session import WriteResult, WriteStatus
 from meshprovision.provisioning.plan import ChangePlan, values_equal
@@ -33,6 +34,12 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
+
+_UTF8_MAX_CUT_BYTES = 3
+"""Most bytes a firmware name truncation can fall short of the byte limit.
+
+Cutting on a character boundary drops at most the first 3 bytes of a
+4-byte UTF-8 character that straddles the limit."""
 
 
 def _render_value(value: object, *, secret: bool) -> str:
@@ -75,6 +82,37 @@ def _not_read_back(field: str) -> WriteResult:
     )
 
 
+def _is_firmware_truncation(desired: str, actual: str, *, field: str) -> bool:
+    """Tell whether ``actual`` is ``desired`` cut short by the firmware's byte limit.
+
+    Firmware truncates only a name longer than its limit
+    (:data:`~meshprovision.name_pattern.SHORT_NAME_MAX_BYTES`/
+    :data:`~meshprovision.name_pattern.LONG_NAME_MAX_BYTES`, the tightest
+    across supported firmware), and keeps as much of it as fits. So a
+    read-back that is merely *a* prefix of the desired name -- most often
+    the old name, when the new one only extends it (``"Base"`` ->
+    ``"Base 2"``) -- is not a truncation unless the desired name is over
+    the limit and the read-back reaches to within
+    :data:`_UTF8_MAX_CUT_BYTES` of it.
+
+    Args:
+        desired: The name the plan wrote.
+        actual: The name read back; must be non-empty.
+        field: ``"short_name"`` or ``"long_name"``.
+
+    Returns:
+        Whether ``actual`` is a plausible firmware truncation of ``desired``.
+    """
+    limit = SHORT_NAME_MAX_BYTES if field == "short_name" else LONG_NAME_MAX_BYTES
+    desired_bytes = len(desired.encode("utf-8"))
+    actual_bytes = len(actual.encode("utf-8"))
+    return (
+        desired.startswith(actual)
+        and desired_bytes > limit
+        and limit - _UTF8_MAX_CUT_BYTES <= actual_bytes < desired_bytes
+    )
+
+
 def _verify_name(
     live: detect.LiveConfig, desired: str | None, *, field: str, read_back: bool = True
 ) -> WriteResult | None:
@@ -88,14 +126,16 @@ def _verify_name(
         read_back: Whether the session that produced ``live`` genuinely
             re-read from the device (see
             :attr:`~meshprovision.provisioning.apply_session.DeviceSession.reads_back`).
-            When ``False``, a mismatch that would otherwise be
-            :attr:`WriteStatus.UNCONFIRMED` is instead reported
+            When ``False``, any mismatch is instead reported
             :attr:`WriteStatus.CONFIRMED` with a note that the write
             could not be read back -- the in-memory interface a
-            non-reconnecting session re-reads may simply not reflect the
-            same post-write state a real reconnect would, so an
-            unconditional UNCONFIRMED here would misreport imprecision
-            as failure (``--no-reconnect``, see firmware issue #7449).
+            non-reconnecting session re-reads still holds the pre-write
+            name (see :func:`_not_read_back`), so an unconditional
+            UNCONFIRMED here would misreport imprecision as failure
+            (``--no-reconnect``, see firmware issue #7449). This is
+            checked before truncation: a stale pre-write name that
+            happens to be a prefix of the new one says nothing about
+            what the firmware stored.
 
     Returns:
         ``None`` when ``desired`` is ``None`` (nothing to verify);
@@ -106,17 +146,15 @@ def _verify_name(
     actual = live.short_name if field == "short_name" else live.long_name
     if actual == desired:
         return WriteResult("owner", WriteStatus.CONFIRMED, "confirmed", field=field)
+    if not read_back:
+        return _not_read_back(field)
     # actual must be non-empty: an empty read-back is not truncation, it's
     # the post-reboot NodeDB user entry not having repopulated yet (the
     # same condition _verify_key_material already treats as "unavailable"
     # for the sibling getPublicKey() read -- both come from iface.getMyUser()).
     # Without this guard, desired.startswith("") is trivially True and an
     # unreadable name was misreported CONFIRMED, silently blanking it.
-    if (
-        actual
-        and desired.startswith(actual)
-        and len(actual.encode("utf-8")) < len(desired.encode("utf-8"))
-    ):
+    if actual and _is_firmware_truncation(desired, actual, field=field):
         return WriteResult(
             "owner",
             WriteStatus.CONFIRMED,
@@ -125,8 +163,6 @@ def _verify_name(
             expected=desired,
             actual=actual,
         )
-    if not read_back:
-        return _not_read_back(field)
     return WriteResult(
         "owner",
         WriteStatus.UNCONFIRMED,
