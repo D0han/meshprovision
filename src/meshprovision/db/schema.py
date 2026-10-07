@@ -943,10 +943,18 @@ def parse_timestamp(raw: str) -> datetime:
         A tz-aware :class:`datetime.datetime` in UTC.
 
     Raises:
-        ValueError: If ``raw`` cannot be parsed as an ISO-8601 timestamp.
+        ValueError: If ``raw`` cannot be parsed as an ISO-8601 timestamp,
+            or names an instant that falls outside the representable
+            date range once shifted to UTC (``0001-01-01T00:00:00+01:00``,
+            ``9999-12-31T23:59:59-05:00``).
     """
     token = raw.strip()
     if not token:
         raise ValueError("Cannot parse an empty timestamp")
     dt = datetime.fromisoformat(token)
-    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=UTC)
+    try:
+        return dt.astimezone(UTC)
+    except OverflowError as exc:
+        raise ValueError(f"Timestamp {token!r} is out of range in UTC") from exc

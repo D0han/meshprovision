@@ -1591,6 +1591,17 @@ def test_parse_timestamp_converts_a_non_utc_offset_to_utc() -> None:
     assert parsed == datetime(2026, 1, 1, 5, 0, 0, tzinfo=UTC)
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["0001-01-01T00:00:00+01:00", "9999-12-31T23:59:59-05:00"],
+    ids=["before-year-1-in-utc", "after-year-9999-in-utc"],
+)
+def test_parse_timestamp_out_of_range_in_utc_is_a_value_error(text: str) -> None:
+    """Shifting to UTC can leave datetime's range; that is a bad value, not a crash."""
+    with pytest.raises(ValueError, match="out of range in UTC"):
+        schema.parse_timestamp(text)
+
+
 def test_utc_timestamp_shifts_an_offset_aware_datetime() -> None:
     aware = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone(timedelta(hours=5)))
     assert schema.utc_timestamp(aware) == "2026-01-01T05:00:00Z"

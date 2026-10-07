@@ -352,6 +352,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A timestamp cell in the database (`first_added_ts`, `last_updated_ts`,
+  `archived_at`, or a key's `created_ts`) holding a value that leaves the
+  supported date range once converted to UTC, such as
+  `0001-01-01T00:00:00+01:00`, crashed `mesh db verify`, `db list` and
+  every other command that opens the database with a Python traceback
+  (exit code 1). It is now reported like any other malformed timestamp:
+  "'<column>' is not a valid timestamp" with an ISO-8601 hint, exit
+  code `4`.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

@@ -468,6 +468,28 @@ def test_db_verify_coerced_cell_is_a_warning_unless_strict(
     assert strict.exit_code == 4
 
 
+def test_db_timestamp_cell_out_of_range_in_utc_is_a_validation_error(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """A hand-edited timestamp that overflows when shifted to UTC exits 4, not 1.
+
+    ``0001-01-01T00:00:00+01:00`` parses, but is one hour before year 1 in
+    UTC; before the fix ``mesh db verify`` and ``mesh db list`` crashed with
+    an ``OverflowError`` traceback instead of naming the cell.
+    """
+    from tests.unit.conftest import edit_ods_cell
+
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    edit_ods_cell(db_path, "Nodes", "first_added_ts", 2, "0001-01-01T00:00:00+01:00")
+
+    for command in (["db", "verify"], ["db", "list"]):
+        result = invoke(runner, command, env)
+        assert result.exit_code == 4, command
+        assert "'first_added_ts' is not a valid timestamp" in result.stderr
+        assert "Use ISO-8601" in result.stderr
+
+
 def test_db_backup_create_and_list(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:
