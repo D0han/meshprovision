@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import ssl
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -883,3 +884,46 @@ def test_request_negative_ttl_raises(tmp_path: Path) -> None:
     client = _make_client(tmp_path, now=now)
     with pytest.raises(SettingsError):
         client.get(URL, ttl=-1)
+
+
+@respx.mock
+def test_write_interrupted_by_ctrl_c_leaves_no_temp_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An entry's temp can be ~17 MB; only OSError used to clean it up."""
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    client = _make_client(tmp_path, now=[0.0])
+
+    def interrupted_replace(self: Path, target: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(Path, "replace", interrupted_replace)
+
+    with pytest.raises(KeyboardInterrupt):
+        client.get(URL)
+
+    path = client.path_for_key(cache_key("GET", URL))
+    assert list(path.parent.glob(f"{path.name}.tmp-*")) == []
+
+
+@respx.mock
+def test_next_write_of_an_entry_sweeps_its_stale_temps_only(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    client = _make_client(tmp_path, now=[0.0])
+    path = client.path_for_key(cache_key("GET", URL))
+    path.parent.mkdir(parents=True)
+    stale = path.with_name(f"{path.name}.tmp-999-deadbeef")
+    young = path.with_name(f"{path.name}.tmp-998-cafef00d")
+    other_key = path.with_name(f"{'0' * 64}.json.tmp-999-deadbeef")
+    two_hours_ago = time.time() - 2 * 60 * 60
+    for temp in (stale, young, other_key):
+        temp.write_bytes(b"killed mid-write")
+    os.utime(stale, (two_hours_ago, two_hours_ago))
+    os.utime(other_key, (two_hours_ago, two_hours_ago))
+
+    client.get(URL)
+
+    assert not stale.exists()
+    assert young.exists()
+    assert other_key.exists()
+    assert path.exists()

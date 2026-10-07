@@ -728,7 +728,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   process are now swept automatically, once they age past 24 hours,
   every time a new backup or write runs. The sweep is age-guarded rather
   than immediate so it can never remove a live, currently-in-progress
-  backup's temp file.
+  backup's temp file. The same holds for the known-good safety copy's
+  temp file (a full copy of the database, keys included), which any
+  command, `mesh status --watch` among them, could leave behind when
+  stopped mid-refresh, and for an HTTP cache entry's temp file (up to
+  ~17 MB), swept after an hour when that entry is next written. Both are
+  now also removed straight away when the command is stopped with Ctrl-C.
 - `mesh admin list`'s table now shows each admin's weak-key audit result
   (`-`, `clean`, `warning`, or `compromised`, the last highlighted) in a
   new `Audit` column. This information was already computed and already

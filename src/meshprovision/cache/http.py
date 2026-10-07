@@ -150,6 +150,14 @@ written under a wrong clock, or edited, and would otherwise stay fresh
 until the clock caught up with it.
 """
 
+_STALE_ENTRY_TEMP_AGE_SECONDS: Final[float] = 60 * 60
+"""How old an entry's leftover temp file must be before a later write of that entry removes it.
+
+Writing even the largest entry (the ~17 MB loranet.pl dump) takes
+seconds, so an hour-old temp belongs to a writer that was killed, not to
+one still running.
+"""
+
 _HTTP_RATE_LIMITED: Final[int] = 429
 _HTTP_CLIENT_ERROR_MIN: Final[int] = 400
 _HTTP_CLIENT_ERROR_MAX: Final[int] = 500
@@ -509,6 +517,26 @@ def _entry_to_response(
         cache_key=cache_key_value,
         from_cache=from_cache,
     )
+
+
+def _sweep_stale_entry_temps(path: Path) -> None:
+    """Best-effort removal of temp files a killed writer left for one cache entry.
+
+    Only this entry's own temps (``<key>.json.tmp-*`` beside ``path``)
+    older than :data:`_STALE_ENTRY_TEMP_AGE_SECONDS`, judged by wall-clock
+    time like the file times themselves. Never raises: a missing shard
+    directory (the entry's first write), a temp that vanished meanwhile, or
+    one that cannot be removed is simply skipped.
+
+    Args:
+        path: The cache entry's path.
+    """
+    cutoff = time.time() - _STALE_ENTRY_TEMP_AGE_SECONDS
+    with contextlib.suppress(OSError):
+        for stale in path.parent.glob(f"{path.name}.tmp-*"):
+            with contextlib.suppress(OSError):
+                if stale.stat().st_mtime < cutoff:
+                    stale.unlink()
 
 
 def _base64_decode(value: object) -> bytes:
@@ -1038,19 +1066,23 @@ class CachedHTTPClient:
             "encoding": "base64",
             "body": base64.b64encode(response.content).decode("ascii"),
         }
+        _sweep_stale_entry_temps(path)
         tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp.write_bytes(json.dumps(entry).encode("utf-8"))
             tmp.replace(path)
         except OSError as exc:
-            with contextlib.suppress(OSError):
-                tmp.unlink()
             raise CacheError(
                 f"Could not write the HTTP cache entry: {exc}",
                 path=str(path),
                 hint="Set MESHPROVISION_CACHE_DIR to a writable directory.",
             ) from exc
+        finally:
+            # Also on Ctrl-C, which the handler above does not catch; after a
+            # successful replace there is nothing left to remove.
+            with contextlib.suppress(OSError):
+                tmp.unlink(missing_ok=True)
 
     def _chmod_cache_root(self) -> None:
         """Restrict the cache root to owner-only access, once per instance.

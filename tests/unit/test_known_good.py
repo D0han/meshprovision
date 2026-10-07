@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from meshprovision.db import known_good
+from meshprovision.db import fs_primitives, known_good
 from meshprovision.db.backups import BackupInfo, create_backup, list_backups
 from tests.unit.conftest import FsyncEvent
 
@@ -809,3 +809,44 @@ def test_refresh_keeps_an_older_spelling_copy_of_another_database(tmp_path: Path
     assert copy.exists()
     assert sidecar.exists()
     assert known_good.known_good_path(real).exists()
+
+
+def test_refresh_interrupted_by_ctrl_c_leaves_no_temp_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The temp is a full database copy, keys included; only OSError used to clean it up."""
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+
+    def interrupted_utime(*_args: object, **_kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(known_good.os, "utime", interrupted_utime)
+
+    with pytest.raises(KeyboardInterrupt):
+        _refresh(target, backup_dir=backup_dir)
+
+    assert list(backup_dir.iterdir()) == []
+
+
+def test_refresh_sweeps_stale_temp_copies_under_every_spelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    real, link = _linked_db(tmp_path)
+    directory = known_good.known_good_path(real).parent
+    directory.mkdir()
+    orphans = [
+        directory / ".nodes_db.known-good.ods.tmp-999-deadbeef",
+        directory / ".fleet.known-good.ods.tmp-999-deadbeef",
+    ]
+    for orphan in orphans:
+        orphan.write_bytes(b"killed mid-refresh")
+    unrelated = directory / ".other_db.known-good.ods.tmp-999-deadbeef"
+    unrelated.write_bytes(b"another database's copy")
+    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+
+    _refresh(link)
+
+    assert [orphan for orphan in orphans if orphan.exists()] == []
+    assert unrelated.exists()

@@ -569,6 +569,15 @@ def refresh_known_good(
         except OSError:
             _logger.debug("Failed to chmod backup directory %s", resolved_dir)
 
+        # Before this call's own temp exists, so it can never sweep it. A
+        # temp left by a kill is a full copy of the database, keys included.
+        for name in backup_name_targets(target):
+            fs_primitives._sweep_stale_temps(
+                resolved_dir,
+                f".{known_good_name(name)}.tmp-*",
+                min_age_seconds=fs_primitives._STALE_TEMP_MIN_AGE_SECONDS,
+            )
+
         tmp_destination = resolved_dir / f".{destination.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
         fd = os.open(tmp_destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, _FILE_MODE)
         with os.fdopen(fd, "wb") as fh:
@@ -582,8 +591,6 @@ def refresh_known_good(
         # as it can be made without a lock.
         if _superseded(target, source_stat, destination):
             _logger.debug("Known-good copy of %s already reflects a newer write; kept.", target)
-            with contextlib.suppress(OSError):
-                tmp_destination.unlink()
             return known_good_info(target, backup_dir=backup_dir)
         tmp_destination.replace(destination)
         tmp_destination = None
@@ -592,9 +599,12 @@ def refresh_known_good(
         _retire_older_spellings(target, backup_dir, current_source)
     except (OSError, AtomicWriteError) as exc:
         _logger.warning("Failed to refresh known-good copy of %s: %s", target, exc)
+        return None
+    finally:
+        # Also on Ctrl-C (KeyboardInterrupt is not caught above): the temp
+        # is a full copy of the database, keys included.
         if tmp_destination is not None:
             with contextlib.suppress(OSError):
                 tmp_destination.unlink()
-        return None
 
     return known_good_info(target, backup_dir=backup_dir)
