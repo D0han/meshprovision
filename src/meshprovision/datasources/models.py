@@ -299,6 +299,39 @@ def e7_to_degrees(value: object, *, limit: float) -> float | None:
     return degrees
 
 
+_RENDERABLE_MIN: Final[datetime] = datetime.min.replace(tzinfo=UTC) + timedelta(days=1)
+"""Earliest timestamp :func:`parse_epoch`/:func:`parse_iso8601` return.
+
+A UTC offset is always strictly less than a day, so this and
+:data:`_RENDERABLE_MAX` bound the instants every local timezone can show:
+``mesh status``'s table renders each one with ``value.astimezone()``
+(see :func:`meshprovision.status.timefmt.format_local`), which raises
+``OverflowError`` for an instant within a day of ``datetime.min``/
+``datetime.max`` in a zone that pushes it past the edge. Such a value is
+never a real observation -- it is typically a .NET ``DateTime.MinValue``/
+``MaxValue`` "never" sentinel -- so it is treated as unparseable.
+"""
+
+_RENDERABLE_MAX: Final[datetime] = datetime.max.replace(tzinfo=UTC) - timedelta(days=1)
+"""Latest timestamp :func:`parse_epoch`/:func:`parse_iso8601` return; see
+:data:`_RENDERABLE_MIN`."""
+
+
+def _renderable_or_none(value: datetime) -> datetime | None:
+    """Return ``value`` when every local timezone can render it, else ``None``.
+
+    Args:
+        value: A timezone-aware datetime.
+
+    Returns:
+        ``value`` when it lies within :data:`_RENDERABLE_MIN` ..
+        :data:`_RENDERABLE_MAX`; otherwise ``None``.
+    """
+    if _RENDERABLE_MIN <= value <= _RENDERABLE_MAX:
+        return value
+    return None
+
+
 def parse_epoch(value: object) -> datetime | None:
     """Convert a unix epoch seconds value to a timezone-aware UTC datetime.
 
@@ -310,17 +343,19 @@ def parse_epoch(value: object) -> datetime | None:
 
     Returns:
         The corresponding UTC datetime, or ``None`` when ``value`` is not
-        a plain ``int``/``float``, is not positive, or is out of range
-        for :meth:`datetime.fromtimestamp`.
+        a plain ``int``/``float``, is not positive, is out of range for
+        :meth:`datetime.fromtimestamp`, or falls within a day of the
+        largest representable datetime (see :data:`_RENDERABLE_MAX`).
     """
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     if value <= 0:
         return None
     try:
-        return datetime.fromtimestamp(value, tz=UTC)
+        parsed = datetime.fromtimestamp(value, tz=UTC)
     except (OverflowError, OSError, ValueError):
         return None
+    return _renderable_or_none(parsed)
 
 
 def parse_iso8601(value: object, *, assume_tz: tzinfo = LORASTATS_NAIVE_TZ) -> datetime | None:
@@ -343,7 +378,10 @@ def parse_iso8601(value: object, *, assume_tz: tzinfo = LORASTATS_NAIVE_TZ) -> d
 
     Returns:
         A timezone-aware UTC datetime, or ``None`` when ``value`` is not
-        a ``str`` or does not parse as ISO 8601.
+        a ``str``, does not parse as ISO 8601, cannot be converted to UTC
+        (an instant at the very edge of the representable range, such as
+        a naive ``"0001-01-01T00:00:00"``), or falls within a day of
+        either end of that range (see :data:`_RENDERABLE_MIN`).
     """
     if not isinstance(value, str):
         return None
@@ -358,7 +396,11 @@ def parse_iso8601(value: object, *, assume_tz: tzinfo = LORASTATS_NAIVE_TZ) -> d
         return None
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=assume_tz)
-    return parsed.astimezone(UTC)
+    try:
+        utc = parsed.astimezone(UTC)
+    except OverflowError:
+        return None
+    return _renderable_or_none(utc)
 
 
 def coerce_float(value: object) -> float | None:

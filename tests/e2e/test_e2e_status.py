@@ -21,7 +21,7 @@ from meshprovision.nodeid import NodeId
 from tests.e2e.conftest import db_fingerprint, invoke
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterator
 
     import respx
     from click.testing import CliRunner
@@ -722,3 +722,51 @@ def test_json_run_escapes_a_lone_surrogate_in_a_node_name(
     assert result.exit_code == 0
     (node_doc,) = json.loads(result.stdout)["nodes"]
     assert node_doc["long_name"] == "Evil\\ud800Name"
+
+
+@pytest.fixture
+def warsaw_local_tz(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Run the test with the C library's local timezone set to Europe/Warsaw (UTC+1/+2).
+
+    ``time.tzset()`` runs again only after the monkeypatch context has
+    restored ``TZ``, so the process's local timezone is back to normal
+    for every later test.
+    """
+    with monkeypatch.context() as patch:
+        patch.setenv("TZ", "Europe/Warsaw")
+        time.tzset()
+        yield
+    time.tzset()
+
+
+@pytest.mark.usefixtures("warsaw_local_tz")
+def test_table_run_survives_timestamps_at_the_edge_of_the_datetime_range(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """A "never" sentinel from either source is an unparseable field, not a crash.
+
+    lorastats' naive ``0001-01-01T00:00:00`` (.NET ``DateTime.MinValue``)
+    used to raise ``OverflowError`` while being converted to UTC; loranet's
+    epoch ``253402300799`` (9999-12-31T23:59:59Z) parsed, then crashed the
+    table's local-time rendering east of UTC. Round 41's logic review,
+    Finding 2.
+    """
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    fields = {
+        "shortName": "MTa1",
+        "seenBy": {"gw1": 253_402_300_799},
+        "last_seen_iso": "0001-01-01T00:00:00",
+    }
+    with mock_sources(nodes={node_hex: fields}):
+        result = invoke(runner, ["status"], {**env, "COLUMNS": "300"})
+
+    # Degraded (7) only because the node is now "unknown", never 1 (a crash).
+    assert result.exit_code == 7
+    assert "never" in result.stdout
+    assert "loranet: 1 field(s) could not be coerced" in result.stdout
+    assert "lorastats: 1 field(s) could not be coerced" in result.stdout

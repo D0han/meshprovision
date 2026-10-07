@@ -190,6 +190,39 @@ def test_parse_iso8601_naive_uses_the_given_assume_tz_not_utc_or_system_local() 
     )
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("0001-01-01T00:00:00", id="naive-min-value-overflows"),
+        pytest.param("0001-01-01T00:00:00Z", id="utc-min-value"),
+        pytest.param("9999-12-31T23:59:59", id="naive-max-value"),
+        pytest.param("9999-12-31T23:59:59-05:00", id="offset-max-value-overflows"),
+    ],
+)
+def test_parse_iso8601_rejects_a_timestamp_at_the_edge_of_the_datetime_range(value: str) -> None:
+    """A .NET DateTime.MinValue/MaxValue "never" sentinel is unparseable, never a crash.
+
+    Two of these used to raise OverflowError out of the UTC conversion
+    (crashing all of ``mesh status``); the other two parsed, then crashed
+    the table's local-time rendering in a timezone that pushed them past
+    the edge. Round 41's logic review, Finding 2.
+    """
+    assert parse_iso8601(value) is None
+
+
+def test_parse_epoch_rejects_the_last_representable_day() -> None:
+    """9999-12-31T23:59:59Z cannot be shown in any timezone east of UTC."""
+    assert parse_epoch(253_402_300_799) is None
+
+
+def test_parse_iso8601_and_parse_epoch_keep_a_timestamp_just_inside_the_renderable_range() -> None:
+    assert parse_iso8601("0001-01-03T00:00:00Z") == datetime(1, 1, 3, tzinfo=UTC)
+    assert parse_iso8601("9999-12-29T00:00:00Z") == datetime(9999, 12, 29, tzinfo=UTC)
+    assert parse_epoch(253_402_300_799 - 3 * 86_400) == datetime(
+        9999, 12, 28, 23, 59, 59, tzinfo=UTC
+    )
+
+
 def test_node_observation_rejects_naive_datetime() -> None:
     from pydantic import ValidationError
 
@@ -322,6 +355,25 @@ def test_lorastats_parse_node_uncoercible_timestamps_counted_as_field_coercions(
     assert obs.last_seen is None
     assert obs.last_boot is None
     assert tracker.failures == 2
+
+
+def test_lorastats_parse_node_counts_a_min_value_last_boot_and_keeps_last_seen() -> None:
+    """One sentinel field costs only that field, not the record (or the whole report)."""
+    tracker = CoercionTracker()
+    obs = lorastats_module.parse_node(
+        {
+            "NodeId": "deadbe01",
+            "LastSeen": "2026-10-07T10:00:00Z",
+            "LastBoot": "0001-01-01T00:00:00",
+        },
+        region="PL",
+        observed_at=datetime.now(tz=UTC),
+        coercion_tracker=tracker,
+    )
+    assert obs is not None
+    assert obs.last_seen == datetime(2026, 10, 7, 10, 0, 0, tzinfo=UTC)
+    assert obs.last_boot is None
+    assert tracker.failures == 1
 
 
 def test_lorastats_parse_node_missing_node_id_returns_none() -> None:

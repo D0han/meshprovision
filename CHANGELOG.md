@@ -398,6 +398,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needed), and a contact with a control or other non-printable character,
   or with `${` (which the loader would expand as a variable reference),
   is refused with an error instead.
+- A "never" timestamp from loranet.pl or lorastats.pl at the very edge
+  of the supported date range -- such as lorastats' `0001-01-01T00:00:00`
+  (a .NET `DateTime.MinValue` sentinel) or a loranet epoch of
+  `253402300799` (9999-12-31) -- crashed `mesh status`, `--watch`
+  included, with a Python traceback (exit code 1): one bad field lost the
+  whole report. Depending on the value, the crash came either while
+  reading the response or, in the table, only in a timezone that pushed
+  it past the edge. Such a value is now counted as a field that could not
+  be read, like any other malformed timestamp, and the rest of the report
+  is unaffected.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they
