@@ -309,6 +309,48 @@ def test_known_good_status_unrecorded_when_sidecar_is_malformed_json(tmp_path: P
     assert status.provenance is known_good.KnownGoodProvenance.UNRECORDED
 
 
+def test_known_good_status_unrecorded_when_the_sidecar_source_is_not_a_string(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    _refresh(target, backup_dir=backup_dir)
+    sidecar = backup_dir / "nodes_db.known-good.json"
+    sidecar.write_text(json.dumps({**json.loads(sidecar.read_bytes()), "source": 5}))
+
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.UNRECORDED
+    assert status.recorded_source is None
+
+
+def test_known_good_status_is_not_verified_when_the_copy_cannot_be_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable copy (EACCES, EIO) was never hashed, so it must not count as verified."""
+    target = tmp_path / "nodes_db.ods"
+    target.write_bytes(b"v1")
+    backup_dir = tmp_path / "backups"
+    _refresh(target, backup_dir=backup_dir)
+    copy = backup_dir / "nodes_db.known-good.ods"
+    real_read_bytes = Path.read_bytes
+
+    def read_bytes(self: Path) -> bytes:
+        if self == copy:
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self))
+        return real_read_bytes(self)
+
+    monkeypatch.setattr(Path, "read_bytes", read_bytes)
+
+    status = known_good.known_good_status(target, backup_dir=backup_dir)
+
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.UNRECORDED
+    assert status.recorded_source == str(target.resolve())
+
+
 def test_known_good_status_other_source_after_a_directory_copy(tmp_path: Path) -> None:
     """Reproduces the "whole fleet directory copied elsewhere" case (D2's headline)."""
     fleet_a_dir = tmp_path / "fleetA"

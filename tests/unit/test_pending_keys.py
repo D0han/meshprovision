@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import stat
 from collections.abc import Callable
@@ -247,6 +248,25 @@ def test_clear_pending_is_idempotent(tmp_path: Path) -> None:
     db_path = tmp_path / "nodes_db.ods"
     pending_keys.clear_pending(db_path, _NODE)
     pending_keys.clear_pending(db_path, _NODE)  # does not raise
+
+
+def test_a_rewritten_pending_keypair_leaves_no_copy_behind_once_cleared(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """A regenerate run overwrites the file; no timestamped backup may keep the old private key."""
+    db_path = tmp_path / "nodes_db.ods"
+    first, second = keypair_factory(), keypair_factory()
+    pending_keys.write_pending(db_path, _NODE, first, now=datetime.now(tz=UTC))
+    pending_keys.write_pending(db_path, _NODE, second, now=datetime.now(tz=UTC))
+
+    pending_keys.clear_pending(db_path, _NODE)
+
+    backup_dir = pending_keys.pending_key_path(db_path, _NODE).parent
+    secrets = [base64.b64encode(kp.private.reveal()) for kp in (first, second)]
+    leftovers = [path for path in backup_dir.rglob("*") if path.is_file()]
+    leaked = any(secret in path.read_bytes() for path in leftovers for secret in secrets)
+    assert not leaked
+    assert [path.name for path in leftovers if ".pending-" in path.name] == []
 
 
 def test_matches_requires_both_halves_to_match(keypair_factory: Callable[[], KeyPair]) -> None:
