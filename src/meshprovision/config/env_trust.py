@@ -1,10 +1,11 @@
 """Upward ``.env`` discovery and the trust checks a discovered file must pass.
 
 :func:`find_env_file` locates the nearest ``.env`` above the working
-directory (bounded at ``$HOME``), and :func:`read_discovered_env_file`
-returns its text only after checking -- on the one open descriptor that is
-then read -- that the file is a regular file owned by the current user and
-writable by no one else, by mode bits or by POSIX ACL. Both are used by
+directory (bounded at ``$HOME``), skipping one that another user could
+have planted, and :func:`read_discovered_env_file` returns its text only
+after checking -- on the one open descriptor that is then read -- that the
+file is a regular file owned by the current user and writable by no one
+else, by mode bits or by POSIX ACL. Both are used by
 :func:`meshprovision.config.settings.load_settings`; an explicitly passed
 ``--env-file`` never goes through here.
 
@@ -14,6 +15,7 @@ This module imports only the standard library and :mod:`meshprovision.errors`.
 from __future__ import annotations
 
 import errno
+import logging
 import os
 import shlex
 import stat
@@ -28,6 +30,8 @@ __all__ = [
     "read_discovered_env_file",
 ]
 
+_logger = logging.getLogger(__name__)
+
 
 def find_env_file(start: Path | None = None) -> Path | None:
     """Locate the nearest ``.env`` file, searching upward from ``start``.
@@ -41,7 +45,16 @@ def find_env_file(start: Path | None = None) -> Path | None:
     ``$HOME`` itself rather than continuing to filesystem root -- a
     project nested a few directories deep inside the home directory has
     no business picking up a ``.env`` planted by another user higher up
-    the tree.
+    the tree. ``$HOME`` is compared both as given and resolved, since
+    ``start`` (the working directory) is always a resolved path.
+
+    A ``.env`` owned by another user, in a directory that is not private
+    to the current user (see :func:`_directory_is_private`), is skipped
+    and the walk goes on: whoever can create files there -- every local
+    user, in ``/tmp`` -- could have planted it, and refusing it would let
+    them break every command run below that directory. It is logged at
+    INFO. One owned by another user in a private directory is still
+    returned, and :func:`read_discovered_env_file` refuses it.
 
     Args:
         start: Directory to begin searching from. Defaults to
@@ -52,20 +65,82 @@ def find_env_file(start: Path | None = None) -> Path | None:
         found.
     """
     base = start if start is not None else Path.cwd()
-    directories: tuple[Path, ...] = (base, *base.parents)
-    home = Path.home()
-    if base == home or home in base.parents:
-        bounded: list[Path] = []
-        for directory in directories:
-            bounded.append(directory)
-            if directory == home:
-                break
-        directories = tuple(bounded)
-    for directory in directories:
+    homes = _home_directories()
+    for directory in (base, *base.parents):
         candidate = directory / ".env"
         if candidate.is_file():
-            return candidate
+            owner = _planted_by(candidate)
+            if owner is None:
+                return candidate
+            _logger.info(
+                "Ignoring %s: it is owned by %s and its directory is not private to you.",
+                candidate,
+                _user_label(owner),
+            )
+        if directory in homes:
+            break
     return None
+
+
+def _home_directories() -> frozenset[Path]:
+    """Return ``$HOME`` as given and resolved, either of which bounds :func:`find_env_file`.
+
+    Returns:
+        ``Path.home()`` and, when it can be resolved, its resolved form.
+    """
+    home = Path.home()
+    try:
+        return frozenset({home, home.resolve()})
+    except (OSError, RuntimeError):  # a symlink loop: RuntimeError before Python 3.13
+        return frozenset({home})
+
+
+def _planted_by(candidate: Path) -> int | None:
+    """Return the owner of a discovered ``.env`` that another user could have planted.
+
+    Args:
+        candidate: An existing ``.env`` file (a symlink is judged by its
+            target, like :func:`read_discovered_env_file` does).
+
+    Returns:
+        The uid owning ``candidate`` when that is not the current user and
+        ``candidate``'s directory is not private to the current user;
+        otherwise None -- including where ``os.getuid`` doesn't exist
+        (Windows) and when ``candidate`` can't be stat-ed (the read then
+        reports why).
+    """
+    if not hasattr(os, "getuid"):
+        return None
+    try:
+        owner = candidate.stat().st_uid
+    except OSError:
+        return None
+    if owner == os.getuid() or _directory_is_private(candidate.parent):
+        return None
+    return owner
+
+
+def _directory_is_private(directory: Path) -> bool:
+    """Return whether only the current user (or root) can create files in ``directory``.
+
+    The directory must be owned by the current user and pass the same
+    mode-bit checks as a discovered ``.env`` (see
+    :func:`_env_trust_problems`): not world-writable, and group-writable
+    only through the user's own private primary group. Its ACL is not
+    read.
+
+    Args:
+        directory: The directory to check.
+
+    Returns:
+        True if it is private; False otherwise, including when it can't
+        be stat-ed.
+    """
+    try:
+        st = directory.stat()
+    except OSError:
+        return False
+    return st.st_uid == os.getuid() and not _env_trust_problems(directory, st, None)
 
 
 _POSIX_ACL_XATTR: Final[str] = "system.posix_acl_access"
@@ -112,7 +187,9 @@ class _EnvTrustProblem(NamedTuple):
 def _env_trust_problems(
     path: Path, st: os.stat_result, acl: tuple[_AclEntry, ...] | None
 ) -> list[_EnvTrustProblem]:
-    """List every reason the ``st`` and ``acl`` of a discovered ``.env`` make it untrustworthy.
+    """List every way the ``st`` and ``acl`` of a discovered ``.env`` let others write it.
+
+    Ownership is checked separately (see :func:`read_discovered_env_file`).
 
     A group-writable file is accepted when its group is the current
     user's primary group and no one else is in that group (see
@@ -130,21 +207,19 @@ def _env_trust_problems(
 
     Args:
         path: The discovered ``.env`` path, used only to build the fix
-            commands (``chmod``/``chown`` follow a symlink to its target,
-            which is what ``st`` describes).
+            commands (``chmod`` follows a symlink to its target, which is
+            what ``st`` describes).
         st: ``os.fstat`` of the open file descriptor that will be parsed.
         acl: That descriptor's access ACL (see :func:`_read_access_acl`),
             or None if it has none.
 
     Returns:
         One :class:`_EnvTrustProblem` per failed check, in a stable order
-        (owner, world-write, group-write, ACL write); empty if the file is
-        trusted.
+        (world-write, group-write, ACL write); empty if no one else can
+        write the file.
     """
     quoted = shlex.quote(str(path))
     problems: list[_EnvTrustProblem] = []
-    if st.st_uid != os.getuid():
-        problems.append(_EnvTrustProblem("it is not owned by you", f'chown "$USER" {quoted}'))
     if st.st_mode & stat.S_IWOTH:
         problems.append(_EnvTrustProblem("it is world-writable", f"chmod o-w {quoted}"))
     group_obj_writable, named_writable = (
@@ -321,6 +396,23 @@ def _primary_group_is_private(gid: int, uid: int) -> bool:
     return not any(entry.pw_gid == gid and entry.pw_uid != uid for entry in pwd.getpwall())
 
 
+def _user_label(uid: int) -> str:
+    """Return user ``uid``'s login name for messages, or ``uid <n>`` if it has none.
+
+    Args:
+        uid: The user id to name.
+
+    Returns:
+        The login name, or ``uid <n>`` when the lookup fails.
+    """
+    import pwd
+
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return f"uid {uid}"
+
+
 def _group_label(gid: int) -> str:
     """Return group ``gid``'s name for messages, or the number if it has none.
 
@@ -344,6 +436,9 @@ def read_discovered_env_file(path: Path) -> str:
     Only applies to a ``.env`` found by :func:`find_env_file` -- a file
     planted above the search start by another user on a shared machine,
     or writable by others, could inject hostile environment overrides.
+    A file owned by another user is refused on that ground alone, with a
+    hint that never suggests taking it over (``chown``): it may be
+    someone else's.
     An explicitly-passed ``env_file`` is operator-chosen and is never
     checked here.
 
@@ -389,6 +484,16 @@ def read_discovered_env_file(path: Path) -> str:
             raise SettingsError(
                 f"Refusing to load discovered .env file {path}: it is not a regular file.",
                 hint="Replace it with a regular file, or pass one explicitly with --env-file.",
+            )
+        if st.st_uid != os.getuid():
+            raise SettingsError(
+                f"Refusing to load discovered .env file {path}: it is owned by "
+                f"{_user_label(st.st_uid)}, not you.",
+                hint=(
+                    "If you did not create it, do not use it: delete it (or ask its owner to), "
+                    "keep your own .env in your project directory, or pass one explicitly "
+                    "with --env-file."
+                ),
             )
         acl = _read_access_acl(stream.fileno(), path)
         problems = _env_trust_problems(path, st, acl)

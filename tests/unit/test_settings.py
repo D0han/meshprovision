@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import errno
 import grp
+import logging
 import os
 import pwd
 import shlex
+import stat
 import struct
 import subprocess
 from collections.abc import Callable
@@ -26,6 +28,7 @@ from meshprovision.config.settings import (
     load_settings,
 )
 from meshprovision.errors import MissingContactError, SettingsError
+from tests.unit.conftest import pretend_owned_by_someone_else
 
 pytestmark = pytest.mark.unit
 
@@ -360,6 +363,98 @@ def test_find_env_file_does_not_walk_above_home(
     assert find_env_file(nested) is None
 
 
+def test_find_env_file_does_not_walk_above_a_symlinked_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``$HOME`` naming a symlink still bounds a walk that starts from the resolved path.
+
+    The working directory is always resolved, so ``$HOME=/home/u`` -> ``/data/u``
+    and a cwd of ``/data/u/proj`` would otherwise never meet ``$HOME``.
+    """
+    real_home = tmp_path / "data" / "u"
+    nested = real_home / "proj" / "sub"
+    nested.mkdir(parents=True)
+    (tmp_path / "data" / ".env").write_text("X=1\n")
+    link = tmp_path / "home-link"
+    link.symlink_to(real_home, target_is_directory=True)
+    monkeypatch.setattr(Path, "home", lambda: link)
+    assert find_env_file(nested) is None
+
+
+def _no_such_user(uid: int) -> NoReturn:
+    raise KeyError(uid)
+
+
+@pytest.mark.parametrize(
+    ("mode", "foreign_gid"),
+    [
+        pytest.param(0o777, False, id="world-writable-like-tmp"),
+        pytest.param(0o770, True, id="writable-by-a-foreign-group"),
+    ],
+)
+def test_find_env_file_skips_another_users_env_in_a_shared_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    mode: int,
+    foreign_gid: bool,
+) -> None:
+    """A ``.env`` someone else could have planted is skipped, and the walk goes on.
+
+    The shared directory is owned by the current user here, like ``/tmp``
+    is owned by root when root runs ``mesh``: being the directory's owner
+    doesn't make it private while others can create files in it.
+    """
+    own = tmp_path / ".env"
+    own.write_text("X=1\n")
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(mode)
+    planted = shared / ".env"
+    planted.write_text("X=2\n")
+    if foreign_gid:
+        real_gid = os.getgid()
+        monkeypatch.setattr(os, "getgid", lambda: real_gid + 1)
+    other_uid = pretend_owned_by_someone_else(monkeypatch, planted)
+    monkeypatch.setattr(pwd, "getpwuid", _no_such_user)
+
+    with caplog.at_level(logging.INFO, logger="meshprovision.config.env_trust"):
+        assert find_env_file(shared) == own
+
+    (record,) = caplog.records
+    assert record.getMessage() == (
+        f"Ignoring {planted}: it is owned by uid {other_uid} and its directory is not "
+        "private to you."
+    )
+
+
+def test_find_env_file_returns_another_users_env_in_a_private_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the user (or root, e.g. via sudo) could have put it there: it is refused on read."""
+    private = tmp_path / "private"
+    private.mkdir()
+    private.chmod(0o700)
+    planted = private / ".env"
+    planted.write_text("X=2\n")
+    pretend_owned_by_someone_else(monkeypatch, planted)
+    assert find_env_file(private) == planted
+
+
+def test_find_env_file_skips_nothing_without_getuid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without ``os.getuid`` (Windows) there is no ownership to judge, so nothing is skipped."""
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o777)
+    planted = shared / ".env"
+    planted.write_text("X=2\n")
+    pretend_owned_by_someone_else(monkeypatch, planted)
+    monkeypatch.delattr(os, "getuid")
+    assert find_env_file(shared) == planted
+
+
 def _expected_hint(path: Path, *fixes: str) -> str:
     quoted = shlex.quote(str(path))
     return "Fix it with `" + " && ".join(f"{fix} {quoted}" for fix in fixes) + "`" + _FALLBACK_HINT
@@ -388,8 +483,6 @@ def _expected_hint(path: Path, *fixes: str) -> str:
             ("chmod o-w", "chmod g-w"),
             id="666-owner-foreign-world-group-write-refused",
         ),
-        pytest.param(0o600, False, True, ('chown "$USER"',), id="600-other-owner-primary-refused"),
-        pytest.param(0o600, False, False, ('chown "$USER"',), id="600-other-owner-foreign-refused"),
     ],
 )
 def test_discovered_env_trust_matrix(
@@ -537,30 +630,51 @@ def test_discovered_env_open_failure_is_a_settings_error(
     assert isinstance(exc_info.value.__cause__, PermissionError)
 
 
+@pytest.mark.parametrize("primary_gid", [True, False], ids=["primary-group", "foreign-group"])
+def test_discovered_env_owned_by_another_user_is_refused_without_a_chown_hint(
+    discovered_env: Callable[..., Path], primary_gid: bool
+) -> None:
+    """Taking the file over would trust whatever its owner wrote; the hint says not to use it."""
+    path = discovered_env(0o600, own_uid=False, primary_gid=primary_gid)
+    with pytest.raises(SettingsError) as exc_info:
+        env_trust.read_discovered_env_file(path)
+    owner = path.stat().st_uid
+    assert str(exc_info.value) == (
+        f"Refusing to load discovered .env file {path}: it is owned by uid {owner}, not you."
+    )
+    assert exc_info.value.hint == (
+        "If you did not create it, do not use it: delete it (or ask its owner to), keep your "
+        "own .env in your project directory, or pass one explicitly with --env-file."
+    )
+
+
 def test_discovered_env_is_parsed_from_the_checked_open_file(
     discovered_env: Callable[..., Path], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """A ``.env`` swapped for another file mid-check must not be what gets parsed.
 
-    The swap is triggered from inside the trust check (its ``os.getuid``
-    call): a check-then-reopen-by-path implementation would parse the
-    swapped-in file, while checking and reading one open descriptor parses
-    the file that was actually checked.
+    The swap is triggered from inside the trust check of the open file
+    (``_env_trust_problems`` called with a regular file's ``st``, not a
+    directory's): a check-then-reopen-by-path implementation would parse
+    the swapped-in file, while checking and reading one open descriptor
+    parses the file that was actually checked.
     """
     path = discovered_env(0o600)
-    real_uid = os.getuid()
+    real_problems = env_trust._env_trust_problems
     swapped: list[bool] = []
 
-    def swap_then_getuid() -> int:
-        if not swapped:
+    def swap_then_check(
+        checked: Path, st: os.stat_result, acl: tuple[object, ...] | None
+    ) -> list[object]:
+        if stat.S_ISREG(st.st_mode) and not swapped:
             replacement = tmp_path / "replacement.env"
             replacement.write_text("MESHPROVISION_CONTACT=swapped@example.invalid\n")
             replacement.chmod(0o600)
             replacement.replace(path)
             swapped.append(True)
-        return real_uid
+        return real_problems(checked, st, acl)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(os, "getuid", swap_then_getuid)
+    monkeypatch.setattr(env_trust, "_env_trust_problems", swap_then_check)
     assert load_settings(environ={}).contact == "me@example.invalid"
     assert swapped == [True]
 

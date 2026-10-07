@@ -377,6 +377,28 @@ def source_without_docstring(path: Path) -> str:
     return ast.unparse(tree)
 
 
+def pretend_owned_by_someone_else(monkeypatch: pytest.MonkeyPatch, target: Path) -> int:
+    """Make ``Path.stat`` report ``target`` as owned by another uid, which it returns.
+
+    A test can't create a file owned by another user without root, and
+    :func:`~meshprovision.config.env_trust.find_env_file`'s ownership check
+    (unlike the read's ``os.fstat``) goes through ``Path.stat``.
+    """
+    real_stat = Path.stat
+    other_uid = os.getuid() + 1
+
+    def fake_stat(self: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        result = real_stat(self, follow_symlinks=follow_symlinks)
+        if self != target:
+            return result
+        fields = list(result)
+        fields[stat.ST_UID] = other_uid
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(Path, "stat", fake_stat)
+    return other_uid
+
+
 @pytest.fixture
 def factory_live(make_live: Callable[..., LiveConfig]) -> LiveConfig:
     """Build a :class:`LiveConfig` with factory-default names and no security.

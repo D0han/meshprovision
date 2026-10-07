@@ -251,7 +251,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are still refused; a symlinked `.env` is judged by the file it points
   to. The check runs against the same open file that is then parsed, so
   the file can't be swapped between check and read, and the error lists
-  each problem with the `chmod`/`chown` command that fixes it.
+  each problem with the `chmod` command that fixes it. A file owned by
+  another user is refused on that ground alone, and the error no longer
+  suggests `chown` (which would have made a file someone else planted
+  trusted): it says not to use a file you didn't create. The upward
+  search now skips (logged with `-v`) a `.env` owned by another user in a
+  directory you don't own or others can create files in, such as `/tmp`,
+  instead of refusing it -- so a file any local user can plant there no longer makes
+  every command run below it fail -- and it stops at `$HOME` also when
+  `$HOME` is a symlink.
 - The `Nodes`/`Keys` sheets are now always sorted -- on load, on every
   in-memory mutation, and on write -- instead of preserving insertion/
   hand-editing order. `Nodes` sorts by `long_name` (falling back to

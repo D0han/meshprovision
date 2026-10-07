@@ -29,6 +29,7 @@ from meshprovision.cli.setup import (
 from meshprovision.config.settings import Settings
 from meshprovision.db import atomic_writer
 from meshprovision.errors import ConfigError, SettingsError
+from tests.unit.conftest import pretend_owned_by_someone_else
 
 pytestmark = pytest.mark.unit
 
@@ -116,6 +117,21 @@ class TestInspectSetup:
         settings = Settings(db_path=nested / "db.ods", template_path=nested / "tpl.yaml")
         status = inspect_setup(settings, env_file=None, cwd=nested)
         assert status.env.path == tmp_path / ".env"
+
+    def test_env_skipped_by_the_upward_search_is_not_reported_as_present(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Setup sees the same .env load_settings would: none, when the only one is planted."""
+        shared = tmp_path / "shared"
+        work = shared / "work"
+        work.mkdir(parents=True)
+        shared.chmod(0o777)
+        (shared / ".env").write_text("MESHPROVISION_CONTACT=planted@example.org\n")
+        pretend_owned_by_someone_else(monkeypatch, shared / ".env")
+        settings = Settings(db_path=work / "db.ods", template_path=work / "tpl.yaml")
+        status = inspect_setup(settings, env_file=None, cwd=work)
+        assert status.env.path == work / ".env"
+        assert not status.env.present
 
     def test_explicit_env_file_overrides_the_upward_search(self, tmp_path: Path) -> None:
         (tmp_path / ".env").write_text("MESHPROVISION_CONTACT=a@b.c\n", encoding="utf-8")

@@ -18,7 +18,13 @@ Part of the meshprovision docs — see the [README](../README.md).
 Precedence, highest to lowest: **CLI flag > environment variable > `.env`
 file > built-in default**. `.env` is found by searching upward from the
 current working directory, or named explicitly with `--env-file`. The
-upward search never crosses above your home directory, and a discovered
+upward search never crosses above your home directory (also when `$HOME`
+is a symlink). It skips a `.env` owned by another user in a directory
+that isn't private to you -- one you don't own, or that others can
+create files in, such as `/tmp` -- since you can't tell who put it
+there; run with `-v` to see which file was skipped and why. A symlinked `.env`
+in such a directory that points at a file you own is still followed,
+since its content is yours. Otherwise a discovered
 `.env` (for a symlink, the file it points to) is refused unless it's a
 regular file owned by you and not world-writable (group-writable is fine
 when the group is your primary group and no one else is in it, the usual
@@ -27,10 +33,12 @@ group, or by a primary group shared with other users such as `users`, is
 refused). On Linux the file's POSIX ACL counts too: an ACL entry that
 lets another user or group write the file (for example one inherited from
 a directory's default ACL) gets it refused, while read-only ACL entries
-are fine. The error lists each problem with the `chmod`/`chown` command
-that fixes it (for an ACL, `chmod g-w`, which takes write access away
-from every ACL entry at once). Pass `--env-file` explicitly to bypass the
-search (and this check) entirely.
+are fine. The error lists each problem with the `chmod` command that
+fixes it (for an ACL, `chmod g-w`, which takes write access away from
+every ACL entry at once). A `.env` owned by another user in your own
+private directory is refused without suggesting `chown`: if you didn't
+create it, don't use it -- delete it and keep your own. Pass `--env-file`
+explicitly to bypass the search (and this check) entirely.
 
 "No one else is in it" means the group lists no other members and no
 other account has it as its primary group. On hosts whose LDAP/sssd
