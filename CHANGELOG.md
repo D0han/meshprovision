@@ -374,7 +374,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every other command that opens the database with a Python traceback
   (exit code 1). It is now reported like any other malformed timestamp:
   "'<column>' is not a valid timestamp" with an ISO-8601 hint, exit
-  code `4`.
+  code `4`. The same kind of value in a pending-key file (`created_ts`,
+  in the database's `backups/` directory) crashed every `mesh provision`
+  of that node until the file was deleted by hand; the file is now
+  ignored with a warning, like any other damaged pending-key file.
 - A node name from loranet.pl or lorastats.pl holding a lone UTF-16
   surrogate (a `\ud800`-`\udfff` escape in the JSON, e.g. an emoji name
   cut in half) crashed `mesh status` -- table, `--json` and `--watch` --

@@ -16,8 +16,9 @@ later ``mesh provision`` of the same node loads it and, if the device's
 live-reported keypair still matches it exactly, recovers it automatically
 instead of losing the key or spuriously regenerating it again.
 
-Imports only :mod:`meshprovision.db.atomic_writer` and
-:mod:`meshprovision.db.backups` (never :mod:`meshprovision.db.known_good`),
+Imports only :mod:`meshprovision.db.atomic_writer`,
+:mod:`meshprovision.db.backups` and :mod:`meshprovision.db.schema` (never
+:mod:`meshprovision.db.known_good`),
 keeping this module's place in the ``db/`` dependency graph a leaf
 alongside it, not a dependent of it.
 """
@@ -35,6 +36,7 @@ from typing import Final
 
 from meshprovision.crypto.keys import X25519_KEY_SIZE, KeyPair
 from meshprovision.crypto.redact import SecretBytes
+from meshprovision.db import schema
 from meshprovision.db.atomic_writer import write_bytes_atomic
 from meshprovision.db.backups import backup_dir_for
 from meshprovision.nodeid import NodeId
@@ -146,10 +148,13 @@ def load_pending(db_path: Path, node_id: NodeId) -> PendingKeypair | None:
     Never raises: a missing file is the ordinary "nothing pending" case
     and is silent. Anything else wrong (an unreadable file -- permission
     denied, an I/O error, a directory at that path -- or a readable but
-    malformed one: bad JSON, an unrecognized format, a wrong-length key)
+    malformed one: bad JSON, an unrecognized format, a wrong-length key,
+    a timestamp that does not parse or is out of range in UTC)
     is logged at ``WARNING`` and treated the same as "nothing pending"
     rather than propagated -- a damaged or inaccessible sidecar must
-    never block an ordinary provisioning run.
+    never block an ordinary provisioning run. A ``created_ts`` without a
+    UTC offset (only possible in a hand-edited file) is read as UTC, the
+    database's own rule, not as host-local time.
 
     Args:
         db_path: The database's own path.
@@ -181,7 +186,10 @@ def load_pending(db_path: Path, node_id: NodeId) -> PendingKeypair | None:
         recorded_node_id = data["node_id"]
         public = base64.b64decode(data["public"], validate=True)
         private = base64.b64decode(data["private"], validate=True)
-        created_ts = datetime.fromisoformat(data["created_ts"])
+        created_raw = data["created_ts"]
+        if not isinstance(created_raw, str):
+            raise TypeError(f"created_ts must be a string, not {type(created_raw).__name__}")
+        created_ts = schema.parse_timestamp(created_raw)
     except (KeyError, TypeError, ValueError) as exc:
         _logger.warning("Malformed pending keypair at %s: %s", path, exc)
         return None
@@ -202,7 +210,7 @@ def load_pending(db_path: Path, node_id: NodeId) -> PendingKeypair | None:
         node_id=node_id,
         public=public,
         private=SecretBytes(private),
-        created_ts=created_ts.astimezone(UTC),
+        created_ts=created_ts,
     )
 
 

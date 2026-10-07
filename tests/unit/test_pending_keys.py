@@ -158,6 +158,34 @@ def test_load_pending_is_none_and_warns_on_malformed_content(
     assert "Malformed pending keypair" in caplog.text
 
 
+@pytest.mark.parametrize(
+    "created_ts",
+    ["9999-12-31T23:59:59-05:00", "0001-01-01T00:00:00+01:00", 1767225600],
+    ids=["past_max_in_utc", "before_min_in_utc", "not_a_string"],
+)
+def test_load_pending_is_none_and_warns_on_an_unusable_timestamp(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    keypair_factory: Callable[[], KeyPair],
+    created_ts: object,
+) -> None:
+    """A timestamp past the datetime range once shifted to UTC raised OverflowError.
+
+    ``mesh provision`` calls ``load_pending`` unprotected, so that crashed
+    every provisioning run of the node until the file was deleted by hand.
+    """
+    db_path = tmp_path / "nodes_db.ods"
+    pending_keys.write_pending(db_path, _NODE, keypair_factory(), now=datetime.now(tz=UTC))
+    path = pending_keys.pending_key_path(db_path, _NODE)
+    payload = json.loads(path.read_text())
+    payload["created_ts"] = created_ts
+    path.write_text(json.dumps(payload))
+
+    with caplog.at_level("WARNING"):
+        assert pending_keys.load_pending(db_path, _NODE) is None
+    assert "Malformed pending keypair" in caplog.text
+
+
 def test_load_pending_is_none_and_warns_on_wrong_length_key(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
