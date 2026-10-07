@@ -286,6 +286,17 @@ def test_parse_profile_yaml_undecodable_channel_url_warns() -> None:
     assert "could not be decoded" in parsed.warnings[0]
 
 
+@pytest.mark.parametrize("key", ["owner", "owner_short"])
+def test_parse_profile_yaml_refuses_a_name_holding_a_lone_surrogate(key: str) -> None:
+    r"""A YAML ``"\ud800"`` escape decodes to a lone surrogate no database row can hold."""
+    text = f'{key}: "MT\\ud80002"\n'
+    with pytest.raises(BackupParseError) as exc_info:
+        backup.parse_profile_yaml(text, source="bad.yaml")
+    assert str(exc_info.value) == (
+        f"bad.yaml: {key} is not valid Unicode text (it holds a lone UTF-16 surrogate)."
+    )
+
+
 def test_parse_profile_yaml_rejects_non_mapping() -> None:
     with pytest.raises(BackupParseError):
         backup.parse_profile_yaml("- just\n- a\n- list\n", source="bad.yaml")
@@ -464,6 +475,27 @@ def test_parse_nodedb_json_invalid_base64_public_key_warns_and_is_absent() -> No
     assert len(parsed.warnings) == 1
     assert "not valid base64" in parsed.warnings[0]
     assert f"{payload['myNodeNum']:08x}" in parsed.warnings[0]
+
+
+def test_parse_nodedb_json_drops_text_fields_holding_a_lone_surrogate() -> None:
+    """Each broken text field is dropped with its own warning; the rest of the entry is kept."""
+    payload = _nodedb_payload()
+    own = payload["nodes"][0]
+    for key in ("longName", "shortName", "hwModel", "role"):
+        own[key] = "x\ud800y"
+    own["metadata"] = {"firmwareVersion": "2.6\udc00"}
+    parsed = backup.parse_nodedb_json(json.dumps(payload).encode(), source="nodedb.json")
+
+    entry = parsed.own_entry()
+    assert entry is not None
+    assert (entry.long_name, entry.short_name, entry.hw_model, entry.role) == (None,) * 4
+    assert entry.firmware_version is None
+    assert entry.public_key == bytes(range(32))
+    assert parsed.warnings == tuple(
+        f"nodedb.json: node a0c4ddc5's {key} is not valid Unicode text "
+        "(it holds a lone UTF-16 surrogate); treating it as absent."
+        for key in ("firmwareVersion", "longName", "shortName", "hwModel", "role")
+    )
 
 
 def test_parse_nodedb_json_own_entry_none_when_my_node_num_absent() -> None:

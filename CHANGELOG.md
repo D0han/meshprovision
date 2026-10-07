@@ -370,7 +370,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a Python traceback (exit code 1), and kept crashing for as long as
   the response stayed cached. Lone surrogates are now escaped like
   control characters, so the name shows as the text `\udXXX` in the
-  table and in `--json`.
+  table and in `--json`. The same kind of name in a backup crashed
+  `mesh adopt --from-backup` with a Python traceback when it saved the
+  adoption: in a node-db export, a name, `hwModel`, `role` or
+  `firmwareVersion` holding a lone surrogate is now dropped with a
+  warning, like a malformed `publicKey`; in a YAML profile, `owner` or
+  `owner_short` holding one is refused with an error, exit code `2`.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

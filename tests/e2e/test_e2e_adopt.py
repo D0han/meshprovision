@@ -2387,3 +2387,28 @@ def test_from_backup_preserves_hw_model_on_re_adopt_without_nodedb(
     node = NodeRecord.from_row(loaded.nodes[0])
     assert node.hw_model == "TBEAM"
     assert node.firmware_version == "2.6.11"
+
+
+def test_from_backup_nodedb_with_a_lone_surrogate_name_adopts_without_it(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    """A node-db longName holding a lone surrogate is dropped with a warning, not a traceback.
+
+    Kept, it reached NodeRecord validation when the adoption was saved and
+    crashed `mesh adopt` with a pydantic ValidationError (exit code 1).
+    """
+    nodedb = _write_nodedb_json(
+        tmp_path / "nodedb.json",
+        num=0xA0CB5CC4,
+        node_id="!a0cb5cc4",
+        long_name="Meshtastic\ud800MT01",
+        short_name="MT01",
+    )
+
+    result = invoke(runner, ["adopt", "--from-backup", str(nodedb), "--no-lookup", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "node a0cb5cc4's longName is not valid Unicode text" in result.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    node = NodeRecord.from_row(loaded.nodes[0])
+    assert (node.long_name, node.short_name) == ("", "MT01")

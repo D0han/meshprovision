@@ -113,6 +113,9 @@ _LONGITUDE_LIMIT: int = 180
 _ALTITUDE_LIMIT: int = 2**31 - 1
 """The largest altitude magnitude, in meters: ``Position.altitude`` is an ``int32``."""
 
+_NOT_UNICODE: str = "is not valid Unicode text (it holds a lone UTF-16 surrogate)"
+"""Why a backup text field holding a lone surrogate is refused (profile) or dropped (node-db)."""
+
 
 class BackupFormat(StrEnum):
     """Which of the three supported backup shapes a file was sniffed as."""
@@ -731,9 +734,11 @@ def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
 
     Raises:
         BackupParseError: If ``text`` is not valid YAML, its top level is
-            not a mapping, a ``config``/``module_config`` section does
-            not match the expected protobuf shape, or a ``location``
-            value is not a number in range.
+            not a mapping, ``owner``/``owner_short`` holds a lone UTF-16
+            surrogate (decoded from a YAML escape), a ``config``/
+            ``module_config`` section does not match the expected
+            protobuf shape, or a ``location`` value is not a number in
+            range.
     """
     try:
         doc = yaml.safe_load(text)
@@ -758,6 +763,9 @@ def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
 
     long_name = str(doc.get("owner") or "")
     short_name = str(doc.get("owner_short") or doc.get("ownerShort") or "")
+    for key, name in (("owner", long_name), ("owner_short", short_name)):
+        if _has_lone_surrogate(name):
+            raise BackupParseError(f"{source}: {key} {_NOT_UNICODE}.", source=source)
     channel_url = str(doc.get("channel_url") or doc.get("channelUrl") or "")
 
     local_config = localonly_pb2.LocalConfig()
@@ -912,6 +920,53 @@ def _clean_str(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def _has_lone_surrogate(text: str) -> bool:
+    """Return whether ``text`` holds a lone UTF-16 surrogate (U+D800-U+DFFF).
+
+    A JSON escape, or a YAML double-quoted one, can decode to such a
+    character. No UTF-8 stream or file can encode it, and
+    :class:`~meshprovision.db.nodes.NodeRecord` rejects it, so a name
+    holding one would crash the adopt that tries to record it.
+
+    Args:
+        text: The decoded string to check.
+
+    Returns:
+        True if ``text`` can't be encoded as UTF-8.
+    """
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
+def _entry_str(entry: dict[str, Any], key: str, *, node: str, warnings: list[str]) -> str | None:
+    """Read one node-db entry's text field like :func:`_clean_str`, dropping a lone surrogate.
+
+    A node-db export lists every node the device has heard, under the
+    names those nodes report for themselves, so one broken name is
+    dropped with a warning (like a malformed ``publicKey``) instead of
+    refusing the whole file. The warning never echoes the value.
+
+    Args:
+        entry: The entry (or its ``metadata`` object).
+        key: The field to read, e.g. ``"longName"``.
+        node: Names the node in the warning, e.g. ``"<source>: node
+            a0c4ddc5's"``.
+        warnings: Collects the warning when the value is dropped.
+
+    Returns:
+        :func:`_clean_str` of ``entry[key]``, or ``None`` when that holds
+        a lone surrogate.
+    """
+    text = _clean_str(entry.get(key))
+    if text is not None and _has_lone_surrogate(text):
+        warnings.append(f"{node} {key} {_NOT_UNICODE}; treating it as absent.")
+        return None
+    return text
+
+
 def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
     """Parse a ``Meshtastic_nodedb_<SHORT>_<ts>.json`` node-db export.
 
@@ -994,19 +1049,22 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
                     f"{X25519_KEY_SIZE}; treating it as absent."
                 )
 
+        node = f"{source}: node {num_int:08x}'s"
         metadata = item.get("metadata")
         firmware_version = (
-            _clean_str(metadata.get("firmwareVersion")) if isinstance(metadata, dict) else None
+            _entry_str(metadata, "firmwareVersion", node=node, warnings=warnings)
+            if isinstance(metadata, dict)
+            else None
         )
 
         entries.append(
             NodeDbEntry(
                 num=num_int,
                 node_id=NodeId.try_parse(num_int),
-                long_name=_clean_str(item.get("longName")),
-                short_name=_clean_str(item.get("shortName")),
-                hw_model=_clean_str(item.get("hwModel")),
-                role=_clean_str(item.get("role")),
+                long_name=_entry_str(item, "longName", node=node, warnings=warnings),
+                short_name=_entry_str(item, "shortName", node=node, warnings=warnings),
+                hw_model=_entry_str(item, "hwModel", node=node, warnings=warnings),
+                role=_entry_str(item, "role", node=node, warnings=warnings),
                 public_key=public_key,
                 firmware_version=firmware_version,
             )
