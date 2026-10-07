@@ -445,6 +445,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   poll's `--json` `cache` block, so every poll after the first repeated
   the first poll's network requests although it made none. Each poll now
   reports only its own hits, misses and requests.
+- A serial connect (`mesh provision`, `mesh adopt`, or any command given
+  `--port`) to a path that is not a serial device -- `/dev/null`, a
+  regular file, a mistyped `--port` -- or to a device unplugged at the
+  wrong moment crashed with a Python traceback (`termios.error`, exit
+  code 1) on Linux and macOS. It now fails like any other connect
+  failure, exit code `5`; when the path is not a serial device, the hint
+  names example serial ports instead of the cable/`dialout` advice.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

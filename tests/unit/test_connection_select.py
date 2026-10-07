@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import errno
 import sys
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -308,6 +310,47 @@ def test_serial_backend_connect_wraps_oserror(monkeypatch: pytest.MonkeyPatch) -
     assert exc_info.value.transport == "serial"
     assert exc_info.value.target == "/dev/ttyUSB0"
     assert exc_info.value.hint
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="termios is POSIX-only")
+@pytest.mark.parametrize(
+    ("error_number", "hint_fragment"),
+    [(errno.ENOTTY, "not a serial device"), (errno.EIO, "dialout")],
+    ids=["enotty", "eio"],
+)
+def test_serial_backend_connect_wraps_termios_error(
+    monkeypatch: pytest.MonkeyPatch, error_number: int, hint_fragment: str
+) -> None:
+    import termios
+
+    import meshtastic.serial_interface as serial_mod
+
+    def failing_init(self: object, **kwargs: object) -> None:
+        raise termios.error(error_number, "termios failure")
+
+    monkeypatch.setattr(serial_mod.SerialInterface, "__init__", failing_init)
+
+    with pytest.raises(ConnectionFailedError) as exc_info:
+        SerialBackend("/dev/ttyUSB0").connect()
+    assert isinstance(exc_info.value.__cause__, termios.error)
+    assert exc_info.value.exit_code == ConnectionFailedError.exit_code
+    assert exc_info.value.hint is not None
+    assert hint_fragment in exc_info.value.hint
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="meshtastic skips termios on Windows")
+def test_serial_backend_connect_on_a_regular_file_raises_connection_failed(
+    tmp_path: Path,
+) -> None:
+    """The real meshtastic SerialInterface on a non-tty path: termios.error(ENOTTY), no hardware."""
+    not_a_port = tmp_path / "not-a-port"
+    not_a_port.write_bytes(b"")
+
+    with pytest.raises(ConnectionFailedError) as exc_info:
+        SerialBackend(str(not_a_port), timeout=2).connect()
+    assert exc_info.value.target == str(not_a_port)
+    assert exc_info.value.hint is not None
+    assert "not a serial device" in exc_info.value.hint
 
 
 def test_tcp_backend_connect_wraps_valueerror(monkeypatch: pytest.MonkeyPatch) -> None:

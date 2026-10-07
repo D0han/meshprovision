@@ -21,8 +21,10 @@ in. That separation is an invariant the unit tests assert.
 from __future__ import annotations
 
 import contextlib
+import errno
 import functools
 import logging
+import sys
 import threading
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -93,6 +95,32 @@ def device_io_errors() -> tuple[type[Exception], ...]:
     except ImportError:
         return tuple(errors)
     return (*errors, BLEInterface.BLEError, BleakError)
+
+
+if sys.platform == "win32":
+    _SERIAL_CONNECT_PLATFORM_ERRORS: Final[tuple[type[Exception], ...]] = ()
+else:
+    import termios
+
+    _SERIAL_CONNECT_PLATFORM_ERRORS: Final[tuple[type[Exception], ...]] = (termios.error,)
+"""Platform exception types :meth:`SerialBackend.connect` catches besides ``OSError`` & co.
+
+meshtastic's ``SerialInterface.connect`` clears ``HUPCL`` with
+``termios.tcgetattr``/``tcsetattr`` on every platform but Windows (the
+same ``sys.platform`` test as here) before pyserial opens the port.
+``termios.error`` is not an ``OSError``, so a ``--port`` naming something
+that is not a terminal device (``/dev/null``, a regular file) or a device
+unplugged at that moment would otherwise escape as a raw traceback.
+"""
+
+_SERIAL_DEFAULT_HINT: Final[str] = (
+    "Check the cable, that the device is not already open in another "
+    "program, and that your user is in the 'dialout' group."
+)
+_SERIAL_NOT_A_TTY_HINT: Final[str] = (
+    "The port is not a serial device. Pass the device's serial port, for "
+    "example /dev/ttyUSB0 or /dev/ttyACM0 (Linux) or /dev/cu.usbserial-* (macOS)."
+)
 
 
 _BLE_CONNECT_BASE_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
@@ -213,15 +241,19 @@ class SerialBackend:
         _logger.debug("Connecting over serial to %s (timeout=%ss).", self.port, self.timeout)
         try:
             iface = SerialInterface(devPath=self.port, timeout=self.timeout)
-        except (OSError, ValueError, RuntimeError, MeshInterface.MeshInterfaceError) as exc:
+        except (
+            OSError,
+            ValueError,
+            RuntimeError,
+            MeshInterface.MeshInterfaceError,
+            *_SERIAL_CONNECT_PLATFORM_ERRORS,
+        ) as exc:
+            not_a_tty = exc.args[:1] == (errno.ENOTTY,)
             raise ConnectionFailedError(
                 f"Failed to connect over serial to {self.port}: {exc}",
                 transport="serial",
                 target=self.port,
-                hint=(
-                    "Check the cable, that the device is not already open in another "
-                    "program, and that your user is in the 'dialout' group."
-                ),
+                hint=_SERIAL_NOT_A_TTY_HINT if not_a_tty else _SERIAL_DEFAULT_HINT,
             ) from exc
         _logger.debug("Connected over serial to %s.", self.port)
         return iface
