@@ -270,7 +270,11 @@ in order of strength: an explicit `--node-id`; a `Keys` sheet public-key
 match (the backup's own public key already belongs to a registered
 `<id>_pub` row); or a paired node-db export's `myNodeNum`. Two of these
 disagreeing is a refusal unless `--force` is passed (which then falls
-back to the same precedence order). If none of them resolve anything,
+back to the same precedence order). When `--force` overrides a paired
+node-db export's `myNodeNum`, that export's entry is ignored; if the
+paired profile carries the same public key as that entry, both files
+describe the export's node, and `mesh adopt` refuses even with `--force`
+rather than file that node's key under another id. If none of them resolve anything,
 and `--no-lookup` wasn't passed, `mesh adopt` searches loranet's dump for
 a `long_name` match and prints it as a `--node-id` hint — **this is
 advisory only**; a name match is never enough on its own to adopt a

@@ -2112,6 +2112,111 @@ def test_from_backup_force_does_not_mis_file_a_different_nodes_data_or_key(
     assert reloaded_nodes == {"bbbb2222", "aaaa1111"}
 
 
+def test_from_backup_force_refuses_a_paired_profile_carrying_the_dropped_exports_key(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """--force must not file a paired profile's key under the forced id when it is the export's.
+
+    merge_backups pairs a profile only with an export it agrees with, and
+    an equal public key proves both files describe the export's own node
+    (myNodeNum). Dropping just the export's entry and keeping the profile
+    used to write that node's key as <forced_id>_pub, so a later adopt of
+    the key's real owner silently resolved to the forced id. Round 41's
+    logic review, Finding 1.
+    """
+    node_a_kp = keypair_factory()
+    cfg = _write_profile_cfg(
+        tmp_path / "profile.cfg",
+        long_name="Node A",
+        short_name="NodA",
+        public_key=node_a_kp.public,
+    )
+    nodedb = _write_nodedb_json(
+        tmp_path / "nodedb.json",
+        num=0xAAAA1111,
+        node_id="!aaaa1111",
+        long_name="Node A",
+        short_name="NodA",
+        public_key=node_a_kp.public,
+    )
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+
+    result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(cfg),
+            "--from-backup",
+            str(nodedb),
+            "--node-id",
+            "!bbbb2222",
+            "--no-lookup",
+            "--force",
+            "--yes",
+        ],
+        env,
+    )
+
+    assert result.exit_code == int(ExitCode.PROVISIONING)
+    assert "carries the same public key as the node-db export's own node !aaaa1111" in (
+        result.stderr
+    )
+    assert "alone with --node-id !bbbb2222" in result.stderr
+    assert db_fingerprint(db_path) == before
+
+
+def test_from_backup_force_keeps_a_paired_profile_not_bound_to_the_export_by_key(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """Only an equal public key binds a profile to the dropped export entry.
+
+    A profile that matches the export by name alone (here: the export has
+    no public key at all) is still adopted under the forced id, its own
+    key included -- --node-id is then the only claim about which node the
+    profile belongs to, as for a profile passed on its own.
+    """
+    profile_kp = keypair_factory()
+    cfg = _write_profile_cfg(
+        tmp_path / "profile.cfg",
+        long_name="Node A",
+        short_name="NodA",
+        public_key=profile_kp.public,
+    )
+    nodedb = _write_nodedb_json(
+        tmp_path / "nodedb.json",
+        num=0xAAAA1111,
+        node_id="!aaaa1111",
+        long_name="Node A",
+        short_name="NodA",
+    )
+
+    result = invoke(
+        runner,
+        [
+            "adopt",
+            "--from-backup",
+            str(cfg),
+            "--from-backup",
+            str(nodedb),
+            "--node-id",
+            "!bbbb2222",
+            "--no-lookup",
+            "--force",
+            "--yes",
+        ],
+        env,
+    )
+
+    assert result.exit_code == 0
+    assert "describes a different node" in result.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert {row["node_id"] for row in loaded.nodes} == {"bbbb2222"}
+    key_material = {row["key_ref"]: row["key_value"] for row in loaded.keys}
+    assert key_material["bbbb2222_pub"] == encode_key(profile_kp.public)
+
+
 def test_from_backup_records_channel_psk(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:

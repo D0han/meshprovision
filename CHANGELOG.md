@@ -144,7 +144,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backup never asserts its own node id with authority, so it is resolved,
   in order, from an explicit `--node-id`, a `Keys` sheet public-key match,
   or a paired node-db export's `myNodeNum`; two of those disagreeing is a
-  refusal (new `NodeIdentityError`) unless `--force` is passed, and when
+  refusal (new `NodeIdentityError`) unless `--force` is passed (still
+  refused when `--force` overrides the export's `myNodeNum` but the paired
+  profile carries that export's own public key, so both files describe
+  the export's node and its key would be filed under another id), and when
   none resolve anything, an unmatched loranet long-name lookup (skippable
   with `--no-lookup`) is offered only as a `--node-id` hint, never used to
   adopt. A `.cfg`'s `channel_url` is decoded and, only when its primary

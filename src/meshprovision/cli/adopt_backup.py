@@ -237,7 +237,10 @@ def _load_backup_bundle(
         meshprovision.errors.BackupParseError: If a file cannot be read
             or parsed, or two backups disagree about which node they
             describe.
-        NodeIdentityError: See :func:`resolve_node_id`.
+        NodeIdentityError: See :func:`resolve_node_id`; also if ``force``
+            resolved an id other than a paired node-db export's
+            ``myNodeNum`` while a paired profile carries that export's
+            own public key.
     """
     profile: backup_mod.ProfileBackup | None = None
     nodedb: backup_mod.NodeDbBackup | None = None
@@ -276,10 +279,32 @@ def _load_backup_bundle(
         # this one, and that mis-filed <node_id>_pub row would then
         # silently redirect every future backup adopt of the real key
         # owner (resolve_node_id's own public-key tier reads exactly that
-        # row). Drop the mismatched entry; only a paired profile's own
-        # data (never subject to this conflict, since a .cfg/.yaml has no
-        # self-reported id at all) still applies.
+        # row). Drop the mismatched entry; a paired profile's own data
+        # still applies -- unless that profile carries the same public key
+        # as the dropped entry. merge_backups only pairs files it found
+        # consistent, and an equal key proves the profile is the export's
+        # own node too, so keeping it would file that node's key (and
+        # names, config and position) under node_id all the same. A
+        # profile linked to the entry by names alone is kept: names
+        # collide, and a name is never used to resolve a node id.
         mismatched_id = bundle.nodedb_entry.node_id.display
+        if (
+            profile is not None
+            and profile.public_key is not None
+            and profile.public_key == bundle.nodedb_entry.public_key
+        ):
+            raise NodeIdentityError(
+                f"{profile.source} carries the same public key as the node-db export's own "
+                f"node {mismatched_id} (its myNodeNum), so both backups describe "
+                f"{mismatched_id}, not the resolved node id {node_id.display}.",
+                candidates=(node_id.display, mismatched_id),
+                hint=(
+                    f"Pass only backup files that belong to {node_id.display}. If "
+                    f"{node_id.display} really carries this key (for example a profile "
+                    f"restored onto a second device), adopt {profile.source} alone with "
+                    f"--node-id {node_id.display}."
+                ),
+            )
         bundle = dataclasses.replace(
             bundle,
             nodedb_entry=None,
@@ -345,7 +370,8 @@ def read_backup_source(
         meshprovision.errors.BackupParseError: If a file cannot be read
             or parsed, or two backups disagree about which node they
             describe.
-        NodeIdentityError: See :func:`resolve_node_id`.
+        NodeIdentityError: See :func:`resolve_node_id` and
+            :func:`_load_backup_bundle`.
     """
     bundle, node_id = _load_backup_bundle(
         ctx,
