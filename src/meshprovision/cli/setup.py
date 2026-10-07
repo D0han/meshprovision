@@ -80,6 +80,14 @@ _CONTACT_LINE_RE: Final[re.Pattern[str]] = re.compile(
 )
 """Matches the single uncommented ``MESHPROVISION_CONTACT=`` line in ``env.example``."""
 
+_QUOTE_TRIGGERS: Final[frozenset[str]] = frozenset(" #'\"\\")
+"""Characters that make :func:`render_env_text` double-quote the contact.
+
+``python-dotenv`` would otherwise end the value at a `` #`` comment, read
+a leading quote as opening a quoted value, or (inside double quotes)
+treat a backslash as an escape.
+"""
+
 
 def example_path(name: str) -> Path:
     """Resolve a bundled example file's on-disk path.
@@ -270,9 +278,11 @@ def validate_contact(raw: str) -> str:
     """Validate an operator-supplied contact string.
 
     Mirrors :meth:`~meshprovision.config.settings.Settings.
-    _blank_contact_is_unset`'s notion of "blank", plus a guard against
-    a stray newline corrupting the ``.env`` file it will be written
-    into.
+    _blank_contact_is_unset`'s notion of "blank", plus guards for the
+    ``.env`` file it will be written into: no line break or other
+    non-printable character (control, bidi or format character, lone
+    surrogate), and no ``${`` -- ``python-dotenv`` expands ``${NAME}``
+    even inside quotes, so the value read back would differ.
 
     Args:
         raw: The raw answer to validate.
@@ -282,7 +292,8 @@ def validate_contact(raw: str) -> str:
 
     Raises:
         SettingsError: If ``raw`` is blank/whitespace-only, or contains
-            a carriage return or newline.
+            a carriage return or newline, any other non-printable
+            character, or ``${``.
     """
     stripped = raw.strip()
     if not stripped:
@@ -295,28 +306,46 @@ def validate_contact(raw: str) -> str:
             "Contact address cannot contain a line break.",
             hint="Enter a single-line email address or URL.",
         )
+    if not stripped.isprintable():
+        raise SettingsError(
+            "Contact address cannot contain control or other non-printable characters.",
+            hint="Enter a plain email address or URL.",
+        )
+    if "${" in stripped:
+        raise SettingsError(
+            "Contact address cannot contain '${': the .env loader would expand it as a "
+            "variable reference.",
+            hint="Enter a plain email address or URL.",
+        )
     return stripped
 
 
 def render_env_text(example_text: str, *, contact: str) -> str:
-    """Return ``env.example``'s text with ``MESHPROVISION_CONTACT`` filled in.
+    r"""Return ``env.example``'s text with ``MESHPROVISION_CONTACT`` filled in.
 
     Every other line -- comments, every other variable, blank lines --
     is left byte-for-byte as shipped.
 
     Args:
         example_text: The bundled example's raw text.
-        contact: The validated contact string to fill in. Quoted with
-            double quotes when it contains whitespace or ``#`` --
-            ``python-dotenv`` would otherwise treat a ` #` as starting
-            an inline comment, or split on internal whitespace.
+        contact: The validated contact string to fill in (see
+            :func:`validate_contact`). Double-quoted, with ``\`` and
+            ``"`` backslash-escaped, when it contains any of
+            :data:`_QUOTE_TRIGGERS`, so ``python-dotenv`` reads back
+            exactly ``contact``.
 
     Returns:
         The rendered ``.env`` text.
     """
-    value = f'"{contact}"' if (" " in contact or "#" in contact) else contact
+    if any(char in _QUOTE_TRIGGERS for char in contact):
+        escaped = contact.replace("\\", "\\\\").replace('"', '\\"')
+        value = f'"{escaped}"'
+    else:
+        value = contact
     replacement = f"MESHPROVISION_CONTACT={value}"
-    text, count = _CONTACT_LINE_RE.subn(replacement, example_text, count=1)
+    # A function, not a template: re.subn would expand backslash escapes
+    # and group references (\n, \1) in a replacement string.
+    text, count = _CONTACT_LINE_RE.subn(lambda _match: replacement, example_text, count=1)
     if count == 0:
         text = text.rstrip("\n") + f"\n{replacement}\n"
     return text

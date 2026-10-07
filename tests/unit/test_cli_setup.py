@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import errno
+import io
 import os
 import stat
 from pathlib import Path
 
+import dotenv
 import pytest
 
 from meshprovision.cli.setup import (
@@ -186,6 +188,28 @@ class TestValidateContact:
     def test_strips_surrounding_whitespace(self) -> None:
         assert validate_contact("  ops@example.org  ") == "ops@example.org"
 
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            pytest.param("ops\x1b]52;c;SGVsbG8=\x07@example.org", id="escape-sequence"),
+            pytest.param("ops\t@example.org", id="inner-tab"),
+            pytest.param("ops\u202e@example.org", id="bidi-override"),
+            pytest.param("ops\ud800@example.org", id="lone-surrogate"),
+        ],
+    )
+    def test_rejects_non_printable_characters(self, raw: str) -> None:
+        with pytest.raises(SettingsError, match="non-printable"):
+            validate_contact(raw)
+
+    def test_a_line_break_is_reported_as_such_even_beside_other_controls(self) -> None:
+        with pytest.raises(SettingsError, match="line break"):
+            validate_contact("ops\x1b@example.org\nX=1")
+
+    @pytest.mark.parametrize("raw", ["${HOME}", "ops+${USER}@example.org"])
+    def test_rejects_a_variable_reference_the_env_loader_would_expand(self, raw: str) -> None:
+        with pytest.raises(SettingsError, match=r"cannot contain '\$\{'"):
+            validate_contact(raw)
+
 
 class TestRenderEnvText:
     def test_replaces_the_contact_assignment_and_keeps_every_comment(self) -> None:
@@ -211,6 +235,35 @@ class TestRenderEnvText:
     def test_quotes_a_value_containing_a_hash(self) -> None:
         rendered = render_env_text("MESHPROVISION_CONTACT=\n", contact="a@b.c #note")
         assert 'MESHPROVISION_CONTACT="a@b.c #note"' in rendered
+
+    @pytest.mark.parametrize(
+        "contact",
+        [
+            pytest.param("ops@example.org", id="plain"),
+            pytest.param("Ops Team <a@b.c>", id="spaces"),
+            pytest.param("a@b.c #note", id="hash"),
+            pytest.param("https://example.org/\\d", id="regex-escape"),
+            pytest.param("me\\1@example.org", id="group-reference"),
+            pytest.param(
+                "ops@example.org\\nMESHPROVISION_DB_PATH=/tmp/other.ods", id="escaped-newline"
+            ),
+            pytest.param('Ops "Team" <a@b.c>', id="double-quotes"),
+            pytest.param('"ops@example.org"', id="leading-double-quote"),
+            pytest.param("'ops@example.org'", id="leading-single-quote"),
+            pytest.param("o'brien@example.org", id="apostrophe"),
+            pytest.param("ops@example.org\\", id="trailing-backslash"),
+            pytest.param('a\\"b@example.org', id="backslash-quote"),
+            pytest.param("$HOME@example.org", id="bare-dollar"),
+            pytest.param("Łódź 📡 ops@example.org", id="non-ascii"),
+        ],
+    )
+    def test_the_env_loader_reads_back_exactly_the_contact(self, contact: str) -> None:
+        example = read_example_text(ENV_EXAMPLE_NAME)
+        rendered = render_env_text(example, contact=validate_contact(contact))
+
+        loaded = dotenv.dotenv_values(stream=io.StringIO(rendered))
+        assert loaded["MESHPROVISION_CONTACT"] == contact
+        assert loaded.keys() == dotenv.dotenv_values(stream=io.StringIO(example)).keys()
 
 
 class TestWriteNewFile:

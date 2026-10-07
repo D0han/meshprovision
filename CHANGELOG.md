@@ -376,6 +376,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `firmwareVersion` holding a lone surrogate is now dropped with a
   warning, like a malformed `publicKey`; in a YAML profile, `owner` or
   `owner_short` holding one is refused with an error, exit code `2`.
+- `mesh init --contact` crashed with a Python traceback on a contact
+  containing a backslash sequence such as `\d` or `\1` (a URL with a
+  backslash, say), and a literal `\n` in the contact slipped past the
+  line-break check and wrote a second line -- any setting, e.g.
+  `MESHPROVISION_DB_PATH` -- into the new `.env`. A contact containing a
+  quote or a backslash could also be read back differently from what was
+  entered. The contact is now written so the `.env` loader reads back
+  exactly what was entered (double-quoted and backslash-escaped where
+  needed), and a contact with a control or other non-printable character,
+  or with `${` (which the loader would expand as a variable reference),
+  is refused with an error instead.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

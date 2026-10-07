@@ -14,6 +14,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import dotenv
 import pytest
 
 from meshprovision.db.nodes import NodeRepository
@@ -206,3 +207,17 @@ def test_already_complete_json_lists_only_present_paths(runner: CliRunner, tmp_p
     payload = json.loads(result.stdout)
     assert payload["created"] == []
     assert len(payload["present"]) == 3
+
+
+def test_a_contact_with_backslashes_is_written_so_it_reads_back_unchanged(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """A backslash in ``--contact`` used to crash init (re.error) or smuggle in a second line."""
+    contact = "https://example.org/\\d?a=\\nMESHPROVISION_DB_PATH=/tmp/other.ods"
+
+    result = invoke(runner, ["init", "--yes", "--contact", contact], _BARE_ENV)
+
+    assert result.exit_code == 0, result.output
+    loaded = dotenv.dotenv_values(tmp_path / ".env")
+    assert loaded["MESHPROVISION_CONTACT"] == contact
+    assert "MESHPROVISION_DB_PATH" not in loaded
