@@ -15,7 +15,7 @@ from typing import NoReturn
 
 import pytest
 
-from meshprovision.config import settings as settings_module
+from meshprovision.config import env_trust
 from meshprovision.config.settings import (
     APP_NAME,
     DEFAULT_CACHE_TTL,
@@ -519,7 +519,7 @@ def test_read_discovered_env_file_refuses_a_fifo(tmp_path: Path) -> None:
     fifo = tmp_path / ".env"
     os.mkfifo(fifo)
     with pytest.raises(SettingsError, match="it is not a regular file"):
-        settings_module._read_discovered_env_file(fifo)
+        env_trust.read_discovered_env_file(fifo)
 
 
 def test_discovered_env_open_failure_is_a_settings_error(
@@ -576,7 +576,7 @@ def test_discovered_env_is_not_checked_without_getuid(
 
 def test_parse_posix_acl_decodes_every_entry() -> None:
     blob = _acl((_USER, _RW, 1234), (_GROUP, _R, 99), (_MASK, _RW, _NO_ID))
-    assert settings_module._parse_posix_acl(blob) == (
+    assert env_trust._parse_posix_acl(blob) == (
         (_USER_OBJ, _RW, _NO_ID),
         (_USER, _RW, 1234),
         (_GROUP_OBJ, _R, _NO_ID),
@@ -601,7 +601,7 @@ def test_parse_posix_acl_decodes_every_entry() -> None:
 )
 def test_parse_posix_acl_rejects_a_malformed_blob(blob: bytes) -> None:
     with pytest.raises(ValueError, match=r"."):
-        settings_module._parse_posix_acl(blob)
+        env_trust._parse_posix_acl(blob)
 
 
 _ACL_REASON = "an ACL grants write access to another user or group"
