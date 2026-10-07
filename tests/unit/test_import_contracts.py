@@ -63,6 +63,14 @@ _CLI_COMMANDS: Final[tuple[str, ...]] = tuple(
     sorted(f"meshprovision.cli.{name}" for name in CLI_COMMAND_MODULES)
 )
 
+_READ_ONLY_CLI_FORBIDDEN: Final[tuple[str, ...]] = (
+    "meshprovision.db",
+    "meshprovision.provisioning",
+)
+"""``mesh status`` (read-only, everything through ``status.report.run_status``) and
+``mesh template validate`` (database-free, device-free) import no database or
+provisioning module at all; ``test_readonly_*_boundary.py`` bans the names."""
+
 FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("errors.py", ("meshprovision",)),
     ("provisioning/plan.py", _PURE_PLAN_FORBIDDEN),
@@ -75,6 +83,8 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("cli/adopt_backup.py", _CLI_COMMANDS),
     ("cli/common.py", _CLI_COMMANDS),
     ("cli/provision_keys.py", _CLI_COMMANDS),
+    ("cli/status.py", _READ_ONLY_CLI_FORBIDDEN),
+    ("cli/template_cmd.py", _READ_ONLY_CLI_FORBIDDEN),
     (
         "status/merge.py",
         (

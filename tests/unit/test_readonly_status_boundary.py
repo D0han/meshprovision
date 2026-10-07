@@ -14,6 +14,8 @@ pytestmark = pytest.mark.unit
 SRC = Path(__file__).resolve().parents[2] / "src" / "meshprovision"
 
 # cli/status.py bans the *names* outright (its module docstring, lines 3-11).
+# Its module imports (``meshprovision.provisioning.apply`` and the rest,
+# however spelled) are banned by its row in test_import_contracts.py.
 _CLI_STATUS_FORBIDDEN = frozenset(
     {
         "OdsDatabase",
@@ -27,9 +29,6 @@ _CLI_STATUS_FORBIDDEN = frozenset(
         "open_database",
         "ods_write",
         "write_database",
-        "meshprovision.provisioning.apply",
-        "meshprovision.provisioning.persist",
-        "meshprovision.provisioning.repair",
     }
 )
 
