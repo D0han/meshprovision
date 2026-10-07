@@ -384,8 +384,10 @@ class TemplateConfig(BaseModel):
                     f"admin_nodes entry {ref!r} must not start with {OBSERVED_PREFIX!r}.",
                     field="admin_nodes",
                     hint=(
-                        "Give the key a real name with `mesh admin import --ref <NAME>` "
-                        "(or `mesh admin bootstrap --ref <NAME>`) and list that name here."
+                        "Give the key a real name with `mesh admin import <NAME>=<BASE64>` "
+                        "(`mesh adopt --show-admin-keys` prints that command with an observed "
+                        "key's material filled in), or use `mesh admin bootstrap --ref <NAME>`, "
+                        "and list that name here."
                     ),
                 )
 

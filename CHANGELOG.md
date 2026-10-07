@@ -304,12 +304,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hard blocklist doesn't already refuse it outright). The old single
   `--force` no longer exists; a script or alias using it needs updating.
 - A template's `admin_nodes` list is now validated the same way `mesh
-  admin import`'s own `--ref` argument always was: an entry that isn't a
-  valid node reference, ends in a reserved suffix (`_pub`/`_priv`/`_psk`),
-  or starts with the reserved `observed-` prefix now fails template load
-  with an actionable hint, instead of loading successfully and only
-  failing later -- confusingly, well after the fact -- the next time `mesh
-  admin import` or a provision run touches that entry.
+  admin import`'s own `REF` (of `REF=BASE64`) always was: an entry that
+  isn't a valid node reference, ends in a reserved suffix
+  (`_pub`/`_priv`/`_psk`), or starts with the reserved `observed-` prefix
+  now fails template load with an actionable hint, instead of loading
+  successfully and only failing later -- confusingly, well after the fact
+  -- the next time `mesh admin import` or a provision run touches that
+  entry. The `observed-` hint names `mesh admin import <NAME>=<BASE64>`
+  (`mesh adopt --show-admin-keys` prints it with the key filled in) or
+  `mesh admin bootstrap --ref <NAME>`. A unit test checks every
+  backticked `mesh ...` command in `src/` against the real command tree.
 - Loading an empty, comments-only, or otherwise blank-after-parsing
   template file now raises immediately instead of silently applying every
   default as if the file had never been read.

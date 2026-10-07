@@ -342,6 +342,11 @@ def test_admin_nodes_entry_with_observed_prefix_raises() -> None:
         TemplateConfig(admin_nodes=["observed-ab12cd34"])
     assert exc_info.value.field == "admin_nodes"
     assert "observed-" in str(exc_info.value)
+    hint = exc_info.value.hint or ""
+    assert "`mesh admin import <NAME>=<BASE64>`" in hint
+    assert "`mesh adopt --show-admin-keys`" in hint
+    assert "`mesh admin bootstrap --ref <NAME>`" in hint
+    assert "admin import --ref" not in hint  # import takes REF=BASE64, it has no --ref
 
 
 def test_admin_nodes_entry_that_merely_starts_with_pre_observed_loads() -> None:
