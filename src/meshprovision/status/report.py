@@ -263,12 +263,7 @@ class StatusReport:
             source skipped an entry it could not parse, or any source
             reported a field it could not coerce.
         """
-        return (
-            self.has_offline
-            or bool(self.failures)
-            or bool(self.skipped_entries)
-            or bool(self.field_coercions)
-        )
+        return self._is_degraded(fail_on_offline=True)
 
     def exit_code(self, *, fail_on_offline: bool = True) -> int:
         """Compute the process exit code the ``mesh status`` CLI should return.
@@ -289,13 +284,26 @@ class StatusReport:
             :attr:`~meshprovision.errors.ExitCode.STATUS_DEGRADED` when
             degraded; :attr:`~meshprovision.errors.ExitCode.OK` otherwise.
         """
-        is_degraded = (
+        if self._is_degraded(fail_on_offline=fail_on_offline):
+            return int(ExitCode.STATUS_DEGRADED)
+        return int(ExitCode.OK)
+
+    def _is_degraded(self, *, fail_on_offline: bool) -> bool:
+        """The one degraded-run rule behind :attr:`degraded` and :meth:`exit_code`.
+
+        Args:
+            fail_on_offline: Whether an offline node counts as degraded.
+
+        Returns:
+            ``True`` if any source failed, skipped an entry or failed to
+            coerce a field, or (when ``fail_on_offline``) a node is offline.
+        """
+        return (
             bool(self.failures)
             or bool(self.skipped_entries)
             or bool(self.field_coercions)
             or (fail_on_offline and self.has_offline)
         )
-        return int(ExitCode.STATUS_DEGRADED) if is_degraded else int(ExitCode.OK)
 
     def summary(self) -> str:
         """Render a one-line human-readable summary of this report.
