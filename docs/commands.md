@@ -346,8 +346,11 @@ masquerades as fresh data. `--json` carries the same information, in UTC,
 under `data_as_of`.
 
 `--watch` respects the cache TTL (default poll interval = the cache TTL,
-floored at 5 s) and prints a per-poll cache hit/miss/request line to
-stderr.
+floored at 5 s, capped at one week) and
+prints a per-poll cache hit/miss/request line to stderr. `--interval`
+takes 1 s up to one week, and `--stale-after`/`--offline-after` up to
+1000000 hours; a value outside that range, `nan` or `inf` is a usage
+error (exit code `2`).
 
 `--fail-on-offline` is **on by default**: an offline node, or any source
 failure, exits `7`. Pass `--no-fail-on-offline` to suppress that.

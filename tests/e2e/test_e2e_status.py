@@ -770,3 +770,80 @@ def test_table_run_survives_timestamps_at_the_edge_of_the_datetime_range(
     assert "never" in result.stdout
     assert "loranet: 1 field(s) could not be coerced" in result.stdout
     assert "lorastats: 1 field(s) could not be coerced" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("args", "option"),
+    [
+        pytest.param(["--stale-after", "inf"], "--stale-after", id="stale-after-inf"),
+        pytest.param(["--stale-after", "nan"], "--stale-after", id="stale-after-nan"),
+        pytest.param(["--stale-after", "1e12"], "--stale-after", id="stale-after-huge"),
+        pytest.param(["--offline-after", "nan"], "--offline-after", id="offline-after-nan"),
+        pytest.param(["--offline-after", "1e12"], "--offline-after", id="offline-after-huge"),
+        pytest.param(["--watch", "--interval", "nan"], "--interval", id="interval-nan"),
+        pytest.param(["--watch", "--interval", "inf"], "--interval", id="interval-inf"),
+        pytest.param(["--watch", "--interval", "1e10"], "--interval", id="interval-huge"),
+    ],
+)
+def test_status_rejects_an_unusable_number_as_a_usage_error(
+    runner: CliRunner,
+    env: dict[str, str],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+    option: str,
+) -> None:
+    """``nan``, ``inf`` or a huge value is a usage error naming the option, not a traceback.
+
+    Most used to crash with exit code 1: the thresholds while being turned
+    into a ``timedelta``, the interval in ``time.sleep`` after the first
+    poll. A ``nan`` threshold exited 2, but with "cannot convert float NaN
+    to integer" and a hint about the thresholds' order. Round 41's logic
+    review, Finding 3.
+    """
+
+    def stop_watching(_seconds: float) -> None:
+        # Ends a --watch run that got past option parsing (a regression)
+        # instead of looping forever on the suite's no-op sleep stub.
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", stop_watching)
+
+    with mock_sources(nodes={}):
+        result = invoke(runner, ["status", *args], env)
+
+    assert result.exit_code == 2
+    assert f"Invalid value for '{option}'" in result.stderr
+    assert result.stdout == ""
+
+
+def test_watch_caps_the_cache_ttl_default_poll_at_one_week(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An infinite cache TTL ("never expire") must not become an infinite sleep.
+
+    ``time.sleep(inf)`` raised ``OverflowError`` after the first poll.
+    """
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    slept: list[float] = []
+
+    def fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": 1}}}):
+        result = invoke(
+            runner, ["--cache-ttl", "inf", "status", "--watch", "--no-fail-on-offline"], env
+        )
+
+    assert slept == [604_800.0]
+    assert result.exit_code == 0
+    assert result.stderr.rstrip().endswith("Stopped.")

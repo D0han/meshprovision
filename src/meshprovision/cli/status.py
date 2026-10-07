@@ -20,6 +20,7 @@ mtime guarantee above.
 
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING
 
@@ -54,6 +55,20 @@ __all__ = ["status"]
 _MIN_WATCH_POLL_SECONDS = 5.0
 """Floor applied to the default watch-poll interval when no ``--interval`` is given."""
 
+_MAX_WATCH_POLL_SECONDS = 604_800.0
+"""Upper bound on the ``--watch`` poll interval, in seconds (one week).
+
+Bounds ``--interval`` and caps the cache-TTL default too, since a TTL may
+legitimately be huge or infinite ("never expire") while ``time.sleep``
+overflows past about 9.2e9 seconds."""
+
+_MAX_THRESHOLD_HOURS = 1_000_000.0
+"""Upper bound on ``--stale-after``/``--offline-after``, in hours (about 114 years).
+
+Any longer threshold already means "never" for a mesh node; the bound
+keeps the value convertible to a :class:`~datetime.timedelta`, which
+overflows past about 2.4e10 hours."""
+
 _WATCH_MAX_CONSECUTIVE_DB_FAILURES = 3
 """How many consecutive per-poll :class:`~meshprovision.errors.DbError`\\ s
 ``--watch`` tolerates before giving up and exiting.
@@ -64,6 +79,34 @@ file ownership is being fixed) without the long-running monitor itself
 being broken. A run of consecutive failures, though, means the database
 is not coming back, and the monitor should stop rather than poll forever
 in silence."""
+
+
+def _finite_float_callback(
+    ctx: click.Context, param: click.Parameter, value: float | None
+) -> float | None:
+    """Reject a non-finite float option value as a usage error.
+
+    ``click.FloatRange`` lets ``nan`` through (every comparison with it is
+    false), and ``nan`` or ``inf`` would otherwise reach ``timedelta`` or
+    ``time.sleep`` and crash with a traceback.
+
+    Args:
+        ctx: The click context (unused).
+        param: The option being parsed.
+        value: The already range-checked value, or ``None`` when the
+            option was not given.
+
+    Returns:
+        ``value`` unchanged.
+
+    Raises:
+        click.BadParameter: If ``value`` is ``nan`` or infinite (exit code
+            2, with click's ``Usage:`` line).
+    """
+    del ctx
+    if value is not None and not math.isfinite(value):
+        raise click.BadParameter(f"{value} is not a finite number.", param=param)
+    return value
 
 
 def _build_options(
@@ -176,9 +219,13 @@ def _run_once(ctx: CliContext, options: StatusOptions, client: CachedHTTPClient)
 )
 @click.option(
     "--interval",
-    type=click.FloatRange(min=1.0),
+    type=click.FloatRange(min=1.0, max=_MAX_WATCH_POLL_SECONDS),
     default=None,
-    help="Poll interval, in seconds (--watch only). Defaults to the cache TTL.",
+    callback=_finite_float_callback,
+    help=(
+        "Poll interval, in seconds (--watch only). Defaults to the cache TTL "
+        "(at least 5 s, at most one week)."
+    ),
 )
 @click.option(
     "--node",
@@ -204,15 +251,17 @@ def _run_once(ctx: CliContext, options: StatusOptions, client: CachedHTTPClient)
 )
 @click.option(
     "--stale-after",
-    type=click.FloatRange(min=0.0, min_open=True),
+    type=click.FloatRange(min=0.0, min_open=True, max=_MAX_THRESHOLD_HOURS),
     default=None,
+    callback=_finite_float_callback,
     metavar="HOURS",
     help="Hours before a node stops being considered online.",
 )
 @click.option(
     "--offline-after",
-    type=click.FloatRange(min=0.0, min_open=True),
+    type=click.FloatRange(min=0.0, min_open=True, max=_MAX_THRESHOLD_HOURS),
     default=None,
+    callback=_finite_float_callback,
     metavar="HOURS",
     help="Hours before a node is considered offline.",
 )
@@ -296,7 +345,7 @@ def status(
         poll = (
             interval
             if interval is not None
-            else max(ctx.settings.cache_ttl, _MIN_WATCH_POLL_SECONDS)
+            else min(max(ctx.settings.cache_ttl, _MIN_WATCH_POLL_SECONDS), _MAX_WATCH_POLL_SECONDS)
         )
         last_report: StatusReport | None = None
         last_db_error: DbError | None = None

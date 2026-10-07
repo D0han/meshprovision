@@ -408,6 +408,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it past the edge. Such a value is now counted as a field that could not
   be read, like any other malformed timestamp, and the rest of the report
   is unaffected.
+- `mesh status --stale-after`/`--offline-after` given `inf` or a huge
+  value (such as `1e12`), and `mesh status --watch --interval` given
+  `nan`, `inf` or a huge value (such as `1e10`), crashed with a Python
+  traceback (exit code 1); so did `--watch` without `--interval` when the
+  cache TTL (`--cache-ttl`, `MESHPROVISION_CACHE_TTL`) was `inf` or huge,
+  since the poll interval defaults to it. `--interval` now accepts 1 s up
+  to one week and the thresholds up to 1000000 hours, anything else
+  (including `nan`) is a usage error naming the option, **exit code `2`**,
+  and the cache-TTL default poll interval is capped at one week.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they
