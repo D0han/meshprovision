@@ -11,7 +11,10 @@ printed unescaped.
 This module is the single place that turns such a string into one that
 is safe to print: every C0/C1 control character (and the Unicode
 bidi-override controls, which can visually reorder surrounding text) is
-replaced by a visible ``\\xNN``/``\\uNNNN`` escape. Everything else,
+replaced by a visible ``\\xNN``/``\\uNNNN`` escape, and so is every lone
+UTF-16 surrogate (U+D800-U+DFFF, e.g. from a ``\\ud800`` escape in a JSON
+document), which no UTF-8 stream can encode -- printing one raises
+``UnicodeEncodeError`` instead of showing anything. Everything else,
 including non-Latin scripts and emoji, passes through untouched.
 :func:`json_dumps_safe` does the same for a JSON document printed to the
 terminal (``--json``), using JSON's own ``\\uNNNN`` escapes so the
@@ -40,13 +43,17 @@ Not in Unicode category ``Cc``, but capable of visually reordering or
 hiding surrounding text on a terminal that honours them.
 """
 
+_ESCAPED_CATEGORIES: Final[frozenset[str]] = frozenset({"Cc", "Cs"})
+"""Unicode categories always escaped: controls, and lone surrogates (which UTF-8 can't encode)."""
+
 _JSON_UNESCAPED_CONTROLS: Final[re.Pattern[str]] = re.compile(
-    "[\x7f-\x9f" + "".join(sorted(_BIDI_CONTROLS)) + "]"
+    "[\x7f-\x9f\ud800-\udfff" + "".join(sorted(_BIDI_CONTROLS)) + "]"
 )
 """What ``json.dumps(ensure_ascii=False)`` writes raw but :func:`terminal_safe` escapes.
 
-DEL, the C1 controls (U+007F-U+009F) and the bidi controls; JSON itself
-already requires the C0 controls (below U+0020) to be escaped.
+DEL, the C1 controls (U+007F-U+009F), the lone surrogates (U+D800-U+DFFF)
+and the bidi controls; JSON itself already requires the C0 controls
+(below U+0020) to be escaped.
 """
 
 _KEPT_WITH_NEWLINES: Final[frozenset[str]] = frozenset({"\n", "\t"})
@@ -64,9 +71,10 @@ def terminal_safe(text: str, *, allow_newlines: bool = False) -> str:
 
     Returns:
         ``text`` with every Unicode category ``Cc`` character (C0
-        controls, DEL, and the C1 controls U+0080-U+009F) and every bidi
-        control replaced by a visible ``\\xNN`` (or ``\\uNNNN`` for the
-        bidi controls, which fall outside one byte) escape. All other
+        controls, DEL, and the C1 controls U+0080-U+009F), every lone
+        surrogate (category ``Cs``) and every bidi control replaced by a
+        visible ``\\xNN`` (or ``\\uNNNN`` for the surrogates and bidi
+        controls, which fall outside one byte) escape. All other
         characters, including non-ASCII printable text, are unchanged.
     """
     kept = _KEPT_WITH_NEWLINES if allow_newlines else frozenset[str]()
@@ -74,7 +82,7 @@ def terminal_safe(text: str, *, allow_newlines: bool = False) -> str:
     for char in text:
         if char in kept:
             escaped.append(char)
-        elif unicodedata.category(char) == "Cc" or char in _BIDI_CONTROLS:
+        elif unicodedata.category(char) in _ESCAPED_CATEGORIES or char in _BIDI_CONTROLS:
             codepoint = ord(char)
             escaped.append(f"\\x{codepoint:02x}" if codepoint <= 0xFF else f"\\u{codepoint:04x}")
         else:
@@ -88,15 +96,17 @@ def json_dumps_safe(
     r"""Serialize ``obj`` as JSON that is safe to print to a real terminal.
 
     Like ``json.dumps(obj, ensure_ascii=False)`` -- non-ASCII text such as
-    ``"Łódź"`` or emoji stays readable -- except that DEL, the C1 controls
-    and the bidi controls are written as ``\uNNNN`` escapes instead of
-    raw, so a device- or file-sourced string can't smuggle a terminal
-    control sequence (e.g. the single-byte CSI U+009B) into ``--json``
-    output. The escapes are standard JSON: the document decodes to
-    exactly the same value. Those characters can only appear inside
-    string literals (keys included), never in JSON's ASCII structure,
-    and a literal backslash before one is already doubled by ``json``,
-    so replacing them in the serialized text is safe.
+    ``"Łódź"`` or emoji stays readable -- except that DEL, the C1 controls,
+    lone surrogates and the bidi controls are written as ``\uNNNN``
+    escapes instead of raw, so a device- or file-sourced string can't
+    smuggle a terminal control sequence (e.g. the single-byte CSI U+009B)
+    into ``--json`` output, nor make printing it fail with
+    ``UnicodeEncodeError`` (a lone surrogate). The escapes are standard
+    JSON: the document decodes to exactly the same value. Those
+    characters can only appear inside string literals (keys included),
+    never in JSON's ASCII structure, and a literal backslash before one is
+    already doubled by ``json``, so replacing them in the serialized text
+    is safe.
 
     Args:
         obj: The value to serialize.

@@ -20,6 +20,8 @@ pytestmark = pytest.mark.unit
         ("\x7f", "\\x7f"),  # DEL
         ("\x9b", "\\x9b"),  # single-byte CSI (C1)
         ("‮", "\\u202e"),  # right-to-left override (bidi control)
+        ("\ud800", "\\ud800"),  # lone high surrogate
+        ("\udfff", "\\udfff"),  # lone low surrogate
     ],
 )
 def test_control_and_bidi_characters_are_escaped(raw: str, escaped: str) -> None:
@@ -64,6 +66,15 @@ def test_empty_string_unchanged() -> None:
 )
 def test_json_dumps_safe_escapes_del_c1_and_bidi_controls(codepoint: int) -> None:
     assert json_dumps_safe(chr(codepoint)) == f'"\\u{codepoint:04x}"'
+
+
+@pytest.mark.parametrize("codepoint", [0xD800, 0xDFFF], ids=lambda codepoint: f"U+{codepoint:04X}")
+def test_json_dumps_safe_escapes_lone_surrogates(codepoint: int) -> None:
+    value = {"name": f"a{chr(codepoint)}b"}
+    text = json_dumps_safe(value)
+    assert text == f'{{"name": "a\\u{codepoint:04x}b"}}'
+    assert text.encode("utf-8")  # printable on a UTF-8 stream; raw, this raises
+    assert json.loads(text) == value
 
 
 def test_json_dumps_safe_round_trips_to_the_same_value() -> None:

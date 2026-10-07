@@ -364,6 +364,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (exit code 1). It is now reported like any other malformed timestamp:
   "'<column>' is not a valid timestamp" with an ISO-8601 hint, exit
   code `4`.
+- A node name from loranet.pl or lorastats.pl holding a lone UTF-16
+  surrogate (a `\ud800`-`\udfff` escape in the JSON, e.g. an emoji name
+  cut in half) crashed `mesh status` -- table, `--json` and `--watch` --
+  with a Python traceback (exit code 1), and kept crashing for as long as
+  the response stayed cached. Lone surrogates are now escaped like
+  control characters, so the name shows as the text `\udXXX` in the
+  table and in `--json`.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

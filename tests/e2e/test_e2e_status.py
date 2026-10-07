@@ -661,3 +661,64 @@ def test_threshold_ordering_is_validated(runner: CliRunner, env: dict[str, str])
 def test_loranet_decimal_key_matches_from_hex_decimal() -> None:
     """Sanity check the design note: never hand-write a loranet dump key."""
     assert NodeId.from_hex("deadbe01").decimal == str(int("deadbe01", 16))
+
+
+def _mock_loranet_raw_long_name(
+    mock_sources: Callable[..., respx.MockRouter], node_hex: str, long_name_json: str
+) -> respx.MockRouter:
+    r"""Mock both sources, then serve loranet's dump as raw JSON text.
+
+    ``long_name_json`` is spliced into the body verbatim, so it can carry
+    a ``\ud800`` escape: valid JSON that decodes to a lone surrogate,
+    which ``httpx.Response(json=...)`` itself can't encode.
+    """
+    recent = int(time.time()) - 60
+    router = mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}})
+    body = (
+        f'{{"{NodeId.from_hex(node_hex).decimal}": {{"shortName": "MTa1", '
+        f'"longName": "{long_name_json}", "seenBy": {{"gw1": {recent}}}}}}}'
+    )
+    router.get(LORANET_NODES_URL).mock(
+        return_value=httpx.Response(
+            200, content=body.encode(), headers={"content-type": "application/json"}
+        )
+    )
+    return router
+
+
+def test_table_run_escapes_a_lone_surrogate_in_a_node_name(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """A self-reported name holding a lone surrogate is shown escaped, not a crash.
+
+    Unescaped, writing it to the UTF-8 stdout raised ``UnicodeEncodeError``
+    (exit 1) on every run for the whole cache TTL.
+    """
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    with _mock_loranet_raw_long_name(mock_sources, node_hex, "Evil\\ud800Name"):
+        result = invoke(runner, ["status", "--source", "loranet"], {**env, "COLUMNS": "300"})
+
+    assert result.exit_code == 0
+    assert "Evil\\ud800Name" in result.stdout
+
+
+def test_json_run_escapes_a_lone_surrogate_in_a_node_name(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    with _mock_loranet_raw_long_name(mock_sources, node_hex, "Evil\\ud800Name"):
+        result = invoke(runner, ["status", "--json", "--source", "loranet"], env)
+
+    assert result.exit_code == 0
+    (node_doc,) = json.loads(result.stdout)["nodes"]
+    assert node_doc["long_name"] == "Evil\\ud800Name"
