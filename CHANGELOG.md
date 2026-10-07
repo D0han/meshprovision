@@ -452,6 +452,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code 1) on Linux and macOS. It now fails like any other connect
   failure, exit code `5`; when the path is not a serial device, the hint
   names example serial ports instead of the cable/`dialout` advice.
+- With a database path that is a symlink under another name (for example
+  `MESHPROVISION_DB_PATH=fleet.ods` pointing at `data/nodes_db.ods`), the
+  files in its `backups/` directory were named after whichever spelling
+  a command was given, while every save's own backup was named after the
+  real file. `mesh db backup --list` through the link showed none of the
+  backups saves had taken, retention and ordering were split between the
+  two names, the database got two known-good copies, and a pending-key
+  file written by a `mesh provision` interrupted under one spelling was
+  not found by a re-run under the other, so the key the device already
+  held could not be recovered automatically. Backups, the known-good copy
+  and its provenance file, and pending-key files are now always named
+  after the real file. Files named after the link by an earlier version
+  are still found through that same link: such backups are listed and
+  pruned with the rest, a known-good copy is used until a refresh
+  replaces it (and is then removed, when its provenance file names this
+  database), and a pending-key file is recovered and then cleared. One
+  written under a link you no longer use can be renamed by hand to
+  `<real name>.pending-<node id>.json`.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

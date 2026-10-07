@@ -1550,3 +1550,63 @@ def test_fsync_dir_is_a_no_op_on_windows(tmp_path: Path, monkeypatch: pytest.Mon
     fs_primitives._fsync_dir(tmp_path)
 
     assert opened == []
+
+
+def _linked_target(tmp_path: Path) -> tuple[Path, Path]:
+    """Build ``ws/fleet.ods`` -> ``shared/nodes_db.ods``: one file, two spellings."""
+    real = tmp_path / "shared" / "nodes_db.ods"
+    real.parent.mkdir()
+    real.write_bytes(b"v0")
+    link = tmp_path / "ws" / "fleet.ods"
+    link.parent.mkdir()
+    link.symlink_to(real)
+    return real, link
+
+
+def test_backups_through_either_spelling_share_names_and_one_listing(tmp_path: Path) -> None:
+    """Saves (which resolve) and `mesh db backup` (which did not) used to split the history."""
+    real, link = _linked_target(tmp_path)
+
+    write_bytes_atomic(link, b"v1", backup=True)
+    first = create_backup(link, now=datetime(2026, 1, 1, tzinfo=UTC))
+    second = create_backup(real, now=datetime(2026, 1, 2, tzinfo=UTC))
+
+    assert first is not None
+    assert second is not None
+    names = [info.path.name for info in list_backups(link)]
+    assert len(names) == 3
+    assert all(name.startswith("nodes_db-") for name in names)
+    assert [info.path for info in list_backups(real)] == [info.path for info in list_backups(link)]
+
+
+def test_older_spelling_backups_are_listed_and_pruned_with_the_rest(tmp_path: Path) -> None:
+    real, link = _linked_target(tmp_path)
+    directory = backup_dir_for(real)
+    directory.mkdir()
+    older = directory / backup_name(Path("fleet.ods"), datetime(2026, 1, 1, tzinfo=UTC))
+    older.write_bytes(b"old")
+    create_backup(link, now=datetime(2026, 1, 2, tzinfo=UTC))
+
+    assert [info.path for info in list_backups(link)][1:] == [older]
+
+    create_backup(link, retention=2, now=datetime(2026, 1, 3, tzinfo=UTC))
+
+    assert not older.exists()
+    assert len(list_backups(link)) == 2
+
+
+def test_older_spelling_backups_are_left_to_the_database_that_owns_that_name(
+    tmp_path: Path,
+) -> None:
+    real, link = _linked_target(tmp_path)
+    (real.parent / "fleet.ods").write_bytes(b"another database")
+    directory = backup_dir_for(real)
+    directory.mkdir()
+    theirs = directory / backup_name(Path("fleet.ods"), datetime(2026, 1, 1, tzinfo=UTC))
+    theirs.write_bytes(b"theirs")
+
+    create_backup(link, retention=1, now=datetime(2026, 1, 2, tzinfo=UTC))
+
+    assert theirs.exists()
+    assert theirs not in [info.path for info in list_backups(link)]
+    assert backups.backup_name_targets(link) == (real,)

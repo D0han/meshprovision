@@ -2099,3 +2099,44 @@ def test_cross_fleet_duplicate_on_a_non_admin_node_regenerates_not_refuses(
     rows = {row["key_ref"]: row for row in loaded.keys}
     assert KeyRecord.from_row(rows["deadbe01_pub"]).material() != shared_kp.public
     assert KeyRecord.from_row(rows["cccc0002_pub"]).material() == shared_kp.public
+
+
+def test_a_pending_keypair_named_after_a_symlinked_db_path_is_found_and_cleared(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    keypair_factory: Callable[[], KeyPair],
+    tmp_path: Path,
+) -> None:
+    """A pending file named after the link is found through it, named, and cleared.
+
+    Files like it were written before names followed the database's real file.
+    """
+    dev = bus.use(FakeMeshInterface("deadbe01"))
+    assert invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env).exit_code == 0
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    link = tmp_path / "ws" / "fleet.ods"
+    link.parent.mkdir()
+    link.symlink_to(db_path.resolve())
+    bogus = keypair_factory()
+    device_public = bytes(dev.localNode.localConfig.security.public_key)
+    pending_keys.write_pending(
+        db_path,
+        dev.nid,
+        KeyPair(private=bogus.private, public=device_public),
+        now=datetime.now(tz=UTC),
+    )
+    current = pending_keys.pending_key_path(db_path, dev.nid)
+    older = current.with_name(f"fleet.pending-{dev.nid.hex}.json")
+    current.rename(older)
+
+    second = invoke(
+        runner,
+        ["provision", "--port", "/dev/ttyFAKE0", "--yes"],
+        {**env, "MESHPROVISION_DB_PATH": str(link)},
+    )
+
+    assert second.exit_code == 0
+    assert f"It stays at {older} only until this run" in second.stderr
+    assert not older.exists()
+    assert not current.exists()

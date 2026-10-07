@@ -617,8 +617,7 @@ def run_provision(
         # (clear_pending) -- it survives only a run that does neither.
         ctx.warn(
             f"A pending keypair from {pending_ts} for this node does not "
-            f"match the device; it was not used. It stays at "
-            f"{pending_keys.pending_key_path(db.path, live.node_id)} only until "
+            f"match the device; it was not used. It stays at {pending.path} only until "
             f"this run writes a new pending keypair or updates the database."
         )
 
@@ -692,7 +691,11 @@ def run_provision(
         node_key_admin_refs=admin_refs,
         pending_keypair_recovered=pending_matches,
     )
+    # The recovered file's own path, which may carry an older spelling of
+    # the database's name (see pending_keys.load_pending).
     pending_path = pending_keys.pending_key_path(db.path, live.node_id)
+    if pending is not None:
+        pending_path = pending.path
     try:
         change_plan = plan_mod.build_plan(inputs)
     except AdminKeyRotationRefusedError as exc:

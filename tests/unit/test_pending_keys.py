@@ -253,7 +253,11 @@ def test_matches_requires_both_halves_to_match(keypair_factory: Callable[[], Key
     kp = keypair_factory()
     other = keypair_factory()
     pending = pending_keys.PendingKeypair(
-        node_id=_NODE, public=kp.public, private=kp.private, created_ts=datetime.now(tz=UTC)
+        node_id=_NODE,
+        public=kp.public,
+        private=kp.private,
+        created_ts=datetime.now(tz=UTC),
+        path=Path("nodes_db.pending-deadbe01.json"),
     )
 
     assert pending.matches(public=kp.public, private=kp.private) is True
@@ -261,3 +265,112 @@ def test_matches_requires_both_halves_to_match(keypair_factory: Callable[[], Key
     assert pending.matches(public=other.public, private=kp.private) is False
     assert pending.matches(public=kp.public, private=other.private) is False
     assert pending.matches(public=other.public, private=other.private) is False
+
+
+def _linked_db(tmp_path: Path) -> tuple[Path, Path]:
+    """Build ``ws/fleet.ods`` -> ``shared/nodes_db.ods``: one database, two spellings."""
+    real = tmp_path / "shared" / "nodes_db.ods"
+    real.parent.mkdir()
+    real.write_bytes(b"db")
+    link = tmp_path / "ws" / "fleet.ods"
+    link.parent.mkdir()
+    link.symlink_to(real)
+    return real, link
+
+
+def _older_spelling_file(real: Path, name: str, node_id: NodeId, keypair: KeyPair) -> Path:
+    """Write a pending file the way a version naming it after the path as given did."""
+    pending_keys.write_pending(real, node_id, keypair, now=datetime.now(tz=UTC))
+    current = pending_keys.pending_key_path(real, node_id)
+    older = current.with_name(f"{name}.pending-{node_id.hex}.json")
+    current.rename(older)
+    return older
+
+
+@pytest.mark.parametrize(
+    "write_via_link", [True, False], ids=["written-via-link", "written-via-real"]
+)
+def test_pending_keypair_is_found_under_either_spelling_of_a_symlinked_db(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair], write_via_link: bool
+) -> None:
+    """Interrupted via one spelling, re-run via the other: the key must be recovered."""
+    real, link = _linked_db(tmp_path)
+    kp = keypair_factory()
+    writer, reader = (link, real) if write_via_link else (real, link)
+
+    pending_keys.write_pending(writer, _NODE, kp, now=datetime.now(tz=UTC))
+    loaded = pending_keys.load_pending(reader, _NODE)
+
+    assert loaded is not None
+    assert loaded.public == kp.public
+    assert loaded.path.name == f"nodes_db.pending-{_NODE.hex}.json"
+    assert pending_keys.pending_key_path(link, _NODE) == pending_keys.pending_key_path(real, _NODE)
+
+
+def test_load_pending_finds_a_file_named_after_the_symlink(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    real, link = _linked_db(tmp_path)
+    kp = keypair_factory()
+    older = _older_spelling_file(real, "fleet", _NODE, kp)
+
+    loaded = pending_keys.load_pending(link, _NODE)
+
+    assert loaded is not None
+    assert loaded.public == kp.public
+    assert loaded.path == older
+
+
+def test_load_pending_prefers_the_real_files_name_when_both_exist(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    real, link = _linked_db(tmp_path)
+    _older_spelling_file(real, "fleet", _NODE, keypair_factory())
+    newer = keypair_factory()
+    pending_keys.write_pending(real, _NODE, newer, now=datetime.now(tz=UTC))
+
+    loaded = pending_keys.load_pending(link, _NODE)
+
+    assert loaded is not None
+    assert loaded.public == newer.public
+    assert loaded.path == pending_keys.pending_key_path(real, _NODE)
+
+
+def test_write_pending_removes_a_superseded_older_spelling(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    real, link = _linked_db(tmp_path)
+    older = _older_spelling_file(real, "fleet", _NODE, keypair_factory())
+
+    pending_keys.write_pending(link, _NODE, keypair_factory(), now=datetime.now(tz=UTC))
+
+    assert not older.exists()
+    assert pending_keys.pending_key_path(real, _NODE).exists()
+
+
+def test_clear_pending_removes_both_spellings(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    real, link = _linked_db(tmp_path)
+    older = _older_spelling_file(real, "fleet", _NODE, keypair_factory())
+    current = pending_keys.pending_key_path(real, _NODE)
+    current.write_bytes(older.read_bytes())
+
+    pending_keys.clear_pending(link, _NODE)
+
+    assert not older.exists()
+    assert not current.exists()
+    assert pending_keys.load_pending(link, _NODE) is None
+
+
+def test_older_spelling_is_left_to_the_database_that_owns_that_name(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    """``shared/fleet.ods`` is a different database: ``fleet.pending-*`` files are its own."""
+    real, link = _linked_db(tmp_path)
+    (real.parent / "fleet.ods").write_bytes(b"another fleet")
+    theirs = _older_spelling_file(real, "fleet", _NODE, keypair_factory())
+
+    assert pending_keys.load_pending(link, _NODE) is None
+    pending_keys.clear_pending(link, _NODE)
+    assert theirs.exists()

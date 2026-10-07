@@ -713,3 +713,99 @@ def test_refresh_known_good_flush_failure_is_logged_not_raised(
     assert result is None
     assert "Failed to refresh known-good copy" in caplog.text
     assert list(backup_dir.iterdir()) == []
+
+
+def _linked_db(tmp_path: Path) -> tuple[Path, Path]:
+    """Build ``ws/fleet.ods`` -> ``shared/nodes_db.ods``: one database, two spellings."""
+    real = tmp_path / "shared" / "nodes_db.ods"
+    real.parent.mkdir()
+    real.write_bytes(b"v1")
+    link = tmp_path / "ws" / "fleet.ods"
+    link.parent.mkdir()
+    link.symlink_to(real)
+    return real, link
+
+
+def _rename_slot_to(real: Path, stem: str) -> tuple[Path, Path]:
+    """Move the current known-good copy and sidecar to an older spelling of the name."""
+    directory = known_good.known_good_path(real).parent
+    copy = directory / f"{stem}.known-good.ods"
+    sidecar = directory / f"{stem}.known-good.json"
+    known_good.known_good_path(real).rename(copy)
+    (directory / "nodes_db.known-good.json").rename(sidecar)
+    return copy, sidecar
+
+
+@pytest.mark.parametrize(
+    "refresh_via_link", [True, False], ids=["refreshed-via-link", "refreshed-via-real"]
+)
+def test_known_good_has_one_verified_slot_across_spellings(
+    tmp_path: Path, refresh_via_link: bool
+) -> None:
+    real, link = _linked_db(tmp_path)
+    refresher, reader = (link, real) if refresh_via_link else (real, link)
+
+    _refresh(refresher)
+    status = known_good.known_good_status(reader)
+
+    assert status is not None
+    assert status.provenance is known_good.KnownGoodProvenance.VERIFIED
+    assert status.info.path.name == "nodes_db.known-good.ods"
+    assert known_good.known_good_path(link) == known_good.known_good_path(real)
+
+
+def test_known_good_status_finds_a_copy_named_after_the_symlink(tmp_path: Path) -> None:
+    """A database that fails to load right after upgrading must still restore --known-good."""
+    real, link = _linked_db(tmp_path)
+    _refresh(real)
+    copy, _sidecar = _rename_slot_to(real, "fleet")
+
+    status = known_good.known_good_status(link)
+
+    assert status is not None
+    assert status.info.path == copy
+    assert status.provenance is known_good.KnownGoodProvenance.VERIFIED
+
+
+def test_refresh_removes_an_older_spelling_copy_of_the_same_database(tmp_path: Path) -> None:
+    real, link = _linked_db(tmp_path)
+    _refresh(real)
+    copy, sidecar = _rename_slot_to(real, "fleet")
+
+    info = _refresh(link)
+
+    assert info is not None
+    assert info.path == known_good.known_good_path(real)
+    assert not copy.exists()
+    assert not sidecar.exists()
+
+
+def test_an_unchanged_refresh_also_removes_an_older_spelling_copy(tmp_path: Path) -> None:
+    """The fast path (copy already current) retires a leftover too, not only a rewrite."""
+    real, link = _linked_db(tmp_path)
+    _refresh(real)
+    directory = known_good.known_good_path(real).parent
+    copy = directory / "fleet.known-good.ods"
+    sidecar = directory / "fleet.known-good.json"
+    shutil.copy2(known_good.known_good_path(real), copy)
+    shutil.copy2(directory / "nodes_db.known-good.json", sidecar)
+    inode_before = known_good.known_good_path(real).stat().st_ino
+
+    _refresh(link)
+
+    assert known_good.known_good_path(real).stat().st_ino == inode_before
+    assert not copy.exists()
+    assert not sidecar.exists()
+
+
+def test_refresh_keeps_an_older_spelling_copy_of_another_database(tmp_path: Path) -> None:
+    real, link = _linked_db(tmp_path)
+    _refresh(real)
+    copy, sidecar = _rename_slot_to(real, "fleet")
+    sidecar.write_text(json.dumps({"format": 1, "source": "/elsewhere/fleet.ods", "sha256": "0"}))
+
+    _refresh(link)
+
+    assert copy.exists()
+    assert sidecar.exists()
+    assert known_good.known_good_path(real).exists()

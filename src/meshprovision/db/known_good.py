@@ -15,6 +15,13 @@ backups.backup_dir_for` resolves per target -- but a directory
 *copied or renamed* wholesale still carries an old known-good copy that
 is no longer this database's, and the sidecar is what makes that
 detectable. See :func:`known_good_status`.
+
+Both files are named after the database's real file (see
+:func:`~meshprovision.db.backups.backup_name_targets`), so a symlinked
+database has one slot whichever spelling opens it. A copy left under an
+older spelling of the name is still found when no copy exists under the
+real file's name, and is removed once a refresh has brought that one up
+to date -- only when its sidecar names this same database.
 """
 
 from __future__ import annotations
@@ -33,7 +40,7 @@ from typing import Final
 
 from meshprovision.db import fs_primitives
 from meshprovision.db.atomic_writer import write_bytes_atomic
-from meshprovision.db.backups import BackupInfo, backup_dir_for
+from meshprovision.db.backups import BackupInfo, backup_dir_for, backup_name_targets
 from meshprovision.db.fs_primitives import _BACKUP_DIR_MODE, _FILE_MODE, resolve_path
 from meshprovision.errors import AtomicWriteError
 
@@ -70,7 +77,8 @@ def known_good_name(target: Path) -> str:
     """Build the stable known-good file name for one target file.
 
     Args:
-        target: The file the known-good copy is for.
+        target: The file whose name the known-good copy is named after
+            (see :func:`~meshprovision.db.backups.backup_name_targets`).
 
     Returns:
         For example ``"nodes_db.known-good.ods"``.
@@ -87,9 +95,12 @@ def known_good_path(target: Path, backup_dir: Path | None = None) -> Path:
             default.
 
     Returns:
-        ``backup_dir_for(target, backup_dir) / known_good_name(target)``.
+        ``backup_dir_for(target, backup_dir) / known_good_name(real)``,
+        where ``real`` is ``target``'s real file (the first of
+        :func:`~meshprovision.db.backups.backup_name_targets`) -- where
+        a refresh writes the copy.
     """
-    return backup_dir_for(target, backup_dir) / known_good_name(target)
+    return backup_dir_for(target, backup_dir) / known_good_name(backup_name_targets(target)[0])
 
 
 def known_good_info(target: Path, *, backup_dir: Path | None = None) -> BackupInfo | None:
@@ -109,13 +120,28 @@ def known_good_info(target: Path, *, backup_dir: Path | None = None) -> BackupIn
         ``None`` if no known-good copy exists yet, or it vanished or
         could not be stat'd between the existence check and the stat
         call (a concurrent refresh mid-replace -- treated the same as
-        "none yet" rather than raised).
+        "none yet" rather than raised). The copy named after the real
+        file wins; one under an older spelling of the name is used only
+        when that one does not exist.
     """
-    path = known_good_path(target, backup_dir)
-    try:
-        stat_result = path.stat()
-    except OSError:
+    found = _existing_slot(target, backup_dir)
+    if found is None:
         return None
+    path, _sidecar, stat_result = found
+    return _copy_info(target, path, stat_result)
+
+
+def _copy_info(target: Path, path: Path, stat_result: os.stat_result) -> BackupInfo:
+    """Build a known-good copy's metadata from its ``stat`` result.
+
+    Args:
+        target: The file the known-good copy is for.
+        path: The copy's path.
+        stat_result: The copy's ``stat`` result.
+
+    Returns:
+        Its metadata, ``created_at`` taken from its mtime.
+    """
     return BackupInfo(
         path=path,
         source=target,
@@ -128,7 +154,8 @@ def _sidecar_name(target: Path) -> str:
     """Build the provenance sidecar's file name for one target file.
 
     Args:
-        target: The file the known-good copy (and its sidecar) is for.
+        target: The file whose name the known-good copy (and its
+            sidecar) is named after.
 
     Returns:
         For example ``"nodes_db.known-good.json"``. The ``.json``
@@ -149,9 +176,78 @@ def _sidecar_path(target: Path, backup_dir: Path | None = None) -> Path:
             default.
 
     Returns:
-        ``backup_dir_for(target, backup_dir) / _sidecar_name(target)``.
+        ``backup_dir_for(target, backup_dir) / _sidecar_name(real)``, the
+        sidecar beside :func:`known_good_path`.
     """
-    return backup_dir_for(target, backup_dir) / _sidecar_name(target)
+    return backup_dir_for(target, backup_dir) / _sidecar_name(backup_name_targets(target)[0])
+
+
+def _slots(target: Path, backup_dir: Path | None) -> tuple[tuple[Path, Path], ...]:
+    """List the ``(copy, sidecar)`` path pairs a target's known-good copy may sit at.
+
+    Args:
+        target: The file the known-good copy is for.
+        backup_dir: An explicit backup directory to use instead of the
+            default.
+
+    Returns:
+        One pair per :func:`~meshprovision.db.backups.backup_name_targets`
+        name: the real file's first, then an older spelling's, if any.
+    """
+    directory = backup_dir_for(target, backup_dir)
+    return tuple(
+        (directory / known_good_name(name), directory / _sidecar_name(name))
+        for name in backup_name_targets(target)
+    )
+
+
+def _existing_slot(
+    target: Path, backup_dir: Path | None
+) -> tuple[Path, Path, os.stat_result] | None:
+    """Find the first of :func:`_slots` whose copy exists.
+
+    Args:
+        target: The file the known-good copy is for.
+        backup_dir: An explicit backup directory to use instead of the
+            default.
+
+    Returns:
+        ``(copy, sidecar, stat of copy)``, or ``None`` when no slot's copy
+        can be stat'd.
+    """
+    for copy, sidecar in _slots(target, backup_dir):
+        try:
+            stat_result = copy.stat()
+        except OSError:
+            continue
+        return copy, sidecar, stat_result
+    return None
+
+
+def _retire_older_spellings(target: Path, backup_dir: Path | None, source: str) -> None:
+    """Remove known-good copies left under an older spelling of the target's name.
+
+    Called only once the copy named after the real file is current and
+    its sidecar names ``source``, so nothing is lost: an older-spelling
+    copy is removed (with its sidecar) only when its own sidecar names
+    the same ``source``. One without a readable sidecar, or naming
+    another database, is left alone. Best-effort: never raises.
+
+    Args:
+        target: The file the known-good copy is for.
+        backup_dir: An explicit backup directory to use instead of the
+            default.
+        source: ``target``'s resolved path, as a sidecar records it.
+    """
+    for copy, sidecar in _slots(target, backup_dir)[1:]:
+        recorded = _read_sidecar(sidecar)
+        if recorded is None or recorded.get("source") != source:
+            continue
+        try:
+            copy.unlink(missing_ok=True)
+            sidecar.unlink(missing_ok=True)
+        except OSError as exc:
+            _logger.debug("Failed to remove the older known-good copy %s: %s", copy, exc)
 
 
 def _read_sidecar(path: Path) -> dict[str, object] | None:
@@ -257,11 +353,13 @@ def known_good_status(target: Path, *, backup_dir: Path | None = None) -> KnownG
         a sidecar exists, names this exact resolved ``target`` as its
         source, and its recorded hash matches the copy's actual bytes.
     """
-    info = known_good_info(target, backup_dir=backup_dir)
-    if info is None:
+    found = _existing_slot(target, backup_dir)
+    if found is None:
         return None
+    path, sidecar_path, stat_result = found
+    info = _copy_info(target, path, stat_result)
 
-    sidecar = _read_sidecar(_sidecar_path(target, backup_dir))
+    sidecar = _read_sidecar(sidecar_path)
     recorded_source = sidecar.get("source") if sidecar is not None else None
     if sidecar is None or not isinstance(recorded_source, str):
         return KnownGood(info=info, provenance=KnownGoodProvenance.UNRECORDED, recorded_source=None)
@@ -450,7 +548,7 @@ def refresh_known_good(
     digest = hashlib.sha256(content).hexdigest()
     try:
         resolved_dir = backup_dir_for(target, backup_dir)
-        destination = resolved_dir / known_good_name(target)
+        destination = known_good_path(target, backup_dir)
         sidecar_path = _sidecar_path(target, backup_dir)
         target_identity = (source_stat.st_mtime_ns, source_stat.st_size)
         if destination.is_file():
@@ -462,6 +560,7 @@ def refresh_known_good(
                     and sidecar.get("source") == current_source
                     and sidecar.get("sha256") == digest
                 ):
+                    _retire_older_spellings(target, backup_dir, current_source)
                     return known_good_info(target, backup_dir=backup_dir)
 
         resolved_dir.mkdir(parents=True, exist_ok=True)
@@ -490,6 +589,7 @@ def refresh_known_good(
         tmp_destination = None
         fs_primitives._fsync_dir(resolved_dir)
         _write_sidecar(sidecar_path, source=current_source, sha256_hex=digest)
+        _retire_older_spellings(target, backup_dir, current_source)
     except (OSError, AtomicWriteError) as exc:
         _logger.warning("Failed to refresh known-good copy of %s: %s", target, exc)
         if tmp_destination is not None:

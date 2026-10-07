@@ -38,7 +38,7 @@ from meshprovision.crypto.keys import X25519_KEY_SIZE, KeyPair
 from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db import schema
 from meshprovision.db.atomic_writer import write_bytes_atomic
-from meshprovision.db.backups import backup_dir_for
+from meshprovision.db.backups import backup_dir_for, backup_name_targets
 from meshprovision.nodeid import NodeId
 
 __all__ = [
@@ -64,14 +64,36 @@ def pending_key_path(db_path: Path, node_id: NodeId) -> Path:
         node_id: The node the pending keypair belongs to.
 
     Returns:
-        For example ``.../backups/nodes_db.pending-deadbe01.json``. This
+        The path a new pending keypair is written to, named after the
+        database's real file (see
+        :func:`meshprovision.db.backups.backup_name_targets`), for example
+        ``.../backups/nodes_db.pending-deadbe01.json``. This
         matches neither :func:`meshprovision.db.backups.
         _backup_name_re` nor its prefiltering glob (the stem is followed
         by ``"."``, never the ``"-"`` a timestamped backup name requires
         immediately after the stem), so it is never listed, pruned, or
         mistaken for a rotated backup.
     """
-    return backup_dir_for(db_path) / f"{db_path.stem}.pending-{node_id.hex}.json"
+    return _pending_paths(db_path, node_id)[0]
+
+
+def _pending_paths(db_path: Path, node_id: NodeId) -> tuple[Path, ...]:
+    """List the paths one node's pending keypair may sit at, the current name first.
+
+    Args:
+        db_path: The database's own path.
+        node_id: The node the pending keypair belongs to.
+
+    Returns:
+        One path per :func:`meshprovision.db.backups.backup_name_targets`
+        name: the real file's, then an older spelling's that a version
+        naming these files after the path as given may have written.
+    """
+    directory = backup_dir_for(db_path)
+    return tuple(
+        directory / f"{name.stem}.pending-{node_id.hex}.json"
+        for name in backup_name_targets(db_path)
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,12 +106,14 @@ class PendingKeypair:
         private: The raw 32-byte private key, wrapped so it is never
             logged or printed by accident.
         created_ts: When this keypair was written ahead, tz-aware UTC.
+        path: The file it was loaded from.
     """
 
     node_id: NodeId
     public: bytes
     private: SecretBytes
     created_ts: datetime
+    path: Path
 
     def matches(self, *, public: bytes, private: bytes | SecretBytes) -> bool:
         """Check whether a live-reported keypair is exactly this pending one.
@@ -139,7 +163,12 @@ def write_pending(db_path: Path, node_id: NodeId, keypair: KeyPair, *, now: date
             "created_ts": now.astimezone(UTC).isoformat(),
         }
     ).encode("ascii")
-    write_bytes_atomic(pending_key_path(db_path, node_id), payload, backup=False)
+    current, *older = _pending_paths(db_path, node_id)
+    write_bytes_atomic(current, payload, backup=False)
+    # Superseded: an older-spelling file describes an earlier keypair, and
+    # would be read again once this one is cleared.
+    for path in older:
+        _remove_pending_file(path)
 
 
 def load_pending(db_path: Path, node_id: NodeId) -> PendingKeypair | None:
@@ -156,6 +185,11 @@ def load_pending(db_path: Path, node_id: NodeId) -> PendingKeypair | None:
     UTC offset (only possible in a hand-edited file) is read as UTC, the
     database's own rule, not as host-local time.
 
+    Looks under the name :func:`pending_key_path` returns first, then
+    under an older spelling of the database's name (see
+    :func:`meshprovision.db.backups.backup_name_targets`); the first file
+    that exists decides.
+
     Args:
         db_path: The database's own path.
         node_id: The node to look up a pending keypair for.
@@ -163,15 +197,30 @@ def load_pending(db_path: Path, node_id: NodeId) -> PendingKeypair | None:
     Returns:
         The parsed :class:`PendingKeypair`, or ``None``.
     """
-    path = pending_key_path(db_path, node_id)
-    try:
-        raw = path.read_bytes()
-    except FileNotFoundError:
-        return None
-    except OSError as exc:
-        _logger.warning("Could not read pending keypair at %s: %s", path, exc)
-        return None
+    for path in _pending_paths(db_path, node_id):
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            _logger.warning("Could not read pending keypair at %s: %s", path, exc)
+            return None
+        return _parse_pending(path, raw, node_id)
+    return None
 
+
+def _parse_pending(path: Path, raw: bytes, node_id: NodeId) -> PendingKeypair | None:
+    """Parse one pending-keypair file's bytes, logging why it is unusable.
+
+    Args:
+        path: The file ``raw`` was read from, for messages.
+        raw: The file's bytes.
+        node_id: The node the file is expected to belong to.
+
+    Returns:
+        The parsed :class:`PendingKeypair`, or ``None`` (after a
+        ``WARNING``) when the content is malformed or names another node.
+    """
     try:
         data = json.loads(raw)
     except ValueError as exc:
@@ -211,6 +260,7 @@ def load_pending(db_path: Path, node_id: NodeId) -> PendingKeypair | None:
         public=public,
         private=SecretBytes(private),
         created_ts=created_ts,
+        path=path,
     )
 
 
@@ -220,13 +270,24 @@ def clear_pending(db_path: Path, node_id: NodeId) -> None:
     Never raises: called once the database and the device are known to
     agree (or once a pending keypair is known to have never reached the
     device), so a failure to remove the now-stale file must not fail the
-    run it is cleaning up after.
+    run it is cleaning up after. Removes the file under an older spelling
+    of the database's name too (see :func:`load_pending`), so neither can
+    be recovered from later.
 
     Args:
         db_path: The database's own path.
         node_id: The node whose pending keypair to clear.
     """
-    path = pending_key_path(db_path, node_id)
+    for path in _pending_paths(db_path, node_id):
+        _remove_pending_file(path)
+
+
+def _remove_pending_file(path: Path) -> None:
+    """Remove one pending-keypair file if it exists, logging (never raising) a failure.
+
+    Args:
+        path: The file to remove.
+    """
     try:
         path.unlink()
     except FileNotFoundError:

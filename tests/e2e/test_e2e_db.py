@@ -1558,3 +1558,33 @@ def test_db_restore_behind_the_clock_keeps_the_pre_restore_backup(
     listed = backups.list_backups(db_path, backup_dir=backup_dir)
     assert listed[0].path.read_bytes() == before_restore
     assert len(listed) == backups.DEFAULT_RETENTION
+
+
+def test_db_backup_list_through_a_differently_named_symlink_shows_every_backup(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    """`db backup --list` through the link showed none of the backups saves had taken.
+
+    Saves named them after the real file; the listing looked for the link's name.
+    """
+    real_target = tmp_path / "shared" / "nodes_db.ods"
+    link = tmp_path / "ws1" / "fleet.ods"
+    env_link = _symlinked_fleet_env(tmp_path, link=link, real_target=real_target)
+    env_real = {**env_link, "MESHPROVISION_DB_PATH": str(real_target)}
+
+    assert invoke(runner, ["init", "--yes"], env_link).exit_code == 0
+    kp = generate_keypair()
+    assert invoke(runner, ["admin", "import", f"WS1={kp.public_b64}"], env_link).exit_code == 0
+    assert invoke(runner, ["db", "backup"], env_link).exit_code == 0
+
+    via_link = invoke(runner, ["db", "backup", "--list", "--json"], env_link)
+    via_real = invoke(runner, ["db", "backup", "--list", "--json"], env_real)
+
+    assert via_link.exit_code == 0
+    document = json.loads(via_link.stdout)
+    paths = [Path(entry["path"]) for entry in document["backups"]]
+    assert len(paths) >= 2
+    assert all(path.name.startswith("nodes_db-") for path in paths)
+    assert document == json.loads(via_real.stdout)
+    assert Path(document["known_good"]["path"]).name == "nodes_db.known-good.ods"
+    assert document["known_good"]["provenance"] == "verified"

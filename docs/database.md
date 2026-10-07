@@ -134,6 +134,14 @@ otherwise reported by fingerprint only, never its raw material;
   says so. Every write -- the database, each backup, the known-good copy
   and the pending-key file -- is flushed to disk before it takes its
   final name, so a power cut cannot leave any of them empty or torn.
+  When the database path is a symlink, the `backups/` directory sits
+  beside the file the link points to, and everything in it (backups, the
+  known-good copy, pending-key files) is named after that file, not the
+  link: through a link `fleet.ods` -> `data/nodes_db.ods`, `mesh db
+  backup --list` shows `data/backups/nodes_db-....ods`, the same list as
+  through `data/nodes_db.ods` itself. Files an earlier version named after
+  the link are still found through that same link, and age out or are
+  replaced from there.
 - Opening the database in LibreOffice Calc, resizing columns, and saving
   is safe — including adding your own comments to a cell, which will not
   corrupt that cell's value. Every header cell carries its column's

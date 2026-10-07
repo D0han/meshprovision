@@ -41,6 +41,7 @@ __all__ = [
     "BackupInfo",
     "backup_dir_for",
     "backup_name",
+    "backup_name_targets",
     "create_backup",
     "legacy_backup_notice",
     "list_backups",
@@ -147,11 +148,58 @@ def backup_dir_for(target: Path, backup_dir: Path | None = None) -> Path:
     return fs_primitives.resolve_path(target).parent / _BACKUP_DIR_NAME
 
 
+def backup_name_targets(target: Path) -> tuple[Path, ...]:
+    """List the paths whose names a target file's backup-directory files are named after.
+
+    Every file this package keeps in a backup directory for ``target`` --
+    timestamped backups, the known-good copy and its sidecar, pending-key
+    files -- is named after ``target``'s *real* file, the same file
+    :func:`backup_dir_for` places the directory beside and
+    :func:`~meshprovision.db.locking.lock_path_for` locks. So a symlinked
+    database reached as ``fleet.ods`` and as the ``nodes_db.ods`` it
+    points at finds the same files under either spelling.
+
+    Files written before names followed the real file were named after
+    the path as given, so a differently named spelling is returned too,
+    for reads and clean-up only (never for new writes). It is left out
+    when a different file of that name sits beside the real file: names
+    of that spelling in the shared backup directory then belong to that
+    other database.
+
+    Args:
+        target: The file, as given.
+
+    Returns:
+        ``(resolved,)``, or ``(resolved, target)`` when ``target``'s file
+        name differs from the real file's and no other database owns that
+        name beside it. The first entry is the one to write under.
+        ``(target,)`` when ``target`` cannot be resolved (a symlink loop):
+        the names as given, as before names followed the real file. Only
+        an explicit backup directory gets that far -- without one,
+        :func:`backup_dir_for` has already refused the path.
+    """
+    try:
+        resolved = fs_primitives.resolve_path(target)
+    except AtomicWriteError:
+        return (target,)
+    if target.name == resolved.name:
+        return (resolved,)
+    sibling = resolved.parent / target.name
+    try:
+        owned_elsewhere = (
+            os.path.lexists(sibling) and fs_primitives.resolve_path(sibling) != resolved
+        )
+    except AtomicWriteError:
+        owned_elsewhere = True
+    return (resolved,) if owned_elsewhere else (resolved, target)
+
+
 def backup_name(target: Path, when: datetime) -> str:
     """Build the backup file name for one target file and timestamp.
 
     Args:
-        target: The file being backed up.
+        target: The file whose name the backup is named after (see
+            :func:`backup_name_targets` for which one that is).
         when: The (ideally UTC) timestamp to embed in the name.
 
     Returns:
@@ -394,15 +442,17 @@ def create_backup(
     except OSError as exc:
         _logger.debug("Failed to chmod backup directory %s: %s", resolved_dir, exc)
 
+    name_targets = backup_name_targets(target)
     # Before this call's own temp exists, so it can never sweep it.
-    fs_primitives._sweep_stale_temps(
-        resolved_dir,
-        f".{target.stem}-*{target.suffix}.tmp-*",
-        min_age_seconds=fs_primitives._STALE_TEMP_MIN_AGE_SECONDS,
-    )
+    for name_target in name_targets:
+        fs_primitives._sweep_stale_temps(
+            resolved_dir,
+            f".{name_target.stem}-*{name_target.suffix}.tmp-*",
+            min_age_seconds=fs_primitives._STALE_TEMP_MIN_AGE_SECONDS,
+        )
 
     when = _monotonic_backup_time(target, resolved_dir, _normalize_utc(now), from_clock=now is None)
-    name = backup_name(target, when)
+    name = backup_name(name_targets[0], when)
     tmp_destination = resolved_dir / f".{name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
     try:
         shutil.copy2(target, tmp_destination)
@@ -453,7 +503,8 @@ def _parse_backup_timestamp(name: str, target: Path) -> datetime | None:
 
     Args:
         name: The backup file's bare name (no directory component).
-        target: The target file the backup belongs to.
+        target: The file the backup is named after (see
+            :func:`backup_name_targets`).
 
     Returns:
         The parsed tz-aware UTC timestamp, or ``None`` if ``name`` does
@@ -498,7 +549,8 @@ def _backup_sort_key(path: Path, target: Path) -> tuple[datetime, float]:
 
     Args:
         path: The backup file.
-        target: The target file the backup belongs to.
+        target: The file the backup is named after (see
+            :func:`backup_name_targets`).
 
     Returns:
         A ``(timestamp, mtime)`` tuple, sortable ascending (larger means
@@ -521,8 +573,11 @@ def list_backups(target: Path, *, backup_dir: Path | None = None) -> tuple[Backu
 
     Returns:
         A tuple of :class:`BackupInfo`, newest first (see
-        :func:`_backup_sort_key` for how same-second ties are broken).
-        Empty when the backup directory does not exist. A backup deleted
+        :func:`_backup_sort_key` for how same-second ties are broken),
+        under every name :func:`backup_name_targets` returns -- the real
+        file's, and an older spelling's still on disk -- so retention and
+        ordering span both. Empty when the backup directory does not
+        exist. A backup deleted
         by a concurrent pruner between the directory scan and its own
         stat is silently omitted rather than raising. Only names that
         :func:`_backup_name_re` fully matches count -- a sibling
@@ -534,17 +589,20 @@ def list_backups(target: Path, *, backup_dir: Path | None = None) -> tuple[Backu
     if not resolved_dir.is_dir():
         return ()
 
-    pattern = _backup_name_re(target)
     keyed: list[tuple[Path, tuple[datetime, float], int]] = []
-    for path in resolved_dir.glob(f"{target.stem}-*{target.suffix}"):
-        if not pattern.fullmatch(path.name):
-            continue
-        try:
-            if not path.is_file():
+    seen: set[Path] = set()
+    for name_target in backup_name_targets(target):
+        pattern = _backup_name_re(name_target)
+        for path in resolved_dir.glob(f"{name_target.stem}-*{name_target.suffix}"):
+            if path in seen or not pattern.fullmatch(path.name):
                 continue
-            keyed.append((path, _backup_sort_key(path, target), path.stat().st_size))
-        except FileNotFoundError:
-            continue
+            try:
+                if not path.is_file():
+                    continue
+                keyed.append((path, _backup_sort_key(path, name_target), path.stat().st_size))
+            except FileNotFoundError:
+                continue
+            seen.add(path)
     keyed.sort(key=lambda item: item[1], reverse=True)
     return tuple(
         BackupInfo(path=path, source=target, created_at=sort_key[0], size_bytes=size_bytes)
