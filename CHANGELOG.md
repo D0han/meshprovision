@@ -936,7 +936,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exits non-zero.
 - No raw cryptographic material is ever logged or printed: secrets are wrapped
   in `SecretBytes`, a structlog processor scrubs every event dict last, and
-  tracebacks use a plain formatter rather than one that dumps locals.
+  tracebacks use a plain formatter rather than one that dumps locals. A
+  traceback logged at `DEBUG` (`-vv`) is formatted before that scrub, so
+  its exception messages, chained causes included, are scrubbed and
+  control-escaped like the rest of the event.
 - `MESHPROVISION_CONTACT` is required with no default, so nobody can
   unknowingly send dummy or third-party contact details to lorastats.pl.
 - Secret hygiene is enforced by three independent layers: `.gitignore`, a

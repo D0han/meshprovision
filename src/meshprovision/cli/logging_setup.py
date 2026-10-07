@@ -211,11 +211,19 @@ def configure_logging(
     records are routed through the same ``structlog.stdlib.
     ProcessorFormatter`` chain as structlog-native events -- including
     :func:`meshprovision.crypto.redact.redact_processor`, which runs
-    first in the formatter's ``processors`` list so it is the last thing
-    to touch the event dict before ``remove_processors_meta``/render.
+    right after ``structlog.processors.format_exc_info`` in the
+    formatter's ``processors`` list so it is the last thing to touch the
+    event dict before ``remove_processors_meta``/render.
+    ``format_exc_info`` turns an ``exc_info`` traceback into the event's
+    ``"exception"`` string first, so the redactor scrubs and
+    control-escapes the traceback text too (exception messages and
+    chained causes can carry device- or file-sourced text); left as a
+    tuple, the renderer would format it after the scrub, raw.
 
-    ``exception_formatter=structlog.dev.plain_traceback`` is passed to
-    the renderer deliberately: ``ConsoleRenderer``'s own default is a
+    ``format_exc_info`` uses the standard library's traceback formatting,
+    which never prints locals, and
+    ``exception_formatter=structlog.dev.plain_traceback`` is still passed
+    to the renderer deliberately: ``ConsoleRenderer``'s own default is a
     ``RichTracebackFormatter(show_locals=True)``, which would print local
     variables -- i.e. potentially raw key material -- into the log on any
     traceback.
@@ -266,6 +274,7 @@ def configure_logging(
     formatter = structlog.stdlib.ProcessorFormatter(
         foreign_pre_chain=shared,
         processors=[
+            structlog.processors.format_exc_info,
             redact.redact_processor,
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             renderer,

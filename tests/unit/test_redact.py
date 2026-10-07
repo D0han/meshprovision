@@ -294,3 +294,32 @@ def test_end_to_end_log_output_never_leaks_key_material(
     assert kp.public.hex() not in output
     assert "<redacted" in output
     assert "a_pub" in output
+
+
+def test_debug_traceback_text_is_scrubbed_and_control_escaped(keypair_factory) -> None:
+    """A logged traceback goes through the same scrub as the event's message.
+
+    Exception messages (and their chained causes) can quote device- or
+    file-sourced text; rendered after the scrub, an ESC sequence or a
+    key-shaped string in one reached the stream raw under ``-vv``.
+    """
+    kp = keypair_factory()
+    buf = io.StringIO()
+    configure_logging("DEBUG", stream=buf, colors=False)
+
+    try:
+        try:
+            raise OSError(f"cause \x1b]52;c;SGVsbG8=\x07 {kp.public_b64}")
+        except OSError as exc:
+            raise ValueError(f"evil \x1b[2J {kp.public_b64}") from exc
+    except ValueError:
+        logging.getLogger("t").debug("command failed", exc_info=True)
+
+    output = buf.getvalue()
+    assert "Traceback (most recent call last)" in output
+    assert "The above exception was the direct cause" in output
+    assert "\x1b" not in output
+    key_leaked = kp.public_b64 in output  # boolean, so a failure never prints the key
+    assert not key_leaked
+    assert f"OSError: cause \\x1b]52;c;SGVsbG8=\\x07 {REDACTED}\n" in output
+    assert f"ValueError: evil \\x1b[2J {REDACTED}\n" in output
