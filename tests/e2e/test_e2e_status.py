@@ -879,3 +879,77 @@ def test_a_cache_entry_with_an_out_of_range_fetch_time_is_refetched(
     document = json.loads(result.stdout)
     assert document["cache"]["hits"] == 0
     assert document["cache"]["network_requests"] > 0
+
+
+def test_watch_reports_each_polls_own_cache_counts(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-poll cache line and JSON block were running totals across polls.
+
+    Polls after the first showed the first poll's requests again although
+    they made none, and their hits kept growing.
+    """
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+    calls = {"n": 0}
+
+    def fake_sleep(_seconds: float) -> None:
+        calls["n"] += 1
+        if calls["n"] >= 3:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}):
+        result = invoke(runner, ["status", "--watch", "--interval", "1", "--json"], env)
+
+    decoder = json.JSONDecoder()
+    text = result.stdout.lstrip()
+    caches = []
+    while text:
+        document, end = decoder.raw_decode(text)
+        caches.append(document["cache"])
+        text = text[end:].lstrip()
+    assert caches == [
+        {"hits": 0, "misses": 2, "network_requests": 2},
+        {"hits": 2, "misses": 0, "network_requests": 0},
+        {"hits": 2, "misses": 0, "network_requests": 0},
+    ]
+    assert result.stderr.count("cache: 2 hit(s), 0 miss(es), 0 request(s)") == 2
+
+
+def test_run_status_counts_only_its_own_requests_on_a_reused_client(
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.cache.http import CachedHTTPClient
+    from meshprovision.config.settings import Settings
+    from meshprovision.db.nodes import NodeRecord
+    from meshprovision.status.report import StatusOptions, run_status
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    settings = Settings(
+        db_path=Path(env["MESHPROVISION_DB_PATH"]),
+        cache_dir=Path(env["MESHPROVISION_CACHE_DIR"]),
+        contact=env["MESHPROVISION_CONTACT"],
+    )
+    options = StatusOptions(fail_on_offline=False)
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": 1}}}):
+        client = CachedHTTPClient(
+            cache_dir=settings.cache_dir, user_agent=settings.user_agent(), ttl=300.0
+        )
+        with client:
+            first = run_status(settings, options, client=client)
+            second = run_status(settings, options, client=client)
+
+    assert (first.cache_hits, first.cache_misses, first.network_requests) == (0, 2, 2)
+    assert (second.cache_hits, second.cache_misses, second.network_requests) == (2, 0, 0)
+    assert client.stats.hits == 2

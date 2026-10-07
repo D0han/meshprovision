@@ -440,6 +440,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   until the clock caught up with it. A cached fetch time that is infinite
   or not a number, is before 1970, or is more than five minutes ahead of the
   clock now counts as stale, and the data is fetched again.
+- `mesh status --watch` printed running totals since it started in its
+  per-poll "cache: N hit(s), N miss(es), N request(s)" line and in each
+  poll's `--json` `cache` block, so every poll after the first repeated
+  the first poll's network requests although it made none. Each poll now
+  reports only its own hits, misses and requests.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

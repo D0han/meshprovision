@@ -603,6 +603,9 @@ def run_status(
                 LorastatsSource(active_client, contact=lorastats_contact, regions=options.regions)
             )
 
+        # A reused client (the --watch loop's) keeps counting across calls;
+        # the report carries only this run's share of its totals.
+        before = active_client.stats
         collected = collect_observations(sources, ids, force_refresh=options.force_refresh)
         stats = active_client.stats
         report = build_report(
@@ -621,9 +624,9 @@ def run_status(
             skipped_entries=collected.skipped_entries,
             field_coercions=collected.field_coercions,
             data_as_of=collected.data_as_of,
-            cache_hits=stats.hits,
-            cache_misses=stats.misses,
-            network_requests=stats.network_requests,
+            cache_hits=stats.hits - before.hits,
+            cache_misses=stats.misses - before.misses,
+            network_requests=stats.network_requests - before.network_requests,
             archived_count=archived_count,
         )
     finally:
