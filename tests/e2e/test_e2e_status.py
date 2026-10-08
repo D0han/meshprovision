@@ -131,6 +131,30 @@ def test_table_run_shows_short_name_and_online_label(
     assert result.stderr == ""
 
 
+def test_table_run_colors_rows_on_a_color_terminal(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every other e2e run sets NO_COLOR; this one checks the row color reaches the terminal."""
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    color_env = {name: value for name, value in env.items() if name != "NO_COLOR"}
+    color_env |= {"FORCE_COLOR": "1", "TERM": "xterm-256color"}
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}):
+        result = invoke(runner, ["status"], color_env)
+
+    assert result.exit_code == 0
+    (row,) = [line for line in result.stdout.splitlines() if "MTa1" in line]
+    assert "\x1b[32m" in row  # green: seen within 24 hours
+
+
 def test_default_run_is_silent_on_stderr_with_the_builtin_log_level(
     runner: CliRunner,
     env: dict[str, str],
