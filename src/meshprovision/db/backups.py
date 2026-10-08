@@ -25,7 +25,6 @@ import logging
 import os
 import re
 import shutil
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -447,13 +446,13 @@ def create_backup(
     for name_target in name_targets:
         fs_primitives.sweep_stale_temps(
             resolved_dir,
-            f".{name_target.stem}-*{name_target.suffix}.tmp-*",
+            fs_primitives.temp_glob(f"{name_target.stem}-*{name_target.suffix}"),
             min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
         )
 
     when = _monotonic_backup_time(target, resolved_dir, _normalize_utc(now), from_clock=now is None)
     name = backup_name(name_targets[0], when)
-    tmp_destination = resolved_dir / f".{name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    tmp_destination = fs_primitives.temp_sibling(resolved_dir, name)
     try:
         shutil.copy2(target, tmp_destination)
         # Mode is set on the temp file, before it becomes visible under the

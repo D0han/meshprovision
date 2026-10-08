@@ -48,6 +48,7 @@ import errno
 import logging
 import os
 import sys
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -64,6 +65,8 @@ __all__ = [
     "link_no_clobber",
     "resolve_path",
     "sweep_stale_temps",
+    "temp_glob",
+    "temp_sibling",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -126,7 +129,7 @@ def sweep_stale_temps(
             removed.
 
     Returns:
-        The number of files actually removed. Both call sites ignore
+        The number of files actually removed. Every call site ignores
         this; it exists for tests and ad-hoc logging.
     """
     now = datetime.now(tz=UTC).timestamp()
@@ -142,6 +145,35 @@ def sweep_stale_temps(
             continue
         removed += 1
     return removed
+
+
+def temp_sibling(directory: Path, name: str) -> Path:
+    """Return a fresh, unique temp-file path for ``name`` inside ``directory``.
+
+    The one spelling of a write temp's name, ``.<name>.tmp-<pid>-<uuid>``,
+    so :func:`temp_glob` -- and therefore :func:`sweep_stale_temps` --
+    always matches what a killed writer left behind.
+
+    Args:
+        directory: The directory the temp file lives in.
+        name: The final file name the temp stands in for.
+
+    Returns:
+        The temp path. Nothing is created on disk.
+    """
+    return directory / f".{name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+
+
+def temp_glob(name_glob: str) -> str:
+    """Return the sweep pattern matching :func:`temp_sibling` temps of ``name_glob``.
+
+    Args:
+        name_glob: A final file name, or a glob over final file names.
+
+    Returns:
+        A pattern for :func:`sweep_stale_temps`.
+    """
+    return f".{name_glob}.tmp-*"
 
 
 _SYMLINK_LOOP_HINT: Final[str] = (

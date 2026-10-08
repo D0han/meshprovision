@@ -31,7 +31,6 @@ import hashlib
 import json
 import logging
 import os
-import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -574,11 +573,11 @@ def refresh_known_good(
         for name in backup_name_targets(target):
             fs_primitives.sweep_stale_temps(
                 resolved_dir,
-                f".{known_good_name(name)}.tmp-*",
+                fs_primitives.temp_glob(known_good_name(name)),
                 min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
             )
 
-        tmp_destination = resolved_dir / f".{destination.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+        tmp_destination = fs_primitives.temp_sibling(resolved_dir, destination.name)
         fd = os.open(tmp_destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, FILE_MODE)
         with os.fdopen(fd, "wb") as fh:
             fh.write(content)

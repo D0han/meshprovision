@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import contextlib
 import os
-import uuid
 from collections.abc import Callable, Iterator
 from datetime import datetime
 from pathlib import Path
@@ -114,11 +113,11 @@ def atomic_write(
     # Before this call's own temp exists, so it can never sweep it.
     fs_primitives.sweep_stale_temps(
         target.parent,
-        f".{target.name}.tmp-*",
+        fs_primitives.temp_glob(target.name),
         min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
     )
 
-    tmp_path = target.parent / f".{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    tmp_path = fs_primitives.temp_sibling(target.parent, target.name)
     try:
         os.close(os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, FILE_MODE))
     except OSError as exc:

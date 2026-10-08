@@ -34,7 +34,6 @@ from __future__ import annotations
 import contextlib
 import os
 import re
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
@@ -374,7 +373,7 @@ def write_new_file(path: Path, text: str, *, mode: int = 0o644) -> None:
             any other OS-level reason.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_name(f".{path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}")
+    tmp_path = fs_primitives.temp_sibling(path.parent, path.name)
     try:
         fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, mode)
     except OSError as exc:
