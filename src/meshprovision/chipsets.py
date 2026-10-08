@@ -1,7 +1,7 @@
 """Hardware-model to main-chipset lookup table.
 
 Maps a Meshtastic ``hw_model`` (e.g. ``"RAK4631"``, ``"TBEAM"``) to the
-board's main MCU/SoC, and to the coarser chipset family. This drives
+board's main MCU/SoC. This drives
 operator-facing expectations (chipset appears in ``mesh status`` output
 and in the ODS ``Nodes`` sheet) about BLE/serial behaviour, so a wrong
 mapping is worse than an absent one: every board listed in
@@ -11,7 +11,7 @@ confirmed are left out rather than guessed.
 
 None of the public functions in this module ever raise. Chipset data is
 informational only, so an unrecognised board degrades to
-:attr:`Chipset.UNKNOWN` / :attr:`ChipFamily.UNKNOWN` rather than aborting
+:attr:`Chipset.UNKNOWN` rather than aborting
 a run.
 """
 
@@ -26,16 +26,9 @@ from meshprovision import enums
 
 __all__ = [
     "CHIPSET_BY_HW_MODEL",
-    "FAMILY_BY_CHIPSET",
-    "ChipFamily",
     "Chipset",
     "chipset_for_hw_model",
-    "family_for_chipset",
-    "family_for_hw_model",
-    "is_mapped_hw_model",
     "main_chipset",
-    "mapped_hw_models",
-    "unmapped_hw_models",
 ]
 
 
@@ -50,17 +43,6 @@ class Chipset(StrEnum):
     RP2040 = "RP2040"
     RP2350 = "RP2350"
     STM32WL = "STM32WL"
-    NATIVE = "native"
-    UNKNOWN = "unknown"
-
-
-class ChipFamily(StrEnum):
-    """Coarse chipset family, useful for capability decisions."""
-
-    NRF52 = "nrf52"
-    ESP32 = "esp32"
-    RP2 = "rp2"
-    STM32 = "stm32"
     NATIVE = "native"
     UNKNOWN = "unknown"
 
@@ -147,22 +129,6 @@ Deliberately NOT mapped (left absent so lookup resolves to
 could not be confirmed.
 """
 
-_FAMILY_BY_CHIPSET: Final[dict[Chipset, ChipFamily]] = {
-    Chipset.NRF52840: ChipFamily.NRF52,
-    Chipset.ESP32: ChipFamily.ESP32,
-    Chipset.ESP32_S3: ChipFamily.ESP32,
-    Chipset.ESP32_C3: ChipFamily.ESP32,
-    Chipset.ESP32_C6: ChipFamily.ESP32,
-    Chipset.RP2040: ChipFamily.RP2,
-    Chipset.RP2350: ChipFamily.RP2,
-    Chipset.STM32WL: ChipFamily.STM32,
-    Chipset.NATIVE: ChipFamily.NATIVE,
-    Chipset.UNKNOWN: ChipFamily.UNKNOWN,
-}
-
-FAMILY_BY_CHIPSET: Final[Mapping[Chipset, ChipFamily]] = types.MappingProxyType(_FAMILY_BY_CHIPSET)
-"""Read-only map from :class:`Chipset` to its coarser :class:`ChipFamily`."""
-
 
 def _canonical(hw_model: str | int) -> str | None:
     """Canonicalize a ``hw_model`` value for table lookup.
@@ -221,68 +187,3 @@ def main_chipset(hw_model: str | int) -> str:
         unmapped. Never raises.
     """
     return chipset_for_hw_model(hw_model).value
-
-
-def family_for_hw_model(hw_model: str | int) -> ChipFamily:
-    """Look up the coarse chip family for a ``hw_model``.
-
-    Args:
-        hw_model: A ``hw_model`` value, numeric or string.
-
-    Returns:
-        The matching :class:`ChipFamily`, or :attr:`ChipFamily.UNKNOWN` if
-        unresolved. Never raises.
-    """
-    return family_for_chipset(chipset_for_hw_model(hw_model))
-
-
-def family_for_chipset(chipset: Chipset) -> ChipFamily:
-    """Look up the coarse chip family for a :class:`Chipset`.
-
-    Args:
-        chipset: A chipset value.
-
-    Returns:
-        The matching :class:`ChipFamily`, or :attr:`ChipFamily.UNKNOWN` if
-        unmapped. Never raises.
-    """
-    return FAMILY_BY_CHIPSET.get(chipset, ChipFamily.UNKNOWN)
-
-
-def is_mapped_hw_model(hw_model: str | int) -> bool:
-    """Check whether ``hw_model`` has a known chipset mapping.
-
-    Args:
-        hw_model: A ``hw_model`` value, numeric or string.
-
-    Returns:
-        ``True`` if ``hw_model`` resolves to an entry in
-        :data:`CHIPSET_BY_HW_MODEL`. Never raises.
-    """
-    canonical = _canonical(hw_model)
-    return canonical is not None and canonical in CHIPSET_BY_HW_MODEL
-
-
-def mapped_hw_models() -> tuple[str, ...]:
-    """Return every ``hw_model`` name with a known chipset mapping.
-
-    Returns:
-        A tuple of canonical names, sorted alphabetically.
-    """
-    return tuple(sorted(CHIPSET_BY_HW_MODEL))
-
-
-def unmapped_hw_models() -> tuple[str, ...]:
-    """Return every known ``hw_model`` name absent from the chipset table.
-
-    Informational only -- a later test layer reports coverage from this,
-    but it must not assert emptiness, since new hardware models routinely
-    arrive ahead of a chipset mapping for them.
-
-    Returns:
-        A tuple of canonical names present in
-        :func:`meshprovision.enums.hw_model_table` but absent from
-        :data:`CHIPSET_BY_HW_MODEL`, sorted alphabetically.
-    """
-    known = set(enums.hw_model_table().names())
-    return tuple(sorted(known - set(CHIPSET_BY_HW_MODEL)))

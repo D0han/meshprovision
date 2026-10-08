@@ -159,8 +159,6 @@ def test_bool_hw_model_is_rejected_despite_being_an_int_subtype(value: bool) -> 
     reject-bool convention used by ``NodeId`` and ``coerce_int``.
     """
     assert chipsets.chipset_for_hw_model(value) is chipsets.Chipset.UNKNOWN
-    assert chipsets.family_for_hw_model(value) is chipsets.ChipFamily.UNKNOWN
-    assert chipsets.is_mapped_hw_model(value) is False
     assert chipsets.main_chipset(value) == "unknown"
 
 
@@ -174,34 +172,9 @@ def test_unusable_hw_model_type_degrades_instead_of_raising(bad) -> None:
     raises ``AttributeError`` out of a function documented never to raise.
     """
     assert chipsets.chipset_for_hw_model(bad) is chipsets.Chipset.UNKNOWN
-    assert chipsets.family_for_hw_model(bad) is chipsets.ChipFamily.UNKNOWN
-    assert chipsets.is_mapped_hw_model(bad) is False
     assert chipsets.main_chipset(bad) == "unknown"
 
 
 def test_main_chipset_returns_display_string() -> None:
     assert chipsets.main_chipset("RAK4631") == "nRF52840"
     assert chipsets.main_chipset("UNKNOWN_THING") == "unknown"
-
-
-def test_family_for_hw_model_and_chipset() -> None:
-    assert chipsets.family_for_hw_model("RAK4631") is chipsets.ChipFamily.NRF52
-    assert chipsets.family_for_chipset(chipsets.Chipset.ESP32_S3) is chipsets.ChipFamily.ESP32
-    assert chipsets.family_for_chipset(chipsets.Chipset.UNKNOWN) is chipsets.ChipFamily.UNKNOWN
-
-
-def test_is_mapped_hw_model() -> None:
-    assert chipsets.is_mapped_hw_model("RAK4631") is True
-    assert chipsets.is_mapped_hw_model("NOT_A_MODEL") is False
-
-
-def test_mapped_hw_models_is_sorted() -> None:
-    mapped = chipsets.mapped_hw_models()
-    assert list(mapped) == sorted(mapped)
-    assert "RAK4631" in mapped
-
-
-def test_unmapped_hw_models_is_informational_only() -> None:
-    # Must not raise, and must not assert emptiness -- purely informational.
-    result = chipsets.unmapped_hw_models()
-    assert isinstance(result, tuple)
