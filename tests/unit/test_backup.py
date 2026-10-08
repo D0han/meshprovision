@@ -606,11 +606,46 @@ def test_merge_backups_nodedb_only() -> None:
     assert bundle.long_name == "Meshtastic MT02"
 
 
-def test_merge_backups_conflicting_long_name_raises() -> None:
-    profile = backup.parse_profile_cfg(_make_cfg_bytes(long_name="Node A"), source="p.cfg")
+# Every key shape that must not count as "the same node, renamed": only the
+# same key on both sides does (the warns-instead-of-raising tests below).
+_KEY_SHAPES_WITHOUT_A_SHARED_KEY = pytest.mark.parametrize(
+    ("profile_has_key", "entry_has_key"),
+    [(False, True), (False, False), (True, False)],
+    ids=["entry-key-only", "no-keys", "profile-key-only"],
+)
+
+
+def _name_conflict_backups(
+    *,
+    profile_has_key: bool,
+    entry_has_key: bool,
+    profile_names: dict[str, str],
+    entry_names: dict[str, str],
+) -> tuple[backup.ProfileBackup, backup.NodeDbBackup]:
+    """A profile and a node-db export whose names disagree, with or without a public key each."""
+    key = bytes(range(32))
+    profile = backup.parse_profile_cfg(
+        _make_cfg_bytes(**profile_names, public_key=key if profile_has_key else b""),
+        source="p.cfg",
+    )
     payload = _nodedb_payload()
-    payload["nodes"][0]["longName"] = "Node B"
+    payload["nodes"][0].update(entry_names)
+    if not entry_has_key:
+        del payload["nodes"][0]["publicKey"]
     nodedb = backup.parse_nodedb_json(json.dumps(payload).encode(), source="n.json")
+    return profile, nodedb
+
+
+@_KEY_SHAPES_WITHOUT_A_SHARED_KEY
+def test_merge_backups_conflicting_long_name_raises(
+    profile_has_key: bool, entry_has_key: bool
+) -> None:
+    profile, nodedb = _name_conflict_backups(
+        profile_has_key=profile_has_key,
+        entry_has_key=entry_has_key,
+        profile_names={"long_name": "Node A"},
+        entry_names={"longName": "Node B"},
+    )
     with pytest.raises(BackupParseError, match="Conflicting long_name"):
         backup.merge_backups(profile=profile, nodedb=nodedb)
 
@@ -641,15 +676,17 @@ def test_merge_backups_name_conflict_with_matching_keys_warns_instead_of_raising
     assert bundle.long_name == "New Name"
 
 
-def test_merge_backups_conflicting_short_name_raises() -> None:
+@_KEY_SHAPES_WITHOUT_A_SHARED_KEY
+def test_merge_backups_conflicting_short_name_raises(
+    profile_has_key: bool, entry_has_key: bool
+) -> None:
     # long_name must match the payload's, or the long_name check raises first.
-    profile = backup.parse_profile_cfg(
-        _make_cfg_bytes(long_name="Meshtastic MT02", short_name="AAAA"), source="p.cfg"
+    profile, nodedb = _name_conflict_backups(
+        profile_has_key=profile_has_key,
+        entry_has_key=entry_has_key,
+        profile_names={"long_name": "Meshtastic MT02", "short_name": "AAAA"},
+        entry_names={"shortName": "BBBB"},
     )
-    payload = _nodedb_payload()
-    payload["nodes"][0]["shortName"] = "BBBB"
-    nodedb = backup.parse_nodedb_json(json.dumps(payload).encode(), source="n.json")
-
     with pytest.raises(BackupParseError, match="Conflicting short_name"):
         backup.merge_backups(profile=profile, nodedb=nodedb)
 
