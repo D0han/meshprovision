@@ -118,7 +118,7 @@ def node_key_admin_refs(
 
     Used by :func:`~meshprovision.cli.provision.run_provision` to populate
     :attr:`~meshprovision.provisioning.plan_types.PlanInputs.node_key_admin_refs`,
-    which gates :func:`~meshprovision.provisioning.plan._plan_node_keypair`:
+    which gates :func:`~meshprovision.provisioning.plan_security.plan_node_keypair`:
     a node whose recorded key is also an authorized admin key may not have
     that key silently replaced (adopted or regenerated), because doing so
     would rotate -- or hand an attacker -- the fleet's admin key. See
@@ -235,7 +235,7 @@ def adopt_would_rotate_admin_key(
     an authorized admin key, this decides whether the *specific* material
     the connected (or ``--from-backup``) device reports would actually
     change what is on file -- exactly mirroring
-    :func:`~meshprovision.provisioning.plan._plan_node_keypair`'s
+    :func:`~meshprovision.provisioning.plan_security.plan_node_keypair`'s
     "device_key_differs_from_db" adopt branch, but pure and reusable here
     since ``mesh adopt`` never goes through :func:`~meshprovision.
     provisioning.plan.build_plan`.

@@ -351,14 +351,14 @@ class PlanInputs:
         allow_weak_admin_key: Whether the operator explicitly authorized
             admin keys that fail the weak-key audit
             (``--allow-weak-admin-key``). Affects only the desired
-            admin-key set; ``_evaluate_lockdown``'s hard refusal is
+            admin-key set; ``evaluate_lockdown``'s hard refusal is
             deliberately not relaxed by it.
         node_key_admin_refs: The ``Keys`` sheet references under which
             this node's DB-recorded key (``<hex>_pub`` material) is
             currently authorized as an admin key, resolved by the caller
             via :func:`meshprovision.provisioning.pipeline.node_key_admin_refs`.
             Empty for an ordinary (non-admin-bearing) node. When
-            non-empty, :func:`~meshprovision.provisioning.plan._plan_node_keypair`
+            non-empty, :func:`~meshprovision.provisioning.plan_security.plan_node_keypair`
             refuses to regenerate or adopt this node's key -- there is no
             flag that overrides this; see
             :class:`~meshprovision.errors.AdminKeyRotationRefusedError`.
@@ -367,7 +367,7 @@ class PlanInputs:
             keypair from an earlier interrupted regenerate whose public
             *and* private halves both match the device's current
             live-reported keypair exactly. When ``True``,
-            :func:`~meshprovision.provisioning.plan._plan_node_keypair`
+            :func:`~meshprovision.provisioning.plan_security.plan_node_keypair`
             adopts the device's (already-matching) key rather than
             regenerating it again, with a distinct
             ``"pending_key_recovered"`` reason -- deliberately a plain

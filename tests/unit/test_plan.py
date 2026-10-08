@@ -354,7 +354,7 @@ def test_serial_and_debug_log_api_enabled_diffed_against_template(
     Both fields default to None ("leave the device alone") and are never
     set to a concrete value anywhere else in this test suite, so the
     `if template_sec.serial_enabled is not None:` branches in
-    _plan_security_section (and the matching apply.py verify-readback)
+    plan_security.plan_security_section (and the matching apply.py verify-readback)
     had zero coverage before this test -- a field-name typo or a
     comparison bug in either path would have gone undetected end to end.
     """

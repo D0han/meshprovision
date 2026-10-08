@@ -494,7 +494,7 @@ def test_admin_bootstrap_ref_captures_the_keypair_of_a_node_with_no_recorded_key
     """``--ref`` on a FOREIGN node with no recorded key captures it, instead of skipping.
 
     Before Round 38 batch 1, this fell through to
-    ``_plan_node_keypair``'s old no-op ``else``: ``register_admin_alias``
+    ``plan_security.plan_node_keypair``'s old no-op ``else``: ``register_admin_alias``
     then hit its ``keypair is None`` path with nothing in ``db.keys``,
     warned "skipping", and exited 0 without ever registering the alias.
     """
@@ -600,7 +600,7 @@ def test_clone_of_an_existing_admin_key_is_refused_even_with_its_own_ref(
     the cross-fleet duplicate audit (Round 38 batch 13) is wired into
     ``mesh provision``: ``deadbe01``'s live key matches ``aaaa0001``'s
     *canonical* recorded row, so ``audit_node_key`` flags it CRITICAL
-    before ``_plan_node_keypair`` ever reaches the ``db_public_key is
+    before ``plan_node_keypair`` ever reaches the ``db_public_key is
     None`` (first-capture) branch -- ``ADMIN1_pub`` itself is never a
     candidate for the duplicate audit (its owner, ``"ADMIN1"``, is not a
     canonical node id), but ``aaaa0001_pub`` is. The refusal therefore

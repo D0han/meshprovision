@@ -2,7 +2,7 @@
 
 Covers ``public_key_matches`` and ``clamp`` (both were exported via
 ``__all__`` with zero direct test coverage before this file existed;
-``public_key_matches`` is wired into ``_evaluate_lockdown``, a gate that
+``public_key_matches`` is wired into ``evaluate_lockdown``, a gate that
 decides whether a device is irreversibly locked, so these tests pin its
 behavior against unmodified source), the ``decode_key``/``encode_key``
 validation surface that turns database rows, CLI input, and weak-key

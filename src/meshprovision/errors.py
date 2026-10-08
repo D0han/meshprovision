@@ -1262,7 +1262,7 @@ class AdminKeyRotationRefusedError(AdminKeyError):
 
     Raised by :func:`meshprovision.provisioning.plan.build_plan` before any
     device I/O when the node being provisioned would regenerate or adopt a
-    new keypair (see :func:`~meshprovision.provisioning.plan._plan_node_keypair`)
+    new keypair (see :func:`~meshprovision.provisioning.plan_security.plan_node_keypair`)
     while :attr:`~meshprovision.provisioning.plan_types.PlanInputs.node_key_admin_refs`
     is non-empty -- i.e. the node's currently-recorded key is authorized as
     an admin key somewhere in the fleet. There is deliberately no flag that
@@ -1284,7 +1284,7 @@ class AdminKeyRotationRefusedError(AdminKeyError):
             matches a pending keypair from an earlier interrupted
             regenerate (see :mod:`meshprovision.db.pending_keys`),
             otherwise the same regenerate reason
-            :func:`~meshprovision.provisioning.plan._plan_node_keypair`
+            :func:`~meshprovision.provisioning.plan_security.plan_node_keypair`
             would have used (``"forced"``, ``"factory_key_presumed_compromised"``,
             ``"missing_key_material"``, or the caller's own
             ``node_key_reason``/``"weak_key_audit"`` -- which is

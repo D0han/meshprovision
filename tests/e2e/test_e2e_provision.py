@@ -1165,7 +1165,7 @@ def test_foreign_node_with_no_recorded_key_captures_its_reported_keypair(
 ) -> None:
     """A FOREIGN node with no ``<hex>_pub`` row but a valid live keypair gets it captured.
 
-    Before the first-capture branch in ``_plan_node_keypair`` existed,
+    Before the first-capture branch in ``plan_node_keypair`` existed,
     this fell through to the final no-op ``else``: the plan never
     changed the key, and the database kept no identity baseline for
     this node at all (Round 38 batch 1, the HIGH finding).

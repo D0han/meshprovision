@@ -376,7 +376,7 @@ def _gather_plan_inputs(
     # under some OTHER ref -- not this node's own recorded identity or an alias
     # of it -- meaning the device claims to hold someone else's admin key.
     # Folded into the same node_key_admin_refs tuple: the gate in
-    # _plan_node_keypair already only fires when the plan changes the key, so
+    # plan_node_keypair already only fires when the plan changes the key, so
     # this never produces a false refusal when nothing would change.
     if live.security.public_key is not None:
         public_key_map = db.keys.public_key_map()
@@ -386,7 +386,7 @@ def _gather_plan_inputs(
         # First capture under a named --ref: the operator explicitly named this
         # alias, its recorded material is what matched (that's why it's about to
         # be "adopted"), and node_key_compromised (run earlier in
-        # _plan_node_keypair) already proved the device holds the matching
+        # plan_node_keypair) already proved the device holds the matching
         # private key. Recording it as <hex>_pub rotates nothing, so this one
         # ref is exempted from the identity-conflict set. Any OTHER matching ref
         # -- including a clone of a different node's key -- still refuses.

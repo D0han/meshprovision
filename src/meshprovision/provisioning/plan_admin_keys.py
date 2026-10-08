@@ -41,7 +41,8 @@ excluded from the desired set, named in
 behavior, so an ordinary (unmanaged) provisioning run will not write a
 known-compromised key to a device either. The stricter
 ``is_managed=true`` path additionally refuses the whole run outright
-(see :func:`_evaluate_lockdown`).
+(see
+:func:`~meshprovision.provisioning.plan_security.evaluate_lockdown`).
 
 :attr:`PlanInputs.allow_weak_admin_key` (``--allow-weak-admin-key``)
 overrides the exclusion only for a key whose ``audit_overridable`` is
@@ -51,8 +52,9 @@ audit with ``audit_overridable=False`` (:data:`~meshprovision.crypto.
 weakkeys.NON_OVERRIDABLE_CHECKS` -- all-zero or small-order) stays
 excluded and ``"resolved_admin_key_rejected"`` regardless of the flag: it
 has no usable private counterpart at all, so no flag can authorize it.
-Either way, the exclusion does **not** reach :func:`_evaluate_lockdown`,
-whose ``is_managed=true`` refusal stands regardless.
+Either way, the exclusion does **not** reach
+:func:`~meshprovision.provisioning.plan_security.evaluate_lockdown`, whose
+``is_managed=true`` refusal stands regardless.
 """
 
 from __future__ import annotations

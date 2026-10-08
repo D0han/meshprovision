@@ -71,7 +71,7 @@ def select_keypair(
     if change_plan.key_plan.regenerate:
         keypair: crypto_keys.KeyPair | None = crypto_keys.generate_keypair()
     elif change_plan.key_plan.adopt_device_key:
-        # _plan_node_keypair only sets adopt_device_key once it has confirmed
+        # plan_node_keypair only sets adopt_device_key once it has confirmed
         # both are present -- this guards the type, not a real code path.
         live_public = live.security.public_key
         live_private = live.security.private_key
