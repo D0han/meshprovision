@@ -32,6 +32,7 @@ from meshprovision.errors import (
     SchemaError,
 )
 from tests.conftest import rezip_ods
+from tests.unit.conftest import edit_ods_cell, libreoffice_round_trip
 
 pytestmark = pytest.mark.unit
 
@@ -229,8 +230,6 @@ def test_structural_assertions_formulas_validations_freeze(tmp_path: Path, keypa
 
 
 def test_operator_hand_edit_is_read_back_exactly(tmp_path: Path, keypair, request) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
     ods_write.write_database(
@@ -254,8 +253,6 @@ def test_operator_hand_edit_is_read_back_exactly(tmp_path: Path, keypair, reques
 
 
 def test_stale_cached_formula_private_key_ref(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
     ods_write.write_database(
@@ -280,8 +277,6 @@ def test_stale_cached_formula_private_key_ref(tmp_path: Path, keypair) -> None:
 
 
 def test_stale_cached_formula_keys_key_ref(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
     ods_write.write_database(
@@ -301,8 +296,6 @@ def test_stale_cached_formula_keys_key_ref(tmp_path: Path, keypair) -> None:
 
 
 def test_stale_cached_formula_main_chipset(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
     ods_write.write_database(
@@ -335,8 +328,6 @@ def test_hex_node_id_looking_like_scientific_notation_survives(tmp_path: Path, k
 
 
 def test_coerced_text_cell_warns_instead_of_raising(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
     ods_write.write_database(
@@ -356,8 +347,6 @@ def test_coerced_text_cell_warns_instead_of_raising(tmp_path: Path, keypair) -> 
 
 
 def test_coerced_identity_column_still_raises_db_validation_error(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "node_id", 2, "not-hex-zzz", value_type="float")
 
@@ -368,8 +357,6 @@ def test_coerced_identity_column_still_raises_db_validation_error(tmp_path: Path
 
 
 def test_blank_trailing_row_with_coerced_cell_produces_no_warnings(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     node, pub, priv = _sample_records(keypair)
     blank_row = {col.name: "" for col in schema.SHEET_SPECS["Nodes"].columns}
     path = tmp_path / "db.ods"
@@ -406,8 +393,6 @@ def test_blank_trailing_row_with_coerced_cell_produces_no_warnings(tmp_path: Pat
 
 
 def test_libreoffice_saved_header_still_loads(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import libreoffice_round_trip
-
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
     ods_write.write_database(
@@ -621,8 +606,6 @@ def _write_raw_row(
 
 
 def test_invalid_role_raises_db_validation_error(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "role", 2, "NOT_A_ROLE")
     with pytest.raises(DbValidationError) as exc_info:
@@ -645,8 +628,6 @@ def test_invalid_literal_allowed_enum_raises_db_validation_error(
     reject an unrecognized value exactly like the ``enum_table`` branch
     already tested by ``test_invalid_role_raises_db_validation_error`` does.
     """
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     sheet = "Keys" if column == "key_type" else "Nodes"
     edit_ods_cell(path, sheet, column, 2, bad_value)
@@ -657,8 +638,6 @@ def test_invalid_literal_allowed_enum_raises_db_validation_error(
 
 
 def test_gps_lat_below_min_range_raises(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "gps_lat", 2, "-95")
     with pytest.raises(DbValidationError) as exc_info:
@@ -667,8 +646,6 @@ def test_gps_lat_below_min_range_raises(tmp_path: Path, keypair) -> None:
 
 
 def test_non_numeric_int_column_raises(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "gps_alt", 2, "not-a-number")
     with pytest.raises(DbValidationError) as exc_info:
@@ -677,8 +654,6 @@ def test_non_numeric_int_column_raises(tmp_path: Path, keypair) -> None:
 
 
 def test_non_numeric_float_column_raises(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "gps_lat", 2, "not-a-number")
     with pytest.raises(DbValidationError) as exc_info:
@@ -687,8 +662,6 @@ def test_non_numeric_float_column_raises(tmp_path: Path, keypair) -> None:
 
 
 def test_non_finite_float_column_raises(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "gps_lat", 2, "nan")
     with pytest.raises(DbValidationError) as exc_info:
@@ -697,8 +670,6 @@ def test_non_finite_float_column_raises(tmp_path: Path, keypair) -> None:
 
 
 def test_malformed_timestamp_raises(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "first_added_ts", 2, "not-a-date")
     with pytest.raises(DbValidationError) as exc_info:
@@ -707,8 +678,6 @@ def test_malformed_timestamp_raises(tmp_path: Path, keypair) -> None:
 
 
 def test_invalid_ref_inside_key_ref_list_raises(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "authorized_admin_keys", 2, "ADMIN1_pub;not a valid ref!")
     with pytest.raises(DbValidationError) as exc_info:
@@ -719,8 +688,6 @@ def test_invalid_ref_inside_key_ref_list_raises(tmp_path: Path, keypair) -> None
 def test_invalid_key_inside_unregistered_admin_keys_raises_without_leaking(
     tmp_path: Path, keypair
 ) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "unregistered_admin_keys", 2, "not-valid-base64!!!")
     with pytest.raises(DbValidationError) as exc_info:
@@ -731,8 +698,6 @@ def test_invalid_key_inside_unregistered_admin_keys_raises_without_leaking(
 
 
 def test_invalid_base64_key_value_raises_without_leaking(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Keys", "key_value", 2, "not-valid-base64!!!")
     with pytest.raises(DbValidationError) as exc_info:
@@ -742,8 +707,6 @@ def test_invalid_base64_key_value_raises_without_leaking(tmp_path: Path, keypair
 
 
 def test_five_digit_ble_pin_raises_without_value(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "ble_pin", 2, "12345")
     with pytest.raises(DbValidationError) as exc_info:
@@ -764,8 +727,6 @@ def test_missing_required_key_column_raises(tmp_path: Path, keypair, column: str
 
 
 def test_out_of_range_gps_lat_raises(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "gps_lat", 2, "95")
     with pytest.raises(DbValidationError):
@@ -860,8 +821,6 @@ def test_repeated_non_blank_row_keeps_later_row_numbers_accurate(tmp_path: Path,
     row 5); the pre-fix behavior cited ``first_data_row + 1`` (row 3)
     instead.
     """
-    from tests.unit.conftest import edit_ods_cell
-
     node_a = NodeRecord(node_id="deadbe01", short_name="AAAA")
     node_b = NodeRecord(node_id="deadbe02", short_name="BBBB")
     path = tmp_path / "db.ods"
@@ -889,8 +848,6 @@ def test_duplicate_key_ref_raises(tmp_path: Path, keypair) -> None:
 
 
 def test_check_header_hint_names_missing_trailing_column(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
     ods_write.write_database(
@@ -905,8 +862,6 @@ def test_check_header_hint_names_missing_trailing_column(tmp_path: Path, keypair
 
 
 def test_check_header_hint_names_renamed_column(tmp_path: Path, keypair) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
     ods_write.write_database(
@@ -923,8 +878,6 @@ def test_check_header_hint_names_renamed_column(tmp_path: Path, keypair) -> None
 
 def test_check_header_reports_both_sheets_when_both_are_mangled(tmp_path: Path, keypair) -> None:
     """A file with two broken headers is diagnosed in one run, not one-at-a-time."""
-    from tests.unit.conftest import edit_ods_cell
-
     node, pub, priv = _sample_records(keypair)
     path = tmp_path / "db.ods"
     ods_write.write_database(
@@ -1521,8 +1474,6 @@ def test_module_level_verify_returns_the_same_warnings_as_load(tmp_path: Path, k
     the expected warnings are genuinely non-empty -- otherwise a mutant
     returning a bare `()` would pass unnoticed against a warning-free file.
     """
-    from tests.unit.conftest import edit_ods_cell
-
     path = tmp_path / "db.ods"
     node, pub, priv = _sample_records(keypair)
     ods_write.write_database(path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()])

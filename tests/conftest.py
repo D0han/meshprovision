@@ -6,7 +6,7 @@ Two things happen here that MUST happen before anything else:
    import. Three places in the source capture ``time.sleep`` as a
    *default argument value* at their own import time:
    ``apply.apply_plan(..., sleep=time.sleep)``,
-   ``apply.ReconnectingSession.sleep`` (a slots-dataclass field default),
+   ``apply_session.ReconnectingSession.sleep`` (a slots-dataclass field default),
    and ``cache.http.CachedHTTPClient.__init__(..., sleep=time.sleep)``.
    A default argument is evaluated once, when the enclosing ``def``/
    dataclass runs -- so monkeypatching ``time.sleep`` from a fixture, at
@@ -39,7 +39,6 @@ from __future__ import annotations
 
 import time
 
-REAL_SLEEP = time.sleep
 time.sleep = lambda *_a, **_k: None
 
 import errno  # noqa: E402
@@ -64,9 +63,6 @@ EXAMPLE_TEMPLATE: Final[Path] = (
     REPO_ROOT / "src" / "meshprovision" / "examples" / "template.example.yaml"
 )
 """Path to the shipped, read-only example provisioning template."""
-
-KNOWN_BAD_KEYS_FILE: Final[Path] = REPO_ROOT / "data" / "known_bad_keys.txt"
-"""Path to the shipped, read-only committed weak-key blocklist."""
 
 TEST_CONTACT: Final[str] = "meshprovision-tests@example.invalid"
 """A syntactically valid, obviously-fake ``MESHPROVISION_CONTACT`` value."""

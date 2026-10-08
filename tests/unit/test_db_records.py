@@ -250,8 +250,9 @@ def test_for_keypair_records_the_caller_supplied_created_ts(keypair) -> None:
 
     Every other call site relies on the implicit ``None`` default, so a
     ``for_keypair``/``from_material`` that dropped the argument on the floor
-    would go unnoticed -- while the real callers (provisioning.apply,
-    cli.admin, cli.provision) all pass an explicit timestamp.
+    would go unnoticed -- while the real callers (provisioning.persist,
+    provisioning.adopt, cli.admin, cli.provision_keys) all pass an explicit
+    timestamp.
     """
     created = datetime(2026, 3, 4, 5, 6, 7, tzinfo=UTC)
     pub, priv = KeyRecord.for_keypair(

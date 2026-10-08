@@ -11,6 +11,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import DetectionError, NodeIdError, PlanConflictError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect, repair
+from tests.unit.conftest import make_security
 
 pytestmark = pytest.mark.unit
 
@@ -34,7 +35,6 @@ def test_classify_in_database(make_live) -> None:
 
 def test_classify_in_database_factory_defaults_restored_and_no_admin_keys(make_live) -> None:
     from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     live = make_live(
@@ -66,7 +66,6 @@ def test_classify_locked_node_with_factory_names_and_no_admin_keys_is_foreign(ma
     unauthenticated writeConfig path will not work against it.
     """
     from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     live = make_live(
@@ -82,7 +81,6 @@ def test_classify_locked_node_with_factory_names_and_no_admin_keys_is_foreign(ma
 
 def test_classify_foreign_custom_names(make_live) -> None:
     from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     live = make_live(
@@ -95,7 +93,6 @@ def test_classify_foreign_custom_names(make_live) -> None:
 
 def test_classify_foreign_admin_keys_present_with_factory_names(make_live, keypair_factory) -> None:
     from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     live = make_live(
@@ -617,7 +614,6 @@ def test_diff_record_name_hardware_firmware_role_region_drift(make_live) -> None
 def test_diff_record_admin_key_rendering_with_unknown_key(make_live, keypair_factory) -> None:
     from meshprovision.config.template import load_template_text
     from meshprovision.crypto import redact
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     kp1 = keypair_factory()
@@ -636,7 +632,6 @@ def test_diff_record_admin_key_rendering_with_unknown_key(make_live, keypair_fac
 
 def test_diff_record_aliased_admin_key_is_not_drift(make_live, keypair_factory) -> None:
     from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     kp = keypair_factory()
@@ -664,7 +659,6 @@ def test_diff_record_non_preferred_alias_ref_is_not_drift(make_live, keypair_fac
     _preferred_ref would rank first.
     """
     from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     kp = keypair_factory()
@@ -682,7 +676,6 @@ def test_diff_record_genuinely_different_admin_key_is_still_drift(
 ) -> None:
     """The material-based comparison must not become blind to a real difference."""
     from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     live_kp = keypair_factory()
@@ -699,7 +692,6 @@ def test_diff_record_genuinely_different_admin_key_is_still_drift(
 def test_diff_record_dangling_admin_key_ref_is_still_drift(make_live, keypair_factory) -> None:
     """An unresolvable recorded ref must never be silently dropped from comparison."""
     from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     live = make_live(template, security=make_security(empty=True))
@@ -720,7 +712,6 @@ def test_diff_record_unmappable_hw_model_is_not_drift(make_live) -> None:
     import dataclasses
 
     from meshprovision.config.template import load_template_text
-    from tests.unit.conftest import make_security
 
     template = load_template_text("version: 1\n")
     live = make_live(template, security=make_security(empty=True), hw_model="RAK4631")

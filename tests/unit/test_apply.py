@@ -2612,7 +2612,6 @@ def _early_exit_plan(make_live: Callable[..., object]) -> ChangePlan:
     )
 
 
-_OK = WriteStatus.CONFIRMED
 _UNC = WriteStatus.UNCONFIRMED
 _FAIL = WriteStatus.FAILED
 _SKIP = WriteStatus.SKIPPED

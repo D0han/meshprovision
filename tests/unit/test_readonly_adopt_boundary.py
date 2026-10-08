@@ -12,7 +12,7 @@ pytestmark = pytest.mark.unit
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "meshprovision"
 
-# cli/adopt.py bans the *names* outright (its module docstring, lines 3-4).
+# cli/adopt.py bans the *names* outright (its module docstring).
 # Beyond this module's own write path, the list also names other known
 # mutating meshtastic MeshInterface/Node methods, so a future change that
 # called one of them directly on the connected iface (bypassing apply_plan

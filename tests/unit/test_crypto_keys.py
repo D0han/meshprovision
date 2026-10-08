@@ -31,7 +31,6 @@ from meshprovision.errors import KeyMaterialError
 
 pytestmark = pytest.mark.unit
 
-_VALID_B64 = encode_key(bytes(range(X25519_KEY_SIZE)))
 _TOO_LONG_B64 = base64.b64encode(bytes(64)).decode("ascii")
 
 

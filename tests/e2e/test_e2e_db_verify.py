@@ -18,6 +18,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.observed_keys import observed_key_ref
 from meshprovision.db.schema import KeyOrigin, KeyType
 from tests.e2e.conftest import invoke
+from tests.unit.conftest import edit_ods_cell
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -447,8 +448,6 @@ def test_db_verify_insecure_permissions_is_a_warning_unless_strict(
 def test_db_verify_coerced_cell_is_a_warning_unless_strict(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:
-    from tests.unit.conftest import edit_ods_cell
-
     node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
     seed_db(nodes=[node])
     db_path = Path(env["MESHPROVISION_DB_PATH"])
@@ -473,8 +472,6 @@ def test_db_timestamp_cell_out_of_range_in_utc_is_a_validation_error(
     UTC; before the fix ``mesh db verify`` and ``mesh db list`` crashed with
     an ``OverflowError`` traceback instead of naming the cell.
     """
-    from tests.unit.conftest import edit_ods_cell
-
     seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
     db_path = Path(env["MESHPROVISION_DB_PATH"])
     edit_ods_cell(db_path, "Nodes", "first_added_ts", 2, "0001-01-01T00:00:00+01:00")
