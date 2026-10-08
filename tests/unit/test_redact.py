@@ -121,6 +121,12 @@ class TestScrubText:
         assert token not in scrub_text(text)
         assert REDACTED in scrub_text(text)
 
+    def test_uppercase_hex_key_redacted(self) -> None:
+        token = ("ab" * 32).upper()
+        text = f"leaked: {token} end"
+        assert token not in scrub_text(text)
+        assert REDACTED in scrub_text(text)
+
     def test_lookalikes_not_touched(self) -> None:
         import base64
 
@@ -135,6 +141,41 @@ class TestScrubText:
         hex63 = "a" * 63
         text_hex63 = f"value {hex63} here"
         assert scrub_text(text_hex63) == text_hex63
+
+
+class TestLibraryRecordMayLeak:
+    """Each predicate of ``library_record_may_leak`` holds on its own.
+
+    Every message trips exactly one predicate, so deleting any one of
+    them (or one field-name spelling) fails exactly its own id.
+    """
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            "sending header:b'\\x94\\xc3'",
+            'long_name: "\\001abc"',
+            "payload: 0a0b",
+            "privateKey: AAAA",
+            "adminKey: AAAA",
+            "fixedPin: 123456",
+            "sessionPasskey: 1",
+        ],
+        ids=[
+            "bytes-literal",
+            "escaped-quote",
+            "payload",
+            "privateKey",
+            "adminKey",
+            "fixedPin",
+            "sessionPasskey",
+        ],
+    )
+    def test_a_single_risky_shape_is_withheld(self, message: str) -> None:
+        assert redact_module.library_record_may_leak(message)
+
+    def test_ordinary_library_chatter_is_not_withheld(self) -> None:
+        assert not redact_module.library_record_may_leak("Connecting to 192.168.1.5")
 
 
 class TestRedactProcessor:
@@ -225,9 +266,11 @@ class TestRedactProcessor:
         assert result["private_key"] == redact(b"value123")
 
     def test_secret_bytes_under_non_sensitive_key_still_redacted(self) -> None:
-        event = {"totally_normal_field": SecretBytes(b"x" * 32)}
+        """Replaced by the redacted string, not left as a ``SecretBytes`` for a renderer to read."""
+        secret = SecretBytes(b"x" * 32)
+        event = {"totally_normal_field": secret}
         result = redact_processor(None, "info", event)
-        assert "<redacted" in str(result["totally_normal_field"])
+        assert result["totally_normal_field"] == redact(secret)
 
     def test_non_str_bytes_value_under_sensitive_key_becomes_literal_redacted(self) -> None:
         event = {"private_key": 12345}
