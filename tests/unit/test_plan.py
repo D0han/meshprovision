@@ -80,6 +80,36 @@ def test_factory_node_plan(make_live, template) -> None:
     assert security_section.reboots_device is True
 
 
+@pytest.mark.parametrize(
+    ("live_enabled", "expected"),
+    [(False, (False, True)), (True, None)],
+    ids=["bluetooth-off", "bluetooth-on"],
+)
+def test_ble_pin_plan_turns_bluetooth_on(
+    make_live, template, live_enabled: bool, expected: tuple[bool, bool] | None
+) -> None:
+    """A fixed PIN is useless on a radio whose Bluetooth stays off."""
+    live = make_live(
+        template,
+        section_overrides={
+            "bluetooth": {"enabled": live_enabled, "mode": "FIXED_PIN", "fixed_pin": 12345}
+        },
+    )
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        ble_pin="012345",
+    )
+
+    bluetooth = build_plan(inputs).section("bluetooth")
+
+    changes = bluetooth.changes if bluetooth is not None else ()
+    enabled = {(c.current, c.desired) for c in changes if c.field == "enabled"}
+    assert enabled == ({expected} if expected is not None else set())
+
+
 def test_reboots_device_on_region_change(make_live, template) -> None:
     live = make_live(
         template,

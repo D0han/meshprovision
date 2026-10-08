@@ -348,6 +348,28 @@ def test_write_default_channel_wraps_every_device_io_error(
     assert exc_info.value.__cause__ is exc
 
 
+def test_write_default_channel_failed_write_restores_snapshot() -> None:
+    """A failed writeChannel must not leave staged values the device never accepted."""
+    iface = _FakeIfaceRaisesOnWrite(OSError(errno.EIO, "simulated I/O failure"))
+    change = SectionChange(
+        section="default_channel",
+        kind=detect.SectionKind.CHANNEL,
+        changes=(
+            FieldChange(
+                section="default_channel", field="position_precision", current=0, desired=12
+            ),
+        ),
+    )
+    pre_call = channel_pb2.ModuleSettings()
+    pre_call.CopyFrom(iface.localNode.channels[0].settings.module_settings)
+
+    with pytest.raises(ProvisioningError):
+        write_default_channel(iface, change)  # type: ignore[arg-type]
+
+    assert iface.localNode.written_sections == ["default_channel"]
+    assert iface.localNode.channels[0].settings.module_settings == pre_call
+
+
 # ---------------------------------------------------------------------------
 # A minimal fake interface for write/verify tests.
 # ---------------------------------------------------------------------------

@@ -76,6 +76,7 @@ def test_factory_provisioning_end_to_end(
 
     assert iface.localNode.localConfig.lora.region == 3  # EU_868
     assert iface.localNode.localConfig.lora.hop_limit == 3
+    assert iface.localNode.localConfig.bluetooth.enabled is True
     assert iface.localNode.localConfig.bluetooth.mode == 1  # FIXED_PIN
 
     public_key = bytes(iface.localNode.localConfig.security.public_key)
