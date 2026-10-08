@@ -20,15 +20,17 @@ from meshprovision.provisioning.apply_session import (
 )
 from meshprovision.provisioning.persist import persist_result
 from meshprovision.provisioning.plan import PlanInputs, build_plan
+from tests.unit.apply_fakes import FakeIfaceForApply, fake_node_id, minimal_template
 from tests.unit.conftest import make_security
-from tests.unit.test_apply import _FakeIfaceForApply, _node_id, _template
 
 pytestmark = pytest.mark.unit
 
 
 def test_persist_result_refuses_on_uncertain_outcome(tmp_path) -> None:
     bad_result = WriteResult("security", WriteStatus.UNCONFIRMED, "mismatch", field="public_key")
-    outcome = ApplyOutcome(node_id=_node_id(), results=(bad_result,), dry_run=False, record=None)
+    outcome = ApplyOutcome(
+        node_id=fake_node_id(), results=(bad_result,), dry_run=False, record=None
+    )
 
     db_path = tmp_path / "db.ods"
     db = OdsDatabase.create(db_path)
@@ -55,7 +57,7 @@ def test_persist_result_refuses_when_may_update_database_is_false_with_a_record_
     independent of whether record happens to be present.
     """
     outcome = ApplyOutcome(
-        node_id=_node_id(),
+        node_id=fake_node_id(),
         results=(),
         dry_run=True,
         verified=False,
@@ -75,13 +77,13 @@ def test_persist_result_refuses_when_may_update_database_is_false_with_a_record_
 
 
 def _confirmed_outcome(make_live) -> tuple[ApplyOutcome, KeyPair]:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     kp = generate_keypair()
 
-    session = InPlaceSession(_FakeIfaceForApply())  # type: ignore[arg-type]
+    session = InPlaceSession(FakeIfaceForApply())  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)
     assert outcome.ok is True, outcome.describe()
     assert outcome.record is not None

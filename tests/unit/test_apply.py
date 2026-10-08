@@ -7,12 +7,11 @@ import dataclasses
 import errno
 import logging
 from collections.abc import Callable
-from typing import Final, Self
+from typing import Final
 
 import pytest
 from meshtastic.protobuf import channel_pb2, localonly_pb2
 
-from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.crypto import redact
 from meshprovision.crypto.keys import generate_keypair
 from meshprovision.db.keys import KeyRepository
@@ -29,7 +28,6 @@ from meshprovision.errors import (
     UnsupportedTransportError,
     WriteVerificationError,
 )
-from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import apply as apply_module
 from meshprovision.provisioning import apply_session as apply_session_module
 from meshprovision.provisioning import detect
@@ -56,6 +54,14 @@ from meshprovision.provisioning.plan import (
 )
 from meshprovision.provisioning.plan_admin_keys import KeyPlan
 from tests.conftest import real_write_config_or_exit
+from tests.unit.apply_fakes import (
+    DEFAULT_NODE_NUM,
+    FakeIfaceForApply,
+    FakeIfaceRaisesOnWrite,
+    FakeLocalNode,
+    fake_node_id,
+    minimal_template,
+)
 from tests.unit.conftest import adopt_device_key_plan, make_security
 
 pytestmark = pytest.mark.unit
@@ -181,7 +187,7 @@ def test_write_result_as_error_carries_the_redacted_fields_through() -> None:
 
 
 def test_write_section_unknown_section_raises() -> None:
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     change = SectionChange(section="not_a_real_section", kind=detect.SectionKind.CONFIG, changes=())
     with pytest.raises(PlanConflictError):
         write_section(iface, change)  # type: ignore[arg-type]
@@ -196,7 +202,7 @@ def test_write_section_regenerate_without_a_keypair_raises() -> None:
     consistency check has its own error message/type worth pinning down
     directly, the same way the unknown-section guard just above is.
     """
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     change = SectionChange(section="security", kind=detect.SectionKind.CONFIG, changes=())
     key_plan = KeyPlan(regenerate=True)
 
@@ -210,7 +216,7 @@ def test_write_section_regenerate_without_a_keypair_raises() -> None:
 
 
 def test_write_default_channel_applies_fields_and_calls_write_channel() -> None:
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     change = SectionChange(
         section="default_channel",
         kind=detect.SectionKind.CHANNEL,
@@ -231,7 +237,7 @@ def test_write_default_channel_applies_fields_and_calls_write_channel() -> None:
 
 
 def test_write_default_channel_no_primary_channel_raises() -> None:
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     iface.localNode.channels = []
     change = SectionChange(
         section="default_channel",
@@ -257,7 +263,7 @@ def test_write_default_channel_disabled_primary_channel_raises_before_any_write(
     one (the library's placeholder role) would overwrite the device's
     primary channel with a near-empty one.
     """
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     iface.localNode.channels[0].role = channel_pb2.Channel.Role.DISABLED
     pre_call = channel_pb2.Channel()
     pre_call.CopyFrom(iface.localNode.channels[0])
@@ -289,7 +295,7 @@ def test_write_default_channel_refuses_exactly_what_detect_reads_as_absent() -> 
     change = SectionChange(section="default_channel", kind=detect.SectionKind.CHANNEL, changes=())
     seen: dict[str, tuple[bool, bool]] = {}
     for role in (None, *channel_pb2.Channel.Role.values()):
-        iface = _FakeIfaceForApply()
+        iface = FakeIfaceForApply()
         if role is None:
             iface.localNode.channels = []
         else:
@@ -315,7 +321,7 @@ def test_write_default_channel_refuses_exactly_what_detect_reads_as_absent() -> 
 
 
 def test_write_default_channel_rejected_field_restores_snapshot() -> None:
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     change = SectionChange(
         section="default_channel",
         kind=detect.SectionKind.CHANNEL,
@@ -339,7 +345,7 @@ def test_write_default_channel_wraps_every_device_io_error(
     device_io_error: Callable[[], BaseException],
 ) -> None:
     exc = device_io_error()
-    iface = _FakeIfaceRaisesOnWrite(exc)
+    iface = FakeIfaceRaisesOnWrite(exc)
     change = SectionChange(section="default_channel", kind=detect.SectionKind.CHANNEL, changes=())
 
     with pytest.raises(ProvisioningError) as exc_info:
@@ -350,7 +356,7 @@ def test_write_default_channel_wraps_every_device_io_error(
 
 def test_write_default_channel_failed_write_restores_snapshot() -> None:
     """A failed writeChannel must not leave staged values the device never accepted."""
-    iface = _FakeIfaceRaisesOnWrite(OSError(errno.EIO, "simulated I/O failure"))
+    iface = FakeIfaceRaisesOnWrite(OSError(errno.EIO, "simulated I/O failure"))
     change = SectionChange(
         section="default_channel",
         kind=detect.SectionKind.CHANNEL,
@@ -371,135 +377,18 @@ def test_write_default_channel_failed_write_restores_snapshot() -> None:
 
 
 # ---------------------------------------------------------------------------
-# A minimal fake interface for write/verify tests.
+# The shared fakes themselves (tests/unit/apply_fakes.py).
 # ---------------------------------------------------------------------------
-
-
-def _default_primary_channel() -> channel_pb2.Channel:
-    ch = channel_pb2.Channel()
-    ch.index = 0
-    ch.role = channel_pb2.Channel.Role.PRIMARY
-    return ch
-
-
-class _FakeLocalNode:
-    def __init__(self, iface: _FakeIfaceForApply) -> None:
-        self._iface = iface
-        self.localConfig = localonly_pb2.LocalConfig()
-        self.moduleConfig = localonly_pb2.LocalModuleConfig()
-        self.channels: list[channel_pb2.Channel] = [_default_primary_channel()]
-        self.written_sections: list[str] = []
-        self.transaction_calls: list[str] = []
-        """Every beginSettingsTransaction()/commitSettingsTransaction() call
-        plus every writeConfig() section name, in true chronological order
-        -- lets a test assert relative call ORDER, not just that each
-        happened. (``written_sections`` stays section-names-only, for
-        every existing test that already asserts against it.) A subclass
-        that overrides ``writeConfig`` does not necessarily append here
-        too -- only the base implementation does."""
-        self.begin_error: BaseException | None = None
-        """Raised by beginSettingsTransaction() (after recording it) when set."""
-        self.commit_error: BaseException | None = None
-        """Raised by commitSettingsTransaction() (after recording it) when set."""
-
-    def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
-        real_write_config_or_exit(section)
-        self.written_sections.append(section)
-        self.transaction_calls.append(section)
-
-    def getChannelByChannelIndex(  # noqa: N802 -- real method name
-        self,
-        channelIndex: int,  # noqa: N803 -- real method name
-    ) -> channel_pb2.Channel | None:
-        if 0 <= channelIndex < len(self.channels):
-            return self.channels[channelIndex]
-        return None
-
-    def writeChannel(  # noqa: N802 -- real method name
-        self,
-        channelIndex: int,  # noqa: ARG002, N803 -- real method name
-        adminIndex: int = 0,  # noqa: ARG002, N803 -- real method name
-    ) -> None:
-        self.written_sections.append("default_channel")
-        self.transaction_calls.append("default_channel")
-
-    def beginSettingsTransaction(self) -> None:  # noqa: N802 -- real MeshInterface method name
-        self.transaction_calls.append("<begin>")
-        if self.begin_error is not None:
-            raise self.begin_error
-
-    def commitSettingsTransaction(self) -> None:  # noqa: N802 -- real MeshInterface method name
-        self.transaction_calls.append("<commit>")
-        if self.commit_error is not None:
-            raise self.commit_error
-
-    def setOwner(  # noqa: N802 -- real MeshInterface method name
-        self,
-        long_name: str | None = None,
-        short_name: str | None = None,
-        is_licensed: bool = False,
-        is_unmessagable: bool | None = None,
-    ) -> None:
-        if short_name is not None:
-            self._iface.user["shortName"] = short_name
-        if long_name is not None:
-            self._iface.user["longName"] = long_name
-            self._iface.user["isLicensed"] = is_licensed
-        if is_unmessagable is not None:
-            self._iface.user["isUnmessagable"] = is_unmessagable
-
-
-_DEFAULT_NODE_NUM: Final = 0xDEADBE01
-
-
-class _FakeIfaceForApply:
-    def __init__(self, node_num: int = _DEFAULT_NODE_NUM) -> None:
-        from types import SimpleNamespace
-
-        self.myInfo = SimpleNamespace(my_node_num=node_num)
-        self.metadata = SimpleNamespace(hw_model="RAK4631", firmware_version="2.7.11")
-        self.user: dict[str, str | bool] = {
-            "shortName": "MT00",
-            "longName": "Meshtastic MT00",
-            "isLicensed": False,
-        }
-        self.localNode = _FakeLocalNode(self)
-
-    def getMyUser(self) -> dict[str, str | bool]:  # noqa: N802 -- real MeshInterface method name
-        return dict(self.user)
-
-    def getPublicKey(self) -> str | None:  # noqa: N802 -- real MeshInterface method name
-        raw = bytes(self.localNode.localConfig.security.public_key)
-        return base64.b64encode(raw).decode("ascii") if raw else None
-
-    def reopened(self, *, node_num: int | None = None) -> Self:
-        """Model a fresh connection to the same device (a plain reconnect).
-
-        Pass ``node_num`` only to model a device that reports a different
-        node number after the reconnect (E3 3b); the returned interface
-        otherwise carries over this one's current config/user state, the
-        same way a real reconnect re-reads what the device actually has.
-        """
-        fresh = type(self)(node_num=self.myInfo.my_node_num if node_num is None else node_num)
-        fresh.localNode.localConfig.CopyFrom(self.localNode.localConfig)
-        fresh.localNode.moduleConfig.CopyFrom(self.localNode.moduleConfig)
-        fresh.localNode.channels = []
-        for ch in self.localNode.channels:
-            copy = channel_pb2.Channel()
-            copy.CopyFrom(ch)
-            fresh.localNode.channels.append(copy)
-        fresh.user = dict(self.user)
-        return fresh
 
 
 def test_fake_iface_node_num_is_what_detect_reads() -> None:
     """Guards against ``node_num=`` silently not reaching ``detect``."""
-    live = detect.read_live_config(_FakeIfaceForApply(node_num=0xCAFE0002))  # type: ignore[arg-type]
+    live = detect.read_live_config(FakeIfaceForApply(node_num=0xCAFE0002))  # type: ignore[arg-type]
     assert live.node_id.hex == "cafe0002"
 
 
 def test_fake_local_node_write_config_rejects_what_the_real_library_rejects() -> None:
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
 
     with pytest.raises(SystemExit):
         iface.localNode.writeConfig("statusmessage")
@@ -511,10 +400,6 @@ def test_fake_local_node_write_config_rejects_what_the_real_library_rejects() ->
 # ---------------------------------------------------------------------------
 # _confirmed_name (verify_plan itself is tested in test_readback.py).
 # ---------------------------------------------------------------------------
-
-
-def _template() -> TemplateConfig:
-    return load_template_text("version: 1\n")
 
 
 def test_confirmed_name_ignores_a_different_fields_actual_value() -> None:
@@ -546,7 +431,7 @@ def test_confirmed_name_ignores_a_different_fields_actual_value() -> None:
 
 def test_apply_outcome_properties() -> None:
     ok_result = WriteResult("device", WriteStatus.CONFIRMED, "confirmed")
-    outcome = ApplyOutcome(node_id=_node_id(), results=(ok_result,), dry_run=False)
+    outcome = ApplyOutcome(node_id=fake_node_id(), results=(ok_result,), dry_run=False)
     assert outcome.ok is True
     assert outcome.uncertain is False
     assert outcome.may_update_database is True
@@ -557,7 +442,7 @@ def test_apply_outcome_properties() -> None:
 
 def test_apply_outcome_uncertain_and_failures() -> None:
     bad_result = WriteResult("security", WriteStatus.UNCONFIRMED, "mismatch", field="public_key")
-    outcome = ApplyOutcome(node_id=_node_id(), results=(bad_result,), dry_run=False)
+    outcome = ApplyOutcome(node_id=fake_node_id(), results=(bad_result,), dry_run=False)
     assert outcome.uncertain is True
     assert outcome.ok is False
     assert outcome.may_update_database is False
@@ -567,13 +452,9 @@ def test_apply_outcome_uncertain_and_failures() -> None:
 
 def test_apply_outcome_dry_run_never_updates_database_even_if_ok() -> None:
     ok_result = WriteResult("device", WriteStatus.SKIPPED, "dry run")
-    outcome = ApplyOutcome(node_id=_node_id(), results=(ok_result,), dry_run=True)
+    outcome = ApplyOutcome(node_id=fake_node_id(), results=(ok_result,), dry_run=True)
     assert outcome.ok is True
     assert outcome.may_update_database is False
-
-
-def _node_id() -> NodeId:
-    return NodeId.from_hex("deadbe01")
 
 
 # ---------------------------------------------------------------------------
@@ -587,7 +468,7 @@ def test_reconnecting_session_reads_back_is_true() -> None:
 
 
 def test_in_place_session_reads_back_is_false() -> None:
-    session = InPlaceSession(_FakeIfaceForApply())  # type: ignore[arg-type]
+    session = InPlaceSession(FakeIfaceForApply())  # type: ignore[arg-type]
     assert session.reads_back is False
 
 
@@ -597,13 +478,13 @@ def test_in_place_session_reads_back_is_false() -> None:
 
 
 def test_apply_plan_regenerate_without_keypair_raises_before_write(make_live) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     assert plan.key_plan.regenerate is True
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = InPlaceSession(iface)  # type: ignore[arg-type]
     with pytest.raises(PlanConflictError):
         apply_plan(plan, session, keypair=None)
@@ -611,13 +492,13 @@ def test_apply_plan_regenerate_without_keypair_raises_before_write(make_live) ->
 
 
 def test_apply_plan_dry_run_never_writes(make_live) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     kp = generate_keypair()
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = InPlaceSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp, dry_run=True)
     assert outcome.dry_run is True
@@ -634,7 +515,7 @@ def test_apply_plan_dry_run_skips_a_rename_too(make_live) -> None:
     plan.name_change.is_empty is always True there and apply_plan's
     `if not plan.name_change.is_empty:` branch never ran).
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(
         template, short_name="be01", long_name="Meshtastic be01", security=make_security(empty=True)
     )
@@ -650,7 +531,7 @@ def test_apply_plan_dry_run_skips_a_rename_too(make_live) -> None:
     assert plan.name_change.is_empty is False
     kp = generate_keypair()
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = InPlaceSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp, dry_run=True)
 
@@ -662,13 +543,13 @@ def test_apply_plan_dry_run_skips_a_rename_too(make_live) -> None:
 
 
 def test_apply_plan_success_confirmed_and_persist_result(tmp_path, make_live) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     kp = generate_keypair()
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     # An in-place session re-reads from the SAME iface, so the write must be
     # reflected there for verification to succeed -- write_section() does
     # this by mutating iface.localNode.localConfig directly.
@@ -700,7 +581,7 @@ def test_apply_plan_sleeps_only_once_for_a_reboot_on_the_last_section(make_live)
     refresh; the last section's reboot is already covered by the
     unconditional sleep right before the final verify reconnect.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -709,7 +590,7 @@ def test_apply_plan_sleeps_only_once_for_a_reboot_on_the_last_section(make_live)
     kp = generate_keypair()
 
     sleep_calls: list[float] = []
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = InPlaceSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp, sleep=sleep_calls.append)
 
@@ -724,7 +605,7 @@ def test_apply_plan_persists_the_truncated_name_not_the_desired_one(tmp_path, ma
     re-diff against a name the device doesn't have, re-plan the same
     rewrite, get truncated again, and never converge.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(
         live=live,
@@ -760,7 +641,7 @@ def test_apply_plan_an_unmappable_enum_value_fails_its_section_not_the_whole_run
     for its own section, not crash apply_plan and abandon sections already
     written to the device with no verify/persist pass at all.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -782,7 +663,7 @@ def test_apply_plan_an_unmappable_enum_value_fails_its_section_not_the_whole_run
     )
     plan = dataclasses.replace(plan, sections=(good_device_change, bad_lora_change))
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = InPlaceSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)
 
@@ -799,7 +680,7 @@ def test_apply_plan_an_unmappable_enum_value_fails_its_section_not_the_whole_run
 
 
 def test_apply_plan_owner_write_failure_reports_failed_not_a_crash(make_live) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(
         live=live,
@@ -833,7 +714,7 @@ def test_apply_plan_preserves_is_licensed_when_only_short_name_changes(make_live
     an already-licensed device's ``is_licensed`` flag to ``False`` on
     every single run that touched the name phase.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, is_licensed=True, security=make_security(empty=True))
     inputs = PlanInputs(
         live=live,
@@ -848,7 +729,7 @@ def test_apply_plan_preserves_is_licensed_when_only_short_name_changes(make_live
     assert plan.name_change.desired_is_licensed is True
     kp = generate_keypair()
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     iface.user["isLicensed"] = True
     session = InPlaceSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)
@@ -858,14 +739,14 @@ def test_apply_plan_preserves_is_licensed_when_only_short_name_changes(make_live
 
 
 def test_apply_plan_writes_is_unmessagable_when_template_configures_it(make_live) -> None:
-    template = _template().model_copy(update={"is_unmessagable": True})
+    template = minimal_template().model_copy(update={"is_unmessagable": True})
     live = make_live(template, is_unmessagable=None, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     assert plan.name_change.is_unmessagable_changed is True
     kp = generate_keypair()
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = InPlaceSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)
 
@@ -885,15 +766,15 @@ class _FakeSessionTracksRefresh:
 
     def __init__(
         self,
-        first: _FakeIfaceForApply,
-        on_refresh: Callable[[int, _FakeIfaceForApply], _FakeIfaceForApply],
+        first: FakeIfaceForApply,
+        on_refresh: Callable[[int, FakeIfaceForApply], FakeIfaceForApply],
     ) -> None:
-        self._iface: _FakeIfaceForApply = first
+        self._iface: FakeIfaceForApply = first
         self._on_refresh = on_refresh
         self.refresh_calls = 0
 
     @property
-    def interface(self) -> _FakeIfaceForApply:
+    def interface(self) -> FakeIfaceForApply:
         return self._iface
 
     @property
@@ -903,28 +784,28 @@ class _FakeSessionTracksRefresh:
     def describe(self) -> str:
         return "fake (tracks refresh calls)"
 
-    def refresh(self) -> _FakeIfaceForApply:
+    def refresh(self) -> FakeIfaceForApply:
         self.refresh_calls += 1
         self._iface = self._on_refresh(self.refresh_calls, self._iface)
         return self._iface
 
 
 def _serve(
-    *ifaces: _FakeIfaceForApply,
-) -> Callable[[int, _FakeIfaceForApply], _FakeIfaceForApply]:
+    *ifaces: FakeIfaceForApply,
+) -> Callable[[int, FakeIfaceForApply], FakeIfaceForApply]:
     """Build an ``on_refresh`` callback that serves ``ifaces`` in order.
 
     Refresh *n* (1-based) returns ``ifaces[n - 1]``; once ``ifaces`` is
     exhausted, every later refresh keeps returning the last one.
     """
 
-    def _on_refresh(n: int, _current: _FakeIfaceForApply) -> _FakeIfaceForApply:
+    def _on_refresh(n: int, _current: FakeIfaceForApply) -> FakeIfaceForApply:
         return ifaces[min(n, len(ifaces)) - 1]
 
     return _on_refresh
 
 
-def _reopen_same_device(_n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+def _reopen_same_device(_n: int, cur: FakeIfaceForApply) -> FakeIfaceForApply:
     """An ``on_refresh`` callback modelling a plain reconnect to the same device.
 
     Unlike :func:`_serve`, each call reopens from whatever interface is
@@ -945,11 +826,11 @@ class _FakeSessionRefreshFailsAfterFirstCall:
     section at all, where that property is never consulted.
     """
 
-    def __init__(self, iface: _FakeIfaceForApply) -> None:
+    def __init__(self, iface: FakeIfaceForApply) -> None:
         self._iface = iface
 
     @property
-    def interface(self) -> _FakeIfaceForApply:
+    def interface(self) -> FakeIfaceForApply:
         return self._iface
 
     @property
@@ -959,7 +840,7 @@ class _FakeSessionRefreshFailsAfterFirstCall:
     def describe(self) -> str:
         return "fake (refresh fails)"
 
-    def refresh(self) -> _FakeIfaceForApply:
+    def refresh(self) -> FakeIfaceForApply:
         raise ConnectionBackendError("link dropped after reboot", transport="serial")
 
 
@@ -980,7 +861,7 @@ def test_apply_plan_writes_every_non_security_section_before_the_one_mid_plan_re
     node, and a plan that regenerates without ever writing "security" is
     internally inconsistent -- no real plan does that.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1002,14 +883,14 @@ def test_apply_plan_writes_every_non_security_section_before_the_one_mid_plan_re
         plan, sections=(rebooting_lora_change, later_device_change, security_section)
     )
 
-    reconnects: list[_FakeIfaceForApply] = []
+    reconnects: list[FakeIfaceForApply] = []
 
-    def _reopen_and_record(n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+    def _reopen_and_record(n: int, cur: FakeIfaceForApply) -> FakeIfaceForApply:
         fresh = _reopen_same_device(n, cur)
         reconnects.append(fresh)
         return fresh
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     session = _FakeSessionTracksRefresh(first_iface, _reopen_and_record)
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
@@ -1049,7 +930,7 @@ def test_apply_plan_mid_loop_reconnect_to_a_device_that_lost_the_pre_reboot_writ
     which the fake must be able to express now that "persisted" is a
     real, distinct state from "what the host staged".
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1071,7 +952,7 @@ def test_apply_plan_mid_loop_reconnect_to_a_device_that_lost_the_pre_reboot_writ
         plan, sections=(rebooting_lora_change, later_device_change, security_section)
     )
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     lost_iface = first_iface.reopened()
     lost_iface.localNode.localConfig.ClearField("lora")
     session = _FakeSessionTracksRefresh(first_iface, _serve(lost_iface))
@@ -1090,7 +971,7 @@ def test_apply_plan_reports_uncertain_when_the_post_commit_reconnect_fails(make_
     first -- only the refresh right before `security` can fail here;
     there is no longer a reconnect between individual sections.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1112,7 +993,7 @@ def test_apply_plan_reports_uncertain_when_the_post_commit_reconnect_fails(make_
         plan, sections=(rebooting_lora_change, later_device_change, security_section)
     )
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = _FakeSessionRefreshFailsAfterFirstCall(iface)
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
@@ -1136,11 +1017,11 @@ class _FakeSessionRefreshFailsWithHintAfterFirstCall:
     ``reads_back`` is ``True`` here.
     """
 
-    def __init__(self, iface: _FakeIfaceForApply) -> None:
+    def __init__(self, iface: FakeIfaceForApply) -> None:
         self._iface = iface
 
     @property
-    def interface(self) -> _FakeIfaceForApply:
+    def interface(self) -> FakeIfaceForApply:
         return self._iface
 
     @property
@@ -1150,7 +1031,7 @@ class _FakeSessionRefreshFailsWithHintAfterFirstCall:
     def describe(self) -> str:
         return "fake (refresh fails, with hint)"
 
-    def refresh(self) -> _FakeIfaceForApply:
+    def refresh(self) -> FakeIfaceForApply:
         raise ConnectionFailedError(
             "link dropped after reboot", hint="check the cable", transport="serial"
         )
@@ -1166,7 +1047,7 @@ def test_apply_plan_post_commit_reconnect_failure_skips_security_and_keeps_the_h
     SKIPPED entry for `security` and set `security_attempted=False` --
     this arm must do the same instead of silently dropping it.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1188,7 +1069,7 @@ def test_apply_plan_post_commit_reconnect_failure_skips_security_and_keeps_the_h
         plan, sections=(rebooting_lora_change, later_device_change, security_section)
     )
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = _FakeSessionRefreshFailsWithHintAfterFirstCall(iface)
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
@@ -1213,7 +1094,7 @@ def test_apply_plan_post_commit_reconnect_failure_skips_security_and_keeps_the_h
 # ---------------------------------------------------------------------------
 
 
-class _FakeIfaceUnreadableIdentity(_FakeIfaceForApply):
+class _FakeIfaceUnreadableIdentity(FakeIfaceForApply):
     """Models a reconnect whose identity cannot be read at all (myInfo=None, getMyNodeInfo()={})."""
 
     def __init__(self) -> None:
@@ -1230,7 +1111,7 @@ def _factory_plan_with_reboot_then_security(make_live: Callable[..., object]) ->
     Shared by the mid-plan identity tests below -- same shape as
     ``test_apply_plan_reconnects_mid_loop_after_a_reboot_before_writing_later_sections``.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1265,8 +1146,8 @@ def test_apply_plan_mid_plan_reconnect_to_a_different_node_is_a_hard_stop(make_l
     plan = _factory_plan_with_reboot_then_security(make_live)
     kp = generate_keypair()
 
-    first_iface = _FakeIfaceForApply()
-    impostor = _FakeIfaceForApply(node_num=0xCAFE0002)
+    first_iface = FakeIfaceForApply()
+    impostor = FakeIfaceForApply(node_num=0xCAFE0002)
     session = _FakeSessionTracksRefresh(first_iface, _serve(impostor))
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
@@ -1299,7 +1180,7 @@ def test_apply_plan_mid_plan_reconnect_with_unreadable_identity_is_a_hard_stop(m
     plan = _factory_plan_with_reboot_then_security(make_live)
     kp = generate_keypair()
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     unreadable = _FakeIfaceUnreadableIdentity()
     session = _FakeSessionTracksRefresh(first_iface, _serve(unreadable))
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
@@ -1323,8 +1204,8 @@ def test_apply_plan_mid_plan_reconnect_with_an_invalid_node_id_is_a_hard_stop(ma
     plan = _factory_plan_with_reboot_then_security(make_live)
     kp = generate_keypair()
 
-    first_iface = _FakeIfaceForApply()
-    invalid = _FakeIfaceForApply(node_num=2**32)
+    first_iface = FakeIfaceForApply()
+    invalid = FakeIfaceForApply(node_num=2**32)
     session = _FakeSessionTracksRefresh(first_iface, _serve(invalid))
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
@@ -1347,7 +1228,7 @@ def test_apply_plan_final_verify_reconnect_to_a_different_node_never_runs_verify
     proving the stop fires because of the identity check, not because of
     an unrelated value mismatch `verify_plan` would have reported anyway.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1358,7 +1239,7 @@ def test_apply_plan_final_verify_reconnect_to_a_different_node_never_runs_verify
     )
     plan = dataclasses.replace(plan, sections=(device_change,), key_plan=KeyPlan())
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     impostor = first_iface.reopened(node_num=0xCAFE0002)
     impostor.localNode.localConfig.device.role = 2  # ROUTER -- matches the plan's intent.
     session = _FakeSessionTracksRefresh(first_iface, _serve(impostor))
@@ -1380,7 +1261,7 @@ def test_apply_plan_final_verify_node_renumber_with_matching_keypair_gets_a_dist
     Diagnostic only -- it still refuses to persist, since re-keying a
     database row to a new node id automatically is out of scope.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1389,7 +1270,7 @@ def test_apply_plan_final_verify_node_renumber_with_matching_keypair_gets_a_dist
     assert plan.key_plan.regenerate is True
     kp = generate_keypair()
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     renumbered = first_iface.reopened(node_num=0xCAFE0002)
     renumbered.localNode.localConfig.security.private_key = kp.private.reveal()
     renumbered.localNode.localConfig.security.public_key = kp.public
@@ -1416,7 +1297,7 @@ def test_apply_plan_final_verify_node_renumber_without_matching_keypair_is_an_or
     device that reports a new number but a DIFFERENT (or no) private key
     is an ordinary mismatch, not a renumber.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1425,7 +1306,7 @@ def test_apply_plan_final_verify_node_renumber_without_matching_keypair_is_an_or
     kp = generate_keypair()
     other_kp = generate_keypair()
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     renumbered = first_iface.reopened(node_num=0xCAFE0002)
     renumbered.localNode.localConfig.security.private_key = other_kp.private.reveal()
     renumbered.localNode.localConfig.security.public_key = other_kp.public
@@ -1443,7 +1324,7 @@ def test_apply_plan_same_node_reconnect_is_unaffected_by_the_identity_check(make
     plan = _factory_plan_with_reboot_then_security(make_live)
     kp = generate_keypair()
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     session = _FakeSessionTracksRefresh(first_iface, _reopen_same_device)
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
@@ -1459,7 +1340,7 @@ def test_apply_plan_calls_on_reconnect_before_each_refresh(make_live) -> None:
     plan = _factory_plan_with_reboot_then_security(make_live)
     kp = generate_keypair()
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     session = _FakeSessionTracksRefresh(first_iface, _reopen_same_device)
     calls: list[int] = []
     outcome = apply_plan(
@@ -1494,7 +1375,7 @@ def test_apply_plan_begins_transaction_before_first_write_and_commits_before_sec
     a DIFFERENT (reopened) interface than the one `lora` and the commit
     used is itself proof that the commit finished first.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1507,14 +1388,14 @@ def test_apply_plan_begins_transaction_before_first_write_and_commits_before_sec
     plan = dataclasses.replace(plan, sections=(lora_change, security_section))
     kp = generate_keypair()
 
-    reconnects: list[_FakeIfaceForApply] = []
+    reconnects: list[FakeIfaceForApply] = []
 
-    def _reopen_and_record(n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+    def _reopen_and_record(n: int, cur: FakeIfaceForApply) -> FakeIfaceForApply:
         fresh = _reopen_same_device(n, cur)
         reconnects.append(fresh)
         return fresh
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     session = _FakeSessionTracksRefresh(first_iface, _reopen_and_record)
     sleep_calls: list[float] = []
     on_reconnect_calls: list[int] = []
@@ -1539,7 +1420,7 @@ def test_apply_plan_begins_transaction_before_first_write_and_commits_before_sec
 
 def test_apply_plan_default_channel_writes_before_security_reconnecting(make_live) -> None:
     """default_channel shares security's post-commit reconnect and lands right before it."""
-    template = _template()
+    template = minimal_template()
     template2 = template.model_copy(
         update={
             "default_channel": template.default_channel.model_copy(
@@ -1562,14 +1443,14 @@ def test_apply_plan_default_channel_writes_before_security_reconnecting(make_liv
     plan = dataclasses.replace(plan, sections=(lora_change, channel_section, security_section))
     kp = generate_keypair()
 
-    reconnects: list[_FakeIfaceForApply] = []
+    reconnects: list[FakeIfaceForApply] = []
 
-    def _reopen_and_record(n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+    def _reopen_and_record(n: int, cur: FakeIfaceForApply) -> FakeIfaceForApply:
         fresh = _reopen_same_device(n, cur)
         reconnects.append(fresh)
         return fresh
 
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     session = _FakeSessionTracksRefresh(first_iface, _reopen_and_record)
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
@@ -1584,7 +1465,7 @@ def test_apply_plan_default_channel_writes_before_security_reconnecting(make_liv
 
 def test_apply_plan_default_channel_failure_skips_security_reconnecting(make_live) -> None:
     """A default_channel write failure cascades into security being SKIPPED."""
-    template = _template()
+    template = minimal_template()
     template2 = template.model_copy(
         update={
             "default_channel": template.default_channel.model_copy(
@@ -1607,8 +1488,8 @@ def test_apply_plan_default_channel_failure_skips_security_reconnecting(make_liv
     plan = dataclasses.replace(plan, sections=(lora_change, channel_section, security_section))
     kp = generate_keypair()
 
-    first_iface = _FakeIfaceForApply()
-    failing_iface = _FakeIfaceRaisesOnWrite(OSError(errno.EIO, "fake I/O error"))
+    first_iface = FakeIfaceForApply()
+    failing_iface = FakeIfaceRaisesOnWrite(OSError(errno.EIO, "fake I/O error"))
     session = _FakeSessionTracksRefresh(first_iface, lambda _n, _cur: failing_iface)
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
@@ -1626,7 +1507,7 @@ def test_apply_plan_default_channel_failure_skips_security_reconnecting(make_liv
 
 def _lora_then_security_plan(make_live: Callable[..., object]) -> ChangePlan:
     """A FACTORY plan with one lora change and the plan's own (deferred) security section."""
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     plan = build_plan(
         PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
@@ -1647,8 +1528,8 @@ def test_apply_plan_deferred_security_write_failure_is_marked_attempted(make_liv
     keypair file -- the regenerated key may now be on the device.
     """
     plan = _lora_then_security_plan(make_live)
-    first_iface = _FakeIfaceForApply()
-    failing_iface = _FakeIfaceRaisesOnWrite(OSError(errno.EIO, "fake I/O error"))
+    first_iface = FakeIfaceForApply()
+    failing_iface = FakeIfaceRaisesOnWrite(OSError(errno.EIO, "fake I/O error"))
     session = _FakeSessionTracksRefresh(first_iface, lambda _n, _cur: failing_iface)
 
     outcome = apply_plan(plan, session, keypair=generate_keypair())  # type: ignore[arg-type]
@@ -1679,10 +1560,10 @@ def test_apply_plan_deferred_security_pre_io_failure_is_not_marked_attempted(
         real_write_section(iface, change, **kwargs)  # type: ignore[arg-type]
 
     monkeypatch.setattr(apply_module, "write_section", _refuse_security)
-    first_iface = _FakeIfaceForApply()
-    refreshed: list[_FakeIfaceForApply] = []
+    first_iface = FakeIfaceForApply()
+    refreshed: list[FakeIfaceForApply] = []
 
-    def _on_refresh(_n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+    def _on_refresh(_n: int, cur: FakeIfaceForApply) -> FakeIfaceForApply:
         refreshed.append(cur.reopened())
         return refreshed[-1]
 
@@ -1706,7 +1587,7 @@ def test_apply_plan_deferred_security_pre_io_failure_is_not_marked_attempted(
 
 def test_apply_plan_default_channel_in_place_lands_before_security(make_live) -> None:
     """Under --no-reconnect, default_channel writes in its natural order, no extra reconnect."""
-    template = _template()
+    template = minimal_template()
     template2 = template.model_copy(
         update={
             "default_channel": template.default_channel.model_copy(
@@ -1729,7 +1610,7 @@ def test_apply_plan_default_channel_in_place_lands_before_security(make_live) ->
     plan = dataclasses.replace(plan, sections=(lora_change, channel_section, security_section))
     kp = generate_keypair()
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = InPlaceSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)
 
@@ -1745,7 +1626,7 @@ def test_apply_plan_default_channel_in_place_lands_before_security(make_live) ->
 
 def test_apply_plan_commits_transaction_even_when_a_mid_loop_section_fails(make_live) -> None:
     """A mid-loop non-security failure must not skip the finally-driven commit."""
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1788,14 +1669,14 @@ def test_apply_plan_transaction_scope_security_only_vs_in_place_with_sections(ma
     exactly once, at the very end -- never split into its own separate
     write/commit.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     assert [s.section for s in plan.sections] == ["security"]
     security_section = plan.sections[0]
 
-    security_only_iface = _FakeIfaceForApply()
+    security_only_iface = FakeIfaceForApply()
     kp = generate_keypair()
     outcome = apply_plan(
         plan,
@@ -1811,7 +1692,7 @@ def test_apply_plan_transaction_scope_security_only_vs_in_place_with_sections(ma
         changes=(FieldChange(section="lora", field="region", current="UNSET", desired="EU_868"),),
     )
     multi_section_plan = dataclasses.replace(plan, sections=(lora_change, security_section))
-    multi_iface = _FakeIfaceForApply()
+    multi_iface = FakeIfaceForApply()
     kp2 = generate_keypair()
     outcome2 = apply_plan(
         multi_section_plan,
@@ -1833,7 +1714,7 @@ def test_apply_plan_post_commit_reconnect_only_happens_when_security_remains(mak
     non-security sections in the plan, that whole sequence is skipped --
     the only refresh left is the unconditional final verify.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -1845,7 +1726,7 @@ def test_apply_plan_post_commit_reconnect_only_happens_when_security_remains(mak
     )
 
     with_security_plan = dataclasses.replace(plan, sections=(lora_change, security_section))
-    first_iface = _FakeIfaceForApply()
+    first_iface = FakeIfaceForApply()
     session = _FakeSessionTracksRefresh(first_iface, _reopen_same_device)
     kp = generate_keypair()
     outcome = apply_plan(with_security_plan, session, keypair=kp)  # type: ignore[arg-type]
@@ -1853,7 +1734,7 @@ def test_apply_plan_post_commit_reconnect_only_happens_when_security_remains(mak
     assert session.refresh_calls == 2
 
     no_security_plan = dataclasses.replace(plan, sections=(lora_change,), key_plan=KeyPlan())
-    second_iface = _FakeIfaceForApply()
+    second_iface = FakeIfaceForApply()
     second_session = _FakeSessionTracksRefresh(second_iface, _reopen_same_device)
     outcome2 = apply_plan(no_security_plan, second_session, keypair=None)  # type: ignore[arg-type]
     assert outcome2.ok is True, outcome2.describe()
@@ -2004,28 +1885,28 @@ def test_reconnecting_session_refresh_closes_the_existing_interface_first() -> N
 class _RefreshFailsSession:
     """A session whose reconnect never succeeds -- pins the lost-reconnect path."""
 
-    def __init__(self, iface: _FakeIfaceForApply) -> None:
+    def __init__(self, iface: FakeIfaceForApply) -> None:
         self._iface = iface
 
     @property
-    def interface(self) -> _FakeIfaceForApply:
+    def interface(self) -> FakeIfaceForApply:
         return self._iface
 
     def describe(self) -> str:
         return "fake (refresh always fails)"
 
-    def refresh(self) -> _FakeIfaceForApply:
+    def refresh(self) -> FakeIfaceForApply:
         raise ConnectionBackendError("link dropped", transport="serial")
 
 
 def test_apply_plan_reports_uncertain_when_the_reconnect_fails(tmp_path, make_live) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     kp = generate_keypair()
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = _RefreshFailsSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)
 
@@ -2043,30 +1924,30 @@ def test_apply_plan_reports_uncertain_when_the_reconnect_fails(tmp_path, make_li
 class _RefreshFailsWithHintSession:
     """Final-verify reconnect-failure variant whose exception carries an actionable hint."""
 
-    def __init__(self, iface: _FakeIfaceForApply) -> None:
+    def __init__(self, iface: FakeIfaceForApply) -> None:
         self._iface = iface
 
     @property
-    def interface(self) -> _FakeIfaceForApply:
+    def interface(self) -> FakeIfaceForApply:
         return self._iface
 
     def describe(self) -> str:
         return "fake (refresh always fails, with hint)"
 
-    def refresh(self) -> _FakeIfaceForApply:
+    def refresh(self) -> FakeIfaceForApply:
         raise ConnectionFailedError("link dropped", hint="check the cable", transport="serial")
 
 
 def test_apply_plan_final_verify_reconnect_failure_keeps_the_cause_and_hint(
     tmp_path, make_live
 ) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     kp = generate_keypair()
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = _RefreshFailsWithHintSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)
 
@@ -2087,7 +1968,7 @@ def test_apply_plan_keeps_an_earlier_section_failure_when_the_final_reconnect_al
     list rather than replacing it, but that's exactly the kind of thing a
     regression could silently break.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -2104,7 +1985,7 @@ def test_apply_plan_keeps_an_earlier_section_failure_when_the_final_reconnect_al
     )
     plan = dataclasses.replace(plan, sections=(bad_lora_change,))
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     session = _RefreshFailsSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)
 
@@ -2116,7 +1997,7 @@ def test_apply_plan_keeps_an_earlier_section_failure_when_the_final_reconnect_al
     assert verify_results[0].status == WriteStatus.FAILED
 
 
-class _FakeIfaceRaisesOnUser(_FakeIfaceForApply):
+class _FakeIfaceRaisesOnUser(FakeIfaceForApply):
     """A fresh interface whose reconnect succeeded but whose user read fails.
 
     ``getMyUser`` is the read ``detect.read_live_config`` actually calls
@@ -2129,14 +2010,14 @@ class _FakeIfaceRaisesOnUser(_FakeIfaceForApply):
         raise ValueError("serial read timed out")
 
 
-class _FakeIfaceRaisesOnPublicKey(_FakeIfaceForApply):
+class _FakeIfaceRaisesOnPublicKey(FakeIfaceForApply):
     """A fresh interface whose reconnect succeeded but whose key read fails."""
 
     def getPublicKey(self) -> str | None:  # noqa: N802 -- real MeshInterface method name
         raise RuntimeError("serial read timed out")
 
 
-class _FakeLocalNodeTruncatesLongName(_FakeLocalNode):
+class _FakeLocalNodeTruncatesLongName(FakeLocalNode):
     """Simulates firmware silently truncating an over-length long_name on write."""
 
     def setOwner(  # noqa: N802 -- real MeshInterface method name
@@ -2155,18 +2036,18 @@ class _FakeLocalNodeTruncatesLongName(_FakeLocalNode):
             self._iface.user["isUnmessagable"] = is_unmessagable
 
 
-class _FakeIfaceTruncatesLongName(_FakeIfaceForApply):
+class _FakeIfaceTruncatesLongName(FakeIfaceForApply):
     """An interface whose firmware truncates every long_name write to 24 bytes."""
 
-    def __init__(self, node_num: int = _DEFAULT_NODE_NUM) -> None:
+    def __init__(self, node_num: int = DEFAULT_NODE_NUM) -> None:
         super().__init__(node_num)
         self.localNode = _FakeLocalNodeTruncatesLongName(self)
 
 
-class _FakeLocalNodeRaisesOnSetOwner(_FakeLocalNode):
+class _FakeLocalNodeRaisesOnSetOwner(FakeLocalNode):
     """Simulates a device/communication failure during the owner (name) write."""
 
-    def __init__(self, iface: _FakeIfaceForApply, exc: BaseException) -> None:
+    def __init__(self, iface: FakeIfaceForApply, exc: BaseException) -> None:
         super().__init__(iface)
         self._exc = exc
 
@@ -2174,50 +2055,21 @@ class _FakeLocalNodeRaisesOnSetOwner(_FakeLocalNode):
         raise self._exc
 
 
-class _FakeIfaceRaisesOnSetOwner(_FakeIfaceForApply):
+class _FakeIfaceRaisesOnSetOwner(FakeIfaceForApply):
     """An interface whose owner (name) write always raises ``exc``."""
 
-    def __init__(self, exc: BaseException | None = None, node_num: int = _DEFAULT_NODE_NUM) -> None:
+    def __init__(self, exc: BaseException | None = None, node_num: int = DEFAULT_NODE_NUM) -> None:
         super().__init__(node_num)
         resolved_exc = exc if exc is not None else OSError("serial write timed out")
         self.localNode = _FakeLocalNodeRaisesOnSetOwner(self, resolved_exc)
 
 
-class _FakeLocalNodeRaisesOnWrite(_FakeLocalNode):
-    """Simulates a device/communication failure during a config section write."""
-
-    def __init__(self, iface: _FakeIfaceForApply, exc: BaseException) -> None:
-        super().__init__(iface)
-        self._exc = exc
-
-    def writeConfig(self, section: str) -> None:  # noqa: N802 -- real MeshInterface method name
-        real_write_config_or_exit(section)
-        self.written_sections.append(section)
-        raise self._exc
-
-    def writeChannel(  # noqa: N802 -- real method name
-        self,
-        channelIndex: int,  # noqa: ARG002, N803 -- real method name
-        adminIndex: int = 0,  # noqa: ARG002, N803 -- real method name
-    ) -> None:
-        self.written_sections.append("default_channel")
-        raise self._exc
-
-
-class _FakeIfaceRaisesOnWrite(_FakeIfaceForApply):
-    """An interface whose config section write always raises ``exc``."""
-
-    def __init__(self, exc: BaseException, node_num: int = _DEFAULT_NODE_NUM) -> None:
-        super().__init__(node_num)
-        self.localNode = _FakeLocalNodeRaisesOnWrite(self, exc)
-
-
-class _FakeLocalNodeFailsOnSections(_FakeLocalNode):
+class _FakeLocalNodeFailsOnSections(FakeLocalNode):
     """Simulates a device I/O failure for specific sections only; others succeed."""
 
     def __init__(
         self,
-        iface: _FakeIfaceForApply,
+        iface: FakeIfaceForApply,
         *,
         fail_sections: frozenset[str],
         exc: BaseException | None = None,
@@ -2246,7 +2098,7 @@ class _FakeLocalNodeFailsOnSections(_FakeLocalNode):
             )
 
 
-class _FakeIfaceFailsOnSections(_FakeIfaceForApply):
+class _FakeIfaceFailsOnSections(FakeIfaceForApply):
     """An interface whose config section write raises only for ``fail_sections``."""
 
     def __init__(
@@ -2254,7 +2106,7 @@ class _FakeIfaceFailsOnSections(_FakeIfaceForApply):
         *,
         fail_sections: frozenset[str],
         exc: BaseException | None = None,
-        node_num: int = _DEFAULT_NODE_NUM,
+        node_num: int = DEFAULT_NODE_NUM,
     ) -> None:
         super().__init__(node_num)
         self.localNode = _FakeLocalNodeFailsOnSections(self, fail_sections=fail_sections, exc=exc)
@@ -2270,7 +2122,7 @@ def test_write_section_wraps_every_device_io_error(
     device_io_error: Callable[[], BaseException],
 ) -> None:
     exc = device_io_error()
-    iface = _FakeIfaceRaisesOnWrite(exc)
+    iface = FakeIfaceRaisesOnWrite(exc)
     change = SectionChange(section="device", kind=detect.SectionKind.CONFIG, changes=())
 
     with pytest.raises(ProvisioningError) as exc_info:
@@ -2281,7 +2133,7 @@ def test_write_section_wraps_every_device_io_error(
 
 def test_write_section_does_not_swallow_a_programming_error() -> None:
     """Pins the module's "no broad except" discipline against a future regression."""
-    iface = _FakeIfaceRaisesOnWrite(ZeroDivisionError("boom"))
+    iface = FakeIfaceRaisesOnWrite(ZeroDivisionError("boom"))
     change = SectionChange(section="device", kind=detect.SectionKind.CONFIG, changes=())
 
     with pytest.raises(ZeroDivisionError):
@@ -2291,7 +2143,7 @@ def test_write_section_does_not_swallow_a_programming_error() -> None:
 def test_apply_plan_owner_write_failure_reports_failed_for_every_device_io_error(
     make_live, device_io_error: Callable[[], BaseException]
 ) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(
         live=live,
@@ -2324,7 +2176,7 @@ def test_apply_plan_owner_write_failure_reports_failed_for_every_device_io_error
 def _lockdown_regenerate_plan(make_live, make_admin_key) -> ChangePlan:
     """Build a real plan on a factory node with lockdown authorized and a regenerated key."""
     admin = make_admin_key("ADMIN1", has_private=True, audit_ok=True)
-    base_template = _template()
+    base_template = minimal_template()
     template = base_template.model_copy(
         update={
             "admin_nodes": ("ADMIN1",),
@@ -2431,7 +2283,7 @@ def test_apply_plan_an_io_failure_skips_every_later_section_not_only_security(
 
 def test_apply_plan_owner_write_failure_stops_every_section(make_live) -> None:
     """A name-phase failure must also withhold every section, not only security."""
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(
         live=live,
@@ -2467,7 +2319,7 @@ def test_apply_plan_owner_write_failure_stops_every_section(make_live) -> None:
 
 def test_apply_plan_pre_io_failure_is_labelled_not_written_and_not_verified(make_live) -> None:
     """A pre-I/O (enum-mapping) failure must not be verified, and must stop later sections."""
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -2489,7 +2341,7 @@ def test_apply_plan_pre_io_failure_is_labelled_not_written_and_not_verified(make
     )
     plan = dataclasses.replace(plan, sections=(bad_lora_change, good_device_change))
 
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     pre_call_lora = localonly_pb2.LocalConfig()
     pre_call_lora.CopyFrom(iface.localNode.localConfig)
     session = InPlaceSession(iface)  # type: ignore[arg-type]
@@ -2515,7 +2367,7 @@ def test_apply_plan_in_place_no_contradictory_confirmed_after_a_failed_write(mak
     *same* interface would show that section's fields as CONFIRMED right
     next to the section itself being FAILED.
     """
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
@@ -2580,7 +2432,7 @@ def test_apply_plan_adopt_key_still_verified_when_security_is_skipped(
 
 def _early_exit_plan(make_live: Callable[..., object]) -> ChangePlan:
     """A FACTORY plan with an owner change, lora, device, default_channel and security."""
-    template = _template()
+    template = minimal_template()
     template2 = template.model_copy(
         update={
             "default_channel": template.default_channel.model_copy(
@@ -2704,7 +2556,7 @@ def test_apply_plan_early_exit_records_every_unsent_section(
     """
     plan = _early_exit_plan(make_live)
     kp = generate_keypair()
-    first = _FakeIfaceForApply()
+    first = FakeIfaceForApply()
     io_error = OSError(errno.EIO, "simulated transaction failure")
     if case.startswith("section_write"):
 
@@ -2721,13 +2573,13 @@ def test_apply_plan_early_exit_records_every_unsent_section(
     if case == "channel_disabled":
         first.localNode.channels[0].role = channel_pb2.Channel.Role.DISABLED
 
-    refreshed: list[_FakeIfaceForApply] = []
+    refreshed: list[FakeIfaceForApply] = []
     served = {
         "identity_unreadable": _FakeIfaceUnreadableIdentity(),
-        "identity_mismatch": _FakeIfaceForApply(node_num=0xCAFE0002),
+        "identity_mismatch": FakeIfaceForApply(node_num=0xCAFE0002),
     }
 
-    def _on_refresh(_n: int, cur: _FakeIfaceForApply) -> _FakeIfaceForApply:
+    def _on_refresh(_n: int, cur: FakeIfaceForApply) -> FakeIfaceForApply:
         fresh = served.get(case) or cur.reopened()
         refreshed.append(fresh)
         return fresh
@@ -2776,7 +2628,7 @@ def test_apply_plan_in_place_commit_failure_counts_security_as_attempted(
     )
     # A security-only plan opens no transaction at all; lora makes it open one.
     plan = dataclasses.replace(lockdown, sections=(lora, *lockdown.sections))
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     iface.localNode.commit_error = OSError(errno.EIO, "simulated commit failure")
 
     outcome = apply_plan(plan, InPlaceSession(iface), keypair=generate_keypair())  # type: ignore[arg-type]
@@ -2799,7 +2651,7 @@ def test_apply_plan_logs_a_commit_failure_that_another_exception_would_hide(
 ) -> None:
     """A commit failing in ``finally`` while another exception propagates is logged, not lost."""
     plan = _early_exit_plan(make_live)
-    iface = _FakeIfaceForApply()
+    iface = FakeIfaceForApply()
     iface.localNode.commit_error = OSError(errno.EIO, "simulated commit failure")
 
     def _raise(_section: str) -> None:
@@ -2823,29 +2675,29 @@ def test_apply_plan_logs_a_commit_failure_that_another_exception_would_hide(
 class _ReadFailsAfterReconnectSession:
     """A session whose reconnect succeeds but returns a fresh, failing interface."""
 
-    def __init__(self, write_iface: _FakeIfaceForApply, fresh_iface: _FakeIfaceForApply) -> None:
+    def __init__(self, write_iface: FakeIfaceForApply, fresh_iface: FakeIfaceForApply) -> None:
         self._write_iface = write_iface
         self._fresh_iface = fresh_iface
 
     @property
-    def interface(self) -> _FakeIfaceForApply:
+    def interface(self) -> FakeIfaceForApply:
         return self._write_iface
 
     def describe(self) -> str:
         return "fake (reconnect succeeds, post-reconnect read fails)"
 
-    def refresh(self) -> _FakeIfaceForApply:
+    def refresh(self) -> FakeIfaceForApply:
         return self._fresh_iface
 
 
 def test_verify_reports_uncertain_when_the_post_reconnect_read_fails(tmp_path, make_live) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     kp = generate_keypair()
 
-    write_iface = _FakeIfaceForApply()
+    write_iface = FakeIfaceForApply()
     fresh_iface = _FakeIfaceRaisesOnUser()
     session = _ReadFailsAfterReconnectSession(write_iface, fresh_iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
@@ -2863,13 +2715,13 @@ def test_verify_reports_uncertain_when_the_post_reconnect_read_fails(tmp_path, m
 
 
 def test_verify_reports_uncertain_when_get_public_key_raises(tmp_path, make_live) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
     kp = generate_keypair()
 
-    write_iface = _FakeIfaceForApply()
+    write_iface = FakeIfaceForApply()
     fresh_iface = _FakeIfaceRaisesOnPublicKey()
     session = _ReadFailsAfterReconnectSession(write_iface, fresh_iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
@@ -2901,7 +2753,7 @@ def test_verify_reports_uncertain_when_get_public_key_raises(tmp_path, make_live
 _NODEDB_ONLY_PUBLIC_KEY: Final = bytes(range(32))
 
 
-class _FakeIfaceNodeDbReportsAnotherKey(_FakeIfaceForApply):
+class _FakeIfaceNodeDbReportsAnotherKey(FakeIfaceForApply):
     """An interface whose own NodeDB entry disagrees with ``localConfig.security``.
 
     The real ``getPublicKey`` reads the node's NodeDB entry, a store separate
@@ -2914,7 +2766,7 @@ class _FakeIfaceNodeDbReportsAnotherKey(_FakeIfaceForApply):
 
 
 def test_verify_flags_a_regenerated_key_the_nodedb_still_reports_differently(make_live) -> None:
-    template = _template()
+    template = minimal_template()
     live = make_live(template, security=make_security(empty=True))
     plan = build_plan(
         PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
