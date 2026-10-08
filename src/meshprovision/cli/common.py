@@ -29,7 +29,6 @@ command module -- only downward, from the earlier layers.
 
 from __future__ import annotations
 
-import contextlib
 import functools
 import logging
 import sys
@@ -821,14 +820,10 @@ class CliContext:
         failure is left alone -- neither is about bad file content, so
         a known-good copy isn't the relevant remedy.
         """
-        from meshprovision.db import ods_write, schema
+        from meshprovision.db import ods_write
         from meshprovision.db.fs_primitives import resolve_path
         from meshprovision.db.keys import KeyRepository
-        from meshprovision.db.known_good import (
-            KnownGoodProvenance,
-            known_good_status,
-            provenance_reason,
-        )
+        from meshprovision.db.known_good import known_good_remediation
         from meshprovision.db.nodes import NodeRepository
         from meshprovision.db.ods import OdsDatabase
 
@@ -871,22 +866,8 @@ class CliContext:
         except DbError as exc:
             if not isinstance(exc, (DbReadError, AtomicWriteError)):
                 # Only enriches the hint: never let it replace `exc`.
-                status = None
-                with contextlib.suppress(AtomicWriteError):
-                    status = known_good_status(path)
-                if status is not None:
-                    if status.provenance is KnownGoodProvenance.VERIFIED:
-                        remediation = (
-                            f"A known-good copy from "
-                            f"{schema.utc_timestamp(status.info.created_at)} is available. "
-                            "Run: mesh db restore --known-good"
-                        )
-                    else:
-                        remediation = (
-                            f"A known-good copy exists at {status.info.path}, but it could "
-                            f"not be confirmed as this database's ({provenance_reason(status)})"
-                            ". Inspect it before restoring it by path."
-                        )
+                remediation = known_good_remediation(path)
+                if remediation is not None:
                     exc.hint = f"{exc.hint}\n{remediation}" if exc.hint else remediation
             db.unlock()
             raise

@@ -37,7 +37,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
-from meshprovision.db import fs_primitives
+from meshprovision.db import fs_primitives, schema
 from meshprovision.db.atomic_writer import write_bytes_atomic
 from meshprovision.db.backups import BackupInfo, backup_dir_for, backup_name_targets
 from meshprovision.db.fs_primitives import BACKUP_DIR_MODE, FILE_MODE, resolve_path
@@ -50,6 +50,7 @@ __all__ = [
     "known_good_info",
     "known_good_name",
     "known_good_path",
+    "known_good_remediation",
     "known_good_status",
     "provenance_reason",
     "refresh_known_good",
@@ -607,3 +608,32 @@ def refresh_known_good(
                 tmp_destination.unlink()
 
     return known_good_info(target, backup_dir=backup_dir)
+
+
+def known_good_remediation(db_path: Path) -> str | None:
+    """Return the hint line pointing at ``db_path``'s known-good copy, if any.
+
+    Args:
+        db_path: The database file whose known-good copy to describe.
+
+    Returns:
+        The ``mesh db restore --known-good`` line for a verified copy, a
+        pointer to an unverified copy by path, or ``None`` when there is
+        no copy (or it could not be inspected).
+    """
+    status = None
+    with contextlib.suppress(AtomicWriteError):
+        status = known_good_status(db_path)
+    if status is None:
+        return None
+    if status.provenance is KnownGoodProvenance.VERIFIED:
+        return (
+            f"A known-good copy from "
+            f"{schema.utc_timestamp(status.info.created_at)} is available. "
+            "Run: mesh db restore --known-good"
+        )
+    return (
+        f"A known-good copy exists at {status.info.path}, but it could "
+        f"not be confirmed as this database's ({provenance_reason(status)})"
+        ". Inspect it before restoring it by path."
+    )
