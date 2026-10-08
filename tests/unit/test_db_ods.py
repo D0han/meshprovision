@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import io
 import os
 import zipfile
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
+from odf import load as odf_load
+from odf import opendocument
+from odf.opendocument import OpenDocumentText
+from odf.text import P
 
 from meshprovision.crypto.keys import encode_key
 from meshprovision.db import backups, cell_validation, ods, ods_read, ods_write, schema
@@ -25,6 +31,7 @@ from meshprovision.errors import (
     DuplicateNodeError,
     SchemaError,
 )
+from tests.conftest import rezip_ods
 
 pytestmark = pytest.mark.unit
 
@@ -1807,3 +1814,195 @@ def test_load_database_unreadable_file_raises_db_read_error(tmp_path: Path, keyp
     assert "not a readable ODF spreadsheet" not in str(exc_info.value)
     assert exc_info.value.hint is not None
     assert "permissions" in exc_info.value.hint
+
+
+# ---------------------------------------------------------------------------
+# A file damaged outside meshprovision: odfpy prints some parse failures and
+# swallows them, so read_raw checks the file itself first.
+# ---------------------------------------------------------------------------
+
+_MANIFEST = "META-INF/manifest.xml"
+
+
+def _cut_in_key_value(parts: dict[str, bytes], secret: bytes) -> dict[str, bytes | None]:
+    content = parts["content.xml"]
+    return {"content.xml": content[: content.index(secret) + len(secret) // 2]}
+
+
+def _cut_after_keys_header(parts: dict[str, bytes], secret: bytes) -> dict[str, bytes | None]:
+    content = parts["content.xml"]
+    keys_sheet = content.index(b'table:name="Keys"')
+    end = content.index(b"</table:table-row>", keys_sheet) + len(b"</table:table-row>")
+    return {"content.xml": content[:end]}
+
+
+def _halve(part: str) -> Callable[[dict[str, bytes], bytes], dict[str, bytes | None]]:
+    def change(parts: dict[str, bytes], secret: bytes) -> dict[str, bytes | None]:
+        return {part: parts[part][: len(parts[part]) // 2]}
+
+    return change
+
+
+def _unbound_prefix(parts: dict[str, bytes], secret: bytes) -> dict[str, bytes | None]:
+    # Well-formed XML, but `foo:` is never declared: only a namespace-aware
+    # parse (odfpy's own) fails, so this exercises the print guard.
+    content = parts["content.xml"]
+    keys_sheet = content.index(b'table:name="Keys"')
+    row = content.index(b"<table:table-row", keys_sheet)
+    return {"content.xml": content[:row] + b"<foo:bar/>" + content[row:]}
+
+
+def _entity_declaration(parts: dict[str, bytes], secret: bytes) -> dict[str, bytes | None]:
+    content = parts["content.xml"]
+    root = content.index(b"<office:document-content")
+    doctype = b'<!DOCTYPE office:document-content [<!ENTITY e "boom">]>'
+    return {"content.xml": content[:root] + doctype + content[root:]}
+
+
+def _no_content_member(parts: dict[str, bytes], secret: bytes) -> dict[str, bytes | None]:
+    return {"content.xml": None}
+
+
+def _content_not_in_manifest(parts: dict[str, bytes], secret: bytes) -> dict[str, bytes | None]:
+    entry = (
+        b'<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
+    )
+    assert entry in parts[_MANIFEST]
+    return {_MANIFEST: parts[_MANIFEST].replace(entry, b"")}
+
+
+def _encrypted(parts: dict[str, bytes], secret: bytes) -> dict[str, bytes | None]:
+    # The manifest shape LibreOffice writes for "Save with password".
+    entry = (
+        b'<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
+    )
+    encrypted_entry = (
+        b'<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml">'
+        b'<manifest:encryption-data manifest:checksum-type="SHA1/1K" manifest:checksum="AAAA">'
+        b'<manifest:algorithm manifest:algorithm-name="Blowfish CFB" '
+        b'manifest:initialisation-vector="AAAA"/></manifest:encryption-data>'
+        b"</manifest:file-entry>"
+    )
+    return {_MANIFEST: parts[_MANIFEST].replace(entry, encrypted_entry)}
+
+
+_DAMAGE: dict[str, tuple[Callable[[dict[str, bytes], bytes], dict[str, bytes | None]], str]] = {
+    "content_cut_in_a_key_value": (_cut_in_key_value, "content.xml is not well-formed XML"),
+    "content_cut_after_keys_header": (_cut_after_keys_header, "content.xml is not well-formed XML"),
+    "styles_truncated": (_halve("styles.xml"), "styles.xml is not well-formed XML"),
+    "meta_truncated": (_halve("meta.xml"), "meta.xml is not well-formed XML"),
+    "settings_truncated": (_halve("settings.xml"), "settings.xml is not well-formed XML"),
+    "manifest_truncated": (_halve(_MANIFEST), f"{_MANIFEST} is not well-formed XML"),
+    "unbound_prefix": (_unbound_prefix, "odfpy could not parse one of its XML parts"),
+    "entity_declaration": (_entity_declaration, "content.xml uses a forbidden XML construct"),
+    "no_content_member": (_no_content_member, "it has no content.xml"),
+    "content_not_in_manifest": (_content_not_in_manifest, "it has no content.xml"),
+    "encrypted": (_encrypted, "is password-protected"),
+}
+
+
+@pytest.fixture
+def db_with_private_key(tmp_path: Path, keypair) -> tuple[bytes, bytes]:
+    """A real database file holding one private key, and that key's base64 text."""
+    node, pub, priv = _sample_records(keypair)
+    path = tmp_path / "db.ods"
+    ods_write.write_database(
+        path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()], backup=False
+    )
+    return path.read_bytes(), priv.key_value.get_secret_value().encode()
+
+
+def _assert_refused_quietly(
+    data: bytes, secret: bytes, fragment: str, capsys: pytest.CaptureFixture[str]
+) -> SchemaError:
+    source = Path("damaged.ods")
+    with pytest.raises(SchemaError) as exc_info:
+        ods.parse_database(data, source=source)
+    error = exc_info.value
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+    assert error.exit_code == 4
+    assert str(source) in error.message
+    assert fragment in error.message
+    # Boolean form: a failing assert must not print the key material itself.
+    leaked = secret.decode() in f"{error.message}\n{error.hint}\n{error!s}"
+    assert not leaked
+    return error
+
+
+@pytest.mark.parametrize("damage", list(_DAMAGE), ids=list(_DAMAGE))
+def test_read_raw_refuses_a_damaged_file_without_printing_it(
+    damage: str, db_with_private_key: tuple[bytes, bytes], capsys: pytest.CaptureFixture[str]
+) -> None:
+    data, secret = db_with_private_key
+    change, fragment = _DAMAGE[damage]
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+
+    error = _assert_refused_quietly(
+        rezip_ods(data, change(parts, secret)), secret, fragment, capsys
+    )
+
+    assert error.hint
+
+
+def _corrupt_deflate_stream(data: bytes, info: zipfile.ZipInfo) -> bytes:
+    # Local file header: 30 fixed bytes, then the name and extra field.
+    name_len = int.from_bytes(data[info.header_offset + 26 : info.header_offset + 28], "little")
+    extra_len = int.from_bytes(data[info.header_offset + 28 : info.header_offset + 30], "little")
+    start = info.header_offset + 30 + name_len + extra_len
+    # 0b111: final block, block type 3 -- reserved, always "invalid block type".
+    return data[:start] + b"\x07" + data[start + 1 :]
+
+
+def _corrupt_crc(data: bytes, info: zipfile.ZipInfo) -> bytes:
+    # The central directory's CRC-32 (offset 16 of the entry) is what zipfile checks.
+    name = info.filename.encode()
+    entry = data.index(b"PK\x01\x02")
+    while data[entry + 46 : entry + 46 + len(name)] != name:
+        entry = data.index(b"PK\x01\x02", entry + 1)
+    crc = (info.CRC ^ 0xFFFFFFFF).to_bytes(4, "little")
+    return data[: entry + 16] + crc + data[entry + 20 :]
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [_corrupt_deflate_stream, _corrupt_crc],
+    ids=["deflate_stream_zlib_error", "crc_mismatch_bad_zip_file"],
+)
+def test_read_raw_refuses_a_corrupt_compressed_part(
+    corrupt: Callable[[bytes, zipfile.ZipInfo], bytes],
+    db_with_private_key: tuple[bytes, bytes],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    data, secret = db_with_private_key
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        info = archive.getinfo("content.xml")
+    assert info.compress_type == zipfile.ZIP_DEFLATED
+
+    _assert_refused_quietly(
+        corrupt(data, info), secret, "content.xml could not be decompressed", capsys
+    )
+
+
+def test_read_raw_refuses_a_text_document(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    document = OpenDocumentText()
+    document.text.addElement(P(text="not a spreadsheet"))
+    path = tmp_path / "letter.odt"
+    document.save(str(path))
+
+    _assert_refused_quietly(path.read_bytes(), b"-", "it is not a spreadsheet document", capsys)
+
+
+def test_odfpy_print_sites_raise_instead_of_printing(capsys: pytest.CaptureFixture[str]) -> None:
+    """Pins the guard on both odfpy print sites (opendocument.py and load.py)."""
+    for module in (opendocument, odf_load):
+        assert module.print is ods_read._refuse_odfpy_print
+        with pytest.raises(ods_read._OdfpyPrintedError) as exc_info:
+            module.print("====== SAX FAILED TO PARSE ==========\n", "<secret-part/>")
+        assert "secret-part" not in str(exc_info.value)
+        assert exc_info.value.args == ()
+    assert capsys.readouterr().out == ""

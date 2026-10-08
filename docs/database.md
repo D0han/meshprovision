@@ -194,6 +194,16 @@ mesh db restore --known-good      # restores it, after the usual confirmation
 mesh db verify                    # confirms you're back to a good state
 ```
 
+A file damaged rather than hand-edited -- an interrupted copy, a sync
+tool, one bad byte -- is refused the same way, naming the damaged part
+(for example `content.xml is not well-formed XML at line 2, column
+19383`). mesh refuses the whole file rather than loading the rows before
+the damage and dropping the rest, so such a load never overwrites the
+known-good copy.
+A password-protected file (LibreOffice's "Save with password") cannot be
+read at all: save it again without the password, and protect it with
+file permissions or disk encryption instead.
+
 `mesh db backup --list` also reports the known-good copy's timestamp and
 provenance directly, so you can check how fresh and trustworthy it is
 before relying on it. Because it is refreshed on every load, it is

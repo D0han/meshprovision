@@ -470,6 +470,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database), and a pending-key file is recovered and then cleared. One
   written under a link you no longer use can be renamed by hand to
   `<real name>.pending-<node id>.json`.
+- A database file damaged outside mesh (an interrupted copy, a sync
+  tool, an edit that left `content.xml` cut short or not well-formed)
+  loaded as "Database OK" with every row after the damage silently
+  missing, and printed the whole damaged part -- private keys included
+  -- to stdout. That load also refreshed the known-good copy with the
+  truncated content, and the next save made the loss permanent. Every
+  XML part is now checked before the file is read: a damaged one fails
+  with exit code `4`, naming the part and its line and column (never its
+  text), nothing is printed, and `mesh db restore --known-good` brings
+  the rows back. A corrupt compressed part, a missing `content.xml`, or
+  an ODF document that is not a spreadsheet failed with a Python
+  traceback (exit code 1) and now fails the same way; a
+  password-protected file says so, with a hint to save it again without
+  the password. `defusedxml`, already installed with `odfpy`, is now a
+  declared dependency.
 - A database path that is a symlink loop crashed `mesh db verify`,
   `db list`, `db backup`, `db forget` and `db restore --known-good` with a
   Python traceback (exit code 1) on Python 3.11 and 3.12; on 3.13 they

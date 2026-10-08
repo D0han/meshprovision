@@ -43,8 +43,10 @@ REAL_SLEEP = time.sleep
 time.sleep = lambda *_a, **_k: None
 
 import errno  # noqa: E402
+import io  # noqa: E402
 import os  # noqa: E402
-from collections.abc import Callable  # noqa: E402
+import zipfile  # noqa: E402
+from collections.abc import Callable, Mapping  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any, Final  # noqa: E402
 
@@ -182,6 +184,31 @@ def empty_ods(tmp_path: Path) -> Path:
     path = tmp_path / "nodes_db.ods"
     ods_write.create_empty(path, backup=False)
     return path
+
+
+def rezip_ods(data: bytes, changes: Mapping[str, bytes | None]) -> bytes:
+    """Rebuild an ``.ods`` zip with some members replaced or dropped.
+
+    Simulates damage done to a database file outside meshprovision, built
+    from the real writer's output at test time so no damaged binary (or
+    the key material in it) is ever committed.
+
+    Args:
+        data: The original file's bytes.
+        changes: Member name -> its new bytes, or ``None`` to drop it.
+            Every other member is copied unchanged, in its original order.
+
+    Returns:
+        The rebuilt file's bytes.
+    """
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(data)) as source, zipfile.ZipFile(out, "w") as target:
+        for info in source.infolist():
+            if info.filename not in changes:
+                target.writestr(info, source.read(info.filename))
+            elif (replacement := changes[info.filename]) is not None:
+                target.writestr(info, replacement)
+    return out.getvalue()
 
 
 @pytest.fixture

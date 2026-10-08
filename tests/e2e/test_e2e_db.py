@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import zipfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -21,7 +22,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.observed_keys import observed_key_ref
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import AtomicWriteError
-from tests.conftest import WIDE_TERMINAL_COLUMNS
+from tests.conftest import WIDE_TERMINAL_COLUMNS, rezip_ods
 from tests.e2e.conftest import invoke
 
 if TYPE_CHECKING:
@@ -777,6 +778,94 @@ def test_db_restore_known_good_restores_it(
     assert result.exit_code == 0
     assert db_path.read_bytes() == good_bytes
     assert invoke(runner, ["db", "verify"], env).exit_code == 0
+
+
+def _seed_with_private_key(seed_db: Callable[..., Path]) -> tuple[Path, str]:
+    """Seed one node plus its keypair; return the database path and the private key's text."""
+    pub, priv = KeyRecord.for_keypair(
+        "deadbe01",
+        generate_keypair(),
+        origin=KeyOrigin.CAPTURED,
+        created_ts=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+    path = seed_db(
+        nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")],
+        keys=[pub, priv],
+    )
+    return path, priv.key_value.get_secret_value()
+
+
+def test_damaged_content_is_refused_and_known_good_restores_the_rows(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """A content.xml cut short outside mesh: refused, never printed, recoverable.
+
+    odfpy alone loaded such a file as "Database OK" with the rows past the
+    cut silently gone (printing the XML, private keys included, to
+    stdout), and that load refreshed the known-good copy with the
+    truncated content.
+    """
+    db_path, secret = _seed_with_private_key(seed_db)
+    good_bytes = db_path.read_bytes()
+    assert invoke(runner, ["db", "verify"], env).exit_code == 0  # refreshes the known-good copy
+
+    with zipfile.ZipFile(db_path) as archive:
+        content = archive.read("content.xml")
+    keys_sheet = content.index(b'table:name="Keys"')
+    cut = content.index(b"</table:table-row>", keys_sheet) + len(b"</table:table-row>")
+    damaged = rezip_ods(good_bytes, {"content.xml": content[:cut]})
+    db_path.write_bytes(damaged)
+
+    result = invoke(runner, ["db", "verify"], env)
+
+    assert result.exit_code == 4
+    assert result.stdout == ""
+    assert "content.xml is not well-formed XML" in result.stderr
+    assert "mesh db restore --known-good" in result.stderr
+    leaked = secret in result.output
+    assert not leaked
+
+    restored = invoke(runner, ["db", "restore", "--known-good", "--yes"], env)
+
+    assert restored.exit_code == 0
+    assert db_path.read_bytes() == good_bytes
+    assert any(info.path.read_bytes() == damaged for info in backups.list_backups(db_path))
+    assert invoke(runner, ["db", "verify"], env).exit_code == 0
+
+
+def test_password_protected_database_is_refused_and_restore_backs_it_up(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """An encrypted file gets its own message and hint; a restore over it keeps a copy of it."""
+    db_path, _ = _seed_with_private_key(seed_db)
+    good_bytes = db_path.read_bytes()
+    assert invoke(runner, ["db", "verify"], env).exit_code == 0
+
+    with zipfile.ZipFile(db_path) as archive:
+        manifest = archive.read("META-INF/manifest.xml")
+    entry = b'manifest:full-path="content.xml" manifest:media-type="text/xml"/>'
+    encrypted_entry = (
+        b'manifest:full-path="content.xml" manifest:media-type="text/xml">'
+        b'<manifest:encryption-data manifest:checksum-type="SHA1/1K" manifest:checksum="AAAA"/>'
+        b"</manifest:file-entry>"
+    )
+    encrypted = rezip_ods(
+        good_bytes, {"META-INF/manifest.xml": manifest.replace(entry, encrypted_entry)}
+    )
+    db_path.write_bytes(encrypted)
+
+    result = invoke(runner, ["db", "verify"], env)
+
+    assert result.exit_code == 4
+    assert result.stdout == ""
+    assert "is password-protected" in result.stderr
+    assert "Save with password" in result.stderr
+
+    restored = invoke(runner, ["db", "restore", "--known-good", "--yes"], env)
+
+    assert restored.exit_code == 0
+    assert db_path.read_bytes() == good_bytes
+    assert any(info.path.read_bytes() == encrypted for info in backups.list_backups(db_path))
 
 
 def test_db_restore_known_good_after_two_saves_keeps_both_admin_imports(

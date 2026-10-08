@@ -47,6 +47,9 @@ dependencies = [
   "PyYAML>=6.0.1,<7",
   "protobuf>=4.21.12",
   "pyserial>=3.5,<4",
+  # Imported directly by db/ods_read.py, which checks every ODF part with it
+  # before odfpy loads the file; also odfpy's own XML parser.
+  "defusedxml>=0.7.1",
 ]
 
 [project.optional-dependencies]
@@ -143,7 +146,7 @@ warn_unreachable = true
 pretty = true
 
 [[tool.mypy.overrides]]
-module = ["meshtastic.*", "odf.*", "serial.*", "bleak.*", "responses.*", "pubsub.*"]
+module = ["meshtastic.*", "odf.*", "defusedxml.*", "serial.*", "bleak.*", "responses.*", "pubsub.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]

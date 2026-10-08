@@ -13,6 +13,11 @@ were confirmed against odfpy's own attribute-name conversion for the
 corresponding ``table:*`` grammar, not guessed -- see
 :mod:`meshprovision.db.ods_write`'s docstring for how the file each of
 these later reads back was itself built and verified.
+
+odfpy is never trusted to report a damaged file: :func:`_preflight`
+checks the zip and every XML part odfpy will parse before it sees them,
+and :func:`_refuse_odfpy_print` turns the failures odfpy only prints
+(and otherwise swallows) into errors.
 """
 
 from __future__ import annotations
@@ -20,12 +25,19 @@ from __future__ import annotations
 import io
 import os
 import xml.parsers.expat
+import xml.sax
+import xml.sax.handler
 import zipfile
+import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, NoReturn
 
+import defusedxml
+import defusedxml.ElementTree
+import defusedxml.sax
+from odf import load as odf_load
 from odf import opendocument, teletype
 from odf import table as odf_table
 from odf import text as odf_text
@@ -52,6 +64,20 @@ MAX_BLANK_ROWS: Final[int] = 64
 MAX_ROW_REPEAT: Final[int] = 1024
 """Above this ``table:number-rows-repeated`` count, a blank row is treated as
 LibreOffice's giant trailing filler row and read stops immediately."""
+
+_MANIFEST_PART: Final[str] = "META-INF/manifest.xml"
+_CONTENT_PART: Final[str] = "content.xml"
+_MANIFEST_NS: Final[str] = "urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"
+_ODFPY_XML_PARTS: Final[frozenset[str]] = frozenset(
+    {"content.xml", "styles.xml", "meta.xml", "settings.xml"}
+)
+"""The part names odfpy parses as XML (at the root and in ``Object N/``)."""
+
+_REPAIR_HINT: Final[str] = (
+    "The file was damaged outside mesh (an interrupted copy, a sync tool, an editor "
+    "other than LibreOffice). Nothing was read from it. `mesh db backup --list` shows "
+    "the backups `mesh db restore` can put back."
+)
 
 _TABLE_CELL_QNAME: Final[tuple[str, str]] = (odf_table.TABLENS, "table-cell")
 _COVERED_CELL_QNAME: Final[tuple[str, str]] = (odf_table.TABLENS, "covered-table-cell")
@@ -387,6 +413,140 @@ def _read_db_file(path: Path) -> tuple[bytes, os.stat_result]:
     return data, stat_result
 
 
+class _OdfpyPrintedError(Exception):
+    """odfpy tried to print a parse diagnostic instead of raising one."""
+
+
+def _refuse_odfpy_print(*_args: object, **_kwargs: object) -> NoReturn:
+    """Stand-in for ``print`` inside odfpy's loader modules.
+
+    odfpy's loader reports some failures by printing them and carrying on.
+    Its only two ``print`` calls on the load path are both replaced (see
+    the assignments below this function): ``odf/opendocument.py``'s
+    ``__loadxmlparts`` catches an XML part's ``SAXParseException``, prints
+    the entire part (the ``Keys`` sheet's private keys included) to
+    stdout, and returns whatever was built before the error;
+    ``odf/load.py``'s ``LoadParser.startElementNS`` catches an
+    ``AttributeError`` building an element, prints it, and carries on.
+    Either way rows vanish without an error. Raising here turns both into
+    an exception :func:`read_raw` reports. The arguments, which hold the
+    part's text, are deliberately dropped. A module-level name lookup, not
+    a ``sys.stdout`` swap: redirecting stdout process-wide would also
+    swallow (and misread as an odfpy failure) whatever meshtastic's reader
+    thread prints while a database is loaded mid-session.
+
+    Raises:
+        _OdfpyPrintedError: Always.
+    """
+    raise _OdfpyPrintedError
+
+
+# The two print sites: odf/opendocument.py __loadxmlparts (`except
+# SAXParseException: print(...)`) and odf/load.py LoadParser.startElementNS
+# (`except AttributeError as v: print(...)`).
+opendocument.print = _refuse_odfpy_print
+odf_load.print = _refuse_odfpy_print
+
+
+def _unreadable(path: Path, reason: str, *, hint: str | None = _REPAIR_HINT) -> SchemaError:
+    """Build the "not a readable ODF spreadsheet" error for ``path``.
+
+    Args:
+        path: The database file, named in the message.
+        reason: Why, without any of the file's content.
+        hint: The operator hint.
+
+    Returns:
+        The constructed :class:`SchemaError`, not yet raised.
+    """
+    return SchemaError(f"{path} is not a readable ODF spreadsheet: {reason}", hint=hint)
+
+
+def _read_part(path: Path, archive: zipfile.ZipFile, part: str) -> bytes:
+    """Read one member of the ODF zip, mapping a damaged member to :class:`SchemaError`.
+
+    Args:
+        path: The database file, named in any error.
+        archive: The opened ODF zip.
+        part: The member's name.
+
+    Returns:
+        The member's decompressed bytes.
+
+    Raises:
+        SchemaError: If the member is missing or cannot be decompressed.
+    """
+    try:
+        return archive.read(part)
+    except KeyError as exc:
+        raise _unreadable(path, f"it has no {part}") from exc
+    except (zipfile.BadZipFile, zlib.error, EOFError, NotImplementedError) as exc:
+        raise _unreadable(path, f"{part} could not be decompressed ({exc})") from exc
+
+
+def _check_well_formed(path: Path, part: str, xml_bytes: bytes) -> None:
+    """Parse one XML part strictly, the way odfpy would, but failing loudly.
+
+    Args:
+        path: The database file, named in any error.
+        part: The part's name, named in any error.
+        xml_bytes: The part's bytes.
+
+    Raises:
+        SchemaError: If the part is not well-formed XML or uses a
+            construct defusedxml forbids (an entity declaration). The
+            message carries the position, never the part's text.
+    """
+    try:
+        defusedxml.sax.parseString(xml_bytes, xml.sax.handler.ContentHandler())
+    except xml.sax.SAXParseException as exc:
+        raise _unreadable(
+            path,
+            f"{part} is not well-formed XML at line {exc.getLineNumber()}, "
+            f"column {exc.getColumnNumber()} ({exc.getMessage()})",
+        ) from exc
+    except defusedxml.DefusedXmlException as exc:
+        raise _unreadable(
+            path, f"{part} uses a forbidden XML construct ({type(exc).__name__})"
+        ) from exc
+
+
+def _preflight(path: Path, archive: zipfile.ZipFile) -> None:
+    """Check the ODF zip before odfpy sees it, for what odfpy would not report.
+
+    Args:
+        path: The database file, named in any error.
+        archive: The opened ODF zip.
+
+    Raises:
+        SchemaError: If the file is password-protected, has no
+            ``content.xml``, or any XML part odfpy would parse is
+            damaged or not well-formed.
+    """
+    manifest_bytes = _read_part(path, archive, _MANIFEST_PART)
+    _check_well_formed(path, _MANIFEST_PART, manifest_bytes)
+    manifest = defusedxml.ElementTree.fromstring(manifest_bytes)
+    if manifest.find(f".//{{{_MANIFEST_NS}}}encryption-data") is not None:
+        raise SchemaError(
+            f"{path} is password-protected (an encrypted ODF file); mesh cannot read it.",
+            hint=(
+                'Open it in LibreOffice Calc, choose File > Save As with "Save with '
+                'password" unticked, and protect the file with permissions '
+                "(chmod 600) or disk encryption instead."
+            ),
+        )
+    listed = {
+        entry.get(f"{{{_MANIFEST_NS}}}full-path", "")
+        for entry in manifest.iter(f"{{{_MANIFEST_NS}}}file-entry")
+    }
+    members = set(archive.namelist())
+    if _CONTENT_PART not in listed or _CONTENT_PART not in members:
+        raise _unreadable(path, f"it has no {_CONTENT_PART} (the part that holds the sheets)")
+    for part in sorted(listed & members):
+        if part.rsplit("/", 1)[-1] in _ODFPY_XML_PARTS:
+            _check_well_formed(path, part, _read_part(path, archive, part))
+
+
 def read_raw(path: Path, *, data: bytes | None = None) -> DatabaseData:
     """Read an ODS file's raw sheet contents, with no schema validation.
 
@@ -404,13 +564,30 @@ def read_raw(path: Path, *, data: bytes | None = None) -> DatabaseData:
 
     Raises:
         SchemaError: If ``path``/``data`` cannot be parsed as an ODF
-            spreadsheet.
+            spreadsheet: not a zip, a damaged or missing part, an XML part
+            that is not well-formed (named, with its line and column,
+            never its text), a password-protected file, or a document
+            that is not a spreadsheet. Nothing is ever printed.
     """
     try:
-        doc = opendocument.load(io.BytesIO(data) if data is not None else str(path))
+        content = data if data is not None else path.read_bytes()
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            _preflight(path, archive)
+        doc = opendocument.load(io.BytesIO(content))
+    except _OdfpyPrintedError as exc:
+        reason = "odfpy could not parse one of its XML parts"
+        if isinstance(exc.__context__, xml.sax.SAXParseException):
+            sax = exc.__context__
+            reason += (
+                f" (line {sax.getLineNumber()}, column {sax.getColumnNumber()}: {sax.getMessage()})"
+            )
+        raise _unreadable(path, reason) from exc
     except (
         OSError,
         zipfile.BadZipFile,
+        zlib.error,
+        EOFError,
+        NotImplementedError,
         xml.parsers.expat.ExpatError,
         ValueError,
         TypeError,
@@ -418,9 +595,12 @@ def read_raw(path: Path, *, data: bytes | None = None) -> DatabaseData:
         AttributeError,
     ) as exc:
         raise SchemaError(f"{path} is not a readable ODF spreadsheet: {exc}") from exc
+    spreadsheet = getattr(doc, "spreadsheet", None)
+    if spreadsheet is None:
+        raise _unreadable(path, "it is not a spreadsheet document", hint=None)
 
     sheets: dict[str, SheetData] = {}
-    for table_elem in doc.spreadsheet.getElementsByType(odf_table.Table):
+    for table_elem in spreadsheet.getElementsByType(odf_table.Table):
         sheet_name: str | None = table_elem.getAttribute("name")
         if sheet_name is None:
             continue
