@@ -124,6 +124,7 @@ STDLIB_PLUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("name_pattern.py", ("meshprovision.errors",)),
     ("crypto/redact.py", ("meshprovision.termsafe",)),
     ("config/env_trust.py", ("meshprovision.errors",)),
+    ("provisioning/backup_models.py", ("meshprovision.crypto.redact", "meshprovision.nodeid")),
 )
 """``(module, allowed meshprovision prefixes)`` for leaves documented as importing
 only the standard library plus those modules."""
