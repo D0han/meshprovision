@@ -1896,7 +1896,7 @@ def test_regenerate_over_a_malformed_live_private_key_records_the_new_pair(
 ) -> None:
     """A live private key that is not 32 bytes is regenerated over, never captured or warned on.
 
-    Pins why ``_capture_proven_private_key``'s ``KeyMaterialError`` branch
+    Pins why ``capture_proven_private_key``'s ``KeyMaterialError`` branch
     returns quietly: the only way to reach it is a malformed pre-apply
     private key, and the plan has already replaced that key.
     """

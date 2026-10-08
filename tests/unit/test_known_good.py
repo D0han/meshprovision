@@ -25,7 +25,7 @@ def _refresh(target: Path, *, backup_dir: Path | None = None) -> BackupInfo | No
     """Call ``refresh_known_good`` with content/source_stat read fresh from ``target``.
 
     Matches how the real caller (``ods.load_database``, via
-    ``ods_read._read_db_file``) supplies them -- from one read of ``target``,
+    ``ods_read.read_db_file``) supplies them -- from one read of ``target``,
     not from ``target`` alone -- for tests whose scenario is just
     "``target`` currently holds this content".
     """
@@ -886,7 +886,7 @@ def test_refresh_sweeps_stale_temp_copies_under_every_spelling(
         orphan.write_bytes(b"killed mid-refresh")
     unrelated = directory / ".other_db.known-good.ods.tmp-999-deadbeef"
     unrelated.write_bytes(b"another database's copy")
-    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
 
     _refresh(link)
 

@@ -34,7 +34,7 @@ from pathlib import Path
 
 from meshprovision.db import fs_primitives
 from meshprovision.db.backups import DEFAULT_RETENTION, create_backup
-from meshprovision.db.fs_primitives import _FILE_MODE
+from meshprovision.db.fs_primitives import FILE_MODE
 from meshprovision.errors import AtomicWriteError
 
 __all__ = [
@@ -73,7 +73,7 @@ def atomic_write(
 
     The temp file is flushed to disk before the backup and the replace,
     and ``target``'s directory after the replace (see
-    :func:`~meshprovision.db.fs_primitives._fsync_file`), so a power cut
+    :func:`~meshprovision.db.fs_primitives.fsync_file`), so a power cut
     right after this returns cannot leave ``target`` empty or torn.
 
     Args:
@@ -112,15 +112,15 @@ def atomic_write(
         ) from exc
 
     # Before this call's own temp exists, so it can never sweep it.
-    fs_primitives._sweep_stale_temps(
+    fs_primitives.sweep_stale_temps(
         target.parent,
         f".{target.name}.tmp-*",
-        min_age_seconds=fs_primitives._STALE_TEMP_MIN_AGE_SECONDS,
+        min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
     )
 
     tmp_path = target.parent / f".{target.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
     try:
-        os.close(os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, _FILE_MODE))
+        os.close(os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, FILE_MODE))
     except OSError as exc:
         raise AtomicWriteError(
             f"Failed to create temporary file {tmp_path}: {exc}", path=str(target)
@@ -128,7 +128,7 @@ def atomic_write(
     try:
         yield tmp_path
         try:
-            fs_primitives._fsync_file(tmp_path)
+            fs_primitives.fsync_file(tmp_path)
         except OSError as exc:
             raise AtomicWriteError(
                 f"Failed to flush {tmp_path} to disk: {exc}", path=str(target)
@@ -141,7 +141,7 @@ def atomic_write(
             raise AtomicWriteError(
                 f"Failed to replace {target} with {tmp_path}: {exc}", path=str(target)
             ) from exc
-        fs_primitives._fsync_dir(target.parent)
+        fs_primitives.fsync_dir(target.parent)
     except BaseException:
         with contextlib.suppress(OSError):
             tmp_path.unlink()

@@ -63,7 +63,7 @@ from meshprovision.errors import AdminKeyRotationRefusedError, LockdownRefusedEr
 from meshprovision.firmware import parse_firmware_version
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
-from meshprovision.provisioning.plan_admin_keys import KeyPlan, _plan_admin_key_material
+from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
 from meshprovision.provisioning.plan_types import (
     ChangePlan,
     FieldChange,
@@ -565,7 +565,7 @@ def _evaluate_lockdown(
     Args:
         inputs: The plan inputs.
         desired_admin_keys: The desired admin-key set computed by
-            :func:`meshprovision.provisioning.plan_admin_keys._plan_admin_key_material`.
+            :func:`meshprovision.provisioning.plan_admin_keys.plan_admin_key_material`.
 
     Returns:
         The :class:`LockdownDecision`.
@@ -603,7 +603,7 @@ def _evaluate_lockdown(
         return LockdownDecision(enable=False, reason=LockdownReason.TEMPLATE_OPT_OUT, gates=gates)
 
     # Must precede the emptiness gate below: a fully compromised admin_nodes list
-    # filters down to desired_admin_keys == () in plan_admin_keys._plan_admin_key_material, which
+    # filters down to desired_admin_keys == () in plan_admin_keys.plan_admin_key_material, which
     # would otherwise be refused as "no_admin_keys" and hide the real cause. This
     # reads the unfiltered inputs.admin_keys for exactly that reason.
     weak_refs = tuple(k.key_ref for k in inputs.admin_keys if not k.audit_ok)
@@ -873,7 +873,7 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
     default_channel_section, default_channel_warnings = _plan_default_channel_section(inputs)
     warnings.extend(default_channel_warnings)
 
-    admin_plan = _plan_admin_key_material(inputs)
+    admin_plan = plan_admin_key_material(inputs)
     warnings.extend(admin_plan.warnings)
 
     regenerate, regenerate_reason, adopt_device_key, keypair_warnings = _plan_node_keypair(inputs)

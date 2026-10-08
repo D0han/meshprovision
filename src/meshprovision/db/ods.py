@@ -490,7 +490,7 @@ def _read_and_parse(path: Path) -> tuple[LoadedDatabase, bytes, os.stat_result]:
     Returns:
         The fully validated database, the exact bytes it was parsed
         from, and their ``fstat`` result at read time (see
-        :func:`meshprovision.db.ods_read._read_db_file`).
+        :func:`meshprovision.db.ods_read.read_db_file`).
 
     Raises:
         DbReadError: If the file cannot be opened or read (permissions, I/O).
@@ -501,7 +501,7 @@ def _read_and_parse(path: Path) -> tuple[LoadedDatabase, bytes, os.stat_result]:
         DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
         DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
     """
-    data, stat_result = ods_read._read_db_file(path)
+    data, stat_result = ods_read.read_db_file(path)
     loaded = parse_database(data, source=path)
     return loaded, data, stat_result
 
@@ -531,7 +531,7 @@ def load_database(path: Path) -> LoadedDatabase:
     -- every successful load, not just a write, since a load having
     reached this point is itself proof the file is currently valid. The
     copy is written from the exact bytes read and validated here, via
-    :func:`meshprovision.db.ods_read._read_db_file`, never by re-opening
+    :func:`meshprovision.db.ods_read.read_db_file`, never by re-opening
     ``path`` afterwards -- so a write landing between validation and the
     refresh can never publish unvalidated content as "known-good". Nor
     does a load that took no lock revert a copy a concurrent ``save()``

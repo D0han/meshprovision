@@ -30,7 +30,7 @@ see ``meshprovision.db.backups.backup_dir_for``) and
 search from ever touching this repository's real files, and what keeps a
 developer's shell environment from leaking into a test run. It also
 stubs ``os.fsync`` to a no-op: every database write flushes its file and
-directory to disk (see ``meshprovision.db.fs_primitives._fsync_file``),
+directory to disk (see ``meshprovision.db.fs_primitives.fsync_file``),
 which on a real disk would add tens of seconds across the suite; the
 tests of that flushing install their own recorder over the stub.
 """

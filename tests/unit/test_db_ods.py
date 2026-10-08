@@ -1174,7 +1174,7 @@ def test_ods_database_two_saves_in_one_session_both_succeed(tmp_path: Path) -> N
     """A session calling `save()` twice must not have its own second save refused.
 
     Mirrors ``persist_result`` (``provisioning/persist.py``) followed by
-    ``_capture_proven_private_key``'s own ``db.db.save()``
+    ``capture_proven_private_key``'s own ``db.db.save()``
     (``cli/provision.py``) -- a single session legitimately saves twice
     in one run, and the second save must not be a false-positive
     conflict against the first save's own write.
@@ -1501,7 +1501,7 @@ def test_load_database_known_good_reflects_validated_bytes_not_a_later_write(
     that window -- for example a concurrent ``db restore``, which writes
     first and validates second by design -- could publish unvalidated
     bytes as the "known-good" safety copy. Reading the file exactly once
-    (``ods_read._read_db_file``) and threading those bytes through both
+    (``ods_read.read_db_file``) and threading those bytes through both
     validation and the refresh closes the window. This monkeypatches the
     last integrity check to race such a write in immediately behind it.
     """

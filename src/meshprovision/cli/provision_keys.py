@@ -1,12 +1,12 @@
 """Key custody for ``mesh provision``: which keypair to write, and how it is recorded.
 
 Split out of :mod:`meshprovision.cli.provision` for size, with no change in
-behavior: choosing the keypair to send (:func:`_select_keypair`), the origin
-recorded for the node's own key (:func:`_node_key_origin`), registering an
-operator-named admin alias (:func:`_register_admin_alias`), filling a
+behavior: choosing the keypair to send (:func:`select_keypair`), the origin
+recorded for the node's own key (:func:`node_key_origin`), registering an
+operator-named admin alias (:func:`register_admin_alias`), filling a
 proven private key into an out-of-band-rotated record
-(:func:`_capture_proven_private_key`), and the operator-facing hint on an
-admin-key-rotation refusal (:func:`_finalize_admin_key_rotation_error`).
+(:func:`capture_proven_private_key`), and the operator-facing hint on an
+admin-key-rotation refusal (:func:`finalize_admin_key_rotation_error`).
 :mod:`meshprovision.cli.provision` imports and uses them; nothing here
 imports from it, or from any other command module.
 
@@ -38,8 +38,16 @@ if TYPE_CHECKING:
 
     from meshprovision.cli.common import CliContext, DbSession
 
+__all__ = [
+    "capture_proven_private_key",
+    "finalize_admin_key_rotation_error",
+    "node_key_origin",
+    "register_admin_alias",
+    "select_keypair",
+]
 
-def _select_keypair(
+
+def select_keypair(
     change_plan: plan_mod.ChangePlan, live: detect.LiveConfig
 ) -> crypto_keys.KeyPair | None:
     """Choose the keypair (if any) to apply for the node's key plan.
@@ -76,7 +84,7 @@ def _select_keypair(
     return keypair
 
 
-def _node_key_origin(key_plan: KeyPlan, *, pending_recovered: bool) -> KeyOrigin:
+def node_key_origin(key_plan: KeyPlan, *, pending_recovered: bool) -> KeyOrigin:
     """Decide a node's own keypair's origin for ``persist_result``/the admin alias.
 
     Args:
@@ -99,7 +107,7 @@ def _node_key_origin(key_plan: KeyPlan, *, pending_recovered: bool) -> KeyOrigin
     return KeyOrigin.CAPTURED
 
 
-def _register_admin_alias(
+def register_admin_alias(
     ctx: CliContext,
     db: DbSession,
     *,
@@ -138,7 +146,7 @@ def _register_admin_alias(
             the key plan changed nothing (the database's existing rows
             are used instead).
         node_origin: The origin being recorded (or already recorded) for
-            the node's own keypair this run -- see :func:`_node_key_origin`.
+            the node's own keypair this run -- see :func:`node_key_origin`.
     """
     now = datetime.now(tz=UTC)
     public_material: bytes | None
@@ -187,7 +195,7 @@ def _register_admin_alias(
         adopt_canonical_ref(db.nodes, db.keys, material=public_material, canonical_owner=admin_ref)
 
 
-def _capture_proven_private_key(
+def capture_proven_private_key(
     db: DbSession,
     *,
     node_id: NodeId,
@@ -293,7 +301,7 @@ _ADMIN_KEY_ROTATION_DOC_HINT: Final[str] = (
 )
 
 
-def _finalize_admin_key_rotation_error(
+def finalize_admin_key_rotation_error(
     exc: AdminKeyRotationRefusedError, live: detect.LiveConfig, *, pending_path: Path | None = None
 ) -> AdminKeyRotationRefusedError:
     """Attach the operator-facing hint to an admin-key-rotation refusal.

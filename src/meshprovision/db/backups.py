@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Final
 
 from meshprovision.db import fs_primitives
-from meshprovision.db.fs_primitives import _BACKUP_DIR_MODE, _FILE_MODE, link_no_clobber
+from meshprovision.db.fs_primitives import BACKUP_DIR_MODE, FILE_MODE, link_no_clobber
 from meshprovision.errors import AtomicWriteError
 
 __all__ = [
@@ -438,17 +438,17 @@ def create_backup(
         ) from exc
 
     try:
-        resolved_dir.chmod(_BACKUP_DIR_MODE)
+        resolved_dir.chmod(BACKUP_DIR_MODE)
     except OSError as exc:
         _logger.debug("Failed to chmod backup directory %s: %s", resolved_dir, exc)
 
     name_targets = backup_name_targets(target)
     # Before this call's own temp exists, so it can never sweep it.
     for name_target in name_targets:
-        fs_primitives._sweep_stale_temps(
+        fs_primitives.sweep_stale_temps(
             resolved_dir,
             f".{name_target.stem}-*{name_target.suffix}.tmp-*",
-            min_age_seconds=fs_primitives._STALE_TEMP_MIN_AGE_SECONDS,
+            min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
         )
 
     when = _monotonic_backup_time(target, resolved_dir, _normalize_utc(now), from_clock=now is None)
@@ -460,12 +460,12 @@ def create_backup(
         # final name: a complete copy of the key material must never exist
         # at the process umask, even briefly.
         try:
-            tmp_destination.chmod(_FILE_MODE)
+            tmp_destination.chmod(FILE_MODE)
         except OSError as chmod_exc:
             _logger.debug("Failed to chmod backup %s: %s", tmp_destination, chmod_exc)
         # Flushed before it gets its final name, so that name never points
         # at a copy the disk does not hold yet.
-        fs_primitives._fsync_file(tmp_destination)
+        fs_primitives.fsync_file(tmp_destination)
         destination = _claim_backup_path(resolved_dir, name, tmp_destination)
     except OSError as exc:
         with contextlib.suppress(OSError):
@@ -474,7 +474,7 @@ def create_backup(
             f"Failed to back up {target} into {resolved_dir} as {name}: {exc}", path=str(target)
         ) from exc
 
-    fs_primitives._fsync_dir(resolved_dir)
+    fs_primitives.fsync_dir(resolved_dir)
 
     # Captured before pruning. keep= protects this backup from its own
     # prune, but not from a concurrent writer's prune (possible only when

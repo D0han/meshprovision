@@ -142,7 +142,7 @@ duplicate check produces.
 
 Exported so a caller can tell this finding apart from every other CRITICAL
 reason by exact match -- notably
-:func:`~meshprovision.cli.provision_keys._finalize_admin_key_rotation_error`, which
+:func:`~meshprovision.cli.provision_keys.finalize_admin_key_rotation_error`, which
 must not fall through to its generic ``"CVE-2025-52464" in exc.reason`` branch
 for this one, even though this reason also happens to contain that substring.
 """

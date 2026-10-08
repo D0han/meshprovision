@@ -16,10 +16,10 @@ Four leaf-level building blocks live here, with no dependency on either
 - :func:`link_no_clobber`, a collision-safe "give this file a new name"
   primitive, used by both the backup-claiming logic and by
   ``cli/setup.py``'s own no-clobber file creation.
-- :func:`_sweep_stale_temps`, a best-effort cleanup of orphaned temp
+- :func:`sweep_stale_temps`, a best-effort cleanup of orphaned temp
   files left by a killed writer, called from both the backup-creation
   path and the target-replace path.
-- :func:`_fsync_file`/:func:`_fsync_fd` and :func:`_fsync_dir`, the
+- :func:`fsync_file`/:func:`fsync_fd` and :func:`fsync_dir`, the
   durability step of every write: a temp file's data is flushed to disk
   before it is renamed or linked into place, and its directory after, so
   a power cut cannot leave a final name pointing at an empty or torn
@@ -55,17 +55,24 @@ from typing import Final
 from meshprovision.errors import AtomicWriteError
 
 __all__ = [
+    "BACKUP_DIR_MODE",
+    "FILE_MODE",
+    "STALE_TEMP_MIN_AGE_SECONDS",
+    "fsync_dir",
+    "fsync_fd",
+    "fsync_file",
     "link_no_clobber",
     "resolve_path",
+    "sweep_stale_temps",
 ]
 
 _logger = logging.getLogger(__name__)
 
-_BACKUP_DIR_MODE: Final[int] = 0o700
+BACKUP_DIR_MODE: Final[int] = 0o700
 
-_FILE_MODE: Final[int] = 0o600
+FILE_MODE: Final[int] = 0o600
 
-_STALE_TEMP_MIN_AGE_SECONDS: Final[float] = 24 * 60 * 60
+STALE_TEMP_MIN_AGE_SECONDS: Final[float] = 24 * 60 * 60
 """Minimum age an orphaned temp file must reach before a sweep removes it."""
 
 _LINK_UNSUPPORTED_ERRNOS: Final[frozenset[int]] = frozenset(
@@ -90,8 +97,8 @@ FUSE/SMB/old NFS mounts return the others. Anything else (``EIO``,
 """
 
 
-def _sweep_stale_temps(
-    directory: Path, pattern: str, *, min_age_seconds: float = _STALE_TEMP_MIN_AGE_SECONDS
+def sweep_stale_temps(
+    directory: Path, pattern: str, *, min_age_seconds: float = STALE_TEMP_MIN_AGE_SECONDS
 ) -> int:
     """Best-effort removal of orphaned temp files left by a killed writer.
 
@@ -217,7 +224,7 @@ def link_no_clobber(source: Path, destination: Path) -> None:
 
     A SIGKILL between the fallback's placeholder claim and its
     ``os.replace`` leaves a 0-byte file under ``destination``'s name.
-    That is the same residual :func:`_sweep_stale_temps` already accepts
+    That is the same residual :func:`sweep_stale_temps` already accepts
     for the link path's own unlink step, and it only arises on a
     filesystem with no hard links to begin with.
 
@@ -239,7 +246,7 @@ def link_no_clobber(source: Path, destination: Path) -> None:
         # _LINK_UNSUPPORTED_ERRNOS, so it always re-raises here too.
         if exc.errno not in _LINK_UNSUPPORTED_ERRNOS:
             raise
-        os.close(os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, _FILE_MODE))
+        os.close(os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, FILE_MODE))
         try:
             source.replace(destination)
         except OSError:
@@ -250,7 +257,7 @@ def link_no_clobber(source: Path, destination: Path) -> None:
     source.unlink()
 
 
-def _fsync_fd(fd: int) -> None:
+def fsync_fd(fd: int) -> None:
     """Flush an open file's data to disk.
 
     Calls ``os.fsync`` through the module attribute (never a ``from os
@@ -274,7 +281,7 @@ def _fsync_fd(fd: int) -> None:
         _logger.debug("fsync is not supported here: %s", exc)
 
 
-def _fsync_file(path: Path) -> None:
+def fsync_file(path: Path) -> None:
     """Flush a closed file's data to disk, by path.
 
     Opened read-write rather than read-only, since Windows refuses to
@@ -284,16 +291,16 @@ def _fsync_file(path: Path) -> None:
         path: The file to flush.
 
     Raises:
-        OSError: If ``path`` cannot be opened, or :func:`_fsync_fd` fails.
+        OSError: If ``path`` cannot be opened, or :func:`fsync_fd` fails.
     """
     fd = os.open(path, os.O_RDWR | getattr(os, "O_BINARY", 0))
     try:
-        _fsync_fd(fd)
+        fsync_fd(fd)
     finally:
         os.close(fd)
 
 
-def _fsync_dir(directory: Path) -> None:
+def fsync_dir(directory: Path) -> None:
     """Best-effort flush of a directory, so a rename or link into it is durable.
 
     Never raises: by the time this runs the rename or link has already

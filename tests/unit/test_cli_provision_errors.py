@@ -13,7 +13,7 @@ from types import SimpleNamespace
 import pytest
 
 from meshprovision.cli.provision import ProvisionOptions, _apply_and_persist
-from meshprovision.cli.provision_keys import _finalize_admin_key_rotation_error
+from meshprovision.cli.provision_keys import finalize_admin_key_rotation_error
 from meshprovision.config.template import load_template_text
 from meshprovision.errors import AdminKeyRotationRefusedError
 from meshprovision.provisioning import apply, detect
@@ -45,7 +45,7 @@ def test_finalize_capture_reason_hint_names_cve_and_ref_flag(keypair) -> None:
         admin_refs=("ADMIN1_pub",),
     )
 
-    finalized = _finalize_admin_key_rotation_error(exc, live)
+    finalized = finalize_admin_key_rotation_error(exc, live)
 
     assert finalized.hint is not None
     assert "sha256:" in finalized.hint

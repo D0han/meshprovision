@@ -1,4 +1,4 @@
-"""Tests for :func:`meshprovision.cli.provision_keys._capture_proven_private_key`.
+"""Tests for :func:`meshprovision.cli.provision_keys.capture_proven_private_key`.
 
 The happy paths (a proven key recorded, a stale alias filled, no alias
 private row ever created) are covered end to end in
@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 
-from meshprovision.cli.provision_keys import _capture_proven_private_key
+from meshprovision.cli.provision_keys import capture_proven_private_key
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin, KeyType
@@ -59,7 +59,7 @@ def test_capture_proven_private_key_ignores_a_live_key_that_does_not_derive_the_
     recorded, unrelated = keypair_factory(), keypair_factory()
     _seed(capture_db.keys, _NODE.hex, KeyType.ADMIN_PUBLIC, recorded.public)
 
-    lines = _capture_proven_private_key(
+    lines = capture_proven_private_key(
         capture_db,  # type: ignore[arg-type]
         node_id=_NODE,
         live_private_key=unrelated.private,
@@ -78,7 +78,7 @@ def test_capture_proven_private_key_never_fills_an_alias_holding_different_publi
     _seed(capture_db.keys, _ALIAS, KeyType.ADMIN_PUBLIC, other_admin.public)
     _seed(capture_db.keys, _ALIAS, KeyType.ADMIN_PRIVATE, other_stale.private)
 
-    lines = _capture_proven_private_key(
+    lines = capture_proven_private_key(
         capture_db,  # type: ignore[arg-type]
         node_id=_NODE,
         live_private_key=node_pair.private,

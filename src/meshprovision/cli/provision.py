@@ -45,11 +45,11 @@ from meshprovision.cli.common import (
 )
 from meshprovision.cli.help_format import MeshCommand
 from meshprovision.cli.provision_keys import (
-    _capture_proven_private_key,
-    _finalize_admin_key_rotation_error,
-    _node_key_origin,
-    _register_admin_alias,
-    _select_keypair,
+    capture_proven_private_key,
+    finalize_admin_key_rotation_error,
+    node_key_origin,
+    register_admin_alias,
+    select_keypair,
 )
 from meshprovision.cli.transport import (
     TransportOptions,
@@ -307,7 +307,7 @@ def _record_proven_private_key(
             and a bare ``OSError`` from serializing -- saying that the
             node's row is saved and only the private key is missing.
     """
-    recorded = _capture_proven_private_key(
+    recorded = capture_proven_private_key(
         db, node_id=node_id, live_private_key=live_private_key, now=now
     )
     if not recorded:
@@ -348,7 +348,7 @@ def _apply_and_persist(
         db: The already-open database session.
         session: The already-open device session.
         change_plan: The plan to apply.
-        keypair: The keypair selected by :func:`_select_keypair`.
+        keypair: The keypair selected by :func:`select_keypair`.
         live: The device's live-read configuration, consulted by
             :func:`_record_proven_private_key` for the device's live
             private key -- read before this apply, but unchanged by it
@@ -386,7 +386,7 @@ def _apply_and_persist(
         if outcome.public_key_fingerprint is not None:
             ctx.info(f"Device public key: {outcome.public_key_fingerprint}")
 
-        node_origin = _node_key_origin(
+        node_origin = node_key_origin(
             change_plan.key_plan, pending_recovered=pending_keypair_recovered
         )
 
@@ -395,7 +395,7 @@ def _apply_and_persist(
             and opts.admin_ref != change_plan.node_id.hex
             and outcome.may_update_database
         ):
-            _register_admin_alias(
+            register_admin_alias(
                 ctx,
                 db,
                 admin_ref=opts.admin_ref,
@@ -699,7 +699,7 @@ def run_provision(
     try:
         change_plan = plan_mod.build_plan(inputs)
     except AdminKeyRotationRefusedError as exc:
-        raise _finalize_admin_key_rotation_error(exc, live, pending_path=pending_path) from exc
+        raise finalize_admin_key_rotation_error(exc, live, pending_path=pending_path) from exc
 
     if opts.no_reconnect and change_plan.key_plan.regenerate:
         raise PlanConflictError(
@@ -721,7 +721,7 @@ def run_provision(
             live_public_key=live.security.public_key,
             db_public_key=db_public_key,
         ):
-            raise _finalize_admin_key_rotation_error(
+            raise finalize_admin_key_rotation_error(
                 AdminKeyRotationRefusedError(
                     f"{opts.admin_ref!r} already names a different admin key; refusing to "
                     "re-point it.",
@@ -756,7 +756,7 @@ def run_provision(
         if not ctx.confirm(question, default=False):
             raise click.Abort()
 
-    keypair = _select_keypair(change_plan, live)
+    keypair = select_keypair(change_plan, live)
 
     if keypair is not None and change_plan.key_plan.regenerate:
         # Write-ahead, before any device write (the database's write lock

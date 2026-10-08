@@ -305,7 +305,7 @@ def alias_would_rotate_admin_key(
     catches a rotation of the *connected node's own* recorded key, keyed on its
     DB row. It says nothing about the alias ref itself -- a factory-fresh node
     (no DB row of its own) bootstrapped under an *existing* ``--ref`` sails
-    through that check, and ``_register_admin_alias`` then upserts the new
+    through that check, and ``register_admin_alias`` then upserts the new
     device's material under ``R`` unconditionally, silently handing the fleet's
     admin ref to a different keypair. This predicate closes that gap by
     checking the alias ref's own existing material instead.

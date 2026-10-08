@@ -41,7 +41,7 @@ from typing import Final
 from meshprovision.db import fs_primitives
 from meshprovision.db.atomic_writer import write_bytes_atomic
 from meshprovision.db.backups import BackupInfo, backup_dir_for, backup_name_targets
-from meshprovision.db.fs_primitives import _BACKUP_DIR_MODE, _FILE_MODE, resolve_path
+from meshprovision.db.fs_primitives import BACKUP_DIR_MODE, FILE_MODE, resolve_path
 from meshprovision.errors import AtomicWriteError
 
 __all__ = [
@@ -477,7 +477,7 @@ def refresh_known_good(
 
     ``content`` and ``source_stat`` must come from the exact same read of
     ``target`` that was validated (see :func:`meshprovision.db.ods_read.
-    _read_db_file`), not from a fresh open of ``target`` here. Re-opening
+    read_db_file`), not from a fresh open of ``target`` here. Re-opening
     the path at this point is exactly the TOCTOU this closes: a write
     landing between validation and this call would otherwise publish
     unvalidated bytes as "known-good". The known-good copy is written
@@ -529,7 +529,7 @@ def refresh_known_good(
         content: The exact bytes that were read and validated from
             ``target``. Written to the known-good copy as-is.
         source_stat: The ``stat`` result from the same read that produced
-            ``content`` (see :func:`meshprovision.db.ods_read._read_db_file`,
+            ``content`` (see :func:`meshprovision.db.ods_read.read_db_file`,
             which uses ``fstat`` on the read fd so this describes exactly
             the inode ``content`` came from).
         backup_dir: Directory to store the known-good copy under.
@@ -565,25 +565,25 @@ def refresh_known_good(
 
         resolved_dir.mkdir(parents=True, exist_ok=True)
         try:
-            resolved_dir.chmod(_BACKUP_DIR_MODE)
+            resolved_dir.chmod(BACKUP_DIR_MODE)
         except OSError:
             _logger.debug("Failed to chmod backup directory %s", resolved_dir)
 
         # Before this call's own temp exists, so it can never sweep it. A
         # temp left by a kill is a full copy of the database, keys included.
         for name in backup_name_targets(target):
-            fs_primitives._sweep_stale_temps(
+            fs_primitives.sweep_stale_temps(
                 resolved_dir,
                 f".{known_good_name(name)}.tmp-*",
-                min_age_seconds=fs_primitives._STALE_TEMP_MIN_AGE_SECONDS,
+                min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
             )
 
         tmp_destination = resolved_dir / f".{destination.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
-        fd = os.open(tmp_destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, _FILE_MODE)
+        fd = os.open(tmp_destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, FILE_MODE)
         with os.fdopen(fd, "wb") as fh:
             fh.write(content)
             fh.flush()
-            fs_primitives._fsync_fd(fh.fileno())
+            fs_primitives.fsync_fd(fh.fileno())
         os.utime(tmp_destination, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns))
         # Checked as late as possible -- after the temp copy is written,
         # immediately before the replace -- to keep the window in which
@@ -594,7 +594,7 @@ def refresh_known_good(
             return known_good_info(target, backup_dir=backup_dir)
         tmp_destination.replace(destination)
         tmp_destination = None
-        fs_primitives._fsync_dir(resolved_dir)
+        fs_primitives.fsync_dir(resolved_dir)
         _write_sidecar(sidecar_path, source=current_source, sha256_hex=digest)
         _retire_older_spellings(target, backup_dir, current_source)
     except (OSError, AtomicWriteError) as exc:

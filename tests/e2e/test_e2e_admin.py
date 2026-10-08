@@ -494,7 +494,7 @@ def test_admin_bootstrap_ref_captures_the_keypair_of_a_node_with_no_recorded_key
     """``--ref`` on a FOREIGN node with no recorded key captures it, instead of skipping.
 
     Before Round 38 batch 1, this fell through to
-    ``_plan_node_keypair``'s old no-op ``else``: ``_register_admin_alias``
+    ``_plan_node_keypair``'s old no-op ``else``: ``register_admin_alias``
     then hit its ``keypair is None`` path with nothing in ``db.keys``,
     warned "skipping", and exited 0 without ever registering the alias.
     """

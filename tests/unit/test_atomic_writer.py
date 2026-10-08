@@ -629,7 +629,7 @@ def test_backup_sweeps_a_stale_orphan_temp(tmp_path: Path, monkeypatch: pytest.M
     )
     orphan.write_bytes(b"half-copied")
 
-    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
     info = create_backup(target, backup_dir=backup_dir)
 
     assert not orphan.exists()
@@ -666,7 +666,7 @@ def test_atomic_write_sweeps_a_stale_orphan_in_the_target_dir(
     orphan = tmp_path / f".{target.name}.tmp-999-deadbeef"
     orphan.write_bytes(b"half-written")
 
-    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
     with atomic_write(target, backup=False) as tmp:
         assert not orphan.exists()
         assert tmp.exists()
@@ -704,7 +704,7 @@ def test_sweep_leaves_real_backups_and_other_targets_alone(
     )
     other_temp.write_bytes(b"not mine")
 
-    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
     create_backup(target, backup_dir=backup_dir, retention=0)
 
     assert real_backup.exists()
@@ -730,7 +730,7 @@ def test_sweep_never_raises_on_an_undeletable_temp(
             raise PermissionError(f"refusing to unlink {self}")
         real_unlink(self, *args, **kwargs)
 
-    monkeypatch.setattr(fs_primitives, "_STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
     monkeypatch.setattr(Path, "unlink", refusing_unlink)
 
     info = create_backup(target, backup_dir=backup_dir)
@@ -1560,7 +1560,7 @@ def test_fsync_dir_is_a_no_op_on_windows(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setattr(os, "open", lambda *args, **_kwargs: opened.append(args))
 
-    fs_primitives._fsync_dir(tmp_path)
+    fs_primitives.fsync_dir(tmp_path)
 
     assert opened == []
 

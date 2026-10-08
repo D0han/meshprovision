@@ -8,7 +8,7 @@ the caller's job). :class:`ResolvedAdminKey` reuses its caller-supplied
 placeholder for key material in its ``__repr__``, so raw key bytes never reach a
 ``repr()``.
 
-**The admin-key rule** (:func:`_plan_admin_key_material`), documented
+**The admin-key rule** (:func:`plan_admin_key_material`), documented
 here verbatim per the design brief: ``resolved`` is the caller-supplied,
 already-audited public keys named in ``template.admin_nodes``, in
 template order. ``live_keys`` is whatever the device currently reports
@@ -64,11 +64,13 @@ from meshprovision.errors import MAX_ADMIN_KEYS, AdminKeyCapacityError
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 
 if TYPE_CHECKING:
-    from meshprovision.provisioning.plan import PlanInputs
+    from meshprovision.provisioning.plan_types import PlanInputs
 
 __all__ = [
+    "AdminKeyPlan",
     "KeyPlan",
     "ResolvedAdminKey",
+    "plan_admin_key_material",
 ]
 
 
@@ -223,8 +225,8 @@ class KeyPlan:
 
 
 @dataclass(frozen=True, slots=True, repr=False)
-class _AdminKeyPlan:
-    """:func:`_plan_admin_key_material`'s result, bundled.
+class AdminKeyPlan:
+    """:func:`plan_admin_key_material`'s result, bundled.
 
     ``repr`` is suppressed rather than customized: :attr:`desired` holds
     raw key bytes, and this private helper has no fingerprint of its own
@@ -257,7 +259,7 @@ class _AdminKeyPlan:
     warnings: tuple[PlanWarning, ...]
 
 
-def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
+def plan_admin_key_material(inputs: PlanInputs) -> AdminKeyPlan:
     """Decide the desired ``security.admin_key`` set (step 6).
 
     See the module docstring for the exact rule this implements,
@@ -269,7 +271,7 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
         inputs: The plan inputs.
 
     Returns:
-        The :class:`_AdminKeyPlan`, carrying the
+        The :class:`AdminKeyPlan`, carrying the
         ``"live_admin_key_rejected"`` warnings for live keys dropped by
         the audit, ``"live_admin_key_revoked"`` warnings for live keys
         dropped only for being absent from a non-empty
@@ -381,7 +383,7 @@ def _plan_admin_key_material(inputs: PlanInputs) -> _AdminKeyPlan:
         for label in removed
     ] + warnings
 
-    return _AdminKeyPlan(
+    return AdminKeyPlan(
         desired=desired,
         desired_refs=desired_refs,
         change_admin_keys=sorted(desired) != sorted(live_keys),

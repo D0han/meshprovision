@@ -52,6 +52,7 @@ __all__ = [
     "CellValue",
     "DatabaseData",
     "SheetData",
+    "read_db_file",
     "read_raw",
 ]
 
@@ -378,7 +379,7 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
     return SheetData(name=name, header=header, rows=tuple(data_rows))
 
 
-def _read_db_file(path: Path) -> tuple[bytes, os.stat_result]:
+def read_db_file(path: Path) -> tuple[bytes, os.stat_result]:
     """Read a database file's bytes and stat in one shot, off the same fd.
 
     Using ``fstat`` on the fd the bytes were read from means the stat
@@ -557,7 +558,7 @@ def read_raw(path: Path, *, data: bytes | None = None) -> DatabaseData:
             directly instead of re-opening ``path``. Used by
             :func:`meshprovision.db.ods.parse_database` so the bytes that
             are validated are exactly the bytes read once via
-            :func:`_read_db_file`.
+            :func:`read_db_file`.
 
     Returns:
         The raw contents of every sheet found.

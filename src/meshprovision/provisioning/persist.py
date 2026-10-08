@@ -139,7 +139,7 @@ def persist_result(
             #7449). Either way, ``keys`` is updated to match what the
             device now holds.
         origin: How ``keypair``'s material came to be recorded -- computed
-            by the caller (see ``cli/provision_keys.py``'s ``_node_key_origin``).
+            by the caller (see ``cli/provision_keys.py``'s ``node_key_origin``).
             Required even when ``keypair`` is ``None`` (unused in that
             case), so every caller is forced to compute it rather than
             accidentally defaulting.
