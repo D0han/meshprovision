@@ -52,7 +52,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
 from meshprovision import enums
-from meshprovision.crypto.redact import SecretBytes, fingerprint
+from meshprovision.crypto.redact import SecretBytes, redact
 from meshprovision.enums import MODULE_SECTIONS
 from meshprovision.errors import DetectionError, NodeIdError, PlanConflictError
 from meshprovision.nodeid import NodeId
@@ -237,10 +237,8 @@ class LiveSecurity:
             A redacted representation with :attr:`public_key` and each
             entry of :attr:`admin_keys` replaced by a fingerprint label.
         """
-        public = (
-            f"<redacted:{fingerprint(self.public_key)}>" if self.public_key is not None else "None"
-        )
-        admin = "(" + ", ".join(f"<redacted:{fingerprint(k)}>" for k in self.admin_keys) + ")"
+        public = redact(self.public_key) if self.public_key is not None else "None"
+        admin = "(" + ", ".join(redact(k) for k in self.admin_keys) + ")"
         return (
             f"LiveSecurity(public_key={public}, private_key={self.private_key!r}, "
             f"admin_keys={admin}, is_managed={self.is_managed!r}, "

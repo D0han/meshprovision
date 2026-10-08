@@ -61,7 +61,7 @@ from meshtastic.protobuf import apponly_pb2, clientonly_pb2, localonly_pb2
 
 from meshprovision import enums
 from meshprovision.crypto.keys import X25519_KEY_SIZE
-from meshprovision.crypto.redact import SecretBytes, fingerprint
+from meshprovision.crypto.redact import SecretBytes, fingerprint, redact
 from meshprovision.errors import BackupParseError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
@@ -222,7 +222,7 @@ class ProfileBackup:
             (:class:`~meshprovision.crypto.redact.SecretBytes` redacts
             its own repr).
         """
-        public = f"<redacted:{fingerprint(self.public_key)}>" if self.public_key else "None"
+        public = redact(self.public_key) if self.public_key else "None"
         return (
             f"ProfileBackup(source={self.source!r}, long_name={self.long_name!r}, "
             f"short_name={self.short_name!r}, public_key={public}, "
@@ -264,7 +264,7 @@ class NodeDbEntry:
             :attr:`public_key` replaced by its fingerprint; every other
             field unredacted.
         """
-        public = f"<redacted:{fingerprint(self.public_key)}>" if self.public_key else "None"
+        public = redact(self.public_key) if self.public_key else "None"
         return (
             f"NodeDbEntry(num={self.num!r}, node_id={self.node_id!r}, "
             f"long_name={self.long_name!r}, short_name={self.short_name!r}, "
