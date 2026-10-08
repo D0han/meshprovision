@@ -522,8 +522,8 @@ def check_stale_private_key(keys: KeyRepository, live: detect.LiveConfig) -> Non
             recorded), when no ``_priv`` row exists, or when the device's
             own private key is proven and will replace the row.
     """
-    node_public = live.security.public_key
-    if not live.security.has_public_key or node_public is None:
+    node_public = live.security.real_public_key
+    if node_public is None:
         return
     if _own_private_key_proven(live):
         return
@@ -876,9 +876,9 @@ def persist_adoption(
     # observed-admin-key loop below, so a device that also lists its own
     # key on security.adminKey resolves that entry to this real ref
     # rather than minting a fresh observed one for it.
-    node_public = live.security.public_key
+    node_public = live.security.real_public_key
     node_private = live.security.private_key
-    if live.security.has_public_key and node_public is not None:
+    if node_public is not None:
         if report.own_private_key_captured and node_private is not None:
             pair = crypto_keys.KeyPair(private=node_private, public=node_public)
             pub_record, priv_record = KeyRecord.for_keypair(

@@ -448,7 +448,7 @@ def _refuse_admin_key_rotation(
     if own_pub_record is None:  # pragma: no cover - node_key_admin_refs already checked this
         return
     db_public_key = own_pub_record.material()
-    live_public_key = live.security.public_key if live.security.has_public_key else None
+    live_public_key = live.security.real_public_key
     live_private_key = own_private_secret.reveal() if own_private_secret is not None else None
 
     if not adopt_would_rotate_admin_key(
@@ -689,7 +689,7 @@ def adopt(
                 node_id=live.node_id.display,
             )
 
-        own_private_secret = live.security.private_key if live.security.has_private_key else None
+        own_private_secret = live.security.real_private_key
         _refuse_admin_key_rotation(
             db.keys,
             db.nodes,
@@ -732,7 +732,7 @@ def adopt(
         overwrite_warnings = _key_overwrite_warnings(
             db.keys,
             node_id_hex=live.node_id.hex,
-            node_public=live.security.public_key if live.security.has_public_key else None,
+            node_public=live.security.real_public_key,
             node_private=(
                 own_private_secret.reveal()
                 if own_private_secret is not None and report.own_private_key_captured
@@ -763,7 +763,7 @@ def adopt(
                 report,
                 show_admin_keys=show_admin_keys,
                 node_id_hex=live.node_id.hex,
-                own_public_key=(live.security.public_key if live.security.has_public_key else None),
+                own_public_key=live.security.real_public_key,
             ):
                 ctx.info(line)
 

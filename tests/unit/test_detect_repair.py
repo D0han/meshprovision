@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 from types import SimpleNamespace
 
 import pytest
 from meshtastic.protobuf import localonly_pb2
 
+from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import DetectionError, NodeIdError, PlanConflictError
 from meshprovision.nodeid import NodeId
@@ -734,3 +736,27 @@ def test_repair_module_exposes_only_the_drift_api() -> None:
     assert set(repair.__all__) == {"Drift", "DriftKind", "diff_record"}
     for removed in ("build_repair_plan", "repair_node", "RepairReport", "reconcile_record"):
         assert not hasattr(repair, removed)
+
+
+@pytest.mark.parametrize(
+    ("public", "private", "real"),
+    [
+        (None, None, False),
+        (bytes(32), bytes(32), False),
+        (b"\x01" * 31, b"\x01" * 31, False),
+        (b"\x01" * 32, b"\x02" * 32, True),
+    ],
+    ids=["none", "all_zero", "short", "real"],
+)
+def test_real_key_accessors_filter_like_has_key(
+    public: bytes | None, private: bytes | None, real: bool
+) -> None:
+    """``real_*_key`` is the key exactly when ``has_*_key`` holds."""
+    base = make_security(empty=True)
+    security = dataclasses.replace(
+        base,
+        public_key=public,
+        private_key=SecretBytes(private) if private is not None else None,
+    )
+    assert security.real_public_key == (public if real else None)
+    assert security.real_private_key == (security.private_key if real else None)

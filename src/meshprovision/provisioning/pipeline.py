@@ -513,12 +513,9 @@ def is_host_generated_key(keys: KeyRepository, live: detect.LiveConfig) -> bool:
         recorded row predates the ``origin`` column (``origin is None``)
         -- unknown provenance never counts as host-generated.
     """
-    security = live.security
-    if not security.has_public_key or not security.has_private_key:
-        return False
-    live_public = security.public_key
-    live_private = security.private_key
-    if live_public is None or live_private is None:  # pragma: no cover - has_*_key guarantees this
+    live_public = live.security.real_public_key
+    live_private = live.security.real_private_key
+    if live_public is None or live_private is None:
         return False
 
     pub_record = keys.find(schema.ref_for(live.node_id.hex, KeyType.ADMIN_PUBLIC))
@@ -570,10 +567,8 @@ def audit_node_key(
         ``reason`` is the first critical finding's reason, or ``""``.
     """
     security = live.security
-    if not security.has_public_key:
-        return False, ""
-    public = security.public_key
-    if public is None:  # pragma: no cover - has_public_key already guarantees this
+    public = security.real_public_key
+    if public is None:
         return False, ""
     try:
         result = weakkeys.audit_node(

@@ -223,6 +223,24 @@ class LiveSecurity:
             return False
         return any(b != 0 for b in self.public_key)
 
+    @property
+    def real_public_key(self) -> bytes | None:
+        """:attr:`public_key` when :attr:`has_public_key`, else ``None``.
+
+        Returns:
+            The device's real public key, or ``None``.
+        """
+        return self.public_key if self.has_public_key else None
+
+    @property
+    def real_private_key(self) -> SecretBytes | None:
+        """:attr:`private_key` when :attr:`has_private_key`, else ``None``.
+
+        Returns:
+            The device's real private key, still wrapped, or ``None``.
+        """
+        return self.private_key if self.has_private_key else None
+
     def __repr__(self) -> str:
         """Return a repr that never exposes raw key bytes.
 
