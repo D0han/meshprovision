@@ -177,6 +177,76 @@ def db_verify(ctx: CliContext, *, strict: bool, json_output: bool) -> None:
         raise SystemExit(code)
 
 
+def _backup_info_json(info: backups.BackupInfo) -> dict[str, object]:
+    """Describe one backup (or the known-good copy) for ``db backup --list --json``.
+
+    Args:
+        info: The backup's metadata.
+
+    Returns:
+        Its ``path``, ``created_at`` and ``size_bytes``, in that key order.
+    """
+    return {
+        "path": str(info.path),
+        "created_at": schema.utc_timestamp(info.created_at),
+        "size_bytes": info.size_bytes,
+    }
+
+
+def _print_backup_list(
+    ctx: CliContext,
+    path: Path,
+    *,
+    resolved_backup_dir: Path,
+    backup_dir: Path | None,
+    json_output: bool,
+) -> None:
+    """Report the existing backups and the known-good copy, for ``db backup --list``.
+
+    Args:
+        ctx: The shared CLI context.
+        path: The database path.
+        resolved_backup_dir: The backup directory to list.
+        backup_dir: The ``--backup-dir`` override as given (``None`` when
+            absent), for the legacy-location notice.
+        json_output: Whether to emit JSON, from ``--json``.
+    """
+    infos = backups.list_backups(path, backup_dir=resolved_backup_dir)
+    # Deliberately not resolved_backup_dir: the known-good copy always
+    # lives at this database's own default-resolved location
+    # (load_database() never sees a per-invocation --backup-dir
+    # override), independent of what this specific --backup-dir names.
+    status = known_good_status(path)
+    notice = backups.legacy_backup_notice(path, backup_dir=backup_dir)
+    if json_output:
+        payload: dict[str, object] = {"backups": [_backup_info_json(info) for info in infos]}
+        if status is not None:
+            payload["known_good"] = {
+                **_backup_info_json(status.info),
+                "provenance": status.provenance.value,
+            }
+        if notice is not None:
+            payload["legacy_backup_notice"] = notice
+        echo_json(payload)
+    else:
+        if status is not None:
+            ctx.print_out(
+                f"known-good: {status.info.path}  "
+                f"{schema.utc_timestamp(status.info.created_at)}  "
+                f"{status.info.size_bytes} bytes  "
+                f"[{status.provenance.value}]"
+            )
+        if not infos:
+            ctx.print_out("No backups found.")
+        else:
+            for info in infos:
+                ctx.print_out(
+                    f"{info.path}  {schema.utc_timestamp(info.created_at)}  {info.size_bytes} bytes"
+                )
+        if notice is not None:
+            ctx.print_out(notice)
+
+
 @db.command(name="backup")
 @click.option(
     "--backup-dir",
@@ -246,52 +316,13 @@ def db_backup(
     resolved_backup_dir = backups.backup_dir_for(path, backup_dir)
 
     if list_only:
-        infos = backups.list_backups(path, backup_dir=resolved_backup_dir)
-        # Deliberately not resolved_backup_dir: the known-good copy always
-        # lives at this database's own default-resolved location
-        # (load_database() never sees a per-invocation --backup-dir
-        # override), independent of what this specific --backup-dir names.
-        status = known_good_status(path)
-        notice = backups.legacy_backup_notice(path, backup_dir=backup_dir)
-        if json_output:
-            payload: dict[str, object] = {
-                "backups": [
-                    {
-                        "path": str(info.path),
-                        "created_at": schema.utc_timestamp(info.created_at),
-                        "size_bytes": info.size_bytes,
-                    }
-                    for info in infos
-                ]
-            }
-            if status is not None:
-                payload["known_good"] = {
-                    "path": str(status.info.path),
-                    "created_at": schema.utc_timestamp(status.info.created_at),
-                    "size_bytes": status.info.size_bytes,
-                    "provenance": status.provenance.value,
-                }
-            if notice is not None:
-                payload["legacy_backup_notice"] = notice
-            echo_json(payload)
-        else:
-            if status is not None:
-                ctx.print_out(
-                    f"known-good: {status.info.path}  "
-                    f"{schema.utc_timestamp(status.info.created_at)}  "
-                    f"{status.info.size_bytes} bytes  "
-                    f"[{status.provenance.value}]"
-                )
-            if not infos:
-                ctx.print_out("No backups found.")
-            else:
-                for info in infos:
-                    ctx.print_out(
-                        f"{info.path}  {schema.utc_timestamp(info.created_at)}  "
-                        f"{info.size_bytes} bytes"
-                    )
-            if notice is not None:
-                ctx.print_out(notice)
+        _print_backup_list(
+            ctx,
+            path,
+            resolved_backup_dir=resolved_backup_dir,
+            backup_dir=backup_dir,
+            json_output=json_output,
+        )
         return
 
     if not path.is_file():

@@ -288,7 +288,8 @@ class TemplateConfig(BaseModel):
         interlock; and the zero-admin-keys lockdown interlock. Enum-typed fields
         (``device.role``, ``device.rebroadcast_mode``, ``lora.region``,
         ``lora.modem_preset``, ``position.gps_mode``) are validated and
-        canonicalized earlier, per-field, rather than here.
+        canonicalized earlier, per-field, rather than here. Each group of
+        checks is its own private method, called in that order.
 
         Returns:
             ``self``, unchanged -- this method only validates.
@@ -302,6 +303,19 @@ class TemplateConfig(BaseModel):
             AdminKeyCapacityError: If more than
                 :data:`~meshprovision.errors.MAX_ADMIN_KEYS` admin node
                 references are configured.
+        """
+        self._check_option_lists()
+        self._check_name_patterns()
+        self._check_admin_nodes()
+        self._check_security_interlocks()
+        return self
+
+    def _check_option_lists(self) -> None:
+        """Check the ``enabled_options``/``disabled_options`` lists.
+
+        Raises:
+            TemplateValidationError: If an option is in both lists, or
+                ``neighbor_info`` is in either.
         """
         overlap = sorted(set(self.enabled_options) & set(self.disabled_options))
         if overlap:
@@ -325,6 +339,15 @@ class TemplateConfig(BaseModel):
                 ),
             )
 
+    def _check_name_patterns(self) -> None:
+        """Check both name patterns' byte limits, then the short-name capacity floor.
+
+        Raises:
+            NamePatternError: If a name pattern's widest rendering
+                overflows its firmware byte limit.
+            NameCapacityError: If the short-name capacity is below the
+                configured floor and ``name_capacity_strict`` is true.
+        """
         short = self.short_name_spec()
         _check_pattern_fits(
             short, self.short_name_pattern, limit=SHORT_NAME_MAX_BYTES, field="short_name_pattern"
@@ -348,6 +371,16 @@ class TemplateConfig(BaseModel):
                 field="short_name_pattern",
             )
 
+    def _check_admin_nodes(self) -> None:
+        """Check the ``admin_nodes`` count, then each reference's format.
+
+        Raises:
+            AdminKeyCapacityError: If more than
+                :data:`~meshprovision.errors.MAX_ADMIN_KEYS` admin node
+                references are configured.
+            TemplateValidationError: If a reference is malformed, ends in
+                a reserved suffix, or starts with the observed prefix.
+        """
         if len(self.admin_nodes) > MAX_ADMIN_KEYS:
             raise AdminKeyCapacityError(
                 f"admin_nodes has {len(self.admin_nodes)} entries; the firmware "
@@ -384,6 +417,13 @@ class TemplateConfig(BaseModel):
                     ),
                 )
 
+    def _check_security_interlocks(self) -> None:
+        """Check the admin-channel and zero-admin-keys lockdown interlocks.
+
+        Raises:
+            TemplateValidationError: If the legacy admin channel is
+                enabled, or ``is_managed`` is set with no ``admin_nodes``.
+        """
         if self.security.admin_channel_enabled:
             raise TemplateValidationError(
                 "The legacy admin channel is never used by meshprovision; "
@@ -398,8 +438,6 @@ class TemplateConfig(BaseModel):
                 field="security.is_managed",
                 hint="Add 1-3 refs to admin_nodes, or set security.is_managed to false.",
             )
-
-        return self
 
     def short_name_spec(self) -> PatternSpec:
         """Compile :attr:`short_name_pattern`.
