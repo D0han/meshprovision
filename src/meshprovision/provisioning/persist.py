@@ -66,7 +66,7 @@ def _unrecorded_keypair_hint(origin: KeyOrigin, *, had_row: bool, had_key: bool)
             exactly when the node's pending-keypair file holds the key --
             written ahead by this run's regenerate, or the one this run
             recovered from -- since a failed save never clears it (see
-            ``cli/provision.py``'s ``_apply_and_persist``). Otherwise the
+            ``cli/provision_apply.py``'s ``apply_and_persist``). Otherwise the
             key is the device's own, adopted or captured.
         had_row: Whether the node had a ``Nodes`` row before this run.
             Without one, the re-run sees a FOREIGN node and asks for

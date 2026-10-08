@@ -1,7 +1,7 @@
 """Unit tests for meshprovision.cli.provision's error reporting.
 
 Covers the admin-key-rotation error finalizer and what
-``_apply_and_persist`` tells the operator after an uncertain apply.
+``apply_and_persist`` tells the operator after an uncertain apply.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from meshprovision.cli.provision import ProvisionOptions, _apply_and_persist
+from meshprovision.cli.provision_apply import ProvisionOptions, apply_and_persist
 from meshprovision.cli.provision_keys import finalize_admin_key_rotation_error
 from meshprovision.config.template import load_template_text
 from meshprovision.errors import AdminKeyRotationRefusedError
@@ -72,7 +72,7 @@ def test_finalize_adopt_reason_hint_lists_the_other_admin_refs(keypair) -> None:
 
 
 # ---------------------------------------------------------------------------
-# _apply_and_persist: what an uncertain outcome says about the security section.
+# apply_and_persist: what an uncertain outcome says about the security section.
 # ---------------------------------------------------------------------------
 
 _MAY_BE_LOCKED = (
@@ -86,7 +86,7 @@ _NOT_LOCKED = (
 
 
 class _RecordingCtx:
-    """Just the ``CliContext`` methods ``_apply_and_persist`` reports through."""
+    """Just the ``CliContext`` methods ``apply_and_persist`` reports through."""
 
     def __init__(self) -> None:
         self.infos: list[str] = []
@@ -120,13 +120,13 @@ def _lockdown_plan() -> tuple[ChangePlan, detect.LiveConfig]:
 def _report(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, results: tuple[WriteResult, ...], **kw: bool
 ) -> _RecordingCtx:
-    """Run ``_apply_and_persist`` with ``apply_plan`` returning ``results``."""
+    """Run ``apply_and_persist`` with ``apply_plan`` returning ``results``."""
     plan, live = _lockdown_plan()
     outcome = ApplyOutcome(node_id=plan.node_id, results=results, **kw)
     monkeypatch.setattr(apply, "apply_plan", lambda *_a, **_k: outcome)
     ctx = _RecordingCtx()
     db = SimpleNamespace(path=tmp_path / "nodes.ods", nodes=None, keys=None)
-    _apply_and_persist(
+    apply_and_persist(
         ctx,  # type: ignore[arg-type]
         db,  # type: ignore[arg-type]
         SimpleNamespace(),  # type: ignore[arg-type]
