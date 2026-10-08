@@ -99,6 +99,32 @@ by :class:`TemplateConfig`'s consistency check in favor of the dedicated
 ``neighbor_info`` section."""
 
 
+def _check_pattern_fits(spec: PatternSpec, pattern: str, *, limit: int, field: str) -> None:
+    """Refuse a name pattern whose widest rendering overflows its firmware limit.
+
+    Args:
+        spec: The compiled pattern.
+        pattern: The pattern's source text, for the message.
+        limit: The firmware byte limit for this name.
+        field: The template field the pattern came from.
+
+    Raises:
+        NamePatternError: If the widest rendering exceeds ``limit`` bytes.
+    """
+    if spec.widest_byte_length() > limit:
+        rendered = spec.render_widest()
+        byte_length = len(rendered.encode("utf-8"))
+        raise NamePatternError(
+            f"{field} {pattern!r} renders at most {rendered!r}, which is {byte_length} "
+            f"UTF-8 bytes; the firmware limit is {limit} bytes and it truncates silently.",
+            pattern=pattern,
+            rendered=rendered,
+            byte_length=byte_length,
+            limit=limit,
+            field=field,
+        )
+
+
 def _normalize_str_tuple(value: object) -> tuple[str, ...]:
     """Coerce a before-validator input into a de-duplicated tuple of strings.
 
@@ -293,39 +319,16 @@ class TemplateConfig(BaseModel):
                 ),
             )
 
-        short = PatternSpec.compile(
-            self.short_name_pattern, self.name_suffix_alphabet, field="short_name_pattern"
+        short = self.short_name_spec()
+        _check_pattern_fits(
+            short, self.short_name_pattern, limit=SHORT_NAME_MAX_BYTES, field="short_name_pattern"
         )
-        if short.widest_byte_length() > SHORT_NAME_MAX_BYTES:
-            rendered = short.render_widest()
-            byte_length = len(rendered.encode("utf-8"))
-            raise NamePatternError(
-                f"short_name_pattern {self.short_name_pattern!r} renders at most "
-                f"{rendered!r}, which is {byte_length} UTF-8 bytes; the firmware "
-                "limit is 4 bytes and it truncates silently.",
-                pattern=self.short_name_pattern,
-                rendered=rendered,
-                byte_length=byte_length,
-                limit=SHORT_NAME_MAX_BYTES,
-                field="short_name_pattern",
-            )
-
-        long_spec = PatternSpec.compile(
-            self.long_name_pattern, self.name_suffix_alphabet, field="long_name_pattern"
+        _check_pattern_fits(
+            self.long_name_spec(),
+            self.long_name_pattern,
+            limit=LONG_NAME_MAX_BYTES,
+            field="long_name_pattern",
         )
-        if long_spec.widest_byte_length() > LONG_NAME_MAX_BYTES:
-            rendered = long_spec.render_widest()
-            byte_length = len(rendered.encode("utf-8"))
-            raise NamePatternError(
-                f"long_name_pattern {self.long_name_pattern!r} renders at most "
-                f"{rendered!r}, which is {byte_length} UTF-8 bytes; the firmware "
-                f"limit is {LONG_NAME_MAX_BYTES} bytes and it truncates silently.",
-                pattern=self.long_name_pattern,
-                rendered=rendered,
-                byte_length=byte_length,
-                limit=LONG_NAME_MAX_BYTES,
-                field="long_name_pattern",
-            )
 
         if short.capacity < self.name_min_capacity and self.name_capacity_strict:
             raise NameCapacityError(

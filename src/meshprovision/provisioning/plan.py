@@ -177,28 +177,20 @@ def _name_warnings(name_change: NameChange) -> tuple[PlanWarning, ...]:
         guards the common case; this catches a hand-passed name.
     """
     warnings: list[PlanWarning] = []
-    short_bytes = len(name_change.desired_short_name.encode("utf-8"))
-    if short_bytes > SHORT_NAME_MAX_BYTES:
-        warnings.append(
-            PlanWarning(
-                PlanWarningCode.NAME_TRUNCATION_RISK,
-                f"Desired short_name {name_change.desired_short_name!r} is {short_bytes} "
-                f"UTF-8 bytes, over the {SHORT_NAME_MAX_BYTES}-byte firmware limit, and "
-                "will be truncated silently.",
-                field="short_name",
+    for field, desired, limit in (
+        ("short_name", name_change.desired_short_name, SHORT_NAME_MAX_BYTES),
+        ("long_name", name_change.desired_long_name, LONG_NAME_MAX_BYTES),
+    ):
+        size = len(desired.encode("utf-8"))
+        if size > limit:
+            warnings.append(
+                PlanWarning(
+                    PlanWarningCode.NAME_TRUNCATION_RISK,
+                    f"Desired {field} {desired!r} is {size} UTF-8 bytes, over the "
+                    f"{limit}-byte firmware limit, and will be truncated silently.",
+                    field=field,
+                )
             )
-        )
-    long_bytes = len(name_change.desired_long_name.encode("utf-8"))
-    if long_bytes > LONG_NAME_MAX_BYTES:
-        warnings.append(
-            PlanWarning(
-                PlanWarningCode.NAME_TRUNCATION_RISK,
-                f"Desired long_name {name_change.desired_long_name!r} is {long_bytes} "
-                f"UTF-8 bytes, over the {LONG_NAME_MAX_BYTES}-byte firmware limit, and "
-                "will be truncated silently.",
-                field="long_name",
-            )
-        )
     return tuple(warnings)
 
 
