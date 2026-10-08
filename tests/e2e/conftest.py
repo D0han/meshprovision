@@ -5,7 +5,7 @@ Everything the e2e tests need to drive the real ``mesh`` CLI (via
 of HTTP data sources lives here: :class:`FakeMeshInterface` (the
 device -- backed by real protobuf ``LocalConfig``/``LocalModuleConfig``
 messages, since ``detect.read_live_config`` walks ``msg.DESCRIPTOR`` and
-``apply.write_section`` calls ``setattr`` on real fields), holding the
+``device_write.write_section`` calls ``setattr`` on real fields), holding the
 device's *persisted* state; :class:`FakeConnection` (the host's handle
 to one connection, returned by :meth:`FakeMeshInterface.connect` --
 holds a *staged*, host-side copy of the config taken at connect time, so
@@ -90,7 +90,7 @@ class FakeNode:
 
     Wraps real protobuf ``LocalConfig``/``LocalModuleConfig`` messages so
     that :mod:`meshprovision.provisioning.detect` (which walks
-    ``msg.DESCRIPTOR``) and :mod:`meshprovision.provisioning.apply`
+    ``msg.DESCRIPTOR``) and :mod:`meshprovision.provisioning.device_write`
     (which calls ``setattr`` on real fields) both operate on genuine
     protobuf objects, exactly as they would against a real device.
 
@@ -275,7 +275,7 @@ class FakeMeshInterface:
     """A stand-in for ``meshtastic``'s ``MeshInterface``.
 
     Exposes exactly the surface :mod:`meshprovision.provisioning.detect`
-    and :mod:`meshprovision.provisioning.apply` read/write: ``myInfo``,
+    and :mod:`meshprovision.provisioning.device_write` read/write: ``myInfo``,
     ``metadata``, ``getMyNodeInfo()``, ``getMyUser()``, ``getPublicKey()``,
     ``localNode`` (a :class:`FakeNode`), and ``close()``.
     """
@@ -432,7 +432,7 @@ class _FakeConnectionNode:
 
     Deep-copies the device's persisted ``localConfig``/``moduleConfig``
     at connect time, so a field change the host stages here (the same
-    way ``apply.write_section`` does, via ``setattr``) is visible to
+    way ``device_write.write_section`` does, via ``setattr``) is visible to
     *this* connection immediately but reaches the device -- and so any
     other connection -- only once :meth:`writeConfig` actually persists
     it.
@@ -645,7 +645,7 @@ class FakeConnection:
     through the ``bus`` fixture's patched ``ConnectionBackend.connect()``
     -- see :func:`bus`). Exposes exactly the production surface
     :mod:`meshprovision.provisioning.detect` and
-    :mod:`meshprovision.provisioning.apply` read/write: ``myInfo``,
+    :mod:`meshprovision.provisioning.device_write` read/write: ``myInfo``,
     ``metadata``, ``getMyNodeInfo()``, ``getMyUser()``, ``getPublicKey()``,
     ``localNode.{localConfig,moduleConfig,writeConfig,setOwner}`` and
     ``close()``.

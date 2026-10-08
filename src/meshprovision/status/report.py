@@ -12,9 +12,10 @@ test.** Nothing in this module may reference
 ``OdsDatabase.save``, ``OdsDatabase.replace``, ``NodeRepository.upsert``,
 ``NodeRepository.delete``, ``KeyRepository.upsert``, ``db.atomic_writer``,
 ``db.pending_keys``, or anything in
-``meshprovision.provisioning.apply`` or ``meshprovision.provisioning.
-repair``. An e2e test asserts the **live** ODS file's mtime is unchanged
-across a full ``mesh status`` run, and a unit test
+``meshprovision.provisioning.apply``, ``meshprovision.provisioning.
+device_write``, or ``meshprovision.provisioning.repair``. An e2e test
+asserts the **live** ODS file's mtime is unchanged across a full
+``mesh status`` run, and a unit test
 (``tests/unit/test_readonly_status_boundary.py``) walks this module's AST
 for those operations -- both are expected to keep passing as this module
 changes.

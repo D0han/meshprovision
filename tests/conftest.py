@@ -262,7 +262,7 @@ One list drives both the connect-time and write-time parametrizations
 (``test_connection_select.py`` and ``test_apply.py``), so adding a type
 here covers connect *and* write in one place -- the drift guard for the
 bug this fixture regression-tests (a BLE write failure used to escape
-every handler because ``apply.py``'s catch tuple never learned about
+every handler because ``device_write.DEVICE_EXCEPTIONS`` never learned about
 ``BLEInterface.BLEError``).
 """
 

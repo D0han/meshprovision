@@ -43,6 +43,7 @@ _REPORT_FORBIDDEN_MODULES = (
     "meshprovision.db.ods_write",
     "meshprovision.db.pending_keys",
     "meshprovision.provisioning.apply",
+    "meshprovision.provisioning.device_write",
     "meshprovision.provisioning.persist",
     "meshprovision.provisioning.repair",
 )

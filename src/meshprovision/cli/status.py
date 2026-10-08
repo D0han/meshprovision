@@ -2,7 +2,8 @@
 
 This module MUST NOT reference ``OdsDatabase``, ``NodeRepository``,
 ``KeyRepository``, ``atomic_writer``, ``known_good``, ``pending_keys``,
-``meshprovision.provisioning.apply``, ``meshprovision.provisioning.repair``,
+``meshprovision.provisioning.apply``, ``meshprovision.provisioning.device_write``,
+``meshprovision.provisioning.repair``,
 :meth:`meshprovision.cli.common.CliContext.open_database`, or any
 ``save``/``replace``/``upsert``/``delete`` name. Everything flows through
 :func:`meshprovision.status.report.run_status`, which is itself certified

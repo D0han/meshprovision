@@ -71,9 +71,10 @@ def device_io_errors() -> tuple[type[Exception], ...]:
     This is the single shared source of truth for "these are the device
     I/O exception types" -- used both by :meth:`BLEBackend.connect` and by
     every device write/read-back site in
-    :mod:`meshprovision.provisioning.apply`, so the two lists cannot drift
-    apart again the way they did before (BLE write failures used to escape
-    every handler because ``apply.py``'s catch tuple never learned about
+    :mod:`meshprovision.provisioning.apply` and
+    :mod:`meshprovision.provisioning.device_write`, so the two lists cannot
+    drift apart again the way they did before (BLE write failures used to
+    escape every handler because the write sites' catch tuple never learned about
     :class:`~meshtastic.ble_interface.BLEInterface.BLEError`).
 
     The ``bleak``/``meshtastic.ble_interface`` import is lazy and cached:

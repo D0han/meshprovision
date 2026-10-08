@@ -41,7 +41,7 @@ _INTERNAL_PACKAGE = "meshprovision"
 # runtime half in [project.dependencies] and its stub half in the `dev`
 # extra: PyYAML and protobuf ship no `py.typed` marker, so `mypy --strict`
 # needs a stub for each (config/template.py, provisioning/backup.py,
-# provisioning/apply.py, provisioning/detect.py). pyserial needs no stub
+# provisioning/device_write.py, provisioning/detect.py). pyserial needs no stub
 # here because [[tool.mypy.overrides]] already sets ignore_missing_imports
 # for `serial.*`.
 _STUB_PAIRS = {
