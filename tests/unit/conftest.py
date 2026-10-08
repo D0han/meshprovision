@@ -565,3 +565,9 @@ def restore_logging() -> Iterator[None]:
             root.addHandler(handler)
         root.setLevel(saved_level)
         structlog.reset_defaults()
+
+
+def with_admin_and_lockdown(template: TemplateConfig, *refs: str) -> TemplateConfig:
+    """Build a template variant with the given admin refs and ``is_managed=True``."""
+    security = template.security.model_copy(update={"is_managed": True})
+    return template.model_copy(update={"admin_nodes": tuple(refs), "security": security})
