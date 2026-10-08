@@ -103,6 +103,25 @@ def _patch_accounts(
     monkeypatch.setattr(pwd, "getpwall", lambda: list(accounts))
 
 
+def _another_mapped_uid(owner: int) -> int:
+    """Pick a uid other than ``owner`` that this user namespace can name in an ACL.
+
+    The kernel refuses (EINVAL) an ACL entry for a uid with no mapping, and
+    a rootless container (``unshare -r``) often maps only its own uid; skip
+    there rather than fail.
+    """
+    try:
+        lines = Path("/proc/self/uid_map").read_text(encoding="ascii").splitlines()
+    except OSError:
+        return owner + 1
+    for line in lines:
+        first, _outside, count = (int(field) for field in line.split())
+        for uid in (owner + 1, first):
+            if first <= uid < first + count and uid != owner:
+                return uid
+    pytest.skip("this user namespace maps no uid besides the file's owner")
+
+
 def _set_real_acl(target: Path, acl: bytes | None) -> None:
     """Write ``acl`` as ``target``'s access ACL, or skip where the filesystem can't."""
     if not hasattr(os, "setxattr"):
@@ -893,7 +912,7 @@ def test_discovered_env_real_acl_write_entry_is_refused_until_the_hint_runs(
     discovered_env: Callable[..., Path], tmp_path: Path, symlink: bool
 ) -> None:
     """A real ``setfacl -m u:<other>:rw`` ACL is refused, and ``chmod g-w`` makes it loadable."""
-    other = tmp_path.stat().st_uid + 1
+    other = _another_mapped_uid(tmp_path.stat().st_uid)
     path = discovered_env(
         0o644,
         symlink=symlink,
