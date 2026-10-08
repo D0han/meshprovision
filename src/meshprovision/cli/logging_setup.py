@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, get_args
 
 import structlog
 
+from meshprovision.config.settings import LogLevel
 from meshprovision.crypto import redact
 from meshprovision.errors import SchemaError
 
@@ -32,8 +33,9 @@ __all__ = [
     "resolve_log_level",
 ]
 
-LOG_LEVELS: Final[tuple[str, ...]] = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
-"""The logging verbosities accepted by ``--log-level``."""
+LOG_LEVELS: Final[tuple[str, ...]] = get_args(LogLevel)
+"""The logging verbosities accepted by ``--log-level``: exactly
+:data:`~meshprovision.config.settings.LogLevel`, in its order."""
 
 _LIBRARY_STAGES: Final[tuple[tuple[str, ...], ...]] = (
     ("meshtastic", "httpx"),

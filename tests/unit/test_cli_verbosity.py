@@ -11,11 +11,15 @@ from typing import Final
 
 import pytest
 import structlog
+from click.testing import CliRunner
 from google.protobuf.text_format import text_encoding
 from meshtastic.protobuf import admin_pb2, localonly_pb2, mesh_pb2
 
 from meshprovision.cli.logging_setup import configure_logging, resolve_log_level
+from meshprovision.cli.main import cli
+from meshprovision.config.settings import Settings
 from meshprovision.crypto.keys import KeyPair, generate_keypair
+from tests.conftest import WIDE_TERMINAL_COLUMNS
 
 pytestmark = pytest.mark.unit
 
@@ -111,6 +115,15 @@ class TestResolveLogLevel:
     @pytest.mark.parametrize("verbose", [2, 3])
     def test_double_or_triple_v_implies_debug_absent_explicit_level(self, verbose: int) -> None:
         assert resolve_log_level(None, verbose) == "DEBUG"
+
+
+def test_log_level_choices_are_the_settings_levels_in_severity_order() -> None:
+    """``--log-level`` offers exactly the levels ``MESHPROVISION_LOG_LEVEL`` accepts, in order."""
+    result = CliRunner().invoke(cli, ["--help"], env={"COLUMNS": WIDE_TERMINAL_COLUMNS})
+
+    assert "--log-level [debug|info|warning|error|critical]" in result.output
+    for level in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+        assert Settings(log_level=level).log_level == level
 
 
 class TestStageThirdPartyLoggers:

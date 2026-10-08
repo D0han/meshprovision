@@ -52,7 +52,6 @@ __all__ = [
     "DEFAULT_REGIONS",
     "LORASTATS_BASE_URL",
     "LORASTATS_NODES_PATH",
-    "LORASTATS_STATUS_PATH",
     "REGION_PATTERN",
     "LorastatsSource",
     "parse_node",
@@ -66,12 +65,6 @@ LORASTATS_BASE_URL: Final[str] = "https://lorastats.pl"
 
 LORASTATS_NODES_PATH: Final[str] = "/API/{region}/Nodes/JSON"
 """Region-scoped nodes endpoint, filterable by the ``node`` query param."""
-
-LORASTATS_STATUS_PATH: Final[str] = "/Node/{node}/Status"
-"""The node health-check endpoint. Verified NOT under ``/API`` and NOT
-region-scoped: ``/API/PL/Node/<id>/Status`` is a 404; the bare
-``/Node/<id>/Status`` form returns HTTP 200 ``text/plain`` for a healthy
-node and HTTP 404 for an unknown one."""
 
 DEFAULT_REGIONS: Final[tuple[str, ...]] = ("PL",)
 """Default, config-overridable region list (finding #3: no JSON region-list

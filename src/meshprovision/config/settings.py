@@ -69,11 +69,11 @@ DEFAULT_TEMPLATE_PATH: Final[Path] = Path("config/template.yaml")
 DEFAULT_CACHE_TTL: Final[float] = 300.0
 """Default HTTP response cache time-to-live, in seconds."""
 
-DEFAULT_LOG_LEVEL: Final[str] = "WARNING"
-"""Default logging verbosity."""
-
 LogLevel: TypeAlias = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 """The set of logging verbosities accepted by :attr:`Settings.log_level`."""
+
+DEFAULT_LOG_LEVEL: Final[LogLevel] = "WARNING"
+"""Default logging verbosity."""
 
 ENV_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(
     {
@@ -136,7 +136,7 @@ class Settings(BaseModel):
     cache_dir: Path = Field(default_factory=default_cache_dir)
     cache_ttl: float = Field(default=DEFAULT_CACHE_TTL, ge=0.0)
     contact: str | None = None
-    log_level: LogLevel = "WARNING"
+    log_level: LogLevel = DEFAULT_LOG_LEVEL
 
     @field_validator("db_path", "template_path", "cache_dir", mode="after")
     @classmethod

@@ -64,7 +64,6 @@ __all__ = [
     "NODES_SHEET",
     "NODES_SHEET_SPEC",
     "REF_PATTERN",
-    "SCHEMA_VERSION",
     "SHEET_NAMES",
     "SHEET_SPECS",
     "ColumnKind",
@@ -87,9 +86,6 @@ __all__ = [
     "utc_timestamp",
     "validation_condition",
 ]
-
-SCHEMA_VERSION: Final[int] = 1
-"""Version of the ODS schema this module implements."""
 
 NODES_SHEET: Final[str] = "Nodes"
 """Name of the sheet holding one row per mesh node."""
