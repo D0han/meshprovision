@@ -24,14 +24,7 @@ from meshprovision.crypto.redact import (
 )
 from meshprovision.nodeid import NodeId
 
-pytestmark = pytest.mark.unit
-
-
-@pytest.fixture(autouse=True)
-def _restore_logging() -> None:
-    """Ensure ``configure_logging`` calls in this module never leak into other tests."""
-    yield
-    configure_logging("WARNING", stream=io.StringIO())
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("restore_logging")]
 
 
 class TestSecretBytes:

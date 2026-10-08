@@ -7,13 +7,12 @@ import io
 import json
 import logging
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
 import click
 import pytest
-import structlog
 from rich.console import Console
 
 from meshprovision.cli.common import (
@@ -31,31 +30,6 @@ pytestmark = pytest.mark.unit
 
 TRIPWIRE: Final[str] = "tripwire-local-value"
 """A value that only a ``show_locals=True`` traceback renderer could print."""
-
-
-@pytest.fixture
-def restore_logging() -> Iterator[None]:
-    """Undo a test's ``configure_logging`` call, restoring pytest's own handlers.
-
-    ``configure_logging`` strips every root handler by design, so a test
-    that calls it would otherwise leave its own ``StringIO`` handler
-    attached to the root logger for the rest of the session.
-
-    Yields:
-        ``None``, once, with the test body running in between.
-    """
-    root = logging.getLogger()
-    saved_handlers = list(root.handlers)
-    saved_level = root.level
-    try:
-        yield
-    finally:
-        for existing in list(root.handlers):
-            root.removeHandler(existing)
-        for handler in saved_handlers:
-            root.addHandler(handler)
-        root.setLevel(saved_level)
-        structlog.reset_defaults()
 
 
 def _context(template_path: Path, buf: io.StringIO) -> CliContext:

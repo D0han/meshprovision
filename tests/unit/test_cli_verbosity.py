@@ -6,11 +6,9 @@ import base64
 import io
 import logging
 import re
-from collections.abc import Iterator
 from typing import Final
 
 import pytest
-import structlog
 from click.testing import CliRunner
 from google.protobuf.text_format import text_encoding
 from meshtastic.protobuf import admin_pb2, localonly_pb2, mesh_pb2
@@ -21,7 +19,7 @@ from meshprovision.config.settings import Settings
 from meshprovision.crypto.keys import KeyPair, generate_keypair
 from tests.conftest import WIDE_TERMINAL_COLUMNS
 
-pytestmark = pytest.mark.unit
+pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("restore_logging")]
 
 _PRIVATE_KEY_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r'private_key: "(?:[^"\\]|\\.)*"')
 """Matches the whole rendered ``private_key: "..."`` field, escapes and all."""
@@ -74,28 +72,6 @@ def _build_admin_message(private_key: bytes, public_key: bytes) -> admin_pb2.Adm
     admin.set_config.security.public_key = public_key
     admin.set_config.security.admin_key.append(public_key)
     return admin
-
-
-@pytest.fixture(autouse=True)
-def _restore_logging() -> Iterator[None]:
-    """Undo each test's ``configure_logging`` call so it never leaks.
-
-    Mirrors the equivalent fixture in ``test_cli_common.py`` and
-    ``test_redact.py``: ``configure_logging`` strips every root handler
-    by design, so a test that calls it would otherwise leave its own
-    ``StringIO`` handler attached to the root logger for the rest of the
-    session.
-    """
-    root = logging.getLogger()
-    saved_handlers = list(root.handlers)
-    saved_level = root.level
-    yield
-    for existing in list(root.handlers):
-        root.removeHandler(existing)
-    for handler in saved_handlers:
-        root.addHandler(handler)
-    root.setLevel(saved_level)
-    structlog.reset_defaults()
 
 
 class TestResolveLogLevel:

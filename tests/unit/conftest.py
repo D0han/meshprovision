@@ -13,13 +13,15 @@ artifact of a hand-built fixture drifting from the template.
 from __future__ import annotations
 
 import ast
+import logging
 import os
 import stat
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from types import MappingProxyType
 
 import pytest
+import structlog
 from meshtastic.protobuf import channel_pb2
 from odf import dc as odf_dc
 from odf import office as odf_office
@@ -538,3 +540,28 @@ def template() -> TemplateConfig:
         The parsed template.
     """
     return load_template_text("version: 1\n")
+
+
+@pytest.fixture
+def restore_logging() -> Iterator[None]:
+    """Undo a test's ``configure_logging`` call, restoring pytest's own handlers.
+
+    ``configure_logging`` strips every root handler by design, so a test
+    that calls it would otherwise leave its own ``StringIO`` handler
+    attached to the root logger for the rest of the session.
+
+    Yields:
+        ``None``, once, with the test body running in between.
+    """
+    root = logging.getLogger()
+    saved_handlers = list(root.handlers)
+    saved_level = root.level
+    try:
+        yield
+    finally:
+        for existing in list(root.handlers):
+            root.removeHandler(existing)
+        for handler in saved_handlers:
+            root.addHandler(handler)
+        root.setLevel(saved_level)
+        structlog.reset_defaults()
