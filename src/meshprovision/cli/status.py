@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn
 
 import click
 
@@ -211,6 +211,68 @@ def _run_once(ctx: CliContext, options: StatusOptions, client: CachedHTTPClient)
     return run_status(ctx.settings, options, client=client)
 
 
+def _watch_loop(
+    ctx: CliContext,
+    options: StatusOptions,
+    client: CachedHTTPClient,
+    *,
+    poll: float,
+    json_output: bool,
+    fail_on_offline: bool,
+) -> NoReturn:
+    """Re-run and re-emit the status report every ``poll`` seconds until Ctrl-C.
+
+    Args:
+        ctx: The shared CLI context.
+        options: The options shaping each run.
+        client: The already-open HTTP client shared by every poll.
+        poll: Seconds to sleep between polls.
+        json_output: Emit JSON instead of the table.
+        fail_on_offline: Count offline nodes toward the exit code.
+
+    Raises:
+        DbError: After too many consecutive failed polls.
+        SystemExit: On Ctrl-C, with the last report's exit code.
+    """
+    last_report: StatusReport | None = None
+    last_db_error: DbError | None = None
+    consecutive_db_failures = 0
+    try:
+        while True:
+            try:
+                last_report = _run_once(ctx, options, client)
+            except DbError as exc:
+                last_db_error = exc
+                consecutive_db_failures += 1
+                ctx.error(
+                    f"Poll failed: {exc.user_message} "
+                    f"(keeping the last report; retrying in {poll}s)"
+                )
+                if consecutive_db_failures >= _WATCH_MAX_CONSECUTIVE_DB_FAILURES:
+                    raise
+                time.sleep(poll)
+                continue
+            consecutive_db_failures = 0
+            last_db_error = None
+            _emit(ctx, last_report, json_output=json_output)
+            ctx.info(
+                f"cache: {last_report.cache_hits} hit(s), {last_report.cache_misses} "
+                f"miss(es), {last_report.network_requests} request(s)"
+            )
+            time.sleep(poll)
+    except KeyboardInterrupt:
+        ctx.info("Stopped.")
+        if last_db_error is not None:
+            code = exit_code_for(last_db_error)
+        else:
+            code = (
+                last_report.exit_code(fail_on_offline=fail_on_offline)
+                if last_report is not None
+                else int(ExitCode.OK)
+            )
+        raise SystemExit(code) from None
+
+
 @click.command(name="status", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
 @click.option(
     "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of a table."
@@ -348,40 +410,11 @@ def status(
             if interval is not None
             else min(max(ctx.settings.cache_ttl, _MIN_WATCH_POLL_SECONDS), _MAX_WATCH_POLL_SECONDS)
         )
-        last_report: StatusReport | None = None
-        last_db_error: DbError | None = None
-        consecutive_db_failures = 0
-        try:
-            while True:
-                try:
-                    last_report = _run_once(ctx, options, client)
-                except DbError as exc:
-                    last_db_error = exc
-                    consecutive_db_failures += 1
-                    ctx.error(
-                        f"Poll failed: {exc.user_message} "
-                        f"(keeping the last report; retrying in {poll}s)"
-                    )
-                    if consecutive_db_failures >= _WATCH_MAX_CONSECUTIVE_DB_FAILURES:
-                        raise
-                    time.sleep(poll)
-                    continue
-                consecutive_db_failures = 0
-                last_db_error = None
-                _emit(ctx, last_report, json_output=json_output)
-                ctx.info(
-                    f"cache: {last_report.cache_hits} hit(s), {last_report.cache_misses} "
-                    f"miss(es), {last_report.network_requests} request(s)"
-                )
-                time.sleep(poll)
-        except KeyboardInterrupt:
-            ctx.info("Stopped.")
-            if last_db_error is not None:
-                code = exit_code_for(last_db_error)
-            else:
-                code = (
-                    last_report.exit_code(fail_on_offline=fail_on_offline)
-                    if last_report is not None
-                    else int(ExitCode.OK)
-                )
-            raise SystemExit(code) from None
+        _watch_loop(
+            ctx,
+            options,
+            client,
+            poll=poll,
+            json_output=json_output,
+            fail_on_offline=fail_on_offline,
+        )
