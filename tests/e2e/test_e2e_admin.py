@@ -26,6 +26,7 @@ from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import ExitCode
+from tests.conftest import BASE64_KEY_RE
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -37,8 +38,6 @@ if TYPE_CHECKING:
     from tests.e2e.conftest import DeviceBus
 
 pytestmark = pytest.mark.e2e
-
-_BASE64_KEY_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])")
 
 
 def test_full_admin_bootstrap_sequence_and_consumption(
@@ -144,8 +143,8 @@ def test_full_admin_bootstrap_sequence_and_consumption(
         assert entry["in_template"] is True
         assert entry["fingerprint"].startswith("sha256:")
 
-    assert not _BASE64_KEY_RE.search(admin_list.stdout)
-    assert not _BASE64_KEY_RE.search(admin_list.stderr)
+    assert not BASE64_KEY_RE.search(admin_list.stdout)
+    assert not BASE64_KEY_RE.search(admin_list.stderr)
 
 
 def test_admin_bootstrap_pending_message_names_the_right_ref_and_node_on_rotation(
@@ -429,7 +428,7 @@ def test_admin_bootstrap_ref_refuses_to_re_point_an_existing_alias_to_a_new_devi
 
     assert result.exit_code == ExitCode.PROVISIONING
     assert "admin key" in result.stderr.lower()
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
     assert impostor.localNode.written_sections == []
 
     after = ods.load_database(db_path)
@@ -637,7 +636,7 @@ def test_clone_of_an_existing_admin_key_is_refused_even_with_its_own_ref(
     assert "CVE-2025-52464 vendor key-cloning failure mode" in result.stderr
     assert "Duplicate (cloned) keys" in result.stderr
     assert expected_ref in result.stderr
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
     assert iface.localNode.written_sections == []
     assert db_fingerprint(db_path) == before
 
@@ -752,7 +751,7 @@ def test_clone_of_a_self_ref_admin_node_is_refused_with_the_duplicate_hint(
     assert "is shared with another node already on file" in result.stderr
     assert "CVE-2025-52464 vendor key-cloning failure mode" in result.stderr
     assert "aaaa0001_pub" in result.stderr
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
     assert iface.localNode.written_sections == []
     assert db_fingerprint(db_path) == before
 
@@ -994,8 +993,8 @@ def test_admin_import_registers_a_held_public_key(runner: CliRunner, env: dict[s
     assert KeyRecord.from_row(rows["ADMIN9_pub"]).material() == kp.public
 
     assert "sha256:" in result.stderr
-    assert not _BASE64_KEY_RE.search(result.stdout)
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stdout)
+    assert not BASE64_KEY_RE.search(result.stderr)
     assert KeyRecord.from_row(rows["ADMIN9_pub"]).origin is KeyOrigin.IMPORTED
 
 
@@ -1218,8 +1217,8 @@ def test_provision_refuses_to_authorize_a_seeded_small_order_admin_key(
     assert key_plan["desired_admin_key_refs"] == []
     assert key_plan["admin_key_count"] == 0
 
-    assert not _BASE64_KEY_RE.search(result.stdout)
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stdout)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
 
 def test_provision_allow_weak_admin_key_authorizes_an_allow_weak_imported_weak_admin_key(
@@ -1249,8 +1248,8 @@ def test_provision_allow_weak_admin_key_authorizes_an_allow_weak_imported_weak_a
     assert len(forced) == 1
     assert "ADMIN9_pub" in forced[0]["message"]
 
-    assert not _BASE64_KEY_RE.search(result.stdout)
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stdout)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
 
 def test_admin_import_allow_weak_still_refuses_a_small_order_key(
@@ -1309,7 +1308,7 @@ def test_admin_import_ref_with_reserved_suffix_is_rejected(
     result = invoke(runner, ["admin", "import", f"ADMIN9{suffix}={kp.public_b64}"], env)
     assert result.exit_code == 2
     assert suffix in result.stderr
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
 
 def test_admin_import_multiple_assignments_reports_registered_and_skipped(
@@ -1483,7 +1482,7 @@ def test_admin_list_table_shows_the_weak_key_audit_result(
     assert "clean" in ok_line
     assert "compromised" not in ok_line
 
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
 
 def test_admin_list_with_unregistered_template_ref_exits_two(
@@ -1548,7 +1547,7 @@ def test_no_flag_bypasses_the_admin_key_rotation_refusal(
     assert "admin key" in result.stderr.lower()
     assert impostor.localNode.written_sections == []
     assert impostor.admin_keys == ()
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
     after = ods.load_database(db_path)
     assert after.nodes == before.nodes
@@ -1602,7 +1601,7 @@ def test_admin_key_rotation_refused_then_recovered_via_admin_import_overwrite(
     assert refused.exit_code == ExitCode.PROVISIONING
     assert "mesh admin import --overwrite aaaa0001=" in refused.stderr
     assert redact.fingerprint(new_kp.public) in refused.stderr
-    assert not _BASE64_KEY_RE.search(refused.stderr)
+    assert not BASE64_KEY_RE.search(refused.stderr)
     assert same_device.localNode.written_sections == []
 
     overwrite = invoke(
@@ -1674,7 +1673,7 @@ def test_admin_import_overwrite_warns_about_a_stale_alias(
     assert "still holds the previous key" in overwrite.stderr
     assert "--overwrite --allow-alias" in overwrite.stderr
     assert "!bbbb0001" in overwrite.stderr
-    assert not _BASE64_KEY_RE.search(overwrite.stderr)
+    assert not BASE64_KEY_RE.search(overwrite.stderr)
 
 
 def test_admin_import_overwrite_with_no_alias_does_not_warn(
@@ -1777,7 +1776,7 @@ def test_impostor_reporting_an_unrelated_admins_public_key_is_refused(
     assert result.exit_code == ExitCode.PROVISIONING
     assert "admin key" in result.stderr.lower()
     assert iface.localNode.written_sections == []
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
     after = ods.load_database(db_path)
     assert after.nodes == before.nodes

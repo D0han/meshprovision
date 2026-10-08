@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import re
 import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -22,6 +21,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.observed_keys import observed_key_ref
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import ExitCode
+from tests.conftest import BASE64_KEY_RE
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -34,8 +34,6 @@ if TYPE_CHECKING:
     from tests.e2e.conftest import DeviceBus
 
 pytestmark = pytest.mark.e2e
-
-_BASE64_KEY_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])")
 
 
 def test_adopt_never_writes_to_the_device(
@@ -479,7 +477,7 @@ def test_adopt_refuses_to_rotate_an_observed_admin_bearing_nodes_key(
     assert "admin key" in result.stderr.lower()
     assert "mesh admin import --overwrite deadbe01=" in result.stderr
     assert redact.fingerprint(fresh.public) in result.stderr
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
     assert impostor.localNode.written_sections == []
 
     after = ods.load_database(db_path)
@@ -520,7 +518,7 @@ def test_adopt_force_does_not_bypass_admin_key_rotation_refusal_on_a_template_no
 
     assert result.exit_code == ExitCode.PROVISIONING
     assert "admin key" in result.stderr.lower()
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
     assert impostor.localNode.written_sections == []
 
     after = ods.load_database(db_path)
@@ -568,7 +566,7 @@ def test_adopt_from_backup_refuses_to_rotate_an_admin_bearing_nodes_key(
 
     assert result.exit_code == ExitCode.PROVISIONING
     assert "admin key" in result.stderr.lower()
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
     after = ods.load_database(db_path)
     assert after.nodes == before.nodes
@@ -737,8 +735,8 @@ def test_unregistered_admin_key_default_hides_material(
     result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
 
     assert result.exit_code == 0
-    assert not _BASE64_KEY_RE.search(result.stdout)
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stdout)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
 
 def test_unregistered_admin_key_show_admin_keys_prints_import_command(
@@ -2320,8 +2318,8 @@ def test_from_backup_flags_a_mismatched_own_keypair(
 
     payload = json.loads(result.stdout)
     assert any("weak-key audit" in warning for warning in payload["warnings"])
-    assert not _BASE64_KEY_RE.search(result.stdout)
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stdout)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
 
 def test_adopt_flags_a_mismatched_own_keypair_from_a_live_device(
@@ -2336,8 +2334,8 @@ def test_adopt_flags_a_mismatched_own_keypair_from_a_live_device(
 
     payload = json.loads(result.stdout)
     assert any("weak-key audit" in warning for warning in payload["warnings"])
-    assert not _BASE64_KEY_RE.search(result.stdout)
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stdout)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
 
 def test_from_backup_json_output_never_leaks_key_material(
@@ -2367,8 +2365,8 @@ def test_from_backup_json_output_never_leaks_key_material(
     )
 
     assert result.exit_code == 0
-    assert not _BASE64_KEY_RE.search(result.stdout)
-    assert not _BASE64_KEY_RE.search(result.stderr)
+    assert not BASE64_KEY_RE.search(result.stdout)
+    assert not BASE64_KEY_RE.search(result.stderr)
 
 
 def test_from_backup_source_line_appears_in_human_output(

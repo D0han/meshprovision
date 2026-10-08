@@ -24,6 +24,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import AtomicWriteError, ExitCode
 from meshprovision.provisioning import apply as apply_mod
+from tests.conftest import BASE64_KEY_RE, SIX_DIGIT_RE
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -35,21 +36,11 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.e2e
 
-_BASE64_KEY_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])")
-_SIX_DIGIT_RE = re.compile(r"(?<![\da-fA-F])\d{6}(?![\da-fA-F])")
-"""Matches a bare 6-digit run (a BLE PIN candidate).
-
-Excludes a digit run adjacent to a hex letter (not just another digit),
-so an 8-char ``sha256:`` fingerprint digest -- non-secret, deliberately
-printed -- is never mistaken for a PIN just because 6 of its 8
-hex characters happen to be ASCII digits.
-"""
-
 
 def _assert_no_secrets(text: str) -> None:
     """Assert ``text`` contains no 44-char base64 blob and no bare 6-digit run."""
-    assert not _BASE64_KEY_RE.search(text)
-    assert not _SIX_DIGIT_RE.search(text)
+    assert not BASE64_KEY_RE.search(text)
+    assert not SIX_DIGIT_RE.search(text)
 
 
 def _scan_for_secrets(value: object) -> None:

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import dataclasses
-import re
 from datetime import UTC, datetime
 
 import pytest
@@ -24,11 +23,10 @@ from meshprovision.provisioning.adopt import (
     persist_adoption,
 )
 from meshprovision.provisioning.detect import LiveSecurity
+from tests.conftest import BASE64_KEY_RE
 from tests.unit.conftest import make_security
 
 pytestmark = pytest.mark.unit
-
-_BASE64_KEY_RE = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])")
 
 
 # ---------------------------------------------------------------------------
@@ -879,7 +877,7 @@ def test_describe_never_contains_base64_key_material(make_live, template, keypai
 
     text = "\n".join(report.describe())
 
-    assert not _BASE64_KEY_RE.search(text)
+    assert not BASE64_KEY_RE.search(text)
 
 
 def test_describe_covers_existing_registered_vulnerable_and_managed(
@@ -908,7 +906,7 @@ def test_describe_covers_existing_registered_vulnerable_and_managed(
     assert any("registered as ADMIN1_pub" in line for line in lines)
     assert any("CVE-2025-52464" in line for line in lines)
     assert any("admin key" in line and "authorized" in line for line in lines)
-    assert not _BASE64_KEY_RE.search(text)
+    assert not BASE64_KEY_RE.search(text)
 
 
 # ---------------------------------------------------------------------------

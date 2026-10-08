@@ -45,6 +45,7 @@ time.sleep = lambda *_a, **_k: None
 import errno  # noqa: E402
 import io  # noqa: E402
 import os  # noqa: E402
+import re  # noqa: E402
 import zipfile  # noqa: E402
 from collections.abc import Callable, Mapping  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -74,6 +75,24 @@ TEST_CONTACT: Final[str] = "meshprovision-tests@example.invalid"
 #: longer than it is split mid-word), so it must exceed any message embedding a
 #: pytest ``tmp_path``, whose length varies with ``--basetemp``.
 WIDE_TERMINAL_COLUMNS: Final[str] = "100000"
+
+BASE64_KEY_RE: Final[re.Pattern[str]] = re.compile(
+    r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{43}=(?![A-Za-z0-9+/=])"
+)
+"""Matches a bare 44-char base64 blob ending in one ``=`` (an encoded 32-byte key).
+
+The one pattern every secret-leak assertion shares, so a leak check can
+never be weakened in one test module while the others stay strict.
+"""
+
+SIX_DIGIT_RE: Final[re.Pattern[str]] = re.compile(r"(?<![\da-fA-F])\d{6}(?![\da-fA-F])")
+"""Matches a bare 6-digit run (a BLE PIN candidate).
+
+Excludes a digit run adjacent to a hex letter (not just another digit),
+so an 8-char ``sha256:`` fingerprint digest -- non-secret, deliberately
+printed -- is never mistaken for a PIN just because 6 of its 8
+hex characters happen to be ASCII digits.
+"""
 
 
 @pytest.fixture(autouse=True)
