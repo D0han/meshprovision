@@ -556,6 +556,23 @@ def test_html_body_raises_invalid_response_error(tmp_path: Path) -> None:
 
 
 @respx.mock
+def test_only_allowlisted_response_headers_are_cached(tmp_path: Path) -> None:
+    """A Set-Cookie (or any header a proxy adds) never reaches the on-disk cache."""
+    headers = {"ETag": '"v1"', "Set-Cookie": "session=hunter2", "X-Other": "1"}
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}, headers=headers))
+    client = _make_client(tmp_path, now=[0.0])
+
+    fetched = client.get(URL)
+    cached = client.get(URL)
+
+    raw = client.path_for_key(cache_key("GET", URL)).read_text()
+    assert set(json.loads(raw)["headers"]) == {"content-type", "etag"}
+    assert "hunter2" not in raw
+    assert cached.from_cache is True
+    assert cached.headers == fetched.headers == json.loads(raw)["headers"]
+
+
+@respx.mock
 def test_path_for_key_shards_on_first_two_hex_chars(tmp_path: Path) -> None:
     respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
     now = [0.0]
@@ -831,6 +848,18 @@ def test_caller_user_agent_header_is_ignored(tmp_path: Path) -> None:
     request = route.calls[0].request
     assert request.headers["user-agent"] == "meshprovision/test (+t@example.invalid)"
     assert request.headers["x-custom"] == "yes"
+
+
+@respx.mock
+def test_caller_user_agent_is_ignored_in_any_spelling(tmp_path: Path) -> None:
+    """A lowercase caller header must not ride along beside ours (lorastats policy)."""
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    client = _make_client(tmp_path, now=[0.0])
+
+    client.get(URL, headers={"user-agent": "evil/1.0"})
+
+    request = route.calls[0].request
+    assert request.headers.get_list("user-agent") == ["meshprovision/test (+t@example.invalid)"]
 
 
 # ---------------------------------------------------------------------------
