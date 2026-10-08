@@ -54,7 +54,6 @@ __all__ = [
     "SerialBackend",
     "TCPBackend",
     "Transport",
-    "backend_for",
     "close_interface",
     "connected",
     "device_io_errors",
@@ -746,41 +745,6 @@ def select_backend(
         return TCPBackend(target.host, port=target.port, timeout=request.timeout)
 
     return _select_auto(request, discovery_result, chooser)
-
-
-def backend_for(
-    transport: Transport, target: str, *, timeout: int = DEFAULT_CONNECT_TIMEOUT
-) -> ConnectionBackend:
-    """Build a backend directly from an already-known transport and target.
-
-    Useful for callers (tests, scripted flows) that already know exactly
-    which device to use and want to skip :func:`select_backend` entirely.
-
-    Args:
-        transport: The transport to connect over.
-        target: The port, BLE address, or TCP host (optionally
-            ``host:port``) to connect to.
-        timeout: Connect timeout, in seconds.
-
-    Returns:
-        The corresponding backend.
-
-    Raises:
-        UnsupportedTransportError: If ``transport`` is not one of
-            :data:`TRANSPORTS`.
-        ConnectionBackendError: If ``transport`` is ``"tcp"`` and
-            ``target`` fails TCP-target parsing.
-    """
-    if transport == "serial":
-        return SerialBackend(target, timeout=timeout)
-    if transport == "ble":
-        return BLEBackend(target, timeout=timeout)
-    if transport == "tcp":
-        parsed = discovery.parse_tcp_target(target)
-        return TCPBackend(parsed.host, port=parsed.port, timeout=timeout)
-    raise UnsupportedTransportError(
-        f"Unsupported transport: {transport!r}", transport=str(transport)
-    )
 
 
 DEFAULT_CLOSE_TIMEOUT: Final[float] = 3.0

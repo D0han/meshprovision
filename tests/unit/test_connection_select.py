@@ -25,7 +25,6 @@ from meshprovision.provisioning.connection import (
     SerialBackend,
     TCPBackend,
     Transport,
-    backend_for,
     select_backend,
 )
 
@@ -234,21 +233,8 @@ def test_auto_zero_both_raises_with_hint() -> None:
 
 
 # ---------------------------------------------------------------------------
-# backend_for / describe / target / close_interface / connected.
+# describe / target / close_interface / connected.
 # ---------------------------------------------------------------------------
-
-
-def test_backend_for_all_transports() -> None:
-    assert isinstance(backend_for("serial", "/dev/ttyUSB0"), SerialBackend)
-    assert isinstance(backend_for("ble", "AA:BB"), BLEBackend)
-    tcp = backend_for("tcp", "host:1234")
-    assert isinstance(tcp, TCPBackend)
-    assert tcp.port == 1234
-
-
-def test_backend_for_unsupported_raises() -> None:
-    with pytest.raises(UnsupportedTransportError):
-        backend_for("carrier-pigeon", "x")  # type: ignore[arg-type]
 
 
 def test_backend_describe_and_target() -> None:
