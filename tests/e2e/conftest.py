@@ -38,7 +38,7 @@ import httpx
 import pytest
 import respx
 from click.testing import CliRunner, Result
-from meshtastic.protobuf import channel_pb2, localonly_pb2
+from meshtastic.protobuf import channel_pb2, clientonly_pb2, config_pb2, localonly_pb2
 
 from meshprovision.cli.main import cli
 from meshprovision.datasources.loranet import LORANET_NODES_URL
@@ -1070,3 +1070,28 @@ def db_fingerprint(path: Path) -> tuple[int, str]:
         calls prove the file was never touched in between.
     """
     return path.stat().st_mtime_ns, __import__("hashlib").sha256(path.read_bytes()).hexdigest()
+
+
+def write_profile_cfg(
+    path: Path,
+    *,
+    long_name: str = "Meshtastic MT01",
+    short_name: str = "MT01",
+    channel_url: str = "",
+    public_key: bytes = b"",
+    private_key: bytes = b"",
+) -> Path:
+    """Write a synthetic ``.cfg`` ``DeviceProfile`` backup to ``path``."""
+    profile = clientonly_pb2.DeviceProfile()
+    profile.long_name = long_name
+    profile.short_name = short_name
+    if channel_url:
+        profile.channel_url = channel_url
+    profile.config.lora.region = config_pb2.Config.LoRaConfig.EU_868
+    profile.config.device.role = config_pb2.Config.DeviceConfig.CLIENT
+    if public_key:
+        profile.config.security.public_key = public_key
+    if private_key:
+        profile.config.security.private_key = private_key
+    path.write_bytes(profile.SerializeToString())
+    return path
