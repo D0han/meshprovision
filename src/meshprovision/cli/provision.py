@@ -32,7 +32,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Any, Final, NamedTuple, TypeVar
 
 import click
 
@@ -81,6 +81,8 @@ from meshprovision.provisioning.pipeline import (
 )
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from meshprovision.cli.common import CliContext, DbSession
     from meshprovision.config.template import TemplateConfig
 
@@ -233,23 +235,33 @@ def render_plan(
             ctx.info(line.text)
 
 
-def run_provision(
+class _GatheredPlanInputs(NamedTuple):
+    """What :func:`run_provision` needs from :func:`_gather_plan_inputs`.
+
+    ``live``, the recorded public key and whether a pending keypair was
+    recovered travel inside :attr:`inputs` (its ``live``,
+    ``db_public_key`` and ``pending_keypair_recovered`` fields).
+    """
+
+    inputs: plan_mod.PlanInputs
+    detection: detect.Detection
+    drifts: tuple[repair.Drift, ...]
+    pending_path: Path
+
+
+def _gather_plan_inputs(
     ctx: CliContext,
     session: apply.DeviceSession,
     db: DbSession,
     template: TemplateConfig,
     opts: ProvisionOptions,
-) -> ProvisionResult:
-    """Run the full provisioning pipeline against an already-open device session.
+) -> _GatheredPlanInputs:
+    """Read the device and the database, and assemble the plan's inputs.
 
-    Detects the node's state, checks for a recoverable write-ahead
-    pending keypair from an earlier interrupted run (see
-    :mod:`meshprovision.db.pending_keys`), diffs any existing database
-    record for drift, resolves and audits admin keys, builds the change
-    plan, prints it, and -- unless ``opts.dry_run`` is set -- confirms,
-    writes the pending keypair ahead of any device write when regenerating,
-    applies the plan to the device, optionally registers an admin alias,
-    and persists the result to the database.
+    The first half of :func:`run_provision`: detection, the archived and
+    not-enrolled refusals, drift, admin-key resolution and audits, the
+    pending-keypair recovery check, name and BLE-PIN allocation, and the
+    admin-key identity refs. Nothing is written anywhere.
 
     Args:
         ctx: The shared CLI context.
@@ -259,16 +271,12 @@ def run_provision(
         opts: The operator's provisioning flags.
 
     Returns:
-        The full :class:`ProvisionResult`.
+        The plan inputs, the detection, any drift, and the path of this
+        node's pending-keypair file (the recovered one when there is one).
 
     Raises:
         AdminKeyCapacityError: If the resolved admin-key set exceeds the
             firmware's capacity.
-        AtomicWriteError: If a fresh keypair's write-ahead pending file
-            could not be written. Raised before any device write.
-        LockdownRefusedError: If the template requests
-            ``security.is_managed=true`` but the safety gates are not
-            satisfied.
         NamespaceExhaustedError: If a name pattern's namespace is
             exhausted while allocating a new name.
         NodeArchivedError: If the node's database record was archived
@@ -276,7 +284,6 @@ def run_provision(
         NodeNotEnrolledError: If the node's database record has
             ``management == ManagementMode.OBSERVED`` and ``opts.enroll``
             is not set.
-        click.Abort: If the operator declines the confirmation prompt.
     """
     iface = session.interface
     live = detect.read_live_config(iface)
@@ -420,6 +427,60 @@ def run_provision(
     pending_path = pending_keys.pending_key_path(db.path, live.node_id)
     if pending is not None:
         pending_path = pending.path
+    return _GatheredPlanInputs(
+        inputs=inputs, detection=detection, drifts=drifts, pending_path=pending_path
+    )
+
+
+def run_provision(
+    ctx: CliContext,
+    session: apply.DeviceSession,
+    db: DbSession,
+    template: TemplateConfig,
+    opts: ProvisionOptions,
+) -> ProvisionResult:
+    """Run the full provisioning pipeline against an already-open device session.
+
+    Detects the node's state, checks for a recoverable write-ahead
+    pending keypair from an earlier interrupted run (see
+    :mod:`meshprovision.db.pending_keys`), diffs any existing database
+    record for drift, resolves and audits admin keys, builds the change
+    plan, prints it, and -- unless ``opts.dry_run`` is set -- confirms,
+    writes the pending keypair ahead of any device write when regenerating,
+    applies the plan to the device, optionally registers an admin alias,
+    and persists the result to the database.
+
+    Args:
+        ctx: The shared CLI context.
+        session: The already-open device session.
+        db: The already-open database session.
+        template: The validated provisioning template.
+        opts: The operator's provisioning flags.
+
+    Returns:
+        The full :class:`ProvisionResult`.
+
+    Raises:
+        AdminKeyCapacityError: If the resolved admin-key set exceeds the
+            firmware's capacity.
+        AtomicWriteError: If a fresh keypair's write-ahead pending file
+            could not be written. Raised before any device write.
+        LockdownRefusedError: If the template requests
+            ``security.is_managed=true`` but the safety gates are not
+            satisfied.
+        NamespaceExhaustedError: If a name pattern's namespace is
+            exhausted while allocating a new name.
+        NodeArchivedError: If the node's database record was archived
+            via ``mesh db forget``.
+        NodeNotEnrolledError: If the node's database record has
+            ``management == ManagementMode.OBSERVED`` and ``opts.enroll``
+            is not set.
+        click.Abort: If the operator declines the confirmation prompt.
+    """
+    inputs, detection, drifts, pending_path = _gather_plan_inputs(ctx, session, db, template, opts)
+    live = inputs.live
+    db_public_key = inputs.db_public_key
+    pending_matches = inputs.pending_keypair_recovered
     try:
         change_plan = plan_mod.build_plan(inputs)
     except AdminKeyRotationRefusedError as exc:
