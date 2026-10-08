@@ -35,6 +35,8 @@ from meshprovision.db.schema import KeyType
 __all__ = [
     "OBSERVED_DIGEST_CHARS",
     "OBSERVED_PREFIX",
+    "REF_SHAPE_TEXT",
+    "RESERVED_SUFFIXES_TEXT",
     "RefProblem",
     "is_observed_owner",
     "is_observed_ref",
@@ -51,6 +53,15 @@ human-chosen ref under this prefix (see
 :func:`meshprovision.cli.admin._validate_admin_ref`), so it can never
 collide with an operator-assigned reference.
 """
+
+REF_SHAPE_TEXT: Final[str] = "1-64 characters from [A-Za-z0-9._-], starting with an alphanumeric"
+"""Human wording of :data:`~meshprovision.db.schema.REF_PATTERN`, for refusal messages."""
+
+_SUFFIXES: Final[tuple[str, ...]] = tuple(schema.KEY_REF_SUFFIXES.values())
+RESERVED_SUFFIXES_TEXT: Final[str] = (
+    ", ".join(repr(s) for s in _SUFFIXES[:-1]) + f", or {_SUFFIXES[-1]!r}"
+)
+"""The reserved :data:`~meshprovision.db.schema.KEY_REF_SUFFIXES`, as an English list."""
 
 OBSERVED_DIGEST_CHARS: Final[int] = 8
 """Default number of hex fingerprint characters kept in an observed owner.

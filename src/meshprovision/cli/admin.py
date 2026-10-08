@@ -91,11 +91,11 @@ def _validate_admin_ref(ref: str) -> None:
     if problem is observed_keys.RefProblem.BAD_SHAPE:
         raise SettingsError(
             f"{ref!r} is not a valid admin reference.",
-            hint="Use 1-64 characters from [A-Za-z0-9._-], starting with an alphanumeric.",
+            hint=f"Use {observed_keys.REF_SHAPE_TEXT}.",
         )
     if problem is observed_keys.RefProblem.RESERVED_SUFFIX:
         raise SettingsError(
-            f"Admin reference {ref!r} must not end in '_pub', '_priv', or '_psk'.",
+            f"Admin reference {ref!r} must not end in {observed_keys.RESERVED_SUFFIXES_TEXT}.",
             hint="meshprovision appends these suffixes itself when resolving Keys sheet rows.",
         )
     if problem is observed_keys.RefProblem.OBSERVED_PREFIX:

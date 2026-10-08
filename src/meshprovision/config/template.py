@@ -53,7 +53,13 @@ from meshprovision.config.template_sections import (
     SecuritySection,
     TelemetrySection,
 )
-from meshprovision.db.observed_keys import OBSERVED_PREFIX, RefProblem, owner_ref_problem
+from meshprovision.db.observed_keys import (
+    OBSERVED_PREFIX,
+    REF_SHAPE_TEXT,
+    RESERVED_SUFFIXES_TEXT,
+    RefProblem,
+    owner_ref_problem,
+)
 from meshprovision.enums import MODULE_SECTIONS
 from meshprovision.errors import (
     MAX_ADMIN_KEYS,
@@ -354,13 +360,12 @@ class TemplateConfig(BaseModel):
             if problem is RefProblem.BAD_SHAPE:
                 raise TemplateValidationError(
                     f"admin_nodes entry {ref!r} is not a valid node reference "
-                    "(expected 1-64 characters from [A-Za-z0-9._-], starting with "
-                    "an alphanumeric).",
+                    f"(expected {REF_SHAPE_TEXT}).",
                     field="admin_nodes",
                 )
             if problem is RefProblem.RESERVED_SUFFIX:
                 raise TemplateValidationError(
-                    f"admin_nodes entry {ref!r} must not end in '_pub', '_priv', or '_psk'.",
+                    f"admin_nodes entry {ref!r} must not end in {RESERVED_SUFFIXES_TEXT}.",
                     field="admin_nodes",
                     hint=(
                         "admin_nodes holds node references; meshprovision appends "
