@@ -1600,6 +1600,7 @@ def test_admin_key_rotation_refused_then_recovered_via_admin_import_overwrite(
     refused = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
     assert refused.exit_code == ExitCode.PROVISIONING
     assert "mesh admin import --overwrite aaaa0001=" in refused.stderr
+    assert "and re-run `mesh provision`." in refused.stderr
     assert redact.fingerprint(new_kp.public) in refused.stderr
     assert not BASE64_KEY_RE.search(refused.stderr)
     assert same_device.localNode.written_sections == []

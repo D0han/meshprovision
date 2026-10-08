@@ -42,6 +42,7 @@ from meshprovision.cli.common import (
     pass_cli,
 )
 from meshprovision.cli.help_format import MeshCommand
+from meshprovision.cli.provision_keys import admin_key_mismatch_hint
 from meshprovision.cli.transport import (
     TransportOptions,
     connected_with_progress,
@@ -463,20 +464,9 @@ def _refuse_admin_key_rotation(
     reported_fingerprint = (
         redact.fingerprint(live_public_key) if live_public_key is not None else "<unknown>"
     )
-    hint = (
-        f"The connected device reports a different key (fingerprint "
-        f"{reported_fingerprint}) than the one recorded for this admin node. It is "
-        "either a different device claiming its node id, or a genuine key loss "
-        "(firmware #7449). Verify the physical device, and compare the fingerprint "
-        "with the one the device itself shows. If it is genuine, register its key "
-        f"with `mesh admin import --overwrite {live.node_id.hex}=<public key>` and "
-        "re-run `mesh adopt`."
+    hint = admin_key_mismatch_hint(
+        live.node_id.hex, reported_fingerprint, admin_refs, rerun="mesh adopt"
     )
-    others = ", ".join(
-        ref for ref in admin_refs if ref != schema.ref_for(live.node_id.hex, KeyType.ADMIN_PUBLIC)
-    )
-    if others:
-        hint = f"{hint} Also re-import: {others}."
 
     raise AdminKeyRotationRefusedError(
         f"{live.node_id.display}'s key would change while it backs authorized admin "

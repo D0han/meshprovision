@@ -17,6 +17,7 @@ through :func:`meshprovision.crypto.redact.fingerprint`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext, DbSession
 
 __all__ = [
+    "admin_key_mismatch_hint",
     "capture_proven_private_key",
     "finalize_admin_key_rotation_error",
     "node_key_origin",
@@ -295,6 +297,55 @@ def capture_proven_private_key(
     return tuple(recorded)
 
 
+def _reported_fingerprint(live: detect.LiveConfig) -> str:
+    """Fingerprint the device's reported public key for a refusal hint.
+
+    Args:
+        live: The device's normalized live configuration.
+
+    Returns:
+        The key's fingerprint, or ``"<unknown>"`` when the device
+        reported none.
+    """
+    live_public = live.security.public_key
+    return fingerprint(live_public) if live_public is not None else "<unknown>"
+
+
+def admin_key_mismatch_hint(
+    node_hex: str, reported_fingerprint: str, admin_refs: Sequence[str], *, rerun: str
+) -> str:
+    """Build the hint for a refused #7449-style admin-node key change.
+
+    Shared by ``mesh provision`` and ``mesh adopt``, whose refusals
+    differ only in the command the operator re-runs afterwards.
+
+    Args:
+        node_hex: The node's hex id.
+        reported_fingerprint: The device's reported key fingerprint, or
+            ``"<unknown>"``.
+        admin_refs: The admin refs the node's recorded key backs.
+        rerun: The command to re-run once the key is re-imported.
+
+    Returns:
+        The hint text, naming any other ref that needs re-importing.
+    """
+    hint = (
+        f"The connected device reports a different key (fingerprint "
+        f"{reported_fingerprint}) than the one recorded for this admin node. It is "
+        "either a different device claiming its node id, or a genuine key loss "
+        "(firmware #7449). Verify the physical device, and compare the fingerprint "
+        "with the one the device itself shows. If it is genuine, register its key "
+        f"with `mesh admin import --overwrite {node_hex}=<public key>` and "
+        f"re-run `{rerun}`."
+    )
+    others = ", ".join(
+        ref for ref in admin_refs if ref != schema.ref_for(node_hex, KeyType.ADMIN_PUBLIC)
+    )
+    if others:
+        hint = f"{hint} Also re-import: {others}."
+    return hint
+
+
 _ADMIN_KEY_ROTATION_DOC_HINT: Final[str] = (
     "meshprovision has no in-tool way to rotate an admin node's key. See the \"Rotating an "
     "admin node's key\" section of docs/security.md for the out-of-band procedure."
@@ -331,32 +382,17 @@ def finalize_admin_key_rotation_error(
         DUPLICATE_KEY_REASON` reasons, ``reported_fingerprint``.
     """
     if exc.reason == "adopt":
-        live_public = live.security.public_key
-        reported_fingerprint = fingerprint(live_public) if live_public is not None else "<unknown>"
-        hint = (
-            f"The connected device reports a different key (fingerprint "
-            f"{reported_fingerprint}) than the one recorded for this admin node. It is "
-            "either a different device claiming its node id, or a genuine key loss "
-            "(firmware #7449). Verify the physical device, and compare the fingerprint "
-            "with the one the device itself shows. If it is genuine, register its key "
-            f"with `mesh admin import --overwrite {live.node_id.hex}=<public key>` and "
-            "re-run `mesh provision`."
+        reported_fingerprint = _reported_fingerprint(live)
+        hint = admin_key_mismatch_hint(
+            live.node_id.hex, reported_fingerprint, exc.admin_refs, rerun="mesh provision"
         )
-        others = ", ".join(
-            ref
-            for ref in exc.admin_refs
-            if ref != schema.ref_for(live.node_id.hex, KeyType.ADMIN_PUBLIC)
-        )
-        if others:
-            hint = f"{hint} Also re-import: {others}."
     elif exc.reason == DUPLICATE_KEY_REASON:
         # Checked by exact match, and before the generic CVE-2025-52464
         # branch below: DUPLICATE_KEY_REASON's own text also contains
         # that substring (it IS a CVE-2025-52464 finding), so the
         # substring check would otherwise mis-catch it and hand out the
         # wrong "upgrade firmware" hint for what is actually a cloned key.
-        live_public = live.security.public_key
-        reported_fingerprint = fingerprint(live_public) if live_public is not None else "<unknown>"
+        reported_fingerprint = _reported_fingerprint(live)
         hint = (
             f"The connected device's key (fingerprint {reported_fingerprint}) is shared "
             f"with another node already on file: {', '.join(exc.admin_refs)}. This is the "
@@ -365,8 +401,7 @@ def finalize_admin_key_rotation_error(
             "section of docs/security.md."
         )
     elif exc.reason == "capture":
-        live_public = live.security.public_key
-        reported_fingerprint = fingerprint(live_public) if live_public is not None else "<unknown>"
+        reported_fingerprint = _reported_fingerprint(live)
         hint = (
             f"This node has no recorded key, and the key it reports (fingerprint "
             f"{reported_fingerprint}) is already registered as {', '.join(exc.admin_refs)}. "

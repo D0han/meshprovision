@@ -56,6 +56,21 @@ def test_finalize_capture_reason_hint_names_cve_and_ref_flag(keypair) -> None:
     assert "sha256:" in finalized.reported_fingerprint
 
 
+def test_finalize_adopt_reason_hint_lists_the_other_admin_refs(keypair) -> None:
+    """An ``"adopt"`` refusal's hint ends with the other refs to re-import."""
+    template = load_template_text("version: 1\n")
+    live = live_config_from_template(template, security=make_security(keypair=keypair))
+    own = f"{live.node_id.hex}_pub"
+    exc = AdminKeyRotationRefusedError(
+        "rotation refused", reason="adopt", admin_refs=(own, "alice", "bob_pub")
+    )
+
+    finalized = finalize_admin_key_rotation_error(exc, live)
+
+    assert finalized.hint is not None
+    assert finalized.hint.endswith("re-run `mesh provision`. Also re-import: alice, bob_pub.")
+
+
 # ---------------------------------------------------------------------------
 # _apply_and_persist: what an uncertain outcome says about the security section.
 # ---------------------------------------------------------------------------

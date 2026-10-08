@@ -475,6 +475,8 @@ def test_adopt_refuses_to_rotate_an_observed_admin_bearing_nodes_key(
     assert result.exit_code == ExitCode.PROVISIONING
     assert "admin key" in result.stderr.lower()
     assert "mesh admin import --overwrite deadbe01=" in result.stderr
+    assert "and re-run `mesh adopt`." in result.stderr
+    assert "Also re-import" not in result.stderr
     assert redact.fingerprint(fresh.public) in result.stderr
     assert not BASE64_KEY_RE.search(result.stderr)
     assert impostor.localNode.written_sections == []
