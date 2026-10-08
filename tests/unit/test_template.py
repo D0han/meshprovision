@@ -595,3 +595,9 @@ def test_admin_key_refs_and_option_state() -> None:
     state = cfg.option_state()
     assert state["mqtt"] is True
     assert state["serial"] is False
+
+
+def test_traffic_management_is_a_known_module_option() -> None:
+    """Every module section the planner writes is a known template option."""
+    template = TemplateConfig(enabled_options=["traffic_management"])
+    assert template.collect_warnings() == ()

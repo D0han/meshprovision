@@ -367,6 +367,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh template validate` warned that `traffic_management` is "not a
+  known Meshtastic module option" although provisioning writes it; the
+  list of known module options is now the planner's own list.
 - A timestamp cell in the database (`first_added_ts`, `last_updated_ts`,
   `archived_at`, or a key's `created_ts`) holding a value that leaves the
   supported date range once converted to UTC, such as

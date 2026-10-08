@@ -54,6 +54,7 @@ from meshprovision.config.template_sections import (
     TelemetrySection,
 )
 from meshprovision.db.observed_keys import OBSERVED_PREFIX, RefProblem, owner_ref_problem
+from meshprovision.enums import MODULE_SECTIONS
 from meshprovision.errors import (
     MAX_ADMIN_KEYS,
     AdminKeyCapacityError,
@@ -88,23 +89,7 @@ __all__ = [
 
 _logger = logging.getLogger(__name__)
 
-KNOWN_MODULE_OPTIONS: Final[frozenset[str]] = frozenset(
-    {
-        "mqtt",
-        "serial",
-        "external_notification",
-        "store_forward",
-        "range_test",
-        "telemetry",
-        "canned_message",
-        "audio",
-        "remote_hardware",
-        "neighbor_info",
-        "ambient_lighting",
-        "detection_sensor",
-        "paxcounter",
-    }
-)
+KNOWN_MODULE_OPTIONS: Final[frozenset[str]] = frozenset(MODULE_SECTIONS)
 """Module option names meshprovision recognizes. An option outside this
 set is not an error -- firmware adds modules over time -- but produces a
 :class:`TemplateWarning`. ``"neighbor_info"`` stays in this set (it is

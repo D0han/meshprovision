@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from meshprovision import enums
 from meshprovision.crypto.redact import SecretBytes, fingerprint
+from meshprovision.enums import MODULE_SECTIONS
 from meshprovision.errors import DetectionError, NodeIdError, PlanConflictError
 from meshprovision.nodeid import NodeId
 
@@ -117,24 +118,6 @@ CONFIG_SECTIONS: Final[tuple[str, ...]] = (
     "security",
 )
 """Exactly the ``LocalConfig`` field names ``Node.writeConfig`` accepts."""
-
-MODULE_SECTIONS: Final[tuple[str, ...]] = (
-    "mqtt",
-    "serial",
-    "external_notification",
-    "store_forward",
-    "range_test",
-    "telemetry",
-    "canned_message",
-    "audio",
-    "remote_hardware",
-    "neighbor_info",
-    "ambient_lighting",
-    "detection_sensor",
-    "paxcounter",
-    "traffic_management",
-)
-"""Exactly the ``LocalModuleConfig`` field names ``Node.writeConfig`` accepts."""
 
 CHANNEL_SECTIONS: Final[tuple[str, ...]] = ("default_channel",)
 """Section names backed by ``iface.localNode.channels`` rather than

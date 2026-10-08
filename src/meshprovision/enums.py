@@ -23,6 +23,9 @@ The fallback tables (``_FALLBACK_ROLE``, ``_FALLBACK_HW_MODEL``,
 under those private-but-stable names specifically so a later test layer
 can assert they agree with the real protobufs whenever those are
 installed.
+
+:data:`MODULE_SECTIONS` (the module-config section names) lives here as
+the one leaf both the planner and the template validator read.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ from typing import Final
 from meshprovision.errors import EnumMappingError
 
 __all__ = [
+    "MODULE_SECTIONS",
     "EnumSource",
     "EnumTable",
     "enum_tables",
@@ -54,6 +58,24 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
+
+MODULE_SECTIONS: Final[tuple[str, ...]] = (
+    "mqtt",
+    "serial",
+    "external_notification",
+    "store_forward",
+    "range_test",
+    "telemetry",
+    "canned_message",
+    "audio",
+    "remote_hardware",
+    "neighbor_info",
+    "ambient_lighting",
+    "detection_sensor",
+    "paxcounter",
+    "traffic_management",
+)
+"""Exactly the ``LocalModuleConfig`` field names ``Node.writeConfig`` accepts."""
 
 # ---------------------------------------------------------------------------
 # Candidate protobuf module/attribute paths, newest layout first.
