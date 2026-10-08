@@ -675,6 +675,19 @@ def test_atomic_write_sweeps_a_stale_orphan_in_the_target_dir(
     assert target.read_bytes() == b"v1"
 
 
+def test_atomic_write_preserves_a_live_concurrent_temp_in_the_target_dir(tmp_path: Path) -> None:
+    """Another writer's in-flight temp (fresh ctime) must survive this write's sweep."""
+    target = tmp_path / "data.txt"
+    live_temp = tmp_path / f".{target.name}.tmp-999-deadbeef"
+    live_temp.write_bytes(b"another writer, mid-write")
+
+    with atomic_write(target, backup=False) as tmp:
+        tmp.write_bytes(b"v1")
+
+    assert live_temp.read_bytes() == b"another writer, mid-write"
+    assert target.read_bytes() == b"v1"
+
+
 def test_sweep_leaves_real_backups_and_other_targets_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -71,6 +71,23 @@ def test_lock_file_records_the_holder_pid(tmp_path: Path) -> None:
 
 
 @_POSIX_ONLY
+def test_lock_file_holds_only_the_new_holder_pid_after_a_longer_stale_one(
+    tmp_path: Path,
+) -> None:
+    """A shorter pid written over a longer one must not keep the old one's tail ("12399")."""
+    target = tmp_path / "nodes_db.ods"
+    lock_path = locking.lock_path_for(target)
+    stale_pid = "9" * (len(str(os.getpid())) + 3)
+    lock_path.write_text(stale_pid, encoding="ascii")
+    lock_path.chmod(0o600)
+
+    with locking.exclusive_lock(target, timeout=1.0):
+        content = lock_path.read_text(encoding="ascii")
+
+    assert content == str(os.getpid())
+
+
+@_POSIX_ONLY
 def test_locked_error_hint_mentions_the_timeout_env_var(tmp_path: Path) -> None:
     """The hint must proactively surface the tuning knob, not just say "wait"."""
     target = tmp_path / "nodes_db.ods"
@@ -220,7 +237,7 @@ def test_resolve_timeout_prefers_explicit_argument_then_env_then_default(
 
 
 @pytest.mark.parametrize(
-    "raw", ["not-a-number", "inf", "-inf", "Infinity", "nan", "NaN", "-5", "10s"]
+    "raw", ["not-a-number", "inf", "-inf", "Infinity", "nan", "NaN", "-5", "-1", "-0.5", "10s"]
 )
 def test_resolve_timeout_rejects_a_malformed_env_value(
     monkeypatch: pytest.MonkeyPatch, raw: str
