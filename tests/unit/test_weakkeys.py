@@ -553,52 +553,6 @@ def test_is_low_entropy_false_at_exactly_min_distinct_bytes() -> None:
     assert is_low_entropy(raw) is False
 
 
-def test_clamping_check_default_off_and_explicit_on(keypair_factory) -> None:
-    from meshprovision.crypto.keys import X25519_KEY_SIZE
-
-    unclamped = bytes([0xFF] * X25519_KEY_SIZE)
-    result_default = audit_private_key(unclamped, check_clamping=False)
-    assert not any(f.check == WeakKeyCheck.UNCLAMPED for f in result_default.findings)
-
-    result_checked = audit_private_key(unclamped, check_clamping=True)
-    unclamped_findings = [f for f in result_checked.findings if f.check == WeakKeyCheck.UNCLAMPED]
-    assert len(unclamped_findings) == 1
-    assert unclamped_findings[0].severity == "warning"
-    assert result_checked.compromised is True
-
-
-def test_unclamped_only_key_is_warning_not_compromise(keypair_factory) -> None:
-    raw = bytearray(keypair_factory().private.reveal())
-    raw[0] |= 0x01
-    result = audit_private_key(bytes(raw), check_clamping=True, known_bad=frozenset())
-    assert [f.check for f in result.findings] == [WeakKeyCheck.UNCLAMPED]
-    assert result.findings[0].severity == "warning"
-    assert result.compromised is False
-
-
-def test_check_clamping_default_is_off_when_omitted_at_every_entry_point() -> None:
-    """The default must actually be exercised by omission, not just by passing False.
-
-    ``check_clamping`` defaults to ``False`` on every public entry point
-    (module docstring); this only pins that when the keyword argument is
-    left out entirely, at all three of ``audit_private_key``,
-    ``audit_node``, and ``audit_keypair``.
-    """
-    from meshprovision.crypto.keys import X25519_KEY_SIZE
-
-    unclamped = bytes([0xFF] * X25519_KEY_SIZE)
-    other_public = bytes(X25519_KEY_SIZE)
-
-    private_result = audit_private_key(unclamped)
-    assert not any(f.check == WeakKeyCheck.UNCLAMPED for f in private_result.findings)
-
-    node_result = audit_node(private=unclamped)
-    assert not any(f.check == WeakKeyCheck.UNCLAMPED for f in node_result.findings)
-
-    keypair_result = audit_keypair(unclamped, other_public)
-    assert not any(f.check == WeakKeyCheck.UNCLAMPED for f in keypair_result.findings)
-
-
 # ---------------------------------------------------------------------------
 # Errors and files.
 # ---------------------------------------------------------------------------

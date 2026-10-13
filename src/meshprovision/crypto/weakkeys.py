@@ -39,15 +39,6 @@ key is nonetheless the one they intend to use. :data:`NON_OVERRIDABLE_CHECKS`
 is the exception -- an all-zero or small-order key has no usable private
 counterpart at all, so no flag ever authorizes it. See
 :attr:`AuditResult.overridable`.
-
-**On key clamping:** OpenSSL-family backends can store an X25519 private
-scalar unclamped and clamp only at use time, so an unclamped private key
-is *not*, by itself, evidence of anything wrong. ``check_clamping``
-therefore defaults to ``False`` on every entry point in this module, and
-when explicitly enabled, an unclamped scalar is reported at severity
-``"warning"`` -- never ``"critical"``. See
-``meshprovision.crypto.keys.is_clamped`` for the exact bit pattern
-checked.
 """
 
 from __future__ import annotations
@@ -127,7 +118,6 @@ class WeakKeyCheck(StrEnum):
     REPEATED_BYTE = "repeated_byte"
     MONOTONIC = "monotonic"
     LOW_ENTROPY = "low_entropy"
-    UNCLAMPED = "unclamped"
     CONSISTENCY = "consistency"
     FIRMWARE_WINDOW = "firmware_window"
     DUPLICATE = "duplicate"
@@ -663,7 +653,6 @@ def audit_private_key(
     node_id: str | None = None,
     key_ref: str | None = None,
     known_bad: Collection[bytes] | None = None,
-    check_clamping: bool = False,
 ) -> AuditResult:
     """Run the structural + blocklist weak-key battery against a private key.
 
@@ -678,11 +667,6 @@ def audit_private_key(
         key_ref: Affected key reference in the ``Keys`` sheet, when known.
         known_bad: The blocklist to check against. When ``None``, loaded
             via :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`.
-        check_clamping: Whether to also check X25519 clamping. Defaults
-            to ``False`` because an unclamped private key is normal for
-            some backends (see the module docstring); when ``True``, an
-            unclamped scalar is reported at severity ``"warning"``, never
-            ``"critical"``.
 
     Returns:
         The audit result, with findings sorted critical-first.
@@ -725,23 +709,6 @@ def audit_private_key(
             material="private",
         )
     )
-    if check_clamping and not keys.is_clamped(raw):
-        findings.append(
-            WeakKeyFinding(
-                check=WeakKeyCheck.UNCLAMPED,
-                severity=WeakKeySeverity.WARNING,
-                reason=(
-                    "private key is not X25519-clamped; this is normal for some "
-                    "OpenSSL-family backends, which can store the unclamped scalar and "
-                    "clamp only at use time, so this is never treated as evidence of "
-                    "compromise"
-                ),
-                fingerprint=fp,
-                node_id=node_id,
-                key_ref=key_ref,
-            )
-        )
-
     return AuditResult(
         findings=_sort_findings(findings), fingerprint=fp, node_id=node_id, key_ref=key_ref
     )
@@ -754,7 +721,6 @@ def audit_keypair(
     node_id: str | None = None,
     key_ref: str | None = None,
     known_bad: Collection[bytes] | None = None,
-    check_clamping: bool = False,
 ) -> AuditResult:
     """Audit a private/public key pair, including cross-key consistency.
 
@@ -773,7 +739,6 @@ def audit_keypair(
             once via
             :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`
             and shared between the private and public sub-audits.
-        check_clamping: Passed through to :func:`audit_private_key`.
 
     Returns:
         A single merged audit result, with findings sorted critical-first.
@@ -788,7 +753,6 @@ def audit_keypair(
         node_id=node_id,
         key_ref=key_ref,
         known_bad=bad_set,
-        check_clamping=check_clamping,
     )
     public_result = audit_public_key(public, node_id=node_id, key_ref=key_ref, known_bad=bad_set)
 
@@ -940,7 +904,6 @@ def audit_node(
     firmware_version: str | None = None,
     known_public_keys: Mapping[str, bytes] | None = None,
     known_bad: Collection[bytes] | None = None,
-    check_clamping: bool = False,
 ) -> AuditResult:
     """The layered, top-level weak-key audit entry point for one node.
 
@@ -993,7 +956,6 @@ def audit_node(
             ``audit_node_key`` supplies here is always alias-safe.
         known_bad: An explicit blocklist. When ``None``, loaded once via
             :func:`~meshprovision.crypto.known_bad_keys.load_known_bad_keys`.
-        check_clamping: Passed through to the private-key audit path.
 
     Returns:
         A single merged :class:`AuditResult`.
@@ -1019,7 +981,6 @@ def audit_node(
             node_id=node_id,
             key_ref=key_ref,
             known_bad=bad_set,
-            check_clamping=check_clamping,
         )
     elif public is not None:
         result = audit_public_key(public, node_id=node_id, key_ref=key_ref, known_bad=bad_set)
@@ -1029,7 +990,6 @@ def audit_node(
             node_id=node_id,
             key_ref=key_ref,
             known_bad=bad_set,
-            check_clamping=check_clamping,
         )
     else:  # pragma: no cover - unreachable, guarded above
         raise KeyMaterialError(

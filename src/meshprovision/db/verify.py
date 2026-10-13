@@ -422,7 +422,6 @@ def _check_weak_keys(keys: KeyRepository, known_bad: frozenset[bytes]) -> list[D
                     record.secret(),
                     key_ref=record.key_ref,
                     known_bad=known_bad,
-                    check_clamping=False,
                 )
         except KeyMaterialError as exc:
             problems.append(

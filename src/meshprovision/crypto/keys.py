@@ -1,4 +1,4 @@
-"""X25519 key generation, encoding, and clamping utilities.
+"""X25519 key generation and encoding utilities.
 
 This is the only module in the project that generates or manipulates raw
 X25519 scalars. Key generation uses ``cryptography``'s
@@ -32,11 +32,9 @@ __all__ = [
     "B64_KEY_PREFIX",
     "X25519_KEY_SIZE",
     "KeyPair",
-    "clamp",
     "decode_key",
     "encode_key",
     "generate_keypair",
-    "is_clamped",
     "public_from_private",
     "public_key_matches",
 ]
@@ -102,15 +100,6 @@ class KeyPair:
             The canonical base64 encoding of :attr:`public`.
         """
         return encode_key(self.public)
-
-    @property
-    def fingerprint(self) -> str:
-        """A redacted, non-reversible label for the public key.
-
-        Returns:
-            For example ``"sha256:ab12cd34"``.
-        """
-        return redact.fingerprint(self.public)
 
     def __repr__(self) -> str:
         """Return a representation that never exposes the private key.
@@ -270,67 +259,6 @@ def decode_key(value: str, *, field: str = "key") -> bytes:
             actual_length=len(raw),
         )
     return raw
-
-
-def is_clamped(private: bytes | SecretBytes) -> bool:
-    """Check whether a private scalar is X25519-clamped.
-
-    Per RFC 7748: bit pattern ``raw[0] & 0b0000_0111 == 0`` (the low 3
-    bits of the first byte are clear), ``raw[31] & 0b1000_0000 == 0``
-    (the top bit of the last byte is clear), and
-    ``raw[31] & 0b0100_0000 == 0b0100_0000`` (the second-highest bit of
-    the last byte is set).
-
-    An **unclamped** private key is completely normal: OpenSSL-family
-    backends (and therefore ``cryptography``'s
-    ``X25519PrivateKey.generate()`` on some versions) can store the raw
-    random scalar and clamp it only at use time, so this check alone must
-    never be treated as evidence of compromise. See
-    :func:`meshprovision.crypto.weakkeys.audit_private_key`'s
-    ``check_clamping`` parameter, which defaults to ``False`` for exactly
-    this reason.
-
-    Args:
-        private: Raw private key bytes, or a :class:`SecretBytes`
-            wrapping them.
-
-    Returns:
-        ``True`` if the scalar is clamped.
-
-    Raises:
-        KeyMaterialError: If ``private`` is not exactly
-            :data:`X25519_KEY_SIZE` bytes.
-    """
-    raw = _coerce_private_bytes(private)
-    return (
-        raw[0] & 0b0000_0111 == 0
-        and raw[31] & 0b1000_0000 == 0
-        and raw[31] & 0b0100_0000 == 0b0100_0000
-    )
-
-
-def clamp(private: bytes | SecretBytes) -> bytes:
-    """Return a clamped copy of a private scalar.
-
-    Never mutates the input; always returns a new ``bytes`` object.
-
-    Args:
-        private: Raw private key bytes, or a :class:`SecretBytes`
-            wrapping them.
-
-    Returns:
-        A new, clamped 32-byte private scalar.
-
-    Raises:
-        KeyMaterialError: If ``private`` is not exactly
-            :data:`X25519_KEY_SIZE` bytes.
-    """
-    raw = _coerce_private_bytes(private)
-    clamped = bytearray(raw)
-    clamped[0] &= 248
-    clamped[31] &= 127
-    clamped[31] |= 64
-    return bytes(clamped)
 
 
 def public_key_matches(private: bytes | SecretBytes, public: bytes) -> bool:

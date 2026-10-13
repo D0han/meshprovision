@@ -1046,7 +1046,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `X25519PrivateKey.generate()`, matching the CVE-2025-52464 advisory's own
   recommendation. Factory keys are treated as compromised and regenerated.
 - Layered weak-key audit: structural checks (all-zero, small-order,
-  repeated-byte, monotonic, low-entropy, unclamped), public/private consistency,
+  repeated-byte, monotonic, low-entropy), public/private consistency,
   a firmware-version window treating `[2.5.0, 2.6.11)` as presumptively
   compromised, cross-node duplicate detection, and a committed blocklist.
 - `data/known_bad_keys.txt` contains the 7 verified X25519 small-order points

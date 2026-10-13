@@ -126,7 +126,7 @@ regeneration:
 
 | Check | What it catches |
 |---|---|
-| `all_zero`, `small_order`, `repeated_byte`, `monotonic`, `low_entropy`, `unclamped` | Structural checks on the key bytes |
+| `all_zero`, `small_order`, `repeated_byte`, `monotonic`, `low_entropy` | Structural checks on the key bytes |
 | `consistency` | Recompute the public key from the private key and compare with what the device reports; a mismatch means corruption or a partial restore |
 | `firmware_window` | A node reporting firmware in `[2.5.0, 2.6.11)` is treated as **presumptively compromised** regardless of the key's contents — unless the key is confirmed host-generated (see below) |
 | `duplicate` | The public key matches another *node's* recorded key elsewhere in your `Keys` sheet; two of your nodes sharing a public key is the vendor-cloning bug; reported CRITICAL. Runs during `mesh provision` (see below) as well as `mesh db verify` |
