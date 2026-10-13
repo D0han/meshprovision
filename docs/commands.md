@@ -490,6 +490,40 @@ mesh db forget deadbe01
   CLI command to un-archive a node; the hint on a refused command names
   the manual workaround (edit the `archived_at` cell by hand).
 
+## `mesh peers`
+
+```bash
+mesh peers --port /dev/ttyUSB0            # report what is missing
+mesh peers --port /dev/ttyUSB0 --apply    # write it
+mesh peers --host 192.168.1.20 --apply --json
+```
+
+Makes the connected device know the rest of your fleet and keep it
+favorited. Every active (non-archived) node in the database, except the
+device itself, is sent to the device as a **contact** (id, names, hardware
+model, role and the public key the Keys sheet records for it) and marked
+**favorite**. A device only keeps the nodes it has heard recently and
+evicts the rest; a favorite is never evicted, which matters most for
+routers and base stations that must always reach, and hold the keys of, the
+whole fleet.
+
+Without `--apply` it only prints what is missing. With `--apply` it writes
+and then reconnects and re-reads the device, so a write the firmware
+silently dropped is reported (exit code 5), like `mesh provision`. It is
+idempotent: a second run finds nothing to do. The database is only read.
+
+Two cases are reported and deliberately left alone: a node with no public
+key in the Keys sheet cannot be added as a contact (it is still favorited if
+the device already holds it), and a node the device holds under a
+*different* public key is not overwritten — that is either a stale database
+or a spoofed identity, for you to decide (`mesh adopt` re-reads the device).
+
+Takes the same connection flags as `mesh provision` (`--port`,
+`--ble-address`, `--ble-scan`, `--host`, `--interface`, `--timeout`,
+`--ble-scan-timeout`) and `--json`. Run it once per device; to do it as the
+last step of every provisioning run instead, set `sync_peers: true` in the
+template ([configuration](configuration.md)).
+
 ## `mesh template`
 
 ```bash

@@ -207,6 +207,10 @@ class TemplateConfig(BaseModel):
             message as :attr:`short_name_pattern`/:attr:`long_name_pattern`
             (``Node.setOwner``'s ``User.is_unmessagable``). ``None``
             (the default) leaves the device's current value untouched.
+        sync_peers: Whether ``mesh provision`` finishes by giving the
+            device every other active fleet node as a favorited contact
+            (the same step as ``mesh peers --apply``). Off by default; a
+            failure there is a warning, never a provisioning failure.
         admin_nodes: 0-3 admin node references. Each must resolve to a
             ``<ref>_pub`` row in the Keys sheet at provisioning time --
             that resolution is deliberately not attempted here, since
@@ -239,6 +243,7 @@ class TemplateConfig(BaseModel):
     name_capacity_warn_utilization: float = Field(default=DEFAULT_WARN_UTILIZATION, gt=0.0, le=1.0)
     name_capacity_strict: bool = False
     is_unmessagable: bool | None = None
+    sync_peers: bool = False
     admin_nodes: tuple[str, ...] = ()
     device: DeviceSection = Field(default_factory=DeviceSection)
     lora: LoraSection = Field(default_factory=LoraSection)

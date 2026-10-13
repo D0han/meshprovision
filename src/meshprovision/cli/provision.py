@@ -43,6 +43,7 @@ from meshprovision.cli.common import (
     pass_cli,
 )
 from meshprovision.cli.help_format import MeshCommand
+from meshprovision.cli.peers_sync import sync_peers_after_provision
 from meshprovision.cli.provision_apply import ProvisionOptions, apply_and_persist
 from meshprovision.cli.provision_keys import (
     finalize_admin_key_rotation_error,
@@ -664,6 +665,8 @@ def provision(
         backend = resolve_backend(ctx, transport_opts)
         with device_session(ctx, backend, no_reconnect=no_reconnect) as session:
             result = run_provision(ctx, session, db, template, opts)
+            if template.sync_peers and not dry_run and not result.exit_code:
+                sync_peers_after_provision(ctx, db, session)
 
     if result.exit_code:
         raise SystemExit(result.exit_code)

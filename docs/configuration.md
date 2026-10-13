@@ -127,6 +127,22 @@ target for direct messages. Omitted or `null` (the default) leaves the
 device's current value untouched; there is no CLI override, unlike
 `short_name`/`long_name`.
 
+### Peers
+
+```yaml
+sync_peers: false
+```
+
+When `true`, `mesh provision` ends by giving the device every other active
+node of the database as a favorited contact, exactly what
+`mesh peers --apply` does (see [commands](commands.md)). A device only keeps the
+nodes it has heard recently and evicts the rest; a favorite is never
+evicted, which matters most for routers and base stations. A node whose
+public key is not in the Keys sheet cannot be added as a contact, and a
+node the device already holds under a *different* key is reported and left
+alone. A failure in this step is a warning, never a provisioning failure.
+Default `false`.
+
 ### Admin nodes
 
 ```yaml

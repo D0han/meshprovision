@@ -9,9 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Single `mesh` console script (distribution `meshprovision`) with seven
+- `mesh peers`: gives the connected device every other active node of the
+  database as a contact (with the public key the Keys sheet records) and
+  marks it favorite, so routers and base stations always hold the whole
+  fleet. Dry run by default, `--apply` writes and verifies after a
+  reconnect, idempotent; a node the device holds under a different key is
+  reported, never overwritten. The new template switch `sync_peers: true`
+  makes `mesh provision` do the same as its last step (off by default; a
+  failure there is a warning).
+- Single `mesh` console script (distribution `meshprovision`) with eight
   subcommands/subcommand groups: `init`, `provision`, `status`, `admin`,
-  `db`, `adopt`, and `template`.
+  `db`, `adopt`, `template`, and `peers`.
 - `mesh init`: creates whatever first-run artifacts (`.env`,
   `config/template.yaml`, `data/nodes_db.ods`) are still missing --
   prompts once for `MESHPROVISION_CONTACT`, the one setting with no

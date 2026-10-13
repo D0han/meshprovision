@@ -81,6 +81,7 @@ One console script, `mesh`, with seven subcommands/subcommand groups.
 | `mesh init` | Create whatever first-run setup (`.env`, template, database) is still missing. |
 | `mesh provision` | Provision a connected device from the template: connects, diffs, writes. |
 | `mesh adopt` | Inventory an already-configured device — strictly read-only toward it. |
+| `mesh peers` | Give the connected device every fleet node as a favorited contact (`--apply` to write). |
 | `mesh status` | Read-only network health from loranet.pl/lorastats.pl, merged with the database. |
 | `mesh admin` | Admin-key custody: `bootstrap`, `import`, `list`. |
 | `mesh db` | Database integrity/backup: `verify`, `backup`, `restore`, `list`, `forget`. |

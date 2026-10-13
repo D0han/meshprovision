@@ -26,6 +26,8 @@ here, never redefined.
 
 from __future__ import annotations
 
+import base64
+import copy
 import errno
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -38,7 +40,7 @@ import httpx
 import pytest
 import respx
 from click.testing import CliRunner, Result
-from meshtastic.protobuf import channel_pb2, clientonly_pb2, config_pb2, localonly_pb2
+from meshtastic.protobuf import admin_pb2, channel_pb2, clientonly_pb2, config_pb2, localonly_pb2
 
 from meshprovision.cli.main import cli
 from meshprovision.datasources.loranet import LORANET_NODES_URL
@@ -270,6 +272,52 @@ class FakeNode:
         if is_unmessagable is not None:
             self._iface.user["isUnmessagable"] = is_unmessagable
 
+    def addContactURL(self, url: str) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Store a shared contact in the device's NodeDB, as the firmware does.
+
+        Args:
+            url: A ``https://meshtastic.org/v/#...`` shared-contact URL.
+
+        Raises:
+            OSError: If :attr:`FakeMeshInterface.fail_peer_writes` is set.
+        """
+        self._iface.peer_calls.append(("add", 0))
+        if self._iface.fail_peer_writes:
+            raise OSError("simulated contact write failure")
+        if self._iface.drop_peer_writes:
+            return
+        token = url.split("/#")[-1]
+        shared = admin_pb2.SharedContact()
+        shared.ParseFromString(base64.urlsafe_b64decode(token + "=" * (-len(token) % 4)))
+        held = self._iface.known_nodes.get(shared.node_num, {})
+        self._iface.known_nodes[shared.node_num] = {
+            **held,
+            "num": shared.node_num,
+            "user": {
+                "id": shared.user.id,
+                "longName": shared.user.long_name,
+                "shortName": shared.user.short_name,
+                "publicKey": base64.b64encode(shared.user.public_key).decode("ascii"),
+            },
+        }
+
+    def setFavorite(self, node_id: int) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Favorite a node the device holds; the firmware ignores unknown ones.
+
+        Args:
+            node_id: The node number.
+
+        Raises:
+            OSError: If :attr:`FakeMeshInterface.fail_peer_writes` is set.
+        """
+        self._iface.peer_calls.append(("fav", node_id))
+        if self._iface.fail_peer_writes:
+            raise OSError("simulated favorite write failure")
+        if self._iface.drop_peer_writes:
+            return
+        if node_id in self._iface.known_nodes:
+            self._iface.known_nodes[node_id]["isFavorite"] = True
+
 
 class FakeMeshInterface:
     """A stand-in for ``meshtastic``'s ``MeshInterface``.
@@ -352,6 +400,14 @@ class FakeMeshInterface:
         }
 
         self.localNode = FakeNode(self)
+
+        self.known_nodes: dict[int, dict[str, object]] = {}
+        """The device's persisted NodeDB (``nodesByNum`` shape), seeded by peers tests."""
+        self.peer_calls: list[tuple[str, int]] = []
+        self.fail_peer_writes = False
+        """Make ``addContactURL``/``setFavorite`` raise ``OSError``."""
+        self.drop_peer_writes = False
+        """Accept ``addContactURL``/``setFavorite`` but silently store nothing."""
 
     def getMyNodeInfo(self) -> dict[str, int]:  # noqa: N802 -- matches MeshInterface's spelling
         """Return this device's node info, as the real interface would.
@@ -637,6 +693,32 @@ class _FakeConnectionNode:
             is_unmessagable=is_unmessagable,
         )
 
+    def addContactURL(self, url: str) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Delegate to the device; the NodeDB view of this connection stays as connected.
+
+        Args:
+            url: The shared-contact URL.
+
+        Raises:
+            OSError: If this connection was already closed.
+        """
+        if self._connection.closed:
+            raise OSError(errno.EBADF, "fake connection is closed")
+        self._connection._device.localNode.addContactURL(url)
+
+    def setFavorite(self, node_id: int) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Delegate to the device.
+
+        Args:
+            node_id: The node number.
+
+        Raises:
+            OSError: If this connection was already closed.
+        """
+        if self._connection.closed:
+            raise OSError(errno.EBADF, "fake connection is closed")
+        self._connection._device.localNode.setFavorite(node_id)
+
 
 class FakeConnection:
     """The host's handle to one connection to a :class:`FakeMeshInterface` device.
@@ -664,6 +746,7 @@ class FakeConnection:
         self._device = device
         self.closed = False
         self.localNode = _FakeConnectionNode(self)
+        self.nodesByNum = copy.deepcopy(device.known_nodes)
 
     @property
     def myInfo(self) -> SimpleNamespace:  # noqa: N802 -- matches MeshInterface's spelling
