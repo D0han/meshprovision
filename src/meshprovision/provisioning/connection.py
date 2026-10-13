@@ -20,13 +20,12 @@ in. That separation is an invariant the unit tests assert.
 
 from __future__ import annotations
 
-import contextlib
 import errno
 import functools
 import logging
 import sys
 import threading
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias
@@ -55,7 +54,6 @@ __all__ = [
     "TCPBackend",
     "Transport",
     "close_interface",
-    "connected",
     "device_io_errors",
     "select_backend",
 ]
@@ -780,8 +778,8 @@ def _close_ignoring_errors(iface: MeshInterface) -> None:
 def close_interface(iface: MeshInterface, *, timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:
     """Close a ``MeshInterface``, never masking a caller's real error -- and never hanging.
 
-    Intended for use in a ``finally`` block (see :func:`connected`): a
-    close-time problem never hides whatever exception was already
+    Intended for use in a ``finally`` block: a close-time problem never
+    hides whatever exception was already
     propagating, since the actual close runs on a daemon thread and any
     ``OSError``/``AttributeError``/``RuntimeError`` it raises is logged at
     DEBUG rather than re-raised (see :func:`_close_ignoring_errors`).
@@ -806,24 +804,3 @@ def close_interface(iface: MeshInterface, *, timeout: float = DEFAULT_CLOSE_TIME
             "(see meshprovision.provisioning.connection.DEFAULT_CLOSE_TIMEOUT).",
             timeout,
         )
-
-
-@contextlib.contextmanager
-def connected(backend: ConnectionBackend) -> Iterator[MeshInterface]:
-    """Context manager: connect, yield the interface, always close it.
-
-    Args:
-        backend: The backend to connect through.
-
-    Yields:
-        The live, connected interface.
-
-    Raises:
-        ConnectionFailedError: If ``backend.connect()`` fails. Closing is
-            not attempted in that case, since no interface was obtained.
-    """
-    iface = backend.connect()
-    try:
-        yield iface
-    finally:
-        close_interface(iface)

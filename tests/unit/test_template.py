@@ -661,7 +661,6 @@ def test_admin_key_refs_and_option_state() -> None:
     cfg = TemplateConfig(
         admin_nodes=["A", "B"], enabled_options=["mqtt"], disabled_options=["serial"]
     )
-    assert cfg.admin_key_refs() == ("A_pub", "B_pub")
     state = cfg.option_state()
     assert state["mqtt"] is True
     assert state["serial"] is False

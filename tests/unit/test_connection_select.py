@@ -438,26 +438,3 @@ def test_device_io_errors_degrades_gracefully_without_ble(monkeypatch: pytest.Mo
         assert errors == (MeshInterface.MeshInterfaceError,)
     finally:
         connection.device_io_errors.cache_clear()
-
-
-def test_connected_closes_interface_even_when_body_raises() -> None:
-    closed = []
-
-    class _FakeIface:
-        def close(self) -> None:
-            closed.append(True)
-
-    class _FakeBackend:
-        transport = "serial"
-        target = "/dev/ttyUSB0"
-
-        def describe(self) -> str:
-            return "fake"
-
-        def connect(self) -> _FakeIface:
-            return _FakeIface()
-
-    with pytest.raises(RuntimeError), connection.connected(_FakeBackend()):  # type: ignore[arg-type]
-        raise RuntimeError("boom")
-
-    assert closed == [True]

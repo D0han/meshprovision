@@ -271,10 +271,8 @@ class ReconnectingSession:
     meaningful for issue #7449 (a restored key silently discarded on
     reboot).
 
-    Deliberately does not use
-    :func:`meshprovision.provisioning.connection.connected` -- that
-    context manager closes the interface on exit, and this session must
-    own the connection's lifecycle across multiple opens.
+    Owns the connection's lifecycle across multiple opens itself, rather
+    than closing the interface after one use.
 
     Attributes:
         backend: The connection backend to (re)connect through.

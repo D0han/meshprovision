@@ -1464,27 +1464,6 @@ def test_read_raw_blank_run_at_exactly_max_blank_rows_reads_cleanly(
     assert raw.sheets["Nodes"].rows[-1][node_id_idx].text == trailing_node.node_id
 
 
-def test_module_level_verify_returns_the_same_warnings_as_load(tmp_path: Path, keypair) -> None:
-    """`ods.verify()` -- `__all__`-exported public API, unused by any CLI command.
-
-    `mesh db verify` goes through the richer `db/verify.py` module instead,
-    but this thin "load purely for warnings" helper is still documented
-    public API and had zero test coverage. Uses a hand-edited stale-formula
-    cell (the same technique as the stale-cached-formula tests above) so
-    the expected warnings are genuinely non-empty -- otherwise a mutant
-    returning a bare `()` would pass unnoticed against a warning-free file.
-    """
-    path = tmp_path / "db.ods"
-    node, pub, priv = _sample_records(keypair)
-    ods_write.write_database(path, nodes=[node.to_row()], keys=[pub.to_row(), priv.to_row()])
-    edit_ods_cell(path, "Nodes", "private_key_ref", 2, "WRONG_ref")
-
-    warnings = ods.verify(path)
-
-    assert len(warnings) == 1
-    assert warnings == ods.load_database(path).warnings
-
-
 # ---------------------------------------------------------------------------
 # Known-good refresh is built from the validated bytes, not a later read.
 # ---------------------------------------------------------------------------

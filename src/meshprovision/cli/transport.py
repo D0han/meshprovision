@@ -312,9 +312,10 @@ def connected_with_progress(
 ) -> Iterator[MeshInterface]:
     """Connect once, with progress output, and always close on exit.
 
-    The read-only sibling of :func:`device_session`: like
-    :func:`meshprovision.provisioning.connection.connected`, but prints a
-    "Connecting over ..." line and ticks a :func:`~meshprovision.cli.
+    The read-only sibling of :func:`device_session`: connects once and
+    always closes the interface (via
+    :func:`~meshprovision.provisioning.connection.close_interface`),
+    printing a "Connecting over ..." line and ticking a :func:`~meshprovision.cli.
     progress.heartbeat` while the (potentially multi-minute, entirely
     silent) ``backend.connect()`` call is in flight. Used by ``mesh
     adopt``, which -- unlike :func:`device_session` -- must never open a

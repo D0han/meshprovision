@@ -502,17 +502,6 @@ class TemplateConfig(BaseModel):
             state[opt] = False
         return MappingProxyType(state)
 
-    def admin_key_refs(self) -> tuple[str, ...]:
-        """Build the Keys-sheet public-key references for every admin node.
-
-        Returns:
-            ``tuple(f"{r}_pub" for r in admin_nodes)`` -- equivalent to
-            ``schema.ref_for(r, KeyType.ADMIN_PUBLIC)``, spelled out here; this
-            module reaches :mod:`meshprovision.db` only through
-            :mod:`meshprovision.db.observed_keys`.
-        """
-        return tuple(f"{ref}_pub" for ref in self.admin_nodes)
-
     def _option_warnings(self) -> tuple[TemplateWarning, ...]:
         """Warn about module options the plan will not write.
 

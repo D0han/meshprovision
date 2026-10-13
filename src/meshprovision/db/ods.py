@@ -57,7 +57,6 @@ __all__ = [
     "OdsDatabase",
     "load_database",
     "parse_database",
-    "verify",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -543,25 +542,6 @@ def load_database(path: Path) -> LoadedDatabase:
     loaded, data, stat_result = _read_and_parse(path)
     refresh_known_good(path, content=data, source_stat=stat_result)
     return loaded
-
-
-def verify(path: Path) -> tuple[IntegrityWarning, ...]:
-    """Load a database purely to collect its integrity warnings.
-
-    Args:
-        path: Path to the ``.ods`` file.
-
-    Returns:
-        Every cached-vs-recomputed disagreement found while loading.
-
-    Raises:
-        DbReadError: If the file cannot be opened or read (permissions, I/O).
-        SchemaError: If the file is not valid ODF content or does not match its schema.
-        DbValidationError: If any cell fails validation.
-        DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
-        DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
-    """
-    return load_database(path).warnings
 
 
 class OdsDatabase:
