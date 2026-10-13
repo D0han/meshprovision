@@ -45,6 +45,7 @@ def _make_cfg_bytes(
     public_key: bytes = b"",
     private_key: bytes = b"",
     fixed_position: tuple[float, float, int] | None = None,
+    role: int | None = config_pb2.Config.DeviceConfig.CLIENT,
 ) -> bytes:
     profile = clientonly_pb2.DeviceProfile()
     profile.long_name = long_name
@@ -52,7 +53,8 @@ def _make_cfg_bytes(
     if channel_url:
         profile.channel_url = channel_url
     profile.config.lora.region = config_pb2.Config.LoRaConfig.EU_868
-    profile.config.device.role = config_pb2.Config.DeviceConfig.CLIENT
+    if role is not None:
+        profile.config.device.role = role
     if public_key:
         profile.config.security.public_key = public_key
     if private_key:
@@ -849,6 +851,54 @@ def test_live_config_from_backup_nodedb_only_unrecognized_role_is_flagged_not_de
     assert live.value("device", "role") is None
     assert live.role_raw == "FUTURE_ROLE_9"
     assert live.sections == {}
+
+
+def _profile_and_nodedb(*, profile_role: int | None, nodedb_role: str) -> backup.BackupBundle:
+    """Merge a profile and a node-db export of the same node (same names and key)."""
+    profile = backup.parse_profile_cfg(
+        _make_cfg_bytes(
+            long_name="Meshtastic MT02",
+            short_name="MT02",
+            public_key=bytes(range(32)),
+            role=profile_role,
+        ),
+        source="p.cfg",
+    )
+    payload = _nodedb_payload()
+    payload["nodes"][0]["role"] = nodedb_role  # type: ignore[index]
+    nodedb = backup.parse_nodedb_json(json.dumps(payload).encode(), source="n.json")
+    return backup.merge_backups(profile=profile, nodedb=nodedb)
+
+
+def test_profile_role_wins_over_the_nodedb_role() -> None:
+    bundle = _profile_and_nodedb(
+        profile_role=config_pb2.Config.DeviceConfig.ROUTER, nodedb_role="CLIENT"
+    )
+
+    live = backup.live_config_from_backup(bundle, node_id=NodeId.from_int(2697256389))
+
+    assert live.value("device", "role") == "ROUTER"
+    (warning,) = bundle.warnings
+    assert "role 'ROUTER'" in warning
+    assert "'CLIENT'" in warning
+    assert "the profile always takes precedence" in warning
+
+
+def test_agreeing_profile_and_nodedb_roles_warn_nothing() -> None:
+    bundle = _profile_and_nodedb(
+        profile_role=config_pb2.Config.DeviceConfig.ROUTER, nodedb_role="ROUTER"
+    )
+
+    assert bundle.warnings == ()
+
+
+def test_nodedb_role_used_when_the_profile_has_no_device_section() -> None:
+    bundle = _profile_and_nodedb(profile_role=None, nodedb_role="ROUTER")
+
+    live = backup.live_config_from_backup(bundle, node_id=NodeId.from_int(2697256389))
+
+    assert live.value("device", "role") == "ROUTER"
+    assert bundle.warnings == ()
 
 
 def test_live_config_from_backup_does_not_mutate_the_profile() -> None:

@@ -97,6 +97,47 @@ __all__ = [
 ]
 
 
+def _profile_sets_role(profile: ProfileBackup | None) -> bool:
+    """Whether a profile backup configures the device role itself.
+
+    proto3 cannot tell an unset role from ``CLIENT`` (``0``), so a
+    profile carrying a ``device`` section is taken to configure the role,
+    even as ``CLIENT``.
+
+    Args:
+        profile: The parsed profile, or ``None``.
+
+    Returns:
+        ``True`` when ``profile`` has a ``device`` config section.
+    """
+    return profile is not None and profile.local_config.HasField("device")
+
+
+def _role_disagreement(profile: ProfileBackup, entry: NodeDbEntry, nodedb_source: str) -> str:
+    """Describe a role the node-db entry reports differently from the profile.
+
+    Args:
+        profile: The parsed profile.
+        entry: The node-db export's own entry.
+        nodedb_source: The node-db file's name, for the message.
+
+    Returns:
+        A warning, or ``""`` when they agree, either side does not state
+        a recognized role, or the profile has no ``device`` section.
+    """
+    if not entry.role or not _profile_sets_role(profile):
+        return ""
+    table = enums.role_table()
+    profile_role = table.try_name(profile.local_config.device.role)
+    entry_role = table.try_name(entry.role)
+    if profile_role is None or entry_role is None or profile_role == entry_role:
+        return ""
+    return (
+        f"{profile.source} configures role {profile_role!r}, {nodedb_source} reports "
+        f"{entry_role!r}; using {profile.source}'s role (the profile always takes precedence)."
+    )
+
+
 def merge_backups(
     profile: ProfileBackup | None = None, nodedb: NodeDbBackup | None = None
 ) -> BackupBundle:
@@ -175,6 +216,9 @@ def merge_backups(
                     "backups may not be for the same node.",
                     source=nodedb_source,
                 )
+        role_warning = _role_disagreement(profile, entry, nodedb_source)
+        if role_warning:
+            warnings.append(role_warning)
         if (
             profile.public_key is not None
             and entry.public_key is not None
@@ -228,7 +272,9 @@ def live_config_from_backup(bundle: BackupBundle, *, node_id: NodeId) -> detect.
     role_recognized: str | None = None
     if entry is not None and entry.public_key and not bytes(local_config.security.public_key):
         local_config.security.public_key = entry.public_key
-    if entry is not None and entry.role:
+    # The profile's own role always takes precedence (merge_backups warns
+    # when the two disagree); the node-db entry only fills it in.
+    if entry is not None and entry.role and not _profile_sets_role(bundle.profile):
         role_value = enums.role_table().try_value(entry.role)
         if role_value is not None:
             local_config.device.role = role_value

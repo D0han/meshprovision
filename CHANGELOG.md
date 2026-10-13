@@ -381,6 +381,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh adopt --from-backup` given both a profile backup and a node-db backup
+  of the same node recorded the node-db entry's role, overriding the role the
+  profile configures, unlike every other overlapping field. The profile's role
+  now wins, with a warning when the two disagree ("... using <profile>'s role
+  (the profile always takes precedence)").
 - A node-db JSON backup starting with a UTF-8 byte-order mark (as some
   Windows editors save it) was refused by `mesh adopt --from-backup` as "not
   a recognized backup format"; it is now read like any other.
