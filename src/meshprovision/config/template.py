@@ -287,8 +287,9 @@ class TemplateConfig(BaseModel):
         Checks, in order, raising on the first failure: no option in
         both enabled/disabled lists; ``neighbor_info`` not in either
         list (use ``neighbor_info.enabled`` instead); both name patterns
-        fit their firmware byte limits; the short-name capacity floor
-        (only a hard error under ``name_capacity_strict``);
+        fit their firmware byte limits; the name capacity floor, against
+        whichever pattern yields fewer names (only a hard error under
+        ``name_capacity_strict``);
         ``admin_nodes`` count and reference format; the admin-channel
         interlock; and the zero-admin-keys lockdown interlock. Enum-typed fields
         (``device.role``, ``device.rebroadcast_mode``, ``lora.region``,
@@ -303,8 +304,9 @@ class TemplateConfig(BaseModel):
             TemplateValidationError: For most of the checks above.
             NamePatternError: If a name pattern's widest rendering
                 overflows its firmware byte limit.
-            NameCapacityError: If the short-name capacity is below the
-                configured floor and ``name_capacity_strict`` is true.
+            NameCapacityError: If the smaller name pattern's capacity is
+                below the configured floor and ``name_capacity_strict`` is
+                true.
             AdminKeyCapacityError: If more than
                 :data:`~meshprovision.errors.MAX_ADMIN_KEYS` admin node
                 references are configured.
@@ -345,17 +347,20 @@ class TemplateConfig(BaseModel):
             )
 
     def _check_name_patterns(self) -> None:
-        """Check both name patterns' byte limits, then the short-name capacity floor.
+        """Check both name patterns' byte limits, then the name capacity floor.
 
         Raises:
             NamePatternError: If a name pattern's widest rendering
                 overflows its firmware byte limit.
-            NameCapacityError: If the short-name capacity is below the
-                configured floor and ``name_capacity_strict`` is true.
+            NameCapacityError: If the smaller name pattern's capacity is
+                below the configured floor and ``name_capacity_strict`` is
+                true.
         """
-        short = self.short_name_spec()
         _check_pattern_fits(
-            short, self.short_name_pattern, limit=SHORT_NAME_MAX_BYTES, field="short_name_pattern"
+            self.short_name_spec(),
+            self.short_name_pattern,
+            limit=SHORT_NAME_MAX_BYTES,
+            field="short_name_pattern",
         )
         _check_pattern_fits(
             self.long_name_spec(),
@@ -364,17 +369,35 @@ class TemplateConfig(BaseModel):
             field="long_name_pattern",
         )
 
-        if short.capacity < self.name_min_capacity and self.name_capacity_strict:
+        field, pattern, spec = self._limiting_name_pattern()
+        if spec.capacity < self.name_min_capacity and self.name_capacity_strict:
             raise NameCapacityError(
-                f"short_name_pattern {self.short_name_pattern!r} over a "
+                f"{field} {pattern!r} over a "
                 f"{len(self.name_suffix_alphabet)}-character alphabet yields only "
-                f"{short.capacity} names, below the configured floor of "
+                f"{spec.capacity} names, below the configured floor of "
                 f"{self.name_min_capacity}.",
-                pattern=self.short_name_pattern,
-                capacity=short.capacity,
+                pattern=pattern,
+                capacity=spec.capacity,
                 floor=self.name_min_capacity,
-                field="short_name_pattern",
+                field=field,
             )
+
+    def _limiting_name_pattern(self) -> tuple[str, str, PatternSpec]:
+        """Pick the name pattern that runs out first.
+
+        Each pattern has its own namespace (``allocate_names`` falls back to
+        the long one's own next free name), so the fleet is capped by the
+        smaller one.
+
+        Returns:
+            ``(field, pattern, spec)`` of ``long_name_pattern`` when it
+            yields fewer names than ``short_name_pattern``, else of
+            ``short_name_pattern``.
+        """
+        short, long_spec = self.short_name_spec(), self.long_name_spec()
+        if long_spec.capacity < short.capacity:
+            return "long_name_pattern", self.long_name_pattern, long_spec
+        return "short_name_pattern", self.short_name_pattern, short
 
     def _check_admin_nodes(self) -> None:
         """Check the ``admin_nodes`` count, then each reference's format.
@@ -537,16 +560,16 @@ class TemplateConfig(BaseModel):
         """
         warnings = list(self._option_warnings())
 
-        short = self.short_name_spec()
-        if short.capacity < self.name_min_capacity:
+        field, pattern, spec = self._limiting_name_pattern()
+        if spec.capacity < self.name_min_capacity:
             warnings.append(
                 TemplateWarning(
                     "capacity_below_floor",
-                    f"short_name_pattern {self.short_name_pattern!r} over a "
+                    f"{field} {pattern!r} over a "
                     f"{len(self.name_suffix_alphabet)}-character alphabet yields "
-                    f"only {short.capacity} names (configured floor "
+                    f"only {spec.capacity} names (configured floor "
                     f"{self.name_min_capacity}).",
-                    field="short_name_pattern",
+                    field=field,
                 )
             )
 

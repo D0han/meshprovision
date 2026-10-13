@@ -177,6 +177,47 @@ def test_capacity_floor_hard_error_when_strict() -> None:
     assert exc.field == "short_name_pattern"
 
 
+@pytest.mark.parametrize(
+    ("long_name_pattern", "capacity"), [("Base Station {n}", 36), ("Base Station", 1)]
+)
+def test_long_pattern_below_floor_warns_naming_it(long_name_pattern: str, capacity: int) -> None:
+    cfg = TemplateConfig(short_name_pattern="MT{n}{n}", long_name_pattern=long_name_pattern)
+
+    (warning,) = [w for w in cfg.collect_warnings() if w.code == "capacity_below_floor"]
+
+    assert warning.field == "long_name_pattern"
+    assert warning.message == (
+        f"long_name_pattern {long_name_pattern!r} over a 36-character alphabet yields "
+        f"only {capacity} names (configured floor 100)."
+    )
+
+
+def test_long_pattern_below_floor_is_an_error_in_strict_mode() -> None:
+    with pytest.raises(NameCapacityError) as exc_info:
+        TemplateConfig(
+            short_name_pattern="MT{n}{n}",
+            long_name_pattern="Base Station {n}",
+            name_capacity_strict=True,
+        )
+    exc = exc_info.value
+    assert exc.field == "long_name_pattern"
+    assert exc.pattern == "Base Station {n}"
+    assert exc.capacity == 36
+    assert str(exc).startswith("long_name_pattern 'Base Station {n}' over a 36-character")
+
+
+def test_short_pattern_is_named_when_both_patterns_tie_below_the_floor() -> None:
+    cfg = TemplateConfig(short_name_pattern="MT{n}", long_name_pattern="Node {n}")
+
+    (warning,) = [w for w in cfg.collect_warnings() if w.code == "capacity_below_floor"]
+
+    assert warning.field == "short_name_pattern"
+    assert warning.message == (
+        "short_name_pattern 'MT{n}' over a 36-character alphabet yields only 36 names "
+        "(configured floor 100)."
+    )
+
+
 def test_check_capacity_utilization_boundaries() -> None:
     spec = PatternSpec.compile("MT{n}{n}", BASE36_ALPHABET, field="short_name_pattern")
     assert check_capacity_utilization(spec, 1166, warn_at=0.9) is None

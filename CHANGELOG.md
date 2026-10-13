@@ -381,6 +381,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `name_min_capacity` and `name_capacity_strict` only checked
+  `short_name_pattern`: a `long_name_pattern` with fewer names
+  (`"Base Station {n}"` yields 36) passed `mesh template validate`, and
+  provisioning then failed with "exhausted" at the 37th node. The check now
+  uses whichever pattern runs out first and names it; under
+  `name_capacity_strict: true` such a template is now refused at load.
 - `mesh adopt --from-backup` given both a profile backup and a node-db backup
   of the same node recorded the node-db entry's role, overriding the role the
   profile configures, unlike every other overlapping field. The profile's role

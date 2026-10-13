@@ -114,7 +114,8 @@ limits — one accented or non-Latin character can consume the entire
 
 **Capacity** is `alphabet_size ** suffix_slots`. `MT{n}{n}` over the
 base36 alphabet above is `36 ** 2 = 1296` names. `name_min_capacity: 100`
-warns at load time if the pattern yields fewer names than that;
+warns at load time if either pattern yields fewer names than that (naming
+the one that runs out first);
 `name_capacity_strict: true` turns that warning into a hard load error;
 `name_capacity_warn_utilization: 0.9` warns on every run once 90% of the
 namespace is in use; exhaustion of the namespace is a clear error naming
