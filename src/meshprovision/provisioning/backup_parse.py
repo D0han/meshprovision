@@ -29,7 +29,7 @@ from meshtastic.protobuf import apponly_pb2, clientonly_pb2, localonly_pb2
 from meshprovision.crypto.keys import X25519_KEY_SIZE
 from meshprovision.crypto.redact import SecretBytes
 from meshprovision.errors import BackupParseError
-from meshprovision.nodeid import NodeId
+from meshprovision.nodeid import NODE_ID_MAX, NodeId
 from meshprovision.provisioning.backup_models import (
     BackupFormat,
     ChannelInfo,
@@ -58,9 +58,6 @@ _PROFILE_YAML_MARKER_KEYS: frozenset[str] = frozenset(
 
 _B64_PREFIX: str = "base64:"
 """The Meshtastic CLI YAML export's marker for a base64-encoded bytes field."""
-
-_NODE_NUM_MAX: int = 0xFFFFFFFF
-"""The largest node number: Meshtastic node numbers are unsigned 32-bit."""
 
 _LATITUDE_LIMIT: int = 90
 """The largest latitude magnitude, in decimal degrees."""
@@ -476,7 +473,7 @@ def _node_number(value: object, *, field: str, source: str) -> int | None:
     if isinstance(value, float) and not (math.isfinite(value) and value.is_integer()):
         raise BackupParseError(f"{source}: {field} {value!r} is not a whole number.", source=source)
     number = int(value)
-    if not 0 <= number <= _NODE_NUM_MAX:
+    if not 0 <= number <= NODE_ID_MAX:
         raise BackupParseError(
             f"{source}: {field} {value!r} is outside the 32-bit node-number range.", source=source
         )

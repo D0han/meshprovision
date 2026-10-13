@@ -24,8 +24,6 @@ from typing import Final, TypeAlias
 from meshprovision.errors import NodeIdError
 
 __all__ = [
-    "BROADCAST",
-    "BROADCAST_NUM",
     "NODE_ID_HEX_WIDTH",
     "NODE_ID_MAX",
     "NodeId",
@@ -40,9 +38,6 @@ NODE_ID_MAX: Final[int] = 0xFFFFFFFF
 
 NODE_ID_HEX_WIDTH: Final[int] = 8
 """Width, in hex digits, of the zero-padded hex form of a node id."""
-
-BROADCAST_NUM: Final[int] = 0xFFFFFFFF
-"""The reserved broadcast node number (``!ffffffff``)."""
 
 _HEX_DIGITS: Final[frozenset[str]] = frozenset("0123456789abcdef")
 
@@ -118,33 +113,6 @@ class NodeId:
             For example ``"2697256388"``.
         """
         return str(self.num)
-
-    @property
-    def db_value(self) -> str:
-        """The exact form stored as the ``Nodes`` sheet primary key.
-
-        Returns:
-            An alias of :attr:`hex`.
-        """
-        return self.hex
-
-    @property
-    def is_broadcast(self) -> bool:
-        """Whether this id is the reserved broadcast address.
-
-        Returns:
-            ``True`` if ``num == BROADCAST_NUM``.
-        """
-        return self.num == BROADCAST_NUM
-
-    @property
-    def is_unset(self) -> bool:
-        """Whether this id is the unset/zero id.
-
-        Returns:
-            ``True`` if ``num == 0``.
-        """
-        return self.num == 0
 
     @classmethod
     def from_int(cls, value: int) -> NodeId:
@@ -385,7 +353,3 @@ class NodeId:
             For example ``"NodeId('!a0cb5cc4')"``.
         """
         return f"NodeId({self.display!r})"
-
-
-BROADCAST: Final[NodeId] = NodeId(BROADCAST_NUM)
-"""The reserved broadcast :class:`NodeId` (``!ffffffff``)."""

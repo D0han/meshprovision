@@ -7,7 +7,7 @@ import random
 import pytest
 
 from meshprovision.errors import NodeIdError
-from meshprovision.nodeid import BROADCAST, NODE_ID_MAX, NodeId
+from meshprovision.nodeid import NODE_ID_MAX, NodeId
 
 pytestmark = pytest.mark.unit
 
@@ -24,7 +24,6 @@ def _assert_all_forms_agree(num: int) -> None:
     assert NodeId.from_int(num) == nid
     assert len(nid.hex) == 8
     assert nid.hex == nid.hex.lower()
-    assert nid.db_value == nid.hex
     assert str(nid) == nid.display
     assert repr(nid) == f"NodeId({nid.display!r})"
     assert int(nid) == num
@@ -94,13 +93,6 @@ def test_try_parse_returns_none_on_failure() -> None:
     assert NodeId.try_parse(object()) is None
     assert NodeId.try_parse("garbage!!") is None
     assert NodeId.try_parse("!a0cb5cc4") == NodeId(0xA0CB5CC4)
-
-
-def test_broadcast_and_unset() -> None:
-    assert BROADCAST.is_broadcast
-    assert BROADCAST.num == NODE_ID_MAX
-    assert NodeId(0).is_unset
-    assert not NodeId(1).is_unset
 
 
 def test_ordering_hashing_and_container_usage() -> None:
