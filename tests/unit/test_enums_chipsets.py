@@ -49,15 +49,10 @@ def test_to_value_digit_string_resolves_like_int() -> None:
     assert table.to_value(str(value)) == value
 
 
-def test_enum_table_values() -> None:
-    table = enums.role_table()
-    assert table.values() == tuple(sorted(table.value_to_name))
-
-
 @pytest.mark.parametrize("table_fn", [enums.role_table, enums.hw_model_table, enums.region_table])
 def test_to_name_to_value_round_trip(table_fn) -> None:
     table = table_fn()
-    for name, value in table.items():
+    for value, name in sorted(table.value_to_name.items()):
         assert table.to_name(value) == name
         assert table.to_value(name) == value
         assert table.to_name(str(value)) == name
@@ -133,7 +128,9 @@ def test_try_name_try_value_return_none() -> None:
 def test_fallback_tables_agree_with_real_protobufs_where_present(fallback, table_fn) -> None:
     table = table_fn()
     for name, value in fallback.items():
-        assert table.contains_name(name), f"{name} missing from real {table.name} table"
+        assert table.normalize(name) in table.name_to_value, (
+            f"{name} missing from real {table.name} table"
+        )
         assert table.to_value(name) == value, f"{name} value mismatch in real {table.name} table"
 
 

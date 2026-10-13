@@ -156,7 +156,6 @@ def test_ble_device_info_summary() -> None:
 def test_tcp_target_str() -> None:
     assert str(TcpTarget("192.168.1.50", 4403)) == "192.168.1.50:4403"
     assert str(TcpTarget("::1", 4403)) == "[::1]:4403"
-    assert TcpTarget("host", 1).summary() == str(TcpTarget("host", 1))
 
 
 # ---------------------------------------------------------------------------

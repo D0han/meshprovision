@@ -319,33 +319,6 @@ class EnumTable:
         """
         return tuple(name for _, name in sorted(self.value_to_name.items()))
 
-    def values(self) -> tuple[int, ...]:
-        """Return every numeric value, ascending.
-
-        Returns:
-            A tuple of numeric values.
-        """
-        return tuple(sorted(self.value_to_name.keys()))
-
-    def items(self) -> tuple[tuple[str, int], ...]:
-        """Return ``(name, value)`` pairs, ordered by ascending numeric value.
-
-        Returns:
-            A tuple of ``(name, value)`` pairs.
-        """
-        return tuple((name, value) for value, name in sorted(self.value_to_name.items()))
-
-    def contains_name(self, name: str) -> bool:
-        """Check whether ``name`` (after normalization) is known.
-
-        Args:
-            name: A candidate name, in any case/spacing convention.
-
-        Returns:
-            ``True`` if the normalized name is in this table.
-        """
-        return self.normalize(name) in self.name_to_value
-
     def normalize(self, name: str) -> str:
         """Canonicalize a name string. Pure string operation; never raises.
 

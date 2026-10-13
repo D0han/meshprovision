@@ -224,14 +224,6 @@ class TcpTarget:
     host: str
     port: int = DEFAULT_TCP_PORT
 
-    def summary(self) -> str:
-        """Render a one-line, operator-facing description of this target.
-
-        Returns:
-            Same text as :meth:`__str__`.
-        """
-        return str(self)
-
     def __str__(self) -> str:
         """Render as ``host:port``, bracketing an IPv6 host.
 
