@@ -117,7 +117,6 @@ def _build_options(
     regions: tuple[str, ...],
     stale_after: float | None,
     offline_after: float | None,
-    fail_on_offline: bool,
     force_refresh: bool,
 ) -> StatusOptions:
     """Build a validated :class:`StatusOptions` from raw CLI values.
@@ -134,8 +133,6 @@ def _build_options(
             default.
         offline_after: Hours from ``--offline-after``, or ``None`` for the
             default.
-        fail_on_offline: Whether an offline node degrades the exit code,
-            from ``--fail-on-offline``/``--no-fail-on-offline``.
         force_refresh: Whether to bypass the HTTP cache read, from the
             global ``--no-cache``/``--force-refresh``.
 
@@ -175,7 +172,6 @@ def _build_options(
         sources=tuple(sources) or SOURCE_PRIORITY,
         regions=tuple(regions) or DEFAULT_REGIONS,
         node_ids=node_ids,
-        fail_on_offline=fail_on_offline,
     )
 
 
@@ -392,7 +388,6 @@ def status(
         regions=regions,
         stale_after=stale_after,
         offline_after=offline_after,
-        fail_on_offline=fail_on_offline,
         force_refresh=ctx.force_refresh,
     )
 

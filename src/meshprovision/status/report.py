@@ -66,7 +66,6 @@ __all__ = [
     "StatusReport",
     "build_report",
     "collect_observations",
-    "load_node_ids",
     "load_records",
     "run_status",
 ]
@@ -138,8 +137,6 @@ class StatusOptions:
             :data:`~meshprovision.datasources.lorastats.DEFAULT_REGIONS`.
         node_ids: Which nodes to report on. An empty tuple means every
             node in the database.
-        fail_on_offline: Whether an offline node should make
-            :meth:`StatusReport.exit_code` return a non-zero exit code.
     """
 
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -147,7 +144,6 @@ class StatusOptions:
     sources: tuple[str, ...] = SOURCE_PRIORITY
     regions: tuple[str, ...] = DEFAULT_REGIONS
     node_ids: tuple[NodeId, ...] = ()
-    fail_on_offline: bool = True
 
 
 _DEFAULT_STATUS_OPTIONS: Final[StatusOptions] = StatusOptions()
@@ -394,30 +390,6 @@ def load_records(db_path: Path) -> dict[NodeId, NodeRecord]:
     return records
 
 
-def load_node_ids(db_path: Path) -> tuple[NodeId, ...]:
-    """Return every node id in the database, in its canonical row order.
-
-    Args:
-        db_path: Path to the ``.ods`` database file.
-
-    Returns:
-        Every node id currently in the ``Nodes`` sheet, sorted by
-        ``long_name`` (see :mod:`meshprovision.db.sorting`).
-
-    Raises:
-        meshprovision.errors.SchemaError: If the file cannot be read or
-            does not match the expected schema.
-        meshprovision.errors.DbValidationError: If any cell fails
-            validation.
-        meshprovision.errors.DuplicateNodeError: If a ``node_id`` value
-            repeats.
-        DbIntegrityError: If a cached derived value disagrees with its
-            recomputed value while loading, or if loading marked the
-            session dirty.
-    """
-    return tuple(load_records(db_path).keys())
-
-
 def collect_observations(
     sources: Sequence[DataSource], ids: Sequence[NodeId], *, force_refresh: bool = False
 ) -> CollectedObservations:
@@ -509,9 +481,7 @@ def build_report(
         observations_by_source: Per-source observation maps, keyed by
             source name.
         node_ids: The node ids to include in the report, in the desired
-            output order (:func:`load_node_ids` returns the database's
-            canonical, ``long_name``-sorted row order; this function
-            never re-sorts it).
+            output order (this function never re-sorts it).
         failures: Data sources that failed during collection.
         now: The current time. Must be timezone-aware.
         options: The thresholds to classify availability against
@@ -544,7 +514,6 @@ def run_status(
     options: StatusOptions = _DEFAULT_STATUS_OPTIONS,
     *,
     client: CachedHTTPClient | None = None,
-    now: datetime | None = None,
 ) -> StatusReport:
     """Run one full, read-only status collection and assembly.
 
@@ -564,7 +533,6 @@ def run_status(
             one. When given, this function does not own it and will not
             close it -- useful for tests and for a CLI ``--watch`` loop
             that wants to reuse one client (and its cache) across polls.
-        now: The current time. Defaults to ``datetime.now(tz=UTC)``.
 
     Returns:
         The assembled status report.
@@ -582,7 +550,7 @@ def run_status(
         DbIntegrityError: If loading the database marked the session
             dirty.
     """
-    resolved_now = now if now is not None else datetime.now(tz=UTC)
+    resolved_now = datetime.now(tz=UTC)
     needs_lorastats = SOURCE_LORASTATS in options.sources
     lorastats_contact = settings.require_contact() if needs_lorastats else None
     owned_client = client is None

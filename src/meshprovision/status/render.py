@@ -286,10 +286,8 @@ def build_table(report: StatusReport) -> Table:
     return table
 
 
-def render_console(
-    report: StatusReport, *, console: Console | None = None, show_summary: bool = True
-) -> None:
-    """Print a status report's table (and optional summary caption) to a console.
+def render_console(report: StatusReport, *, console: Console | None = None) -> None:
+    """Print a status report's table and summary caption to a console.
 
     The only function in this module permitted to touch a ``Console``.
 
@@ -297,13 +295,9 @@ def render_console(
         report: The report to render.
         console: The ``rich`` console to print to. Defaults to a new
             :class:`~rich.console.Console`.
-        show_summary: Whether to include the summary/failures caption
-            below the table.
     """
     active_console = console if console is not None else Console()
     table = build_table(report)
-    if not show_summary:
-        table.caption = None
     active_console.print(table, markup=False, highlight=False)
 
 

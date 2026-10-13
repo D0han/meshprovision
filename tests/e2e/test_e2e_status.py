@@ -955,7 +955,7 @@ def test_run_status_counts_only_its_own_requests_on_a_reused_client(
         cache_dir=Path(env["MESHPROVISION_CACHE_DIR"]),
         contact=env["MESHPROVISION_CONTACT"],
     )
-    options = StatusOptions(fail_on_offline=False)
+    options = StatusOptions()
 
     with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": 1}}}):
         client = CachedHTTPClient(
