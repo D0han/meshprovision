@@ -63,7 +63,8 @@ class TemplateWarning:
     Attributes:
         code: Machine-readable warning code, one of
             ``"capacity_below_floor"``, ``"capacity_near_exhaustion"``,
-            ``"unknown_option"``, or ``"long_name_near_limit"``.
+            ``"unknown_option"``, ``"option_has_no_switch"``, or
+            ``"long_name_near_limit"``.
         message: Human-readable description of the finding.
         field: Name of the associated template field, when known.
     """

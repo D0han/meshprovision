@@ -70,13 +70,17 @@ version: 1
 Followed by module options:
 
 ```yaml
-enabled_options: [telemetry]
+enabled_options: []
 disabled_options: [mqtt, serial, range_test, store_forward, remote_hardware, paxcounter]
 ```
 
 An option listed in *both* `enabled_options` and `disabled_options` is a
 template-load error. An option meshprovision does not recognize is only a
-warning, because firmware adds new modules over time. `neighbor_info` must
+warning, because firmware adds new modules over time; it is ignored (nothing
+is written for it). So is an option whose module has no on/off switch in the
+firmware (`telemetry`, `traffic_management`, `audio`, `ambient_lighting`): it
+gets a load-time warning too, and `telemetry` is configured in its own
+`telemetry:` section instead. `neighbor_info` must
 not appear in either list — unlike `telemetry`, it has a real device-level
 `enabled` field, so it gets its own dedicated `neighbor_info:` block instead
 (see below); listing it here is also a template-load error.

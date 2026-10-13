@@ -60,7 +60,7 @@ from meshprovision.db.observed_keys import (
     RefProblem,
     owner_ref_problem,
 )
-from meshprovision.enums import MODULE_SECTIONS
+from meshprovision.enums import MODULE_SECTIONS, MODULES_WITHOUT_ENABLED
 from meshprovision.errors import (
     MAX_ADMIN_KEYS,
     AdminKeyCapacityError,
@@ -490,6 +490,38 @@ class TemplateConfig(BaseModel):
         """
         return tuple(f"{ref}_pub" for ref in self.admin_nodes)
 
+    def _option_warnings(self) -> tuple[TemplateWarning, ...]:
+        """Warn about module options the plan will not write.
+
+        Returns:
+            One ``"unknown_option"`` or ``"option_has_no_switch"`` warning
+            per such option, ``enabled_options`` first.
+        """
+        warnings: list[TemplateWarning] = []
+        for field_name, options in (
+            ("enabled_options", self.enabled_options),
+            ("disabled_options", self.disabled_options),
+        ):
+            for opt in options:
+                if opt not in KNOWN_MODULE_OPTIONS:
+                    message = (
+                        f"Option {opt!r} is not a known Meshtastic module option; "
+                        "it is ignored (nothing is written to the device for it)."
+                    )
+                    warnings.append(TemplateWarning("unknown_option", message, field=field_name))
+                elif opt in MODULES_WITHOUT_ENABLED:
+                    message = (
+                        f"Option {opt!r} has no on/off switch in the firmware (its module "
+                        f"config has no 'enabled' field), so listing it in {field_name} "
+                        "does nothing; remove it."
+                    )
+                    if opt in type(self).model_fields:
+                        message += f" Configure it in its own '{opt}:' section."
+                    warnings.append(
+                        TemplateWarning("option_has_no_switch", message, field=field_name)
+                    )
+        return tuple(warnings)
+
     def collect_warnings(self) -> tuple[TemplateWarning, ...]:
         """Compute every non-fatal finding about this template.
 
@@ -499,31 +531,11 @@ class TemplateConfig(BaseModel):
 
         Returns:
             A tuple of :class:`TemplateWarning`, in a fixed order:
-            unknown module options first, then a capacity-below-floor
-            warning (when not already a hard error), then a
-            long-name-near-limit warning.
+            module-option warnings first (unknown, or without an on/off
+            switch), then a capacity-below-floor warning (when not already
+            a hard error), then a long-name-near-limit warning.
         """
-        warnings: list[TemplateWarning] = []
-        for opt in self.enabled_options:
-            if opt not in KNOWN_MODULE_OPTIONS:
-                warnings.append(
-                    TemplateWarning(
-                        "unknown_option",
-                        f"Option {opt!r} is not a known Meshtastic module option; "
-                        "it will be passed through unchanged.",
-                        field="enabled_options",
-                    )
-                )
-        for opt in self.disabled_options:
-            if opt not in KNOWN_MODULE_OPTIONS:
-                warnings.append(
-                    TemplateWarning(
-                        "unknown_option",
-                        f"Option {opt!r} is not a known Meshtastic module option; "
-                        "it will be passed through unchanged.",
-                        field="disabled_options",
-                    )
-                )
+        warnings = list(self._option_warnings())
 
         short = self.short_name_spec()
         if short.capacity < self.name_min_capacity:

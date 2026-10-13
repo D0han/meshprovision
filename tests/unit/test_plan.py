@@ -439,16 +439,30 @@ def test_module_diffing_unknown_module_warns(make_live, template) -> None:
     )
 
 
-def test_module_diffing_telemetry_has_no_enabled_field(make_live, template) -> None:
+def test_module_diffing_live_module_without_enabled_field_warns(make_live, template) -> None:
+    """A module whose protobuf has ``enabled`` but the live firmware reports none."""
+    template2 = template.model_copy(update={"enabled_options": ("mqtt",)})
+    live = make_live(
+        template2, security=make_security(empty=True), module_enabled_overrides={"mqtt": None}
+    )
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+    assert any(
+        w.code == "module_has_no_enabled_field" and w.section == "mqtt" for w in plan.warnings
+    )
+
+
+def test_option_without_an_on_off_switch_is_skipped_silently(make_live, template) -> None:
+    """The template already warned at load time; the plan does not repeat it every run."""
     template2 = template.model_copy(update={"enabled_options": ("telemetry",)})
     live = make_live(template2, security=make_security(empty=True))
     inputs = PlanInputs(
         live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
     )
     plan = build_plan(inputs)
-    assert any(
-        w.code == "module_has_no_enabled_field" and w.section == "telemetry" for w in plan.warnings
-    )
+    assert not any(w.section == "telemetry" for w in plan.warnings)
 
 
 def test_telemetry_new_fields_are_diffed(make_live, template) -> None:

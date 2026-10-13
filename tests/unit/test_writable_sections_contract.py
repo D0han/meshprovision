@@ -25,6 +25,7 @@ from typing import Final
 import pytest
 from meshtastic.protobuf import config_pb2, localonly_pb2, module_config_pb2
 
+from meshprovision.enums import MODULES_WITHOUT_ENABLED
 from meshprovision.provisioning import detect
 from tests.conftest import real_write_config_or_exit
 
@@ -68,3 +69,15 @@ def test_module_sections_are_local_module_config_fields() -> None:
     fields = {field.name for field in localonly_pb2.LocalModuleConfig.DESCRIPTOR.fields}
 
     assert set(detect.MODULE_SECTIONS) <= fields
+
+
+def test_modules_without_enabled_are_exactly_those_lacking_the_field() -> None:
+    by_name = localonly_pb2.LocalModuleConfig.DESCRIPTOR.fields_by_name
+    lacking = {
+        name
+        for name in detect.MODULE_SECTIONS
+        if "enabled" not in by_name[name].message_type.fields_by_name
+    }
+
+    assert set(MODULES_WITHOUT_ENABLED) == lacking
+    assert "telemetry" in lacking

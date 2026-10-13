@@ -58,6 +58,7 @@ from __future__ import annotations
 
 from typing import Any, Final
 
+from meshprovision.enums import MODULES_WITHOUT_ENABLED
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
@@ -320,6 +321,9 @@ def _plan_module_sections(
                     section=opt,
                 )
             )
+            continue
+        if opt in MODULES_WITHOUT_ENABLED:
+            # No on/off switch to write; the template warned once at load.
             continue
         current = live.module_enabled.get(opt)
         if current is None:

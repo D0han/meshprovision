@@ -401,8 +401,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   surrounding whitespace is no longer drift and never triggers a rename,
   and adopt now says what it records ("recorded as 'AB'").
 - `mesh template validate` warned that `traffic_management` is "not a
-  known Meshtastic module option" although provisioning writes it; the
-  list of known module options is now the planner's own list.
+  known Meshtastic module option"; the list of known module options is
+  now the planner's own list. A module option whose firmware module has
+  no on/off switch (`telemetry`, `traffic_management`, `audio`,
+  `ambient_lighting`) did nothing in `enabled_options`/`disabled_options`
+  except print "has no 'enabled' field" on every `mesh provision`, while
+  `mesh template validate` reported the template OK; it now gets one
+  load-time warning (`option_has_no_switch`) and the planner skips it
+  silently. The shipped example template no longer lists `telemetry` in
+  `enabled_options`. The warning for an unrecognized option now says it
+  is ignored instead of "passed through unchanged", which it never was.
 - A timestamp cell in the database (`first_added_ts`, `last_updated_ts`,
   `archived_at`, or a key's `created_ts`) holding a value that leaves the
   supported date range once converted to UTC, such as

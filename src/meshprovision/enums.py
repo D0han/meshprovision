@@ -24,8 +24,9 @@ under those private-but-stable names specifically so a later test layer
 can assert they agree with the real protobufs whenever those are
 installed.
 
-:data:`MODULE_SECTIONS` (the module-config section names) lives here as
-the one leaf both the planner and the template validator read.
+:data:`MODULE_SECTIONS` (the module-config section names) and
+:data:`MODULES_WITHOUT_ENABLED` live here as the one leaf both the planner and
+the template validator read.
 """
 
 from __future__ import annotations
@@ -43,6 +44,7 @@ from typing import Final
 from meshprovision.errors import EnumMappingError
 
 __all__ = [
+    "MODULES_WITHOUT_ENABLED",
     "MODULE_SECTIONS",
     "EnumSource",
     "EnumTable",
@@ -76,6 +78,14 @@ MODULE_SECTIONS: Final[tuple[str, ...]] = (
     "traffic_management",
 )
 """Exactly the ``LocalModuleConfig`` field names ``Node.writeConfig`` accepts."""
+
+MODULES_WITHOUT_ENABLED: Final[frozenset[str]] = frozenset(
+    {"ambient_lighting", "audio", "telemetry", "traffic_management"}
+)
+"""The :data:`MODULE_SECTIONS` whose config message has no ``enabled`` field, so
+``enabled_options``/``disabled_options`` cannot switch them. Spelled out rather
+than read off the protobufs, which this module never imports at import time;
+``test_writable_sections_contract.py`` checks it against them."""
 
 # ---------------------------------------------------------------------------
 # Candidate protobuf module/attribute paths, newest layout first.

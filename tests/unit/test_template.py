@@ -15,6 +15,7 @@ from meshprovision.config.template import (
     load_template,
     load_template_text,
 )
+from meshprovision.enums import MODULES_WITHOUT_ENABLED
 from meshprovision.errors import (
     AdminKeyCapacityError,
     NameCapacityError,
@@ -456,6 +457,34 @@ def test_unknown_module_option_is_warning_not_error() -> None:
     assert any(w.code == "unknown_option" for w in warnings)
 
 
+def test_unknown_module_option_warning_says_it_is_ignored() -> None:
+    (warning,) = TemplateConfig(disabled_options=["not_a_real_module"]).collect_warnings()
+
+    assert warning.message == (
+        "Option 'not_a_real_module' is not a known Meshtastic module option; "
+        "it is ignored (nothing is written to the device for it)."
+    )
+    assert warning.field == "disabled_options"
+
+
+@pytest.mark.parametrize("field_name", ["enabled_options", "disabled_options"])
+def test_option_without_an_on_off_switch_warns_at_load(field_name: str) -> None:
+    (warning,) = TemplateConfig(**{field_name: ["telemetry"]}).collect_warnings()
+
+    assert warning.code == "option_has_no_switch"
+    assert warning.field == field_name
+    assert f"listing it in {field_name} does nothing" in warning.message
+    assert "telemetry:" in warning.message
+
+
+def test_every_module_without_an_on_off_switch_warns() -> None:
+    cfg = TemplateConfig(enabled_options=sorted(MODULES_WITHOUT_ENABLED))
+
+    warnings = cfg.collect_warnings()
+
+    assert [w.code for w in warnings] == ["option_has_no_switch"] * len(MODULES_WITHOUT_ENABLED)
+
+
 def test_options_lowercased() -> None:
     cfg = TemplateConfig(enabled_options=["MQTT", "Serial"])
     assert cfg.enabled_options == ("mqtt", "serial")
@@ -600,4 +629,4 @@ def test_admin_key_refs_and_option_state() -> None:
 def test_traffic_management_is_a_known_module_option() -> None:
     """Every module section the planner writes is a known template option."""
     template = TemplateConfig(enabled_options=["traffic_management"])
-    assert template.collect_warnings() == ()
+    assert "unknown_option" not in {w.code for w in template.collect_warnings()}

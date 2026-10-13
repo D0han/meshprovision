@@ -9,8 +9,10 @@ version: 1
 # name (lower_snake_case). An option may appear in at most ONE of these
 # two lists -- listing it in both is a template-load error. An option
 # meshprovision does not recognize is not an error either -- firmware
-# adds modules over time -- it just produces a load-time warning.
-enabled_options: [telemetry]
+# adds modules over time -- it produces a load-time warning and is
+# ignored. telemetry has no on/off switch; tune it in the telemetry:
+# section below.
+enabled_options: []
 disabled_options: [mqtt, serial, range_test, store_forward, remote_hardware, paxcounter]
 
 # Naming. '{n}' is the ONLY placeholder; each occurrence consumes one
