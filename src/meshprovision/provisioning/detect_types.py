@@ -434,10 +434,6 @@ class Detection:
         state: The decided :class:`NodeState`.
         node_id: The classified node's id.
         in_database: Whether this node id was found in the ODS.
-        factory_short_name: Whether the live ``short_name`` matches the
-            firmware factory default.
-        factory_long_name: Whether the live ``long_name`` matches the
-            firmware factory default.
         admin_keys_present: Whether the device reports any
             ``security.admin_key`` entries.
         reasons: Machine-readable codes explaining the decision, in a
@@ -448,8 +444,6 @@ class Detection:
     state: NodeState
     node_id: NodeId
     in_database: bool
-    factory_short_name: bool
-    factory_long_name: bool
     admin_keys_present: bool
     reasons: tuple[str, ...] = ()
 

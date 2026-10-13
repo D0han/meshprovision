@@ -55,7 +55,6 @@ from meshprovision.cli.transport import (
     resolve_backend,
     transport_options,
 )
-from meshprovision.crypto import keys as crypto_keys
 from meshprovision.db import pending_keys, schema
 from meshprovision.db.schema import KeyType, ManagementMode
 from meshprovision.errors import (
@@ -174,27 +173,14 @@ class ProvisionResult:
 
     Attributes:
         node_id: The provisioned node's id.
-        detection: The node's classification before the plan was built.
-        drifts: Drifts detected against the database, when the node was
-            already provisioned.
         plan: The change plan that was built and (unless a dry run)
             applied.
-        keypair: The freshly generated node keypair, when one was
-            generated (``regenerate``); the device's own already-existing
-            keypair, when one was adopted into the database instead
-            (``adopt_device_key``); otherwise ``None``.
-        outcome: The result of applying the plan to the device, or
-            ``None`` for a dry run.
         persisted: Whether the database was updated.
         exit_code: The process exit code this run should produce.
     """
 
     node_id: NodeId
-    detection: detect.Detection
-    drifts: tuple[repair.Drift, ...]
     plan: plan_mod.ChangePlan
-    keypair: crypto_keys.KeyPair | None
-    outcome: apply.ApplyOutcome | None
     persisted: bool
     exit_code: int
 
@@ -523,11 +509,7 @@ def run_provision(
     if opts.dry_run:
         return ProvisionResult(
             node_id=change_plan.node_id,
-            detection=detection,
-            drifts=drifts,
             plan=change_plan,
-            keypair=None,
-            outcome=None,
             persisted=False,
             exit_code=int(ExitCode.OK),
         )
@@ -566,11 +548,7 @@ def run_provision(
 
     return ProvisionResult(
         node_id=change_plan.node_id,
-        detection=detection,
-        drifts=drifts,
         plan=change_plan,
-        keypair=keypair,
-        outcome=outcome,
         persisted=persisted,
         exit_code=outcome.exit_code,
     )

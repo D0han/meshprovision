@@ -264,12 +264,10 @@ class SheetSpec:
     Attributes:
         name: The sheet name.
         columns: The sheet's columns, in left-to-right order.
-        key_column: Name of the column that is this sheet's primary key.
     """
 
     name: str
     columns: tuple[ColumnSpec, ...]
-    key_column: str
 
     def column_names(self) -> tuple[str, ...]:
         """Return every column name, in left-to-right order.
@@ -417,7 +415,6 @@ def _recompute_main_chipset(row: Mapping[str, str]) -> str:
 
 NODES_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
     name=NODES_SHEET,
-    key_column="node_id",
     columns=(
         ColumnSpec(
             name="node_id",
@@ -650,7 +647,6 @@ NODES_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
 
 KEYS_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
     name=KEYS_SHEET,
-    key_column="key_ref",
     columns=(
         ColumnSpec(
             name="key_ref",
