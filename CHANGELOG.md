@@ -381,6 +381,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An unused admin-key slot read back as an empty entry counted as an admin
+  key: a factory-named device reporting one was classified as foreign instead
+  of factory, and `mesh adopt` counted it in "N admin key(s) will be filed
+  under a synthetic observed-* ref". Empty slots are now ignored, and that
+  count includes only the keys adopt actually files (a malformed key is still
+  reported, but not counted).
 - `name_min_capacity` and `name_capacity_strict` only checked
   `short_name_pattern`: a `long_name_pattern` with fewer names
   (`"Base Station {n}"` yields 36) passed `mesh template validate`, and

@@ -918,6 +918,26 @@ def test_adopt_single_unregistered_admin_key_reports_one_present_zero_recognized
     assert adopted.unregistered_admin_keys == ()
 
 
+def test_adopt_counts_only_the_admin_keys_it_will_file(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """An empty slot or malformed entry is not filed, so the hint must not count it."""
+    stray_kp = keypair_factory()
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.admin_key.extend([b"", b"\x01" * 5, stray_kp.public])
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "1 admin key(s) will be filed under a synthetic observed-* ref" in result.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    adopted = NodeRecord.from_row(loaded.nodes[0])
+    assert adopted.authorized_admin_keys == (observed_key_ref(stray_kp.public),)
+
+
 def test_adopt_then_enroll_round_trip(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus
 ) -> None:

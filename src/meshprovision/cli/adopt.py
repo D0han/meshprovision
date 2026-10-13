@@ -294,8 +294,8 @@ def _render_admin_key_lines(
         line noting it can't be rendered or registered at all, rather
         than a crash or a silently wrong encoding; the report's own
         warnings already flag the malformed key separately); otherwise a
-        single count hint line for the remainder, or nothing when there
-        is no self-admin key and every other key is already registered.
+        single count hint line for the remaining well-formed keys, or
+        nothing when there is no self-admin key and no such key remains.
     """
     self_admin_lines: list[str] = []
     unregistered: list[adopt_mod.LiveAdminKey] = []
@@ -328,9 +328,13 @@ def _render_admin_key_lines(
                 f"rename it once its owner is known: mesh admin import <REF>={encoded}"
             )
         return (*self_admin_lines, *lines)
+    # A malformed key is not filed (see above), so it is not counted either.
+    fileable = [key for key in unregistered if len(key.material) == crypto_keys.X25519_KEY_SIZE]
+    if not fileable:
+        return tuple(self_admin_lines)
     return (
         *self_admin_lines,
-        f"{len(unregistered)} admin key(s) will be filed under a synthetic observed-* ref "
+        f"{len(fileable)} admin key(s) will be filed under a synthetic observed-* ref "
         "in the Keys sheet; re-run with --show-admin-keys for import commands to rename them.",
     )
 

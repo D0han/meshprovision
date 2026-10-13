@@ -303,7 +303,8 @@ def live_config_from_protobufs(
     security = LiveSecurity(
         public_key=public_key_bytes or None,
         private_key=SecretBytes(private_key_bytes) if private_key_bytes else None,
-        admin_keys=tuple(bytes(k) for k in sec.admin_key),
+        # An unused admin slot can read back as an empty entry; it is no key.
+        admin_keys=tuple(bytes(k) for k in sec.admin_key if k),
         is_managed=bool(sec.is_managed),
         admin_channel_enabled=bool(sec.admin_channel_enabled),
         serial_enabled=bool(sec.serial_enabled),

@@ -182,6 +182,35 @@ def test_live_config_from_protobufs_normalizes_enums_and_excludes_repeated_bytes
     assert live.security.admin_keys == (bytes(range(1, 33)),)
 
 
+def test_empty_admin_key_slots_are_ignored() -> None:
+    """A device reports unused admin slots as empty entries; they are not keys."""
+    local_config = localonly_pb2.LocalConfig()
+    local_config.security.admin_key.extend([b"", bytes(range(1, 33)), b""])
+
+    live = detect.live_config_from_protobufs(
+        local_config, localonly_pb2.LocalModuleConfig(), node_id=NodeId.from_hex("deadbe01")
+    )
+
+    assert live.security.admin_keys == (bytes(range(1, 33)),)
+
+
+def test_a_factory_device_with_only_empty_admin_slots_is_factory() -> None:
+    local_config = localonly_pb2.LocalConfig()
+    local_config.security.admin_key.extend([b"", b"", b""])
+    live = detect.live_config_from_protobufs(
+        local_config,
+        localonly_pb2.LocalModuleConfig(),
+        node_id=NodeId.from_hex("deadbe01"),
+        short_name="be01",
+        long_name="Meshtastic be01",
+    )
+
+    detection = detect.classify(live, db_entry=None)
+
+    assert detection.state is detect.NodeState.FACTORY
+    assert not detection.admin_keys_present
+
+
 def test_message_fields_skips_bytes_and_repeated_fields() -> None:
     local_config = localonly_pb2.LocalConfig()
     local_config.security.public_key = bytes(range(32))
