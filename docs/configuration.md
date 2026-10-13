@@ -130,10 +130,10 @@ device's current value untouched; there is no CLI override, unlike
 ### Peers
 
 ```yaml
-sync_peers: false
+sync_peers: true
 ```
 
-When `true`, `mesh provision` ends by giving the device every other active
+When `true` (the default), `mesh provision` ends by giving the device every other active
 node of the database as a favorited contact, exactly what
 `mesh peers --apply` does (see [commands](commands.md)). A device only keeps the
 nodes it has heard recently and evicts the rest; a favorite is never
@@ -141,7 +141,7 @@ evicted, which matters most for routers and base stations. A node whose
 public key is not in the Keys sheet cannot be added as a contact, and a
 node the device already holds under a *different* key is reported and left
 alone. A failure in this step is a warning, never a provisioning failure.
-Default `false`.
+Set `false` to leave the device's contacts alone.
 
 ### Admin nodes
 

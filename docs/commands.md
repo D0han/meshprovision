@@ -521,8 +521,8 @@ or a spoofed identity, for you to decide (`mesh adopt` re-reads the device).
 Takes the same connection flags as `mesh provision` (`--port`,
 `--ble-address`, `--ble-scan`, `--host`, `--interface`, `--timeout`,
 `--ble-scan-timeout`) and `--json`. Run it once per device; to do it as the
-last step of every provisioning run instead, set `sync_peers: true` in the
-template ([configuration](configuration.md)).
+last step of every provisioning run, leave `sync_peers: true` (the default) in
+the template ([configuration](configuration.md)).
 
 ## `mesh template`
 

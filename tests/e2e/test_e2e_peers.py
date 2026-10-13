@@ -182,11 +182,24 @@ def test_json_output_names_nodes_but_carries_no_key_material(
     assert not BASE64_KEY_RE.search(result.stdout + result.stderr)
 
 
-def _with_sync_peers(env: dict[str, str], write_template: Callable[..., Path]) -> dict[str, str]:
-    return {**env, "MESHPROVISION_TEMPLATE_PATH": str(write_template(sync_peers=True))}
+def _with_sync_peers(
+    env: dict[str, str], write_template: Callable[..., Path], *, enabled: bool = True
+) -> dict[str, str]:
+    return {**env, "MESHPROVISION_TEMPLATE_PATH": str(write_template(sync_peers=enabled))}
 
 
-def test_provision_syncs_peers_when_the_template_asks_for_it(
+def test_provision_syncs_peers_by_default(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface("a1b2c3d4"))
+
+    result = invoke(runner, ["provision", *PORT_ARGS, "--yes"], env)
+
+    assert result.exit_code == 0
+    assert device.known_nodes[int(NodeId.parse(B_HEX))]["isFavorite"] is True
+
+
+def test_provision_leaves_the_contacts_alone_when_the_template_opts_out(
     runner: CliRunner,
     env: dict[str, str],
     bus: DeviceBus,
@@ -196,19 +209,10 @@ def test_provision_syncs_peers_when_the_template_asks_for_it(
     device = bus.use(FakeMeshInterface("a1b2c3d4"))
 
     result = invoke(
-        runner, ["provision", *PORT_ARGS, "--yes"], _with_sync_peers(env, write_template)
+        runner,
+        ["provision", *PORT_ARGS, "--yes"],
+        _with_sync_peers(env, write_template, enabled=False),
     )
-
-    assert result.exit_code == 0
-    assert device.known_nodes[int(NodeId.parse(B_HEX))]["isFavorite"] is True
-
-
-def test_provision_leaves_the_contacts_alone_by_default(
-    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
-) -> None:
-    device = bus.use(FakeMeshInterface("a1b2c3d4"))
-
-    result = invoke(runner, ["provision", *PORT_ARGS, "--yes"], env)
 
     assert result.exit_code == 0
     assert device.peer_calls == []

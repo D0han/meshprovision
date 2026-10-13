@@ -39,12 +39,13 @@ name_capacity_strict: false # true turns the capacity-floor warning above into a
 # omitted entirely) to leave the device's current value untouched.
 # is_unmessagable: false
 
-# true makes `mesh provision` finish by giving the device every other
+# true (the default) makes `mesh provision` finish by giving the device every other
 # active node of your database as a favorited contact (what
 # `mesh peers --apply` does by hand). Favorites are never evicted from
 # the device's node list, which matters most for routers and base
-# stations. A failure here is a warning; the node is still provisioned.
-sync_peers: false
+# stations. Set false to leave contacts alone. A failure here is a warning;
+# the node is still provisioned.
+sync_peers: true
 
 # 0 to 3 admin node references (3 is the firmware's admin_key capacity
 # -- config.security.admin_key is a `repeated bytes` field limited to

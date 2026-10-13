@@ -14,9 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marks it favorite, so routers and base stations always hold the whole
   fleet. Dry run by default, `--apply` writes and verifies after a
   reconnect, idempotent; a node the device holds under a different key is
-  reported, never overwritten. The new template switch `sync_peers: true`
-  makes `mesh provision` do the same as its last step (off by default; a
-  failure there is a warning).
+  reported, never overwritten. The template switch `sync_peers` (on
+  by default; set `false` to opt out) makes `mesh provision` do the same
+  as its last step; a failure there is a warning.
 - Single `mesh` console script (distribution `meshprovision`) with eight
   subcommands/subcommand groups: `init`, `provision`, `status`, `admin`,
   `db`, `adopt`, `template`, and `peers`.
