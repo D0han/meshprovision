@@ -9,7 +9,6 @@ from meshprovision.errors import (
     ExitCode,
     ProvisioningError,
     UnsupportedTransportError,
-    WriteVerificationError,
 )
 from meshprovision.provisioning import apply_session as apply_session_module
 from meshprovision.provisioning.apply import ApplyOutcome, ReconnectingSession
@@ -25,33 +24,6 @@ from tests.unit.apply_fakes import (
 )
 
 pytestmark = pytest.mark.unit
-
-
-def test_write_result_as_error_carries_the_redacted_fields_through() -> None:
-    """`WriteResult.as_error()` -- `__all__`-exported public API, unused internally.
-
-    `cli/provision.py` reimplements similar rendering inline for its own
-    CLI-specific message formatting, but this convenience method for
-    library consumers wanting a proper typed exception from a
-    `WriteResult` had zero test coverage.
-    """
-    result = WriteResult(
-        "security",
-        WriteStatus.UNCONFIRMED,
-        "admin key set mismatch: expected 1, got 0",
-        field="admin_key",
-        expected="sha256:aaaa",
-        actual="<none>",
-    )
-
-    error = result.as_error()
-
-    assert isinstance(error, WriteVerificationError)
-    assert error.section == "security"
-    assert error.field == "admin_key"
-    assert error.expected == "sha256:aaaa"
-    assert error.actual == "<none>"
-    assert "admin key set mismatch" in str(error)
 
 
 # ---------------------------------------------------------------------------

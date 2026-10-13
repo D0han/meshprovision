@@ -31,8 +31,7 @@ Secret hygiene: nothing in this module ever logs, prints, or otherwise
 renders raw key bytes, base64 key strings, or a BLE PIN. Every
 human-facing representation of a secret field goes through
 :func:`meshprovision.crypto.redact.fingerprint` first; ``WriteResult``
-and :class:`~meshprovision.errors.WriteVerificationError` document
-``expected``/``actual`` as always-redacted strings.
+documents ``expected``/``actual`` as always-redacted strings.
 
 Exception discipline: the only broad ``except`` in this module is
 :data:`~meshprovision.provisioning.device_write.DEVICE_EXCEPTIONS` plus

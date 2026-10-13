@@ -78,7 +78,6 @@ __all__ = [
     "UnsupportedTransportError",
     "WeakKeyError",
     "WeakKeySeverity",
-    "WriteVerificationError",
     "exit_code_for",
 ]
 
@@ -1089,58 +1088,6 @@ class PlanConflictError(ProvisioningError):
         """
         super().__init__(message, hint=hint)
         self.field = field
-
-
-class WriteVerificationError(ProvisioningError):
-    """A post-write read-back did not match the intended configuration.
-
-    Per firmware issue #7449, a written value (including keys) can fail
-    to persist across a reboot, so every write is verified by reading it
-    back. When this error is raised, the caller must skip the
-    corresponding ODS write and the process must exit non-zero.
-
-    ``expected`` and ``actual`` are always human-readable, already-redacted
-    representations (for example a redacted fingerprint string) -- never
-    raw cryptographic material. Route any key material through
-    ``meshprovision.crypto.redact`` before constructing this error.
-
-    Attributes:
-        section: Name of the config section that failed verification.
-        field: Name of the specific field that failed verification, when
-            known.
-        expected: Redacted, human-readable representation of the intended
-            value, when known.
-        actual: Redacted, human-readable representation of the value read
-            back from the device, when known.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        section: str,
-        field: str | None = None,
-        expected: str | None = None,
-        actual: str | None = None,
-        hint: str | None = None,
-    ) -> None:
-        """Initialize the error.
-
-        Args:
-            message: Human-readable description of what went wrong.
-            section: Name of the config section that failed verification.
-            field: Name of the specific field that failed verification.
-            expected: Redacted, human-readable representation of the
-                intended value. Never raw key material.
-            actual: Redacted, human-readable representation of the value
-                read back from the device. Never raw key material.
-            hint: Optional actionable suggestion for resolving the error.
-        """
-        super().__init__(message, hint=hint)
-        self.section = section
-        self.field = field
-        self.expected = expected
-        self.actual = actual
 
 
 class NamespaceExhaustedError(ProvisioningError):

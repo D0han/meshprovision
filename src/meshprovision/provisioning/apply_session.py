@@ -37,7 +37,6 @@ from meshprovision.errors import (
     ConnectionFailedError,
     ExitCode,
     ProvisioningError,
-    WriteVerificationError,
 )
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning.connection import ConnectionBackend, close_interface
@@ -121,22 +120,6 @@ class WriteResult:
             or :attr:`WriteStatus.SKIPPED`.
         """
         return self.status in (WriteStatus.CONFIRMED, WriteStatus.SKIPPED)
-
-    def as_error(self) -> WriteVerificationError:
-        """Build the :class:`~meshprovision.errors.WriteVerificationError` for this result.
-
-        Returns:
-            A :class:`~meshprovision.errors.WriteVerificationError`
-            carrying this result's already-redacted ``expected``/
-            ``actual`` strings.
-        """
-        return WriteVerificationError(
-            self.message,
-            section=self.section,
-            field=self.field,
-            expected=self.expected,
-            actual=self.actual,
-        )
 
 
 @dataclass(frozen=True, slots=True)

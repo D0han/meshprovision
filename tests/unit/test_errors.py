@@ -19,7 +19,6 @@ from meshprovision.errors import (
     ProvisioningError,
     WeakKeyError,
     WeakKeySeverity,
-    WriteVerificationError,
     exit_code_for,
 )
 
@@ -107,20 +106,6 @@ def test_weak_key_error_attribute_plumbing() -> None:
     assert exc.key_ref == "deadbe01_pub"
     assert exc.severity == "warning"
     assert exc.fingerprint == "sha256:ab12"
-
-
-def test_write_verification_error_attribute_plumbing() -> None:
-    exc = WriteVerificationError(
-        "mismatch",
-        section="security",
-        field="public_key",
-        expected="<redacted>",
-        actual="<redacted>",
-    )
-    assert exc.section == "security"
-    assert exc.field == "public_key"
-    assert exc.expected == "<redacted>"
-    assert exc.actual == "<redacted>"
 
 
 def test_db_validation_error_attribute_plumbing() -> None:
