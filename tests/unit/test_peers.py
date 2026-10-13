@@ -176,6 +176,69 @@ def test_replanning_after_applying_the_plan_is_empty() -> None:
     assert second.in_sync == (B, C)
 
 
+# --- archived nodes (--prune-archived) ---------------------------------------------------------
+
+
+def test_archived_node_ids_lists_only_archived_rows_in_order() -> None:
+    records = [
+        _node_record("c0000003", archived=True),
+        _node_record("a0000001"),
+        _node_record("b0000002", archived=True),
+    ]
+
+    assert peers.archived_node_ids(records) == (B, C)
+
+
+def test_archived_favorited_node_is_planned_for_unfavorite_only_when_requested() -> None:
+    live = {int(C): peers.LivePeer(KEY_C, True)}
+
+    asked = peers.plan_peers(A, [], live, archived=(C,))
+    default = peers.plan_peers(A, [], live)
+
+    assert asked.unfavorite == (C,)
+    assert not asked.is_empty
+    assert default.unfavorite == ()
+    assert default.is_empty
+
+
+def test_archived_node_not_favorited_or_not_held_is_left_alone() -> None:
+    live = {int(B): peers.LivePeer(KEY_B, False)}
+
+    plan = peers.plan_peers(A, [], live, archived=(B, C))
+
+    assert plan.unfavorite == ()
+    assert plan.is_empty
+
+
+def test_own_node_is_never_unfavorited() -> None:
+    plan = peers.plan_peers(A, [], {int(A): peers.LivePeer(KEY_A, True)}, archived=(A,))
+
+    assert plan.unfavorite == ()
+
+
+def test_apply_unfavorites_with_remove_favorite_after_the_actions() -> None:
+    plan = peers.plan_peers(
+        A, [_contact(B, KEY_B)], {int(C): peers.LivePeer(KEY_C, True)}, archived=(C,)
+    )
+    node = _FakeLocalNode()
+
+    outcome = peers.apply_peers(node, plan)  # type: ignore[arg-type]
+
+    assert node.calls == [("add", int(B)), ("fav", int(B)), ("unfav", int(C))]
+    assert outcome.unfavorited == (C,)
+    assert outcome.ok
+
+
+def test_a_failed_unfavorite_is_reported() -> None:
+    plan = peers.plan_peers(A, [], {int(C): peers.LivePeer(KEY_C, True)}, archived=(C,))
+    node = _FakeLocalNode(fail_on=int(C))
+
+    outcome = peers.apply_peers(node, plan)  # type: ignore[arg-type]
+
+    assert outcome.failures == ((C, "serial write failed"),)
+    assert outcome.unfavorited == ()
+
+
 # --- screen_contacts ---------------------------------------------------------------------------
 
 D = NodeId.parse("d0000004")
@@ -293,6 +356,11 @@ class _FakeLocalNode:
 
     def setFavorite(self, num: int) -> None:  # noqa: N802 -- real Node method name
         self.calls.append(("fav", num))
+
+    def removeFavorite(self, num: int) -> None:  # noqa: N802 -- real Node method name
+        if num == self._fail_on:
+            raise OSError("serial write failed")
+        self.calls.append(("unfav", num))
 
 
 def test_apply_sends_the_contact_before_the_favorite_flag() -> None:

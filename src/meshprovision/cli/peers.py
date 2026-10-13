@@ -63,6 +63,7 @@ def _report_json(report: PeersReport) -> dict[str, object]:
         "no_key": [node_id.display for node_id in report.plan.no_key],
         "key_mismatch": [node_id.display for node_id in report.plan.key_mismatch],
         "weak_key": [node_id.display for node_id in report.plan.weak_key],
+        "unfavorite": [node_id.display for node_id in report.plan.unfavorite],
         "failed": (
             [{"node": n.display, "error": m} for n, m in report.outcome.failures]
             if report.outcome is not None
@@ -82,6 +83,15 @@ def _report_json(report: PeersReport) -> dict[str, object]:
     help="Write the missing contacts and favorites (default: only report them).",
 )
 @click.option(
+    "--prune-archived",
+    is_flag=True,
+    default=False,
+    help=(
+        "Also unfavorite nodes archived in the database (`mesh db forget`) that the device "
+        "still has favorited. Never removes them from the device's node list."
+    ),
+)
+@click.option(
     "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of human text."
 )
 @pass_cli
@@ -97,6 +107,7 @@ def peers(
     timeout: int,
     ble_scan_timeout: float,
     apply_changes: bool,
+    prune_archived: bool,
     json_output: bool,
 ) -> None:
     """Add every fleet node to the connected device's contacts and favorite it.
@@ -118,6 +129,8 @@ def peers(
         timeout: Connect timeout, in seconds, from ``--timeout``.
         ble_scan_timeout: BLE scan duration, from ``--ble-scan-timeout``.
         apply_changes: Whether to write, from ``--apply``.
+        prune_archived: Whether to also unfavorite archived nodes, from
+            ``--prune-archived``.
         json_output: Whether to emit JSON, from ``--json``.
 
     Raises:
@@ -136,7 +149,7 @@ def peers(
     with ctx.open_database() as db:
         backend = resolve_backend(ctx, transport_opts)
         with device_session(ctx, backend) as session:
-            report = run_peers(ctx, db, session, apply=apply_changes)
+            report = run_peers(ctx, db, session, apply=apply_changes, prune_archived=prune_archived)
 
     if json_output:
         echo_json(_report_json(report))

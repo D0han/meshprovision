@@ -41,8 +41,9 @@ class PeersReport:
         applied: Whether writes were attempted (``--apply``).
         outcome: What the device accepted, or ``None`` for a dry run or an
             empty plan.
-        remaining: Nodes still missing contact or favorite after the
-            read-back; always empty for a dry run.
+        remaining: Nodes still missing contact or favorite (or, with
+            ``--prune-archived``, still favorited although archived) after
+            the read-back; always empty for a dry run.
     """
 
     own_node: NodeId
@@ -65,7 +66,7 @@ class PeersReport:
 
 
 def _plan(
-    db: DbSession, session: DeviceSession, *, known_bad: frozenset[bytes]
+    db: DbSession, session: DeviceSession, *, known_bad: frozenset[bytes], prune_archived: bool
 ) -> tuple[NodeId, peers.PeersPlan, dict[NodeId, str]]:
     """Plan the sync against the session's current interface.
 
@@ -73,6 +74,7 @@ def _plan(
         db: The open database session.
         session: The open device session.
         known_bad: The known-bad-keys blocklist for the weak-key audit.
+        prune_archived: Whether to plan unfavoriting archived nodes.
 
     Returns:
         The device's own id, the plan, and why each weak-keyed node's key
@@ -86,33 +88,42 @@ def _plan(
         peers.build_contacts(nodes, public_keys), public_keys, known_bad=known_bad
     )
     reasons = {c.node_id: c.weak_reason for c in contacts if c.weak_reason}
-    return own, peers.plan_peers(own, contacts, peers.read_live_peers(iface)), reasons
+    archived = peers.archived_node_ids(nodes) if prune_archived else ()
+    plan = peers.plan_peers(own, contacts, peers.read_live_peers(iface), archived=archived)
+    return own, plan, reasons
 
 
 def _remaining_after(
-    db: DbSession, session: DeviceSession, *, known_bad: frozenset[bytes]
-) -> tuple[NodeId, ...]:
-    """Re-read the device after the writes and list what is still missing.
+    db: DbSession, session: DeviceSession, *, known_bad: frozenset[bytes], prune_archived: bool
+) -> tuple[tuple[NodeId, ...], tuple[NodeId, ...]]:
+    """Re-read the device after the writes and list what did not stick.
 
     Args:
         db: The open database session.
         session: The open device session.
         known_bad: The blocklist the first plan was screened with.
+        prune_archived: Whether the first plan unfavorited archived nodes.
 
     Returns:
-        The nodes the device still lacks as contact or favorite; empty
-        when the session cannot read back (an in-place session has no
-        independent view of the device).
+        The nodes the device still lacks as contact or favorite, and the
+        archived nodes it still has favorited; both empty when the session
+        cannot read back (an in-place session has no independent view of
+        the device).
     """
     if not session.reads_back:
-        return ()
+        return (), ()
     session.refresh()
-    _, replan, _ = _plan(db, session, known_bad=known_bad)
-    return tuple(action.contact.node_id for action in replan.actions)
+    _, replan, _ = _plan(db, session, known_bad=known_bad, prune_archived=prune_archived)
+    return tuple(action.contact.node_id for action in replan.actions), replan.unfavorite
 
 
 def run_peers(
-    ctx: CliContext, db: DbSession, session: DeviceSession, *, apply: bool
+    ctx: CliContext,
+    db: DbSession,
+    session: DeviceSession,
+    *,
+    apply: bool,
+    prune_archived: bool = False,
 ) -> PeersReport:
     """Plan the peers sync and, with ``apply``, perform and verify it.
 
@@ -121,13 +132,15 @@ def run_peers(
         db: The open database session (read only here).
         session: The open device session.
         apply: Whether to write. ``False`` only reports the plan.
+        prune_archived: Whether to also unfavorite nodes archived in the
+            database that the device still has favorited.
 
     Returns:
         The report. Every problem that needs attention is also printed
         through ``ctx``.
     """
     known_bad = ctx.known_bad_keys()
-    own, plan, weak_reasons = _plan(db, session, known_bad=known_bad)
+    own, plan, weak_reasons = _plan(db, session, known_bad=known_bad, prune_archived=prune_archived)
     for node_id in plan.weak_key:
         ctx.warn(
             f"{node_id.display}: its recorded public key failed the weak-key audit "
@@ -149,6 +162,8 @@ def run_peers(
             if on
         ]
         ctx.info(f"{action.contact.node_id.display}: {' + '.join(steps)}")
+    for node_id in plan.unfavorite:
+        ctx.info(f"{node_id.display}: archived in the database; unfavorite")
     if plan.is_empty:
         attention = len(plan.weak_key) + len(plan.key_mismatch) + len(plan.no_key)
         if attention:
@@ -157,18 +172,26 @@ def run_peers(
             ctx.success("Peers are in sync: nothing to change.")
         return PeersReport(own_node=own, plan=plan, applied=apply)
     if not apply:
-        ctx.info(f"{len(plan.actions)} node(s) need changes; re-run with --apply to write them.")
+        changes = len(plan.actions) + len(plan.unfavorite)
+        ctx.info(f"{changes} node(s) need changes; re-run with --apply to write them.")
         return PeersReport(own_node=own, plan=plan, applied=False)
 
     outcome = peers.apply_peers(session.interface.localNode, plan)
     for node_id, message in outcome.failures:
         ctx.error(f"{node_id.display}: {message}")
-    remaining = _remaining_after(db, session, known_bad=known_bad)
-    if remaining:
-        names = ", ".join(node_id.display for node_id in remaining)
+    missing, still_favorited = _remaining_after(
+        db, session, known_bad=known_bad, prune_archived=prune_archived
+    )
+    if missing:
+        names = ", ".join(node_id.display for node_id in missing)
         ctx.error(f"Sent, but the device does not show {names} after reconnecting.")
-    elif outcome.ok:
-        ctx.success(f"Peers synced: {len(plan.actions)} node(s) updated.")
+    if still_favorited:
+        names = ", ".join(node_id.display for node_id in still_favorited)
+        ctx.error(f"Sent, but the device still has {names} favorited after reconnecting.")
+    remaining = (*missing, *still_favorited)
+    if not remaining and outcome.ok:
+        pruned = f", {len(plan.unfavorite)} archived node(s) unfavorited" if plan.unfavorite else ""
+        ctx.success(f"Peers synced: {len(plan.actions)} node(s) updated{pruned}.")
     return PeersReport(own_node=own, plan=plan, applied=True, outcome=outcome, remaining=remaining)
 
 

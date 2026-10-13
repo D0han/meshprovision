@@ -243,6 +243,7 @@ def test_a_write_the_device_silently_drops_fails_the_read_back(
     assert result.exit_code == 5
     assert "does not show" in result.stderr
     assert B_HEX in result.stderr
+    assert "favorited after reconnecting" not in result.stderr
 
 
 def test_a_rejected_write_is_reported_and_fails_the_run(
@@ -274,6 +275,86 @@ def test_json_output_names_nodes_but_carries_no_key_material(
     assert not BASE64_KEY_RE.search(result.stdout + result.stderr)
 
 
+def _favorited_archived_d(device: FakeMeshInterface) -> int:
+    d_num = int(NodeId.parse(D_HEX))
+    device.known_nodes[d_num] = {
+        "num": d_num,
+        "user": {"publicKey": _b64(OTHER_KEY)},
+        "isFavorite": True,
+    }
+    return d_num
+
+
+def test_prune_archived_dry_run_reports_and_writes_nothing(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    d_num = _favorited_archived_d(device)
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--prune-archived"], env)
+
+    assert result.exit_code == 0
+    assert f"!{D_HEX}: archived in the database; unfavorite" in result.stderr
+    assert "2 node(s) need changes" in result.stderr
+    assert device.peer_calls == []
+    assert device.known_nodes[d_num]["isFavorite"] is True
+
+
+def test_prune_archived_apply_unfavorites_and_is_idempotent(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    d_num = _favorited_archived_d(device)
+
+    first = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--prune-archived", "--json"], env)
+
+    assert first.exit_code == 0
+    assert ("unfav", d_num) in device.peer_calls
+    # Unfavorited only: the device keeps the node (and its key) in its NodeDB.
+    assert device.known_nodes[d_num]["isFavorite"] is False
+    assert device.known_nodes[d_num]["user"]["publicKey"] == _b64(OTHER_KEY)  # type: ignore[index]
+    assert json.loads(first.stdout)["unfavorite"] == [f"!{D_HEX}"]
+    assert "1 archived node(s) unfavorited" in first.stderr
+
+    calls_after_first = list(device.peer_calls)
+    second = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--prune-archived"], env)
+
+    assert second.exit_code == 0
+    assert device.peer_calls == calls_after_first
+
+
+def test_apply_without_prune_archived_leaves_archived_favorites_alone(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    d_num = _favorited_archived_d(device)
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--json"], env)
+
+    assert result.exit_code == 0
+    assert ("unfav", d_num) not in device.peer_calls
+    assert device.known_nodes[d_num]["isFavorite"] is True
+    assert json.loads(result.stdout)["unfavorite"] == []
+
+
+def test_a_dropped_unfavorite_fails_the_read_back(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    _favorited_archived_d(device)
+    device.drop_peer_writes = True
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--prune-archived", "--json"], env)
+
+    assert result.exit_code == 5
+    assert f"!{D_HEX}" in json.loads(result.stdout)["unconfirmed"]
+    assert f"Sent, but the device still has !{D_HEX} favorited after reconnecting." in (
+        result.stderr
+    )
+    (not_shown,) = [line for line in result.stderr.splitlines() if "does not show" in line]
+    assert D_HEX not in not_shown
+
+
 def _with_sync_peers(
     env: dict[str, str], write_template: Callable[..., Path], *, enabled: bool = True
 ) -> dict[str, str]:
@@ -289,6 +370,19 @@ def test_provision_syncs_peers_by_default(
 
     assert result.exit_code == 0
     assert device.known_nodes[int(NodeId.parse(B_HEX))]["isFavorite"] is True
+
+
+def test_provision_sync_peers_never_prunes_archived_favorites(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface("a1b2c3d4"))
+    d_num = _favorited_archived_d(device)
+
+    result = invoke(runner, ["provision", *PORT_ARGS, "--yes"], env)
+
+    assert result.exit_code == 0
+    assert ("unfav", d_num) not in device.peer_calls
+    assert device.known_nodes[d_num]["isFavorite"] is True
 
 
 def test_provision_leaves_the_contacts_alone_when_the_template_opts_out(

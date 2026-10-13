@@ -135,8 +135,8 @@ sync_peers: true
 
 When `true` (the default), `mesh provision` ends by giving the device every other active
 node of the database as a favorited contact, exactly what
-`mesh peers --apply` does (see [commands](commands.md)). A device only keeps the
-nodes it has heard recently and evicts the rest; a favorite is never
+`mesh peers --apply` does (it never unfavorites archived nodes) (see
+[commands](commands.md)). A device only keeps the nodes it has heard recently and evicts the rest; a favorite is never
 evicted, which matters most for routers and base stations. A node whose
 public key is not in the Keys sheet cannot be added as a contact; a node the
 device already holds under a *different* key, and a node whose recorded key

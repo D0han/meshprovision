@@ -19,6 +19,10 @@ This module is the whole feature, shared by ``mesh peers`` and the
   that is idempotent, so a second run plans nothing;
 * :func:`apply_peers` sends the planned admin messages to the local node.
 
+Asked to (``mesh peers --prune-archived``), the plan also unfavorites the
+nodes archived in the database (:func:`archived_node_ids`) that the device
+still has favorited. It never removes a node from the device's NodeDB.
+
 A device that already holds a *different* public key for a fleet node is
 never overwritten: that is either a stale database or a spoofed identity,
 and which one is for the operator to decide, so it is reported as a
@@ -64,6 +68,7 @@ __all__ = [
     "PeersOutcome",
     "PeersPlan",
     "apply_peers",
+    "archived_node_ids",
     "build_contacts",
     "contact_url",
     "plan_peers",
@@ -147,6 +152,8 @@ class PeersPlan:
         weak_key: Nodes whose recorded key failed the weak-key audit or is
             shared with another node. Nothing is written for them, not even
             a favorite.
+        unfavorite: Archived nodes the device still has favorited, to
+            unfavorite; only planned when asked for.
     """
 
     actions: tuple[PeerAction, ...] = ()
@@ -154,15 +161,16 @@ class PeersPlan:
     no_key: tuple[NodeId, ...] = ()
     key_mismatch: tuple[NodeId, ...] = ()
     weak_key: tuple[NodeId, ...] = ()
+    unfavorite: tuple[NodeId, ...] = ()
 
     @property
     def is_empty(self) -> bool:
         """Whether there is nothing to write.
 
         Returns:
-            ``True`` when :attr:`actions` is empty.
+            ``True`` when :attr:`actions` and :attr:`unfavorite` are empty.
         """
-        return not self.actions
+        return not self.actions and not self.unfavorite
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,11 +180,13 @@ class PeersOutcome:
     Attributes:
         added: Nodes sent as contacts.
         favorited: Nodes marked favorite.
+        unfavorited: Archived nodes unfavorited.
         failures: ``(node, message)`` for each write that raised.
     """
 
     added: tuple[NodeId, ...] = ()
     favorited: tuple[NodeId, ...] = ()
+    unfavorited: tuple[NodeId, ...] = ()
     failures: tuple[tuple[NodeId, str], ...] = ()
 
     @property
@@ -207,6 +217,18 @@ def public_key_map(keys: KeyRepository, nodes: Iterable[NodeRecord]) -> dict[str
         if record is not None:
             found[node.node_id] = record.material()
     return found
+
+
+def archived_node_ids(nodes: Iterable[NodeRecord]) -> tuple[NodeId, ...]:
+    """List the nodes archived in the database (``mesh db forget``).
+
+    Args:
+        nodes: Every ``Nodes`` row.
+
+    Returns:
+        The archived nodes' ids, in node-id order.
+    """
+    return tuple(sorted((NodeId.parse(n.node_id) for n in nodes if n.is_archived), key=int))
 
 
 def build_contacts(
@@ -350,6 +372,8 @@ def plan_peers(
     own_node: NodeId | None,
     contacts: Iterable[PeerContact],
     live: Mapping[int, LivePeer],
+    *,
+    archived: Iterable[NodeId] = (),
 ) -> PeersPlan:
     """Diff the fleet against one device's NodeDB. Pure.
 
@@ -360,6 +384,9 @@ def plan_peers(
         contacts: The fleet, from :func:`build_contacts`, screened by
             :func:`screen_contacts`.
         live: What the device holds, from :func:`read_live_peers`.
+        archived: Nodes archived in the database, from
+            :func:`archived_node_ids`, to unfavorite where the device has
+            them favorited; empty (the default) unfavorites nothing.
 
     Returns:
         The plan. Running it and re-planning yields an empty one.
@@ -391,12 +418,18 @@ def plan_peers(
             actions.append(PeerAction(contact, add_contact=add, favorite=favorite))
         elif held is not None:
             in_sync.append(contact.node_id)
+    unfavorite = tuple(
+        node_id
+        for node_id in archived
+        if node_id != own_node and live.get(int(node_id), LivePeer()).is_favorite
+    )
     return PeersPlan(
         actions=tuple(actions),
         in_sync=tuple(in_sync),
         no_key=tuple(no_key),
         key_mismatch=tuple(mismatch),
         weak_key=tuple(weak),
+        unfavorite=unfavorite,
     )
 
 
@@ -436,7 +469,7 @@ def apply_peers(local_node: Node, plan: PeersPlan) -> PeersOutcome:
     Each action is attempted independently, so one rejected contact does
     not leave the rest of the fleet unprocessed. A contact is always sent
     before its favorite flag, since the device can only favorite a node it
-    holds.
+    holds. The planned unfavorites follow the actions.
 
     Args:
         local_node: The connected device's ``localNode``.
@@ -449,6 +482,7 @@ def apply_peers(local_node: Node, plan: PeersPlan) -> PeersOutcome:
     caught = (*DEVICE_EXCEPTIONS, *connection.device_io_errors())
     added: list[NodeId] = []
     favorited: list[NodeId] = []
+    unfavorited: list[NodeId] = []
     failures: list[tuple[NodeId, str]] = []
     for action in plan.actions:
         node_id = action.contact.node_id
@@ -462,4 +496,16 @@ def apply_peers(local_node: Node, plan: PeersPlan) -> PeersOutcome:
         except caught as exc:
             _logger.warning("Peer write for %s failed: %s", node_id.display, exc)
             failures.append((node_id, str(exc) or type(exc).__name__))
-    return PeersOutcome(added=tuple(added), favorited=tuple(favorited), failures=tuple(failures))
+    for node_id in plan.unfavorite:
+        try:
+            local_node.removeFavorite(int(node_id))
+            unfavorited.append(node_id)
+        except caught as exc:
+            _logger.warning("Unfavoriting %s failed: %s", node_id.display, exc)
+            failures.append((node_id, str(exc) or type(exc).__name__))
+    return PeersOutcome(
+        added=tuple(added),
+        favorited=tuple(favorited),
+        unfavorited=tuple(unfavorited),
+        failures=tuple(failures),
+    )

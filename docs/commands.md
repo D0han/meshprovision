@@ -496,6 +496,7 @@ mesh db forget deadbe01
 mesh peers --port /dev/ttyUSB0            # report what is missing
 mesh peers --port /dev/ttyUSB0 --apply    # write it
 mesh peers --host 192.168.1.20 --apply --json
+mesh peers --port /dev/ttyUSB0 --apply --prune-archived   # also unfavorite archived nodes
 ```
 
 Makes the connected device know the rest of your fleet and keep it
@@ -523,6 +524,15 @@ is neither added nor favorited, because a favorite is never evicted — run
 `mesh db verify`, then re-key the node (`mesh provision
 --force-regenerate-key`). A run that leaves only such cases says so instead of
 reporting the peers in sync; its exit code stays `0`.
+
+`--prune-archived` also unfavorites every node archived in the database
+(`mesh db forget`) that the device still has favorited, so the device may
+evict it again. It only unfavorites: the device keeps the node and its key
+until it evicts it or you remove it by hand, and the device's own node is
+never touched. Without `--apply` it is only reported; an unfavorite the
+device did not keep is reported after the read-back ("still has …
+favorited", exit code `5`). The `sync_peers` step of `mesh provision` never
+prunes.
 
 Takes the same connection flags as `mesh provision` (`--port`,
 `--ble-address`, `--ble-scan`, `--host`, `--interface`, `--timeout`,

@@ -318,6 +318,23 @@ class FakeNode:
         if node_id in self._iface.known_nodes:
             self._iface.known_nodes[node_id]["isFavorite"] = True
 
+    def removeFavorite(self, node_id: int) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Unfavorite a node the device holds; the node itself stays in the NodeDB.
+
+        Args:
+            node_id: The node number.
+
+        Raises:
+            OSError: If :attr:`FakeMeshInterface.fail_peer_writes` is set.
+        """
+        self._iface.peer_calls.append(("unfav", node_id))
+        if self._iface.fail_peer_writes:
+            raise OSError("simulated unfavorite write failure")
+        if self._iface.drop_peer_writes:
+            return
+        if node_id in self._iface.known_nodes:
+            self._iface.known_nodes[node_id]["isFavorite"] = False
+
 
 class FakeMeshInterface:
     """A stand-in for ``meshtastic``'s ``MeshInterface``.
@@ -718,6 +735,19 @@ class _FakeConnectionNode:
         if self._connection.closed:
             raise OSError(errno.EBADF, "fake connection is closed")
         self._connection._device.localNode.setFavorite(node_id)
+
+    def removeFavorite(self, node_id: int) -> None:  # noqa: N802 -- matches Node's own spelling
+        """Delegate to the device.
+
+        Args:
+            node_id: The node number.
+
+        Raises:
+            OSError: If this connection was already closed.
+        """
+        if self._connection.closed:
+            raise OSError(errno.EBADF, "fake connection is closed")
+        self._connection._device.localNode.removeFavorite(node_id)
 
 
 class FakeConnection:
