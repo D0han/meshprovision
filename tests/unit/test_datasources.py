@@ -737,10 +737,10 @@ def test_loranet_raw_index_force_refresh_returns_the_fresh_value_over_a_live_mem
 ) -> None:
     """Regression test: force_refresh must beat an already-populated memo.
 
-    Unlike the invalidate() test, this deliberately leaves ``_index``
-    populated -- inverting the guard to ``... and force_refresh`` would
-    otherwise hand back the stale memo here, while a test that clears the
-    memo first cannot tell the two apart.
+    This deliberately leaves ``_index`` populated -- inverting the guard to
+    ``... and force_refresh`` would otherwise hand back the stale memo
+    here, while a test that clears the memo first cannot tell the two
+    apart.
     """
     key = NodeId.from_hex("deadbe01").decimal
     route = respx.get(LORANET_NODES_URL).mock(
@@ -759,19 +759,6 @@ def test_loranet_raw_index_force_refresh_returns_the_fresh_value_over_a_live_mem
     # The refreshed value replaces the memo, so a following default call
     # serves "fresh" too -- never the resurrected original.
     assert source.raw_index()[key]["shortName"] == "fresh"
-
-
-@respx.mock
-def test_loranet_invalidate_drops_memo(tmp_path: Path) -> None:
-    route = respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
-    client = CachedHTTPClient(
-        cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", ttl=10000
-    )
-    source = LoranetSource(client)
-    source.raw_index()
-    source.invalidate()
-    source.raw_index(force_refresh=True)
-    assert route.call_count == 2
 
 
 @respx.mock
@@ -843,7 +830,6 @@ def test_loranet_invalidate_then_force_refresh_advances_last_fetch_data_as_of(
     first = source.last_fetch_data_as_of
 
     clock_state["now"] = 1_700_000_900.0
-    source.invalidate()
     source.fetch_all(force_refresh=True)
 
     assert source.last_fetch_data_as_of == datetime.fromtimestamp(1_700_000_900.0, tz=UTC)

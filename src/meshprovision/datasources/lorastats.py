@@ -122,24 +122,6 @@ class LorastatsSource(BaseHTTPDataSource):
         self._base_url = base_url.rstrip("/")
         self._regions = validate_regions(regions)
 
-    @property
-    def regions(self) -> tuple[str, ...]:
-        """The validated, de-duplicated region list this source queries by default.
-
-        Returns:
-            The configured regions, in the order they were given.
-        """
-        return self._regions
-
-    @property
-    def base_url(self) -> str:
-        """The lorastats.pl base URL this source queries.
-
-        Returns:
-            The configured base URL, with any trailing slash stripped.
-        """
-        return self._base_url
-
     def fetch_nodes(
         self, ids: Collection[NodeId], *, force_refresh: bool | None = None
     ) -> dict[NodeId, NodeObservation]:
@@ -194,8 +176,8 @@ class LorastatsSource(BaseHTTPDataSource):
         Args:
             node_id: The node id to look up, in any form
                 :meth:`NodeId.parse` accepts.
-            region: A single region to query instead of
-                :attr:`regions`. Does not need to already be validated
+            region: A single region to query instead of the
+                configured regions. Does not need to already be validated
                 (this call validates it before use).
             force_refresh: Whether to bypass the HTTP cache read for
                 this call.

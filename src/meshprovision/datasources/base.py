@@ -218,15 +218,6 @@ class BaseHTTPDataSource:
             return None
         return datetime.fromtimestamp(self._last_fetch_data_as_of, tz=UTC)
 
-    @property
-    def client(self) -> CachedHTTPClient:
-        """The cache-backed HTTP client this source issues requests through.
-
-        Returns:
-            The injected :class:`~meshprovision.cache.http.CachedHTTPClient`.
-        """
-        return self._client
-
     def _begin_fetch(self) -> None:
         """Reset the per-fetch data-as-of tracker.
 

@@ -259,20 +259,6 @@ class NodeObservation(BaseModel):
             raise ValueError("datetime fields must be timezone-aware")
         return value
 
-    def age(self, *, now: datetime | None = None) -> timedelta | None:
-        """Return how long ago this node was last seen.
-
-        Args:
-            now: The current time. Defaults to ``datetime.now(tz=UTC)``.
-
-        Returns:
-            ``now - last_seen``, or ``None`` when ``last_seen`` is unknown.
-        """
-        if self.last_seen is None:
-            return None
-        current = now if now is not None else datetime.now(tz=UTC)
-        return current - self.last_seen
-
 
 def e7_to_degrees(value: object, *, limit: float) -> float | None:
     """Convert a Meshtastic E7 fixed-point coordinate to decimal degrees.

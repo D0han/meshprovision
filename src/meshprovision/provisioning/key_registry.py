@@ -75,8 +75,8 @@ def register_observed_key(
             repositories together, but kept for a future caller that
             needs to cross-check node state before minting.
         keys: The open key repository to resolve against and, on a miss,
-            upsert into. In-memory only; the caller must call
-            ``keys.db.save()`` to persist.
+            upsert into. In-memory only; the caller must save the shared
+            database session to persist.
         material: The raw 32-byte public key material to register.
         created_ts: Timestamp to record on a freshly minted row. Unused
             when an existing ref is reused.

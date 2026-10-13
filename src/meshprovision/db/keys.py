@@ -344,15 +344,6 @@ class KeyRepository:
         """
         self._db = db
 
-    @property
-    def db(self) -> OdsDatabase:
-        """The underlying database session.
-
-        Returns:
-            The :class:`OdsDatabase` this repository wraps.
-        """
-        return self._db
-
     def all(self) -> tuple[KeyRecord, ...]:
         """Return every key currently in the database.
 
@@ -513,7 +504,8 @@ class KeyRepository:
     def upsert(self, record: KeyRecord) -> KeyRecord:
         """Insert or update a key's row, in memory only.
 
-        Does not write to disk; call ``self.db.save()`` to persist.
+        Does not write to disk; the caller must save the shared database
+        session to persist.
 
         Args:
             record: The key record to store.
@@ -540,7 +532,8 @@ class KeyRepository:
         """Delete a key's row, in memory only.
 
         Mirrors :meth:`~meshprovision.db.nodes.NodeRepository.delete`. Does
-        not write to disk; call ``self.db.save()`` to persist.
+        not write to disk; the caller must save the shared database session
+        to persist.
 
         Args:
             key_ref: The ``key_ref`` of the row to delete.

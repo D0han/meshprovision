@@ -66,9 +66,9 @@ class LoranetSource(BaseHTTPDataSource):
 
     Unlike lorastats, loranet has no per-node query endpoint: every fetch
     (of even a single node) requires the full ~12.7 MB dump, so this
-    class fetches it once and memoizes the decoded index on the instance.
-    :meth:`invalidate` drops that in-memory memo (not the on-disk HTTP
-    cache); pass ``force_refresh=True`` to bypass both.
+    class fetches it once and memoizes the decoded index on the instance;
+    pass ``force_refresh=True`` to bypass both the memo and the HTTP cache
+    read.
     """
 
     def __init__(self, client: CachedHTTPClient, *, url: str = LORANET_NODES_URL) -> None:
@@ -82,15 +82,6 @@ class LoranetSource(BaseHTTPDataSource):
         self._url = url
         self._index: Mapping[str, Any] | None = None
         self._index_fetched_at: float | None = None
-
-    @property
-    def url(self) -> str:
-        """The node dump URL this source fetches from.
-
-        Returns:
-            The configured URL.
-        """
-        return self._url
 
     def raw_index(self, *, force_refresh: bool | None = None) -> Mapping[str, Any]:
         """Return the decoded dump, fetching (and memoizing) it if needed.
@@ -126,16 +117,6 @@ class LoranetSource(BaseHTTPDataSource):
         self._index = index
         self._index_fetched_at = self._last_fetch_data_as_of
         return index
-
-    def invalidate(self) -> None:
-        """Drop the in-memory memoized index (not the on-disk HTTP cache).
-
-        The next call to :meth:`raw_index`, :meth:`fetch_all`, or
-        :meth:`fetch_nodes` will re-decode from a fresh (or still-cached,
-        depending on TTL) HTTP response.
-        """
-        self._index = None
-        self._index_fetched_at = None
 
     def fetch_all(self, *, force_refresh: bool | None = None) -> dict[NodeId, NodeObservation]:
         """Parse every entry in the dump into a normalized observation.
