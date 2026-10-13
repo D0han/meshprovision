@@ -381,6 +381,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An admin key named twice in `admin_nodes` (a node and its
+  `mesh admin bootstrap --ref` alias, holding the same key) was written to
+  two of the device's three admin slots. It now fills one slot, with a
+  `duplicate_admin_key_ref` plan warning naming both entries; a device that
+  already holds it twice is rewritten to hold it once.
 - A device name with surrounding whitespace (`"AB "`) was recorded
   stripped by `mesh adopt`, which still said "recorded as-is", and the
   next `mesh provision` reported name drift and planned to rename the

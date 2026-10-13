@@ -17,6 +17,7 @@ from meshprovision.provisioning.plan import (
     PlanInputs,
     build_plan,
 )
+from meshprovision.provisioning.plan_types import ChangePlan
 from tests.unit.conftest import make_security, with_admin_and_lockdown
 
 pytestmark = pytest.mark.unit
@@ -144,6 +145,57 @@ def test_admin_key_ordering_difference_is_not_drift(make_live, template, make_ad
     )
     plan = build_plan(inputs)
     assert plan.key_plan.change_admin_keys is False
+
+
+def _aliased_admin_plan(
+    make_live, template, make_admin_key, *, live_copies: int
+) -> tuple[bytes, ChangePlan]:
+    """Plan admin_nodes naming one key under a node ref and an alias ref."""
+    node_key = make_admin_key("a0cb5cc4")
+    alias = make_admin_key("laptop", public=node_key.public, has_private=False)
+    template2 = template.model_copy(update={"admin_nodes": ("a0cb5cc4", "laptop")})
+    live_keys = (node_key.public,) * live_copies
+    live = make_live(template2, security=make_security(admin_keys=live_keys))
+    inputs = PlanInputs(
+        live=live,
+        template=template2,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        admin_keys=(node_key, alias),
+    )
+    return node_key.public, build_plan(inputs)
+
+
+def test_an_aliased_admin_key_takes_one_slot_and_records_both_refs(
+    make_live, template, make_admin_key
+) -> None:
+    key, plan = _aliased_admin_plan(make_live, template, make_admin_key, live_copies=0)
+
+    assert plan.key_plan.desired_admin_keys == (key,)
+    assert plan.key_plan.desired_admin_key_refs == ("a0cb5cc4_pub", "laptop_pub")
+    (warning,) = [w for w in plan.warnings if w.code == "duplicate_admin_key_ref"]
+    assert "a0cb5cc4 and laptop name the same key" in warning.message
+    assert plan.to_record().authorized_admin_keys == (
+        "a0cb5cc4_pub",
+        "laptop_pub",
+    )
+
+
+def test_an_aliased_admin_key_already_written_once_is_not_rewritten(
+    make_live, template, make_admin_key
+) -> None:
+    _, plan = _aliased_admin_plan(make_live, template, make_admin_key, live_copies=1)
+
+    assert plan.key_plan.change_admin_keys is False
+
+
+def test_an_aliased_admin_key_doubled_on_the_device_is_rewritten_once(
+    make_live, template, make_admin_key
+) -> None:
+    key, plan = _aliased_admin_plan(make_live, template, make_admin_key, live_copies=2)
+
+    assert plan.key_plan.change_admin_keys is True
+    assert plan.key_plan.desired_admin_keys == (key,)
 
 
 # ---------------------------------------------------------------------------

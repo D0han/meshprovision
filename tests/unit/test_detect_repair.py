@@ -658,6 +658,23 @@ def test_diff_record_aliased_admin_key_is_not_drift(make_live, keypair_factory) 
         assert not any(d.kind is repair.DriftKind.ADMIN_KEYS for d in drifts), public_keys
 
 
+def test_diff_record_two_recorded_aliases_of_one_live_key_are_not_drift(
+    make_live, keypair_factory
+) -> None:
+    """admin_nodes naming one key under two refs records both, but writes it once."""
+    from meshprovision.config.template import load_template_text
+
+    template = load_template_text("version: 1\n")
+    kp = keypair_factory()
+    live = make_live(template, security=make_security(admin_keys=(kp.public,)))
+    record = NodeRecord(node_id="deadbe01", authorized_admin_keys=("a0cb5cc4_pub", "laptop_pub"))
+    public_keys = {"a0cb5cc4_pub": kp.public, "laptop_pub": kp.public}
+
+    drifts = repair.diff_record(live, record, public_keys=public_keys)
+
+    assert not any(d.kind is repair.DriftKind.ADMIN_KEYS for d in drifts)
+
+
 def test_diff_record_non_preferred_alias_ref_is_not_drift(make_live, keypair_factory) -> None:
     """Regression test for Round 35's weakkey-drift review, Finding 1.
 

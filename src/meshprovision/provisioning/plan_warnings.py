@@ -42,6 +42,7 @@ class PlanWarningCode(StrEnum):
     RESOLVED_ADMIN_KEY_REJECTED = "resolved_admin_key_rejected"
     LIVE_ADMIN_KEY_REVOKED = "live_admin_key_revoked"
     LIVE_ADMIN_KEY_REJECTED = "live_admin_key_rejected"
+    DUPLICATE_ADMIN_KEY_REF = "duplicate_admin_key_ref"
     PENDING_KEY_RECOVERED = "pending_key_recovered"
     DEFAULT_CHANNEL_REBOOT_UNKNOWN = "default_channel_reboot_unknown"
     FIELD_UNSUPPORTED_BY_FIRMWARE = "field_unsupported_by_firmware"

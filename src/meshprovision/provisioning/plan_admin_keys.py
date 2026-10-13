@@ -30,8 +30,12 @@ the desired set is every entry of ``resolved`` that **passed the
 weak-key audit** (``audit_ok``), and any live key not named in it is
 removed and reported as a ``"live_admin_key_revoked"`` warning (see
 :attr:`KeyPlan.revoked_admin_fingerprints`), distinct from a live key
-dropped by the weak-key audit itself. Either way the sets are compared
-as **sorted** tuples, so a mere ordering difference is never churn.
+dropped by the weak-key audit itself. Two entries naming the same key
+material (a node and its ``mesh admin bootstrap --ref`` alias) fill one
+firmware slot, with a ``"duplicate_admin_key_ref"`` warning; both refs
+stay in :attr:`KeyPlan.desired_admin_key_refs`. Either way the sets are
+compared as **sorted** tuples, so a mere ordering difference is never
+churn.
 
 An entry that failed the weak-key audit is never authorized: it is
 excluded from the desired set, named in
@@ -150,14 +154,15 @@ class KeyPlan:
             firmware issue #7449 -- a restored key can silently fail to
             persist across a reboot).
         change_admin_keys: Whether ``security.admin_key`` needs writing.
-        desired_admin_keys: The raw public keys the plan wants
+        desired_admin_keys: The distinct raw public keys the plan wants
             authorized, in write order. Never rendered by
             :meth:`__repr__`.
         desired_admin_key_refs: The ``Keys`` sheet references
-            corresponding to :attr:`desired_admin_keys`, in the same
-            order -- empty when the desired set came from the device's
-            own live keys rather than a resolved ``admin_nodes`` list
-            (see the module docstring's admin-key rule).
+            authorized, in template order -- empty when the desired set
+            came from the device's own live keys rather than a resolved
+            ``admin_nodes`` list (see the module docstring's admin-key
+            rule). Index-aligned with :attr:`desired_admin_keys` unless
+            two refs name the same key, which then fills one slot.
         removed_admin_fingerprints: Positional labels
             (``"live-admin[0]"``, ...) for live admin keys dropped
             because the caller's weak-key audit flagged them.
@@ -235,11 +240,11 @@ class AdminKeyPlan:
     to render in their place.
 
     Attributes:
-        desired: The desired raw admin-key bytes, in write order.
-        desired_refs: The ``Keys`` sheet refs corresponding to
-            :attr:`desired`, empty when the desired set came from the
-            device's own live keys rather than a resolved
-            ``admin_nodes`` list.
+        desired: The distinct desired raw admin-key bytes, in write order.
+        desired_refs: The ``Keys`` sheet refs authorized, empty when the
+            desired set came from the device's own live keys rather than
+            a resolved ``admin_nodes`` list; see
+            :attr:`KeyPlan.desired_admin_key_refs`.
         change_admin_keys: Whether ``security.admin_key`` needs writing.
         removed: Positional labels for live keys dropped by the audit.
         revoked: Positional labels for live keys dropped only because
@@ -261,6 +266,36 @@ class AdminKeyPlan:
     warnings: tuple[PlanWarning, ...]
 
 
+def _distinct_admin_keys(
+    authorized: tuple[ResolvedAdminKey, ...],
+) -> tuple[tuple[bytes, ...], tuple[PlanWarning, ...]]:
+    """Collapse ``admin_nodes`` entries naming the same key into one slot.
+
+    Args:
+        authorized: The entries to authorize, in template order.
+
+    Returns:
+        The distinct key material, in first-occurrence order, and one
+        ``"duplicate_admin_key_ref"`` warning per later entry naming an
+        already-listed key.
+    """
+    first_ref: dict[bytes, str] = {}
+    warnings: list[PlanWarning] = []
+    for key in authorized:
+        first = first_ref.setdefault(key.public, key.ref)
+        if first != key.ref:
+            warnings.append(
+                PlanWarning(
+                    PlanWarningCode.DUPLICATE_ADMIN_KEY_REF,
+                    f"admin_nodes entries {first} and {key.ref} name the same key "
+                    f"({key.fingerprint}); it is authorized once, in one admin slot.",
+                    section="security",
+                    field="admin_key",
+                )
+            )
+    return tuple(first_ref), tuple(warnings)
+
+
 def plan_admin_key_material(inputs: PlanInputs) -> AdminKeyPlan:
     """Decide the desired ``security.admin_key`` set (step 6).
 
@@ -280,7 +315,9 @@ def plan_admin_key_material(inputs: PlanInputs) -> AdminKeyPlan:
         ``template.admin_nodes``, and, for template-named keys the audit
         flagged, either ``"resolved_admin_key_rejected"`` warnings or --
         under ``inputs.allow_weak_admin_key`` --
-        ``"resolved_admin_key_forced"`` ones.
+        ``"resolved_admin_key_forced"`` ones, plus a
+        ``"duplicate_admin_key_ref"`` warning for each entry naming a key
+        an earlier entry already names.
 
     Raises:
         AdminKeyCapacityError: If ``template.admin_nodes`` resolves to
@@ -352,7 +389,8 @@ def plan_admin_key_material(inputs: PlanInputs) -> AdminKeyPlan:
                 )
                 for key in rejected
             )
-        desired = tuple(k.public for k in authorized)
+        desired, alias_warnings = _distinct_admin_keys(authorized)
+        warnings.extend(alias_warnings)
         desired_refs = tuple(k.key_ref for k in authorized)
         rejected_refs = tuple(k.key_ref for k in rejected)
 

@@ -205,10 +205,12 @@ def diff_record(
     # --ref LABEL) drifted forever whenever the template happened to name
     # the non-preferred alias. _preferred_ref is still used to *render*
     # the display strings below -- only the equality check changed.
+    # Recorded material is deduplicated: two refs naming one key (a node
+    # and its alias, both in admin_nodes) are written to one slot.
     live_material = tuple(sorted(live.security.admin_keys))
     recorded_material = tuple(
         sorted(
-            (_recorded_material(ref, known) for ref in record.authorized_admin_keys),
+            {_recorded_material(ref, known) for ref in record.authorized_admin_keys},
             key=_material_sort_key,
         )
     )
