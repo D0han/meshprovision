@@ -150,8 +150,8 @@ def _resolve_timeout(timeout: float | None) -> float:
     Raises:
         SettingsError: If :data:`LOCK_TIMEOUT_ENV` is set to anything
             other than a finite, non-negative number of seconds. This
-            matches :func:`~meshprovision.cache.http.resolve_ttl`'s
-            handling of ``MESHPROVISION_CACHE_TTL``: a malformed value
+            matches how :class:`~meshprovision.config.settings.Settings`
+            rejects a malformed ``MESHPROVISION_CACHE_TTL``: a malformed value
             is an operator typo, and substituting a default for it
             produces symptoms harder to diagnose than one loud refusal.
     """

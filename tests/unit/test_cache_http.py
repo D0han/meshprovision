@@ -22,7 +22,6 @@ from meshprovision.cache.http import (
     CachedHTTPClient,
     CachedResponse,
     cache_key,
-    resolve_ttl,
 )
 from meshprovision.errors import (
     CacheError,
@@ -543,7 +542,6 @@ def test_html_body_raises_invalid_response_error(tmp_path: Path) -> None:
     client = _make_client(tmp_path, now=now)
 
     response = client.get(URL)
-    assert response.text() == "<html>not json</html>"
     assert response.content_type is not None
     with pytest.raises(InvalidResponseError) as exc_info:
         response.json()
@@ -860,32 +858,6 @@ def test_caller_user_agent_is_ignored_in_any_spelling(tmp_path: Path) -> None:
 
     request = route.calls[0].request
     assert request.headers.get_list("user-agent") == ["meshprovision/test (+t@example.invalid)"]
-
-
-# ---------------------------------------------------------------------------
-# resolve_ttl precedence.
-# ---------------------------------------------------------------------------
-
-
-def test_resolve_ttl_precedence() -> None:
-    assert resolve_ttl(explicit=10, environ={"MESHPROVISION_CACHE_TTL": "20"}, config_ttl=30) == 10
-    assert resolve_ttl(environ={"MESHPROVISION_CACHE_TTL": "20"}, config_ttl=30) == 20
-    assert resolve_ttl(environ={}, config_ttl=30) == 30
-    assert resolve_ttl(environ={}) == 300.0
-
-
-def test_resolve_ttl_non_numeric_env_raises() -> None:
-    with pytest.raises(SettingsError):
-        resolve_ttl(environ={"MESHPROVISION_CACHE_TTL": "not-a-number"})
-
-
-def test_resolve_ttl_negative_raises() -> None:
-    with pytest.raises(SettingsError):
-        resolve_ttl(explicit=-1)
-
-
-def test_resolve_ttl_zero_is_legal() -> None:
-    assert resolve_ttl(explicit=0.0) == 0.0
 
 
 @respx.mock

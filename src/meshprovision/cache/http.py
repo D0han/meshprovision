@@ -14,22 +14,15 @@ follow a redirect from an ``https`` URL to a non-``https`` one (which
 would send the operator-contact ``User-Agent`` in cleartext and cache an
 unauthenticated body for the full TTL).
 
-**TTL precedence.** This module does not know about
+**TTL and refresh.** This module does not know about
 :class:`meshprovision.config.settings.Settings` -- the ``cache`` group is
 independent of ``config`` by design (see the layer's cross-cutting
-notes). :func:`resolve_ttl` instead accepts loose values and resolves the
-precedence chain ``explicit > env (MESHPROVISION_CACHE_TTL) > config >
-DEFAULT_TTL_SECONDS``. The CLI layer is expected to wire it as::
-
-    ttl = resolve_ttl(config_ttl=settings.cache_ttl, explicit=cli_ttl)
-    client = CachedHTTPClient(
-        cache_dir=..., user_agent=..., ttl=ttl, force_refresh=no_cache or force_refresh
-    )
-
-where ``--cache-ttl`` supplies ``explicit``, and ``--no-cache`` /
-``--force-refresh`` both map to ``force_refresh=True`` (bypassing cache
-*reads* only -- a forced fetch is still written to disk, refreshing the
-entry for the next run).
+notes). The caller passes the already-resolved TTL (the CLI uses
+``Settings.cache_ttl``, which applies the ``--cache-ttl`` >
+``MESHPROVISION_CACHE_TTL`` > config > default precedence) and
+``force_refresh``. ``--no-cache`` / ``--force-refresh`` both map to
+``force_refresh=True`` (bypassing cache *reads* only -- a forced fetch is
+still written to disk, refreshing the entry for the next run).
 
 **On-disk format.** Each cache entry is one JSON file, holding the
 response's status code, a small allow-listed subset of headers, the body
@@ -89,7 +82,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "CACHE_ENTRY_VERSION",
-    "CACHE_TTL_ENV",
     "DEFAULT_BACKOFF_BASE",
     "DEFAULT_BACKOFF_MAX",
     "DEFAULT_MAX_RETRIES",
@@ -101,13 +93,9 @@ __all__ = [
     "CachedHTTPClient",
     "CachedResponse",
     "cache_key",
-    "resolve_ttl",
 ]
 
 _logger = logging.getLogger(__name__)
-
-CACHE_TTL_ENV: Final[str] = "MESHPROVISION_CACHE_TTL"
-"""Environment variable that overrides the configured cache TTL."""
 
 CACHE_ENTRY_VERSION: Final[int] = 1
 """On-disk cache entry schema version. A mismatch is treated as a miss."""
@@ -303,55 +291,6 @@ def cache_key(
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-def resolve_ttl(
-    *,
-    config_ttl: float | None = None,
-    explicit: float | None = None,
-    environ: Mapping[str, str] | None = None,
-) -> float:
-    """Resolve the effective cache TTL from the precedence chain.
-
-    Precedence, highest first: ``explicit`` > the ``MESHPROVISION_CACHE_TTL``
-    environment variable > ``config_ttl`` > :data:`DEFAULT_TTL_SECONDS`.
-
-    Args:
-        config_ttl: TTL from a loaded ``Settings`` object, when available.
-        explicit: TTL requested explicitly at the call site (for example
-            the CLI's ``--cache-ttl`` flag).
-        environ: Environment mapping to read ``MESHPROVISION_CACHE_TTL``
-            from. Defaults to ``os.environ``.
-
-    Returns:
-        The resolved TTL in seconds. ``0.0`` is a legal result and means
-        "always refetch, still write".
-
-    Raises:
-        SettingsError: If the environment variable is set but is not a
-            valid number, or if the resolved value is negative.
-    """
-    env = environ if environ is not None else os.environ
-    raw = env.get(CACHE_TTL_ENV)
-
-    value: float
-    if explicit is not None:
-        value = explicit
-    elif raw is not None and raw.strip():
-        try:
-            value = float(raw)
-        except ValueError as exc:
-            raise SettingsError(
-                f"{CACHE_TTL_ENV} must be a number of seconds, got {raw!r}"
-            ) from exc
-    elif config_ttl is not None:
-        value = config_ttl
-    else:
-        value = DEFAULT_TTL_SECONDS
-
-    if value < 0:
-        raise SettingsError("Cache TTL must not be negative.")
-    return float(value)
-
-
 @dataclass(frozen=True, slots=True)
 class CacheStats:
     """Cumulative counters for one :class:`CachedHTTPClient` instance.
@@ -437,17 +376,6 @@ class CachedResponse:
         if not 0.0 <= self.fetched_at <= current + _FETCHED_AT_FUTURE_SKEW_SECONDS:
             return False
         return self.age(now=current) <= ttl
-
-    def text(self, *, encoding: str = "utf-8") -> str:
-        """Decode the response body as text.
-
-        Args:
-            encoding: The text encoding to decode with.
-
-        Returns:
-            The decoded body.
-        """
-        return self.content.decode(encoding)
 
     def json(self) -> Any:
         """Parse the response body as JSON.
@@ -790,15 +718,6 @@ class CachedHTTPClient:
         return self._cache_dir
 
     @property
-    def ttl(self) -> float:
-        """The default TTL used when a call does not pass an explicit one.
-
-        Returns:
-            The default TTL, in seconds.
-        """
-        return self._ttl
-
-    @property
     def stats(self) -> CacheStats:
         """A snapshot of this client's cumulative cache/network counters.
 
@@ -838,7 +757,7 @@ class CachedHTTPClient:
                 defaults (call-site wins), except ``User-Agent`` which is
                 always the client's own.
             ttl: Freshness window override for this call, in seconds.
-                Defaults to :attr:`ttl`.
+                Defaults to the client's constructor ``ttl``.
             force_refresh: Whether to bypass the cache read for this
                 call. Defaults to the client's configured default. The
                 fetched response is still written to the cache either
@@ -891,7 +810,7 @@ class CachedHTTPClient:
                 different contact string than the one this client was
                 constructed with.
             ttl: Freshness window override for this call, in seconds.
-                Defaults to :attr:`ttl`.
+                Defaults to the client's constructor ``ttl``.
             force_refresh: Whether to bypass the cache read for this
                 call. Defaults to the client's configured default. The
                 fetched response is still written to the cache either
