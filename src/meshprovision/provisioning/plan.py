@@ -122,6 +122,26 @@ which stops writing at the first section that fails, so nothing after it
 _REBOOT_LORA_FIELDS: Final[frozenset[str]] = frozenset({"region", "modem_preset"})
 
 
+def _db_name_or_live(db_name: str, live_name: str) -> str:
+    """Pick the recorded name, unless it is empty or only the live one stripped.
+
+    The database strips surrounding whitespace from every name, so a
+    device named ``"AB "`` is recorded as ``"AB"``; that alone is no
+    reason to rename the device.
+
+    Args:
+        db_name: The database entry's name, or ``""``.
+        live_name: The device's live name.
+
+    Returns:
+        ``live_name`` when ``db_name`` is empty or equals it stripped,
+        else ``db_name``.
+    """
+    if not db_name or db_name == live_name.strip():
+        return live_name
+    return db_name
+
+
 def _plan_name_change(inputs: PlanInputs) -> NameChange:
     """Resolve the desired ``short_name``/``long_name``/``is_unmessagable`` (step 1).
 
@@ -131,7 +151,8 @@ def _plan_name_change(inputs: PlanInputs) -> NameChange:
     Returns:
         The :class:`NameChange`, computed from
         ``inputs.desired_short_name``/``desired_long_name`` when set,
-        else the database entry's name when non-empty, else the live
+        else the database entry's name when non-empty and not just the
+        live name stripped of surrounding whitespace, else the live
         name. ``is_unmessagable`` is resolved from ``template.is_unmessagable``
         when set, else the live value (template-only -- no CLI override,
         unlike the names). ``is_licensed`` is always echoed from the live
@@ -142,11 +163,11 @@ def _plan_name_change(inputs: PlanInputs) -> NameChange:
 
     desired_short = inputs.desired_short_name
     if desired_short is None:
-        desired_short = db_entry.short_name if db_entry and db_entry.short_name else live.short_name
+        desired_short = _db_name_or_live(db_entry.short_name if db_entry else "", live.short_name)
 
     desired_long = inputs.desired_long_name
     if desired_long is None:
-        desired_long = db_entry.long_name if db_entry and db_entry.long_name else live.long_name
+        desired_long = _db_name_or_live(db_entry.long_name if db_entry else "", live.long_name)
 
     template_is_unmessagable = inputs.template.is_unmessagable
     desired_is_unmessagable = (

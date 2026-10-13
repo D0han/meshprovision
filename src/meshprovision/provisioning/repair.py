@@ -157,12 +157,16 @@ def diff_record(
     known = public_keys or {}
     drifts: list[Drift] = []
 
+    # The database strips surrounding whitespace from names, so compare
+    # the live names stripped too: padding alone is not drift.
     short_drift = _drift_if_differs(
-        DriftKind.NAME, "short_name", record.short_name, live.short_name
+        DriftKind.NAME, "short_name", record.short_name, live.short_name.strip()
     )
     if short_drift is not None:
         drifts.append(short_drift)
-    long_drift = _drift_if_differs(DriftKind.NAME, "long_name", record.long_name, live.long_name)
+    long_drift = _drift_if_differs(
+        DriftKind.NAME, "long_name", record.long_name, live.long_name.strip()
+    )
     if long_drift is not None:
         drifts.append(long_drift)
 

@@ -574,6 +574,17 @@ def test_diff_record_recorded_value_equal_to_live_is_never_drift(
     assert repair.diff_record(live, record) == ()
 
 
+def test_whitespace_only_name_difference_is_not_drift(make_live) -> None:
+    """The database strips surrounding whitespace, so a padded live name matches its row."""
+    from meshprovision.config.template import load_template_text
+
+    template = load_template_text("version: 1\n")
+    live = make_live(template, short_name="AB ", long_name=" Gateway Hill")
+    record = NodeRecord(node_id="deadbe01", short_name="AB", long_name="Gateway Hill")
+
+    assert repair.diff_record(live, record) == ()
+
+
 def test_diff_record_name_hardware_firmware_role_region_drift(make_live) -> None:
     from meshprovision.config.template import load_template_text
 

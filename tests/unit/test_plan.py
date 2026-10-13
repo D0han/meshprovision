@@ -293,6 +293,22 @@ def test_summary_owner_count_includes_name_changes(make_live, template, keypair)
 # ---------------------------------------------------------------------------
 
 
+def test_db_name_differing_only_in_whitespace_plans_no_rename(make_live, template) -> None:
+    """The database strips surrounding whitespace; that alone is no reason to rename."""
+    live = make_live(template, short_name="AB ", long_name=" Gateway Hill")
+    record = NodeRecord(node_id="deadbe01", short_name="AB", long_name="Gateway Hill")
+    inputs = PlanInputs(
+        live=live, template=template, db_entry=record, state=detect.NodeState.PROVISIONED
+    )
+
+    plan = build_plan(inputs)
+
+    assert plan.name_change.desired_short_name == "AB "
+    assert plan.name_change.desired_long_name == " Gateway Hill"
+    assert not plan.name_change.short_changed
+    assert not plan.name_change.long_changed
+
+
 def test_drift_repair_targets_database_names(make_live, template, keypair) -> None:
     live = make_live(
         template,

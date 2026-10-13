@@ -149,6 +149,20 @@ def classify_live_admin_keys(
     return tuple(result)
 
 
+def _recorded_as(name: str) -> str:
+    """Say how a live name is recorded: the database strips surrounding whitespace.
+
+    Args:
+        name: The device's live name.
+
+    Returns:
+        ``"recorded as-is"``, or ``"recorded as '<stripped>'"`` for a
+        padded name.
+    """
+    stripped = name.strip()
+    return "recorded as-is" if stripped == name else f"recorded as {stripped!r}"
+
+
 def check_name_pattern_fit(
     template: TemplateConfig, *, short_name: str, long_name: str
 ) -> tuple[str, ...]:
@@ -172,12 +186,12 @@ def check_name_pattern_fit(
     if template.short_name_spec().parse_index(short_name) is None:
         findings.append(
             f"short_name {short_name!r} does not match the configured pattern "
-            f"{template.short_name_pattern!r} -- recorded as-is."
+            f"{template.short_name_pattern!r} -- {_recorded_as(short_name)}."
         )
     if template.long_name_spec().parse_index(long_name) is None:
         findings.append(
             f"long_name {long_name!r} does not match the configured pattern "
-            f"{template.long_name_pattern!r} -- recorded as-is."
+            f"{template.long_name_pattern!r} -- {_recorded_as(long_name)}."
         )
     return tuple(findings)
 
@@ -228,8 +242,10 @@ class AdoptionReport:
             :func:`meshprovision.provisioning.detect.classify`.
         existing: The node's existing ``Nodes`` sheet row, or ``None`` if
             this node id was not found in the database.
-        short_name: The device's live ``short_name``, recorded as-is.
-        long_name: The device's live ``long_name``, recorded as-is.
+        short_name: The device's live ``short_name``, recorded as-is
+            (the database strips surrounding whitespace).
+        long_name: The device's live ``long_name``, recorded as-is
+            (the database strips surrounding whitespace).
         hw_model: The device's live ``hw_model``, recorded as-is.
         firmware_version: The device's live firmware version, recorded
             as-is.

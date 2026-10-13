@@ -124,6 +124,20 @@ def test_check_name_pattern_fit_mixed(template) -> None:
     assert "long_name" in findings[0]
 
 
+def test_check_name_pattern_fit_shows_the_stripped_recorded_value(template) -> None:
+    findings = check_name_pattern_fit(template, short_name="AB ", long_name=" Gateway Hill")
+
+    assert "short_name 'AB ' does not match" in findings[0]
+    assert findings[0].endswith("-- recorded as 'AB'.")
+    assert findings[1].endswith("-- recorded as 'Gateway Hill'.")
+
+
+def test_check_name_pattern_fit_unpadded_name_is_recorded_as_is(template) -> None:
+    (finding,) = check_name_pattern_fit(template, short_name="MT00", long_name="Custom Name")
+
+    assert finding.endswith("-- recorded as-is.")
+
+
 # ---------------------------------------------------------------------------
 # capture_ble_pin
 # ---------------------------------------------------------------------------

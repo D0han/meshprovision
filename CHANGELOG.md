@@ -381,6 +381,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A device name with surrounding whitespace (`"AB "`) was recorded
+  stripped by `mesh adopt`, which still said "recorded as-is", and the
+  next `mesh provision` reported name drift and planned to rename the
+  device to the stripped name without `--rename`. A difference only in
+  surrounding whitespace is no longer drift and never triggers a rename,
+  and adopt now says what it records ("recorded as 'AB'").
 - `mesh template validate` warned that `traffic_management` is "not a
   known Meshtastic module option" although provisioning writes it; the
   list of known module options is now the planner's own list.
