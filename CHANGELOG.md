@@ -381,6 +381,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A node-db JSON backup starting with a UTF-8 byte-order mark (as some
+  Windows editors save it) was refused by `mesh adopt --from-backup` as "not
+  a recognized backup format"; it is now read like any other.
 - An admin key named twice in `admin_nodes` (a node and its
   `mesh admin bootstrap --ref` alias, holding the same key) was written to
   two of the device's three admin slots. It now fills one slot, with a

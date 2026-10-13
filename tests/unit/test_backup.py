@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import codecs
 import json
 import re
 import traceback
@@ -74,6 +75,12 @@ def test_sniff_format_detects_device_profile_protobuf() -> None:
 
 def test_sniff_format_detects_nodedb_json() -> None:
     raw = json.dumps({"schemaVersion": 1, "nodes": []}).encode()
+    assert backup.sniff_format(raw) is backup.BackupFormat.NODEDB_JSON
+
+
+def test_sniff_format_accepts_a_utf8_bom_nodedb_json() -> None:
+    """A node-db export re-saved by a Windows editor starts with a byte-order mark."""
+    raw = codecs.BOM_UTF8 + json.dumps({"schemaVersion": 1, "nodes": []}).encode()
     assert backup.sniff_format(raw) is backup.BackupFormat.NODEDB_JSON
 
 
@@ -441,6 +448,16 @@ def test_parse_nodedb_json_finds_own_entry() -> None:
     assert entry.public_key == bytes(range(32))
     assert entry.firmware_version == "2.6.11"
     assert entry.node_id == NodeId.from_int(2697256389)
+
+
+def test_parse_nodedb_json_accepts_a_utf8_bom() -> None:
+    raw = codecs.BOM_UTF8 + json.dumps(_nodedb_payload()).encode()
+
+    parsed = backup.parse_nodedb_json(raw, source="nodedb.json")
+
+    entry = parsed.own_entry()
+    assert entry is not None
+    assert entry.long_name == "Meshtastic MT02"
 
 
 def test_parse_nodedb_json_wrong_length_public_key_warns_and_is_absent() -> None:

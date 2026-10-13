@@ -132,7 +132,8 @@ def sniff_format(raw: bytes) -> BackupFormat | None:
     """
     text: str | None
     try:
-        text = raw.decode("utf-8")
+        # utf-8-sig: a file re-saved by a Windows editor starts with a BOM.
+        text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         text = None
 
@@ -563,7 +564,7 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
             the whole file is refused.
     """
     try:
-        text = raw.decode("utf-8")
+        text = raw.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise BackupParseError(f"{source}: not valid UTF-8: {exc}", source=source) from exc
     try:
