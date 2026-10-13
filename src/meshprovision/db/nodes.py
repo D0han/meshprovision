@@ -269,7 +269,6 @@ class NodeRepository:
         spec: PatternSpec,
         *,
         is_long: bool = False,
-        start: int = 0,
         warn_at: float | None = None,
     ) -> tuple[int, str]:
         """Find the next unused name for a compiled pattern, warning near exhaustion.
@@ -283,7 +282,6 @@ class NodeRepository:
                 -- :attr:`~meshprovision.name_pattern.PatternSpec.field`
                 exists only to make error messages actionable and is
                 deliberately not inferred from here.
-            start: Index to begin searching from.
             warn_at: Utilization ratio at or above which a warning is
                 logged. Defaults to
                 :data:`~meshprovision.name_pattern.DEFAULT_WARN_UTILIZATION`
@@ -307,7 +305,7 @@ class NodeRepository:
         if warning is not None:
             _logger.warning("%s", warning.message)
 
-        return find_next_free_name(spec, used, start=start)
+        return find_next_free_name(spec, used)
 
     def unresolved_admin_refs(self, keys: KeyRepository) -> Mapping[str, tuple[str, ...]]:
         """Cross-check every node's ``authorized_admin_keys`` against the ``Keys`` sheet.

@@ -53,7 +53,7 @@ _WIDENED_DIGEST_CHARS = 16
 
 
 def register_observed_key(
-    nodes: NodeRepository, keys: KeyRepository, material: bytes, *, created_ts: datetime | None
+    keys: KeyRepository, material: bytes, *, created_ts: datetime | None
 ) -> str:
     """Resolve or mint the ``Keys`` sheet ref an observed admin key belongs at.
 
@@ -69,11 +69,6 @@ def register_observed_key(
     ``refs[0]`` here is already the right preference.
 
     Args:
-        nodes: The open node repository. Unused directly -- accepted so
-            this function's signature matches
-            :func:`adopt_canonical_ref`'s and every call site opens both
-            repositories together, but kept for a future caller that
-            needs to cross-check node state before minting.
         keys: The open key repository to resolve against and, on a miss,
             upsert into. In-memory only; the caller must save the shared
             database session to persist.
@@ -91,7 +86,6 @@ def register_observed_key(
             hard failure rather than silently overwriting an unrelated
             row.
     """
-    del nodes
     existing = pipeline.match_admin_key_refs(material, keys.public_key_map())
     if existing:
         return existing[0]

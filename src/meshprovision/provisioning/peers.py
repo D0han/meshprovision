@@ -369,7 +369,7 @@ def read_live_peers(iface: MeshInterface) -> dict[int, LivePeer]:
 
 
 def plan_peers(
-    own_node: NodeId | None,
+    own_node: NodeId,
     contacts: Iterable[PeerContact],
     live: Mapping[int, LivePeer],
     *,
@@ -379,8 +379,7 @@ def plan_peers(
 
     Args:
         own_node: The connected device's own id, excluded from the plan
-            (a node does not need itself as a peer). ``None`` excludes
-            nothing.
+            (a node does not need itself as a peer).
         contacts: The fleet, from :func:`build_contacts`, screened by
             :func:`screen_contacts`.
         live: What the device holds, from :func:`read_live_peers`.
@@ -397,7 +396,7 @@ def plan_peers(
     mismatch: list[NodeId] = []
     weak: list[NodeId] = []
     for contact in contacts:
-        if own_node is not None and contact.node_id == own_node:
+        if contact.node_id == own_node:
             continue
         if contact.weak_reason:
             weak.append(contact.node_id)

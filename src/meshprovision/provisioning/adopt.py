@@ -942,9 +942,7 @@ def persist_adoption(
     observed_refs: dict[bytes, str] = {}
     for key in report.admin_keys:
         try:
-            observed_refs[key.material] = register_observed_key(
-                nodes, keys, key.material, created_ts=now
-            )
+            observed_refs[key.material] = register_observed_key(keys, key.material, created_ts=now)
         except KeyMaterialError:
             continue
 

@@ -28,7 +28,6 @@ from __future__ import annotations
 import contextlib
 import os
 from collections.abc import Callable, Iterator
-from datetime import datetime
 from pathlib import Path
 
 from meshprovision.db import fs_primitives
@@ -50,7 +49,6 @@ def atomic_write(
     backup: bool = True,
     backup_dir: Path | None = None,
     retention: int = DEFAULT_RETENTION,
-    now: datetime | None = None,
 ) -> Iterator[Path]:
     """Yield a temp path in ``target.parent``; replace ``target`` atomically on success.
 
@@ -84,8 +82,6 @@ def atomic_write(
             :func:`~meshprovision.db.backups.backup_dir_for`'s
             resolution.
         retention: Number of backups to retain, when ``backup`` is true.
-        now: Timestamp to embed in the backup's name, when ``backup`` is
-            true. Defaults to the current time.
 
     Yields:
         A temporary file path in ``target``'s directory, already created
@@ -133,7 +129,7 @@ def atomic_write(
                 f"Failed to flush {tmp_path} to disk: {exc}", path=str(target)
             ) from exc
         if backup:
-            create_backup(target, backup_dir=backup_dir, retention=retention, now=now)
+            create_backup(target, backup_dir=backup_dir, retention=retention)
         try:
             tmp_path.replace(target)
         except OSError as exc:

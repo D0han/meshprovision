@@ -39,7 +39,7 @@ def test_register_observed_key_mints_a_new_row(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
     # Act
-    ref = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
+    ref = register_observed_key(keys, keypair.public, created_ts=_NOW)
 
     # Assert
     assert ref == observed_keys.observed_key_ref(keypair.public)
@@ -57,7 +57,7 @@ def test_register_observed_key_reuses_an_existing_real_ref(
     keys.upsert(pub)
 
     # Act
-    ref = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
+    ref = register_observed_key(keys, keypair.public, created_ts=_NOW)
 
     # Assert: no new row minted, the real ref is reused
     assert ref == "ADMIN1_pub"
@@ -68,8 +68,8 @@ def test_register_observed_key_is_idempotent(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
     # Act
-    first = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
-    second = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
+    first = register_observed_key(keys, keypair.public, created_ts=_NOW)
+    second = register_observed_key(keys, keypair.public, created_ts=_NOW)
 
     # Assert
     assert first == second
@@ -92,7 +92,7 @@ def test_register_observed_key_prefers_a_node_owned_ref_over_a_stale_observed_on
     )
 
     # Act
-    ref = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
+    ref = register_observed_key(keys, keypair.public, created_ts=_NOW)
 
     # Assert
     assert ref == "deadbe01_pub"
@@ -113,7 +113,7 @@ def test_register_observed_key_widens_digest_on_collision(
     )
 
     # Act
-    ref = register_observed_key(nodes, keys, a.public, created_ts=_NOW)
+    ref = register_observed_key(keys, a.public, created_ts=_NOW)
 
     # Assert
     assert ref == observed_keys.observed_key_ref(a.public, chars=16)
@@ -138,7 +138,7 @@ def test_register_observed_key_raises_when_both_widths_collide(
     )
 
     with pytest.raises(DbIntegrityError):
-        register_observed_key(nodes, keys, a.public, created_ts=_NOW)
+        register_observed_key(keys, a.public, created_ts=_NOW)
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +150,7 @@ def test_adopt_canonical_ref_rewrites_authorized_admin_keys_and_deletes_observed
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
     # Arrange
-    observed_ref = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
+    observed_ref = register_observed_key(keys, keypair.public, created_ts=_NOW)
     node = NodeRecord(node_id="cafe0001", authorized_admin_keys=(observed_ref,))
     nodes.upsert(node)
     keys.upsert(KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED)[0])
@@ -169,7 +169,7 @@ def test_adopt_canonical_ref_dedupes_when_canonical_ref_already_present(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
     # Arrange
-    observed_ref = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
+    observed_ref = register_observed_key(keys, keypair.public, created_ts=_NOW)
     node = NodeRecord(node_id="cafe0001", authorized_admin_keys=(observed_ref, "deadbe01_pub"))
     nodes.upsert(node)
 
@@ -333,7 +333,7 @@ def test_adopt_canonical_ref_ignores_an_observed_row_for_different_material(
 ) -> None:  # type: ignore[no-untyped-def]
     """An observed row for a *different* key is left completely alone."""
     a, b = keypair_factory(), keypair_factory()
-    unrelated_observed_ref = register_observed_key(nodes, keys, b.public, created_ts=_NOW)
+    unrelated_observed_ref = register_observed_key(keys, b.public, created_ts=_NOW)
     node = NodeRecord(node_id="cafe0001", authorized_admin_keys=(unrelated_observed_ref,))
     nodes.upsert(node)
 
@@ -385,7 +385,7 @@ def test_adopt_canonical_ref_handles_both_reconciliations_across_several_nodes(
 ) -> None:
     """The cloned-key case: two nodes reported the same key, one via each path."""
     # Arrange
-    observed_ref = register_observed_key(nodes, keys, keypair.public, created_ts=_NOW)
+    observed_ref = register_observed_key(keys, keypair.public, created_ts=_NOW)
     node_a = NodeRecord(node_id="aaaa0001", authorized_admin_keys=(observed_ref,))
     node_b = NodeRecord(node_id="bbbb0002", unregistered_admin_keys=(encode_key(keypair.public),))
     nodes.upsert(node_a)
