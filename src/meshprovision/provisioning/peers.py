@@ -11,7 +11,8 @@ This module is the whole feature, shared by ``mesh peers`` and the
 ``sync_peers`` step of ``mesh provision``:
 
 * :func:`build_contacts` / :func:`public_key_map` turn the database's active
-  nodes and recorded public keys into :class:`PeerContact` values;
+  nodes and recorded public keys into :class:`PeerContact` values, and
+  :func:`screen_contacts` runs the weak-key audit over them;
 * :func:`read_live_peers` reads what the connected device already has
   (never raises);
 * :func:`plan_peers` is pure: it diffs the two into a :class:`PeersPlan`
@@ -21,7 +22,9 @@ This module is the whole feature, shared by ``mesh peers`` and the
 A device that already holds a *different* public key for a fleet node is
 never overwritten: that is either a stale database or a spoofed identity,
 and which one is for the operator to decide, so it is reported as a
-mismatch and left alone.
+mismatch and left alone. Nor is a key that fails the weak-key audit or is
+shared with another node ever sent: a favorite is never evicted, so the
+device would keep it.
 
 Secret hygiene: only *public* keys pass through this module, and none is
 ever logged or printed; a fingerprint is the most any message shows.
@@ -31,15 +34,18 @@ from __future__ import annotations
 
 import base64
 import binascii
+import dataclasses
 import logging
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from meshtastic.protobuf import admin_pb2, config_pb2, mesh_pb2
 
+from meshprovision.crypto import weakkeys
 from meshprovision.crypto.keys import X25519_KEY_SIZE
 from meshprovision.db import schema
+from meshprovision.errors import KeyMaterialError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import connection
 from meshprovision.provisioning.device_write import DEVICE_EXCEPTIONS
@@ -63,6 +69,7 @@ __all__ = [
     "plan_peers",
     "public_key_map",
     "read_live_peers",
+    "screen_contacts",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -83,6 +90,9 @@ class PeerContact:
         role: Canonical ``Config.DeviceConfig.Role`` name, or ``""``.
         public_key: Its 32-byte public key, or ``None`` when the database
             records none (such a node cannot be added as a contact).
+        weak_reason: Why the recorded public key must not be shared (it
+            failed the weak-key audit or is shared with another node), or
+            ``""``. Set by :func:`screen_contacts`.
     """
 
     node_id: NodeId
@@ -91,6 +101,7 @@ class PeerContact:
     hw_model: str = ""
     role: str = ""
     public_key: bytes | None = None
+    weak_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,12 +144,16 @@ class PeersPlan:
             already has them.
         key_mismatch: Nodes whose key on the device differs from the
             database's. Nothing is written for them.
+        weak_key: Nodes whose recorded key failed the weak-key audit or is
+            shared with another node. Nothing is written for them, not even
+            a favorite.
     """
 
     actions: tuple[PeerAction, ...] = ()
     in_sync: tuple[NodeId, ...] = ()
     no_key: tuple[NodeId, ...] = ()
     key_mismatch: tuple[NodeId, ...] = ()
+    weak_key: tuple[NodeId, ...] = ()
 
     @property
     def is_empty(self) -> bool:
@@ -221,6 +236,65 @@ def build_contacts(
     return tuple(sorted(contacts, key=lambda contact: int(contact.node_id)))
 
 
+def _weak_reason(
+    contact: PeerContact, shared: Mapping[str, tuple[str, ...]], known_bad: Collection[bytes]
+) -> str:
+    """Say why one contact's recorded key must not be shared, if it must not.
+
+    Args:
+        contact: The contact to check.
+        shared: :func:`~meshprovision.crypto.weakkeys.find_duplicate_public_keys`
+            over the fleet's recorded keys.
+        known_bad: The known-bad-keys blocklist.
+
+    Returns:
+        The first critical audit finding, else the nodes sharing the key,
+        else ``""`` (also for a contact without a key).
+    """
+    if contact.public_key is None:
+        return ""
+    try:
+        audit = weakkeys.audit_public_key(
+            contact.public_key, node_id=contact.node_id.display, known_bad=known_bad
+        )
+    except KeyMaterialError:
+        return "malformed key material"
+    if audit.compromised:
+        return audit.findings[0].reason
+    others = shared.get(contact.node_id.hex, ())
+    if others:
+        names = ", ".join(NodeId.from_hex(other).display for other in others)
+        return f"public key shared with {names}, the CVE-2025-52464 key-cloning signature"
+    return ""
+
+
+def screen_contacts(
+    contacts: Iterable[PeerContact],
+    public_keys: Mapping[str, bytes],
+    *,
+    known_bad: Collection[bytes],
+) -> tuple[PeerContact, ...]:
+    """Run the weak-key audit over the contacts' recorded keys. Pure.
+
+    Args:
+        contacts: The fleet, from :func:`build_contacts`.
+        public_keys: Every node's recorded key, from :func:`public_key_map`
+            (archived nodes included: a key shared with one is still a
+            clone).
+        known_bad: The known-bad-keys blocklist.
+
+    Returns:
+        The contacts in the same order, each with :attr:`PeerContact.weak_reason`
+        set when its key is critically weak or shared with another node.
+    """
+    shared = weakkeys.find_duplicate_public_keys(public_keys)
+    screened: list[PeerContact] = []
+    for contact in contacts:
+        reason = _weak_reason(contact, shared, known_bad)
+        screened.append(dataclasses.replace(contact, weak_reason=reason) if reason else contact)
+    return tuple(screened)
+
+
 def _decode_public_key(raw: object) -> bytes | None:
     """Decode a ``nodesByNum`` ``user.publicKey`` value, tolerating junk.
 
@@ -283,7 +357,8 @@ def plan_peers(
         own_node: The connected device's own id, excluded from the plan
             (a node does not need itself as a peer). ``None`` excludes
             nothing.
-        contacts: The fleet, from :func:`build_contacts`.
+        contacts: The fleet, from :func:`build_contacts`, screened by
+            :func:`screen_contacts`.
         live: What the device holds, from :func:`read_live_peers`.
 
     Returns:
@@ -293,8 +368,12 @@ def plan_peers(
     in_sync: list[NodeId] = []
     no_key: list[NodeId] = []
     mismatch: list[NodeId] = []
+    weak: list[NodeId] = []
     for contact in contacts:
         if own_node is not None and contact.node_id == own_node:
+            continue
+        if contact.weak_reason:
+            weak.append(contact.node_id)
             continue
         held = live.get(int(contact.node_id))
         wanted = contact.public_key
@@ -317,6 +396,7 @@ def plan_peers(
         in_sync=tuple(in_sync),
         no_key=tuple(no_key),
         key_mismatch=tuple(mismatch),
+        weak_key=tuple(weak),
     )
 
 

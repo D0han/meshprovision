@@ -64,29 +64,40 @@ class PeersReport:
         return int(ExitCode.PROVISIONING if failed or self.remaining else ExitCode.OK)
 
 
-def _plan(db: DbSession, session: DeviceSession) -> tuple[NodeId, peers.PeersPlan]:
+def _plan(
+    db: DbSession, session: DeviceSession, *, known_bad: frozenset[bytes]
+) -> tuple[NodeId, peers.PeersPlan, dict[NodeId, str]]:
     """Plan the sync against the session's current interface.
 
     Args:
         db: The open database session.
         session: The open device session.
+        known_bad: The known-bad-keys blocklist for the weak-key audit.
 
     Returns:
-        The device's own id and the plan.
+        The device's own id, the plan, and why each weak-keyed node's key
+        was refused (``{node: reason}``).
     """
     iface = session.interface
     own = detect.read_node_id(iface)
     nodes = db.nodes.all()
-    contacts = peers.build_contacts(nodes, peers.public_key_map(db.keys, nodes))
-    return own, peers.plan_peers(own, contacts, peers.read_live_peers(iface))
+    public_keys = peers.public_key_map(db.keys, nodes)
+    contacts = peers.screen_contacts(
+        peers.build_contacts(nodes, public_keys), public_keys, known_bad=known_bad
+    )
+    reasons = {c.node_id: c.weak_reason for c in contacts if c.weak_reason}
+    return own, peers.plan_peers(own, contacts, peers.read_live_peers(iface)), reasons
 
 
-def _remaining_after(db: DbSession, session: DeviceSession) -> tuple[NodeId, ...]:
+def _remaining_after(
+    db: DbSession, session: DeviceSession, *, known_bad: frozenset[bytes]
+) -> tuple[NodeId, ...]:
     """Re-read the device after the writes and list what is still missing.
 
     Args:
         db: The open database session.
         session: The open device session.
+        known_bad: The blocklist the first plan was screened with.
 
     Returns:
         The nodes the device still lacks as contact or favorite; empty
@@ -96,7 +107,7 @@ def _remaining_after(db: DbSession, session: DeviceSession) -> tuple[NodeId, ...
     if not session.reads_back:
         return ()
     session.refresh()
-    _, replan = _plan(db, session)
+    _, replan, _ = _plan(db, session, known_bad=known_bad)
     return tuple(action.contact.node_id for action in replan.actions)
 
 
@@ -115,7 +126,14 @@ def run_peers(
         The report. Every problem that needs attention is also printed
         through ``ctx``.
     """
-    own, plan = _plan(db, session)
+    known_bad = ctx.known_bad_keys()
+    own, plan, weak_reasons = _plan(db, session, known_bad=known_bad)
+    for node_id in plan.weak_key:
+        ctx.warn(
+            f"{node_id.display}: its recorded public key failed the weak-key audit "
+            f"({weak_reasons[node_id]}); not added or favorited. Run `mesh db verify`, "
+            "then re-key the node (`mesh provision --force-regenerate-key`)."
+        )
     for node_id in plan.key_mismatch:
         ctx.warn(
             f"{node_id.display}: the device holds a different public key than the database; "
@@ -132,7 +150,11 @@ def run_peers(
         ]
         ctx.info(f"{action.contact.node_id.display}: {' + '.join(steps)}")
     if plan.is_empty:
-        ctx.success("Peers are in sync: nothing to change.")
+        attention = len(plan.weak_key) + len(plan.key_mismatch) + len(plan.no_key)
+        if attention:
+            ctx.info(f"Nothing to write; {attention} node(s) left as reported above.")
+        else:
+            ctx.success("Peers are in sync: nothing to change.")
         return PeersReport(own_node=own, plan=plan, applied=apply)
     if not apply:
         ctx.info(f"{len(plan.actions)} node(s) need changes; re-run with --apply to write them.")
@@ -141,7 +163,7 @@ def run_peers(
     outcome = peers.apply_peers(session.interface.localNode, plan)
     for node_id, message in outcome.failures:
         ctx.error(f"{node_id.display}: {message}")
-    remaining = _remaining_after(db, session)
+    remaining = _remaining_after(db, session, known_bad=known_bad)
     if remaining:
         names = ", ".join(node_id.display for node_id in remaining)
         ctx.error(f"Sent, but the device does not show {names} after reconnecting.")

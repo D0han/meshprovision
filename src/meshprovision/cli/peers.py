@@ -62,6 +62,7 @@ def _report_json(report: PeersReport) -> dict[str, object]:
         "in_sync": [node_id.display for node_id in report.plan.in_sync],
         "no_key": [node_id.display for node_id in report.plan.no_key],
         "key_mismatch": [node_id.display for node_id in report.plan.key_mismatch],
+        "weak_key": [node_id.display for node_id in report.plan.weak_key],
         "failed": (
             [{"node": n.display, "error": m} for n, m in report.outcome.failures]
             if report.outcome is not None
@@ -103,7 +104,8 @@ def peers(
     Connects over serial, BLE, or TCP, compares the device's NodeDB with
     the database's active nodes, and reports which contacts and favorites
     are missing. A node the device already holds under a different public
-    key is reported and left alone.
+    key, or whose recorded key fails the weak-key audit, is reported and
+    left alone.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.

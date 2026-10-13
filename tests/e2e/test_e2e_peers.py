@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 import pytest
 
+from meshprovision.crypto.known_bad_keys import SMALL_ORDER_POINTS
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.node_record import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType
@@ -30,9 +32,11 @@ SELF_HEX = "deadbe01"
 B_HEX = "b0000002"
 C_HEX = "c0000003"
 D_HEX = "d0000004"
-KEY_SELF = bytes([1]) * 32
-KEY_B = bytes([2]) * 32
-OTHER_KEY = bytes([9]) * 32
+E_HEX = "e0000005"
+# Realistic key bytes: a repeated-byte key would fail the weak-key audit.
+KEY_SELF = hashlib.sha256(b"self").digest()
+KEY_B = hashlib.sha256(b"b").digest()
+OTHER_KEY = hashlib.sha256(b"other").digest()
 PORT_ARGS = ["--port", "/dev/ttyFAKE0"]
 
 
@@ -106,8 +110,31 @@ def test_apply_adds_and_favorites_the_fleet_and_is_idempotent(
     second = invoke(runner, ["peers", *PORT_ARGS, "--apply"], env)
 
     assert second.exit_code == 0
-    assert "in sync" in second.stderr
+    # C still has no key, so the run is not reported as "in sync".
+    assert "Nothing to write; 1 node(s) left as reported above." in second.stderr
     assert device.peer_calls == calls_after_first
+
+
+def test_a_fully_synced_device_is_reported_in_sync(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    seed_db(
+        nodes=[_node(SELF_HEX), _node(B_HEX)],
+        keys=[_pub(SELF_HEX, KEY_SELF), _pub(B_HEX, KEY_B)],
+    )
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    b_num = int(NodeId.parse(B_HEX))
+    device.known_nodes[b_num] = {
+        "num": b_num,
+        "user": {"publicKey": _b64(KEY_B)},
+        "isFavorite": True,
+    }
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply"], env)
+
+    assert result.exit_code == 0
+    assert "Peers are in sync: nothing to change." in result.stderr
+    assert device.peer_calls == []
 
 
 def test_known_but_unfavorited_nodes_are_only_favorited(
@@ -139,6 +166,70 @@ def test_a_different_key_on_the_device_is_reported_and_never_overwritten(
     assert "different public key" in result.stderr
     assert device.peer_calls == []
     assert device.known_nodes[b_num]["user"]["publicKey"] == _b64(OTHER_KEY)  # type: ignore[index]
+
+
+def test_mismatch_and_keyless_only_is_not_reported_as_in_sync(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    b_num = int(NodeId.parse(B_HEX))
+    device.known_nodes[b_num] = {
+        "num": b_num,
+        "user": {"publicKey": _b64(OTHER_KEY)},
+        "isFavorite": True,
+    }
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply"], env)
+
+    assert result.exit_code == 0
+    assert "in sync" not in result.stderr
+    assert "Nothing to write; 2 node(s) left as reported above." in result.stderr
+    assert device.peer_calls == []
+
+
+def test_weak_or_shared_keys_are_reported_and_never_sent(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    shared = hashlib.sha256(b"cloned").digest()
+    seed_db(
+        nodes=[_node(SELF_HEX), _node(B_HEX), _node(C_HEX), _node(D_HEX)],
+        keys=[
+            _pub(SELF_HEX, KEY_SELF),
+            _pub(B_HEX, shared),
+            _pub(C_HEX, shared),
+            _pub(D_HEX, SMALL_ORDER_POINTS[1]),
+        ],
+    )
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--json"], env)
+
+    assert result.exit_code == 0
+    assert device.peer_calls == []
+    assert device.known_nodes == {}
+    assert result.stderr.count("failed the weak-key audit") == 3
+    assert "Nothing to write; 3 node(s) left as reported above." in result.stderr
+    document = json.loads(result.stdout)
+    assert document["weak_key"] == [f"!{B_HEX}", f"!{C_HEX}", f"!{D_HEX}"]
+    assert document["to_change"] == []
+    assert not BASE64_KEY_RE.search(result.stdout + result.stderr)
+
+
+def test_provision_never_sends_a_weak_peer_key(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    seed_db(
+        nodes=[_node(B_HEX), _node(E_HEX)],
+        keys=[_pub(B_HEX, SMALL_ORDER_POINTS[1]), _pub(E_HEX, KEY_B)],
+    )
+    device = bus.use(FakeMeshInterface("a1b2c3d4"))
+
+    result = invoke(runner, ["provision", *PORT_ARGS, "--yes"], env)
+
+    assert result.exit_code == 0
+    assert set(device.known_nodes) == {int(NodeId.parse(E_HEX))}
+    assert f"!{B_HEX}: its recorded public key failed the weak-key audit" in result.stderr
+    assert "Peer sync incomplete" not in result.stderr
 
 
 def test_a_write_the_device_silently_drops_fails_the_read_back(
@@ -178,6 +269,7 @@ def test_json_output_names_nodes_but_carries_no_key_material(
     assert document["applied"] is True
     assert [entry["node"] for entry in document["to_change"]] == [f"!{B_HEX}"]
     assert document["no_key"] == [f"!{C_HEX}"]
+    assert document["weak_key"] == []
     assert document["unconfirmed"] == []
     assert not BASE64_KEY_RE.search(result.stdout + result.stderr)
 

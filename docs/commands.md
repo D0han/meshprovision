@@ -512,11 +512,17 @@ and then reconnects and re-reads the device, so a write the firmware
 silently dropped is reported (exit code 5), like `mesh provision`. It is
 idempotent: a second run finds nothing to do. The database is only read.
 
-Two cases are reported and deliberately left alone: a node with no public
+Three cases are reported and deliberately left alone: a node with no public
 key in the Keys sheet cannot be added as a contact (it is still favorited if
-the device already holds it), and a node the device holds under a
-*different* public key is not overwritten — that is either a stale database
-or a spoofed identity, for you to decide (`mesh adopt` re-reads the device).
+the device already holds it); a node the device holds under a *different*
+public key is not overwritten — that is either a stale database or a spoofed
+identity, for you to decide (`mesh adopt` re-reads the device); and a node
+whose recorded public key fails the weak-key audit (the structural checks and
+known-bad-keys blocklist of `mesh db verify`) or is shared with another node
+is neither added nor favorited, because a favorite is never evicted — run
+`mesh db verify`, then re-key the node (`mesh provision
+--force-regenerate-key`). A run that leaves only such cases says so instead of
+reporting the peers in sync; its exit code stays `0`.
 
 Takes the same connection flags as `mesh provision` (`--port`,
 `--ble-address`, `--ble-scan`, `--host`, `--interface`, `--timeout`,

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
 from meshtastic.protobuf import admin_pb2, config_pb2, mesh_pb2
 
+from meshprovision.crypto.known_bad_keys import SMALL_ORDER_POINTS
 from meshprovision.db.node_record import NodeRecord
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import peers
@@ -172,6 +174,64 @@ def test_replanning_after_applying_the_plan_is_empty() -> None:
     assert len(first.actions) == 2
     assert second.is_empty
     assert second.in_sync == (B, C)
+
+
+# --- screen_contacts ---------------------------------------------------------------------------
+
+D = NodeId.parse("d0000004")
+E = NodeId.parse("e0000005")
+REAL_A = hashlib.sha256(b"peer a").digest()
+SHARED = hashlib.sha256(b"cloned").digest()
+REAL_E = hashlib.sha256(b"peer e").digest()
+SMALL_ORDER = SMALL_ORDER_POINTS[1]
+
+
+def _screened(public_keys: dict[str, bytes] | None = None) -> tuple[peers.PeerContact, ...]:
+    contacts = [
+        _contact(A, REAL_A),
+        _contact(B, SHARED),
+        _contact(C, SHARED),
+        _contact(D, SMALL_ORDER),
+        _contact(E, REAL_E),
+    ]
+    keys = {c.node_id.hex: c.public_key for c in contacts if c.public_key is not None}
+    return peers.screen_contacts(
+        contacts, {**keys, **(public_keys or {})}, known_bad=frozenset(SMALL_ORDER_POINTS)
+    )
+
+
+def test_screen_contacts_flags_shared_and_weak_keys_only() -> None:
+    screened = {c.node_id: c.weak_reason for c in _screened()}
+
+    assert screened[A] == ""
+    assert screened[E] == ""
+    assert "shared with !c0000003" in screened[B]
+    assert "shared with !b0000002" in screened[C]
+    assert "known-bad key blocklist" in screened[D]
+
+
+def test_screen_contacts_counts_a_key_shared_with_an_archived_node() -> None:
+    screened = {c.node_id: c.weak_reason for c in _screened({"f0000006": REAL_E})}
+
+    assert "shared with !f0000006" in screened[E]
+
+
+def test_screen_contacts_treats_malformed_material_as_weak() -> None:
+    (contact,) = peers.screen_contacts(
+        [_contact(B, b"short")], {}, known_bad=frozenset(SMALL_ORDER_POINTS)
+    )
+
+    assert contact.weak_reason == "malformed key material"
+
+
+def test_a_weak_or_shared_key_is_never_added_or_favorited() -> None:
+    live = {int(D): peers.LivePeer(None, False)}
+
+    plan = peers.plan_peers(A, _screened(), live)
+
+    assert plan.weak_key == (B, C, D)
+    assert [a.contact.node_id for a in plan.actions] == [E]
+    assert plan.in_sync == ()
 
 
 # --- contact_url -------------------------------------------------------------------------------

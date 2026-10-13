@@ -14,7 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marks it favorite, so routers and base stations always hold the whole
   fleet. Dry run by default, `--apply` writes and verifies after a
   reconnect, idempotent; a node the device holds under a different key is
-  reported, never overwritten. The template switch `sync_peers` (on
+  reported, never overwritten. A node whose recorded key fails the weak-key
+  audit or is shared with another node is reported and never sent or
+  favorited (`weak_key` in `--json`); a run that leaves only such reported
+  nodes no longer says the peers are in sync. The template switch `sync_peers` (on
   by default; set `false` to opt out) makes `mesh provision` do the same
   as its last step; a failure there is a warning.
 - Single `mesh` console script (distribution `meshprovision`) with eight
