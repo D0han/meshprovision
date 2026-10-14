@@ -10,10 +10,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from meshprovision.cli import peers_sync
 from meshprovision.crypto.known_bad_keys import SMALL_ORDER_POINTS
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.node_record import NodeRecord
-from meshprovision.db.schema import KeyOrigin, KeyType
+from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.nodeid import NodeId
 from tests.conftest import BASE64_KEY_RE
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
@@ -24,6 +25,7 @@ if TYPE_CHECKING:
 
     from click.testing import CliRunner
 
+    from meshprovision.crypto.keys import KeyPair
     from tests.e2e.conftest import DeviceBus
 
 pytestmark = pytest.mark.e2e
@@ -83,7 +85,7 @@ def test_dry_run_reports_and_writes_nothing(
 
     assert result.exit_code == 0
     assert "need changes" in result.stderr
-    assert B_HEX in result.stderr
+    assert f"!{B_HEX}: add contact + favorite" in result.stderr
     assert device.peer_calls == []
     assert device.known_nodes == {}
     assert db_fingerprint(fleet) == before
@@ -104,6 +106,8 @@ def test_apply_adds_and_favorites_the_fleet_and_is_idempotent(
     # Neither this device, the key-less node, nor the archived node is touched.
     assert set(device.known_nodes) == {int(NodeId.parse(B_HEX))}
     assert "No public key recorded for" in first.stderr
+    assert "Peers synced: 1 node(s) updated." in first.stderr
+    assert "after reconnecting" not in first.stderr
     assert db_fingerprint(fleet) == before
 
     calls_after_first = list(device.peer_calls)
@@ -267,9 +271,9 @@ def test_a_write_the_device_silently_drops_fails_the_read_back(
     result = invoke(runner, ["peers", *PORT_ARGS, "--apply"], env)
 
     assert result.exit_code == 5
-    assert "does not show" in result.stderr
-    assert B_HEX in result.stderr
+    assert f"Sent, but the device does not show !{B_HEX} after reconnecting." in result.stderr
     assert "favorited after reconnecting" not in result.stderr
+    assert "Peers synced" not in result.stderr
 
 
 def test_a_rejected_write_is_reported_and_fails_the_run(
@@ -278,10 +282,14 @@ def test_a_rejected_write_is_reported_and_fails_the_run(
     device = bus.use(FakeMeshInterface(SELF_HEX))
     device.fail_peer_writes = True
 
-    result = invoke(runner, ["peers", *PORT_ARGS, "--apply"], env)
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--json"], env)
 
     assert result.exit_code == 5
-    assert "simulated contact write failure" in result.stderr
+    assert f"!{B_HEX}: simulated contact write failure" in result.stderr
+    assert "Peers synced" not in result.stderr
+    document = json.loads(result.stdout)
+    assert document["failed"] == [{"node": f"!{B_HEX}", "error": "simulated contact write failure"}]
+    assert document["unconfirmed"] == [f"!{B_HEX}"]
 
 
 def test_json_output_names_nodes_but_carries_no_key_material(
@@ -299,6 +307,35 @@ def test_json_output_names_nodes_but_carries_no_key_material(
     assert document["weak_key"] == []
     assert document["unconfirmed"] == []
     assert not BASE64_KEY_RE.search(result.stdout + result.stderr)
+
+
+def test_peers_json_reports_each_node_under_the_right_key(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    """The keys scripts read: to_change entries, in_sync, key_mismatch, no_key, failed."""
+    f_hex = "f0000006"
+    key_e = hashlib.sha256(b"e").digest()
+    seed_db(
+        nodes=[_node(SELF_HEX), _node(B_HEX), _node(C_HEX), _node(E_HEX), _node(f_hex)],
+        keys=[_pub(B_HEX, KEY_B), _pub(E_HEX, key_e), _pub(f_hex, hashlib.sha256(b"f").digest())],
+    )
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    b_num, e_num = int(NodeId.parse(B_HEX)), int(NodeId.parse(E_HEX))
+    device.known_nodes[b_num] = {
+        "num": b_num,
+        "user": {"publicKey": _b64(KEY_B)},
+        "isFavorite": True,
+    }
+    device.known_nodes[e_num] = {"num": e_num, "user": {"publicKey": _b64(OTHER_KEY)}}
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--json"], env)
+
+    document = json.loads(result.stdout)
+    assert document["to_change"] == [{"node": f"!{f_hex}", "add_contact": True, "favorite": True}]
+    assert document["in_sync"] == [f"!{B_HEX}"]
+    assert document["key_mismatch"] == [f"!{E_HEX}"]
+    assert document["no_key"] == [f"!{C_HEX}"]
+    assert document["failed"] == []
 
 
 def _favorited_archived_d(device: FakeMeshInterface) -> int:
@@ -466,3 +503,49 @@ def test_a_failed_peer_sync_never_fails_provisioning(
     assert result.exit_code == 0
     assert "Peer sync incomplete" in result.stderr
     assert "Database updated" in result.stderr
+
+
+def test_a_peer_sync_that_raises_is_a_warning_not_a_provisioning_failure(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    fleet: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bus.use(FakeMeshInterface("a1b2c3d4"))
+
+    def _radio_gone(*_args: object, **_kwargs: object) -> object:
+        raise OSError("radio went away")
+
+    monkeypatch.setattr(peers_sync, "run_peers", _radio_gone)
+
+    result = invoke(runner, ["provision", *PORT_ARGS, "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "Peer sync failed (radio went away)" in result.stderr
+    assert "mesh peers --apply" in result.stderr
+    assert "Database updated" in result.stderr
+
+
+def test_no_reconnect_provision_syncs_peers_without_a_bogus_read_back_failure(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """An in-place session cannot read back its own peer writes, so none is reported missing."""
+    kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id=SELF_HEX, management=ManagementMode.TEMPLATE), _node(B_HEX)],
+        keys=[*KeyRecord.for_keypair(SELF_HEX, kp, origin=KeyOrigin.CAPTURED), _pub(B_HEX, KEY_B)],
+    )
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    device.localNode.localConfig.security.public_key = kp.public
+    device.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(runner, ["provision", *PORT_ARGS, "--yes", "--no-reconnect"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert device.known_nodes[int(NodeId.parse(B_HEX))]["isFavorite"] is True
+    assert "Peer sync incomplete" not in result.stderr

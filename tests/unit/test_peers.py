@@ -162,6 +162,14 @@ def test_peer_without_a_database_key_is_favorited_only_when_the_device_holds_it(
     assert plan.no_key == (B, C)
 
 
+def test_a_keyless_peer_the_device_lacks_is_never_reported_in_sync() -> None:
+    plan = peers.plan_peers(A, [_contact(C)], {})
+
+    assert plan.actions == ()
+    assert plan.no_key == (C,)
+    assert plan.in_sync == ()
+
+
 def test_replanning_after_applying_the_plan_is_empty() -> None:
     contacts = [_contact(A, KEY_A), _contact(B, KEY_B), _contact(C, KEY_C)]
     first = peers.plan_peers(A, contacts, {})
@@ -451,6 +459,18 @@ def test_apply_skips_the_add_for_a_known_peer() -> None:
     peers.apply_peers(node, plan)  # type: ignore[arg-type]
 
     assert node.calls == [("fav", int(B))]
+
+
+def test_apply_adds_without_refavoriting_a_peer_already_favorited_but_keyless() -> None:
+    """The device holds B favorited but without a key: send the contact, not the flag again."""
+    plan = peers.plan_peers(A, [_contact(B, KEY_B)], {int(B): peers.LivePeer(None, True)})
+    node = _FakeLocalNode()
+
+    outcome = peers.apply_peers(node, plan)  # type: ignore[arg-type]
+
+    assert node.calls == [("add", int(B))]
+    assert outcome.added == (B,)
+    assert outcome.favorited == ()
 
 
 def test_one_failed_peer_does_not_stop_the_rest() -> None:
