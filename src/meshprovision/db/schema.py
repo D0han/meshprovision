@@ -499,6 +499,8 @@ NODES_SHEET_SPEC: Final[SheetSpec] = SheetSpec(
             description="Altitude in meters.",
             kind=ColumnKind.INT,
             width="0.8in",
+            min_value=-2147483648.0,
+            max_value=2147483647.0,
         ),
         ColumnSpec(
             name="first_added_ts",

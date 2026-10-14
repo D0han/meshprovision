@@ -18,7 +18,7 @@ LibreOffice, not a CSV dump.
 | `firmware_version` | TEXT | Firmware version string as reported by the device |
 | `gps_lat` | FLOAT, `[-90, 90]` | Latitude in decimal degrees |
 | `gps_lon` | FLOAT, `[-180, 180]` | Longitude in decimal degrees |
-| `gps_alt` | INT | Altitude in meters |
+| `gps_alt` | INT | Altitude in meters (int32 range) |
 | `first_added_ts` | TIMESTAMP (ISO-8601 UTC, e.g. `2026-08-25T03:14:10Z`) | UTC timestamp this node was first added to the database |
 | `last_updated_ts` | TIMESTAMP | UTC timestamp this node's record was last updated |
 | `authorized_admin_keys` | KEY_REF_LIST (`;`-separated) | Semicolon-separated `key_ref` list of admin public keys authorized on this node's `security.adminKey`. Deliberately **not** a formula: it records what was actually written to the device — narrowed when a run revokes a live admin key it names, but never rebuilt from the device, so a live key that was never recorded stays unrecorded — which is not a function of any other cell on the row |

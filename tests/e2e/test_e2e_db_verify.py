@@ -481,3 +481,17 @@ def test_db_timestamp_cell_out_of_range_in_utc_is_a_validation_error(
         assert result.exit_code == 4, command
         assert "'first_added_ts' is not a valid timestamp" in result.stderr
         assert "Use ISO-8601" in result.stderr
+
+
+def test_db_overlong_integer_cell_is_a_validation_error(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """A 400-digit ``gps_alt`` exits 4 naming the cell, not 1 with an ``OverflowError``."""
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    edit_ods_cell(db_path, "Nodes", "gps_alt", 2, "9" * 400)
+
+    for command in (["db", "verify"], ["db", "list"]):
+        result = invoke(runner, command, env)
+        assert result.exit_code == 4, command
+        assert "'gps_alt' is out of range: a 400-character integer" in result.stderr

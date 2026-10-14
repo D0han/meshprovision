@@ -22,6 +22,7 @@ from meshprovision.db.schema import KeyOrigin
 from meshprovision.errors import AtomicWriteError
 from tests.conftest import WIDE_TERMINAL_COLUMNS, rezip_ods
 from tests.e2e.conftest import invoke
+from tests.unit.conftest import edit_ods_cell
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -226,6 +227,24 @@ def test_db_restore_of_an_unparsable_backup_reports_a_clear_error(
     # backup of it was ever created.
     assert db_path.read_bytes() == before
     assert list(backup_dir.glob("*.ods")) == []
+
+
+def test_db_restore_of_a_backup_with_an_overlong_integer_cell_reports_a_clear_error(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """Refused as an invalid backup (exit 4), not an ``OverflowError`` traceback (exit 1)."""
+    backup = _valid_backup(tmp_path, env, seed_db)
+    edit_ods_cell(backup, "Nodes", "gps_alt", 2, "9" * 400)
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_path.read_bytes()
+
+    result = invoke(
+        runner, ["db", "restore", str(backup), "--yes", "--backup-dir", str(tmp_path / "b")], env
+    )
+
+    assert result.exit_code == 4
+    assert "is not a valid database; nothing was restored" in " ".join(result.stderr.split())
+    assert db_path.read_bytes() == before
 
 
 def test_db_restore_missing_backup_file_is_a_usage_error(

@@ -381,6 +381,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A database cell holding an absurdly long integer (`gps_alt`) is reported
+  as a validation error (exit 4) instead of crashing every command that
+  loads the database, including `mesh db verify` and `mesh db restore`, with
+  a traceback; `gps_alt` is now checked against the int32 range Meshtastic
+  stores altitude in.
 - A template number outside its firmware field's range (an interval above
   4294967295, a float that is not finite or overflows a 32-bit float) is now
   rejected when the template loads, including by `mesh template validate`,

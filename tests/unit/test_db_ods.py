@@ -653,6 +653,14 @@ def test_non_numeric_int_column_raises(tmp_path: Path, keypair) -> None:
     assert exc_info.value.column == "gps_alt"
 
 
+def test_load_reports_an_overlong_int_cell_as_a_validation_error(tmp_path: Path, keypair) -> None:
+    path = _write_raw_row(tmp_path, keypair, {})
+    edit_ods_cell(path, "Nodes", "gps_alt", 2, "9" * 400)
+    with pytest.raises(DbValidationError) as exc_info:
+        ods.load_database(path)
+    assert exc_info.value.column == "gps_alt"
+
+
 def test_non_numeric_float_column_raises(tmp_path: Path, keypair) -> None:
     path = _write_raw_row(tmp_path, keypair, {})
     edit_ods_cell(path, "Nodes", "gps_lat", 2, "not-a-number")

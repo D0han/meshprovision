@@ -124,8 +124,8 @@ def _validate_int(sheet: str, row: int, spec: schema.ColumnSpec, stripped: str) 
         The canonical decimal integer text.
 
     Raises:
-        DbValidationError: If ``stripped`` is not an integer, or is out of
-            ``[spec.min_value, spec.max_value]``.
+        DbValidationError: If ``stripped`` is not an integer, is too long
+            to convert, or is out of ``[spec.min_value, spec.max_value]``.
     """
     if not _INT_PATTERN.match(stripped):
         raise DbValidationError(
@@ -135,8 +135,20 @@ def _validate_int(sheet: str, row: int, spec: schema.ColumnSpec, stripped: str) 
             column=spec.name,
             value=stripped,
         )
-    parsed = int(stripped)
-    _check_range(sheet=sheet, row=row, spec=spec, parsed=float(parsed))
+    try:
+        parsed = int(stripped)
+        as_float = float(parsed)
+    except (ValueError, OverflowError) as exc:
+        # int() refuses more than sys.get_int_max_str_digits() digits;
+        # float() overflows past ~1e308. Neither is a real value.
+        raise DbValidationError(
+            f"{spec.name!r} is out of range: a {len(stripped)}-character integer",
+            sheet=sheet,
+            row=row,
+            column=spec.name,
+            value=f"{stripped[:20]}...",
+        ) from exc
+    _check_range(sheet=sheet, row=row, spec=spec, parsed=as_float)
     return str(parsed)
 
 

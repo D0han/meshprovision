@@ -133,6 +133,30 @@ def test_float_bounds_reject_just_past_the_boundary(column: str, value: str) -> 
     assert exc_info.value.column == column
 
 
+@pytest.mark.parametrize("digits", [400, 5000], ids=["float-overflow", "int-str-limit"])
+def test_an_overlong_integer_cell_is_a_validation_error(digits: int) -> None:
+    """Not ``OverflowError``/``ValueError`` -- those crash every command with a traceback."""
+    spec = schema.NODES_SHEET_SPEC.column("gps_alt")
+    with pytest.raises(DbValidationError) as exc_info:
+        cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value="9" * digits)
+    assert exc_info.value.column == "gps_alt"
+    assert "out of range" in exc_info.value.message
+
+
+@pytest.mark.parametrize("value", ["-2147483648", "2147483647"])
+def test_gps_alt_accepts_the_int32_range(value: str) -> None:
+    spec = schema.NODES_SHEET_SPEC.column("gps_alt")
+    assert cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value=value) == value
+
+
+@pytest.mark.parametrize("value", ["-2147483649", "2147483648"])
+def test_gps_alt_rejects_just_past_the_int32_range(value: str) -> None:
+    spec = schema.NODES_SHEET_SPEC.column("gps_alt")
+    with pytest.raises(DbValidationError) as exc_info:
+        cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value=value)
+    assert exc_info.value.column == "gps_alt"
+
+
 def test_base64_key_list_dedupes_after_canonicalization(keypair) -> None:
     """One key spelled two ways collapses to one element.
 
