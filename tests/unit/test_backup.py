@@ -280,6 +280,27 @@ def test_parse_profile_yaml_round_trips_fields() -> None:
     assert parsed.fixed_position.latitude == pytest.approx(52.0)
 
 
+def test_profile_yaml_config_and_module_config_reach_the_live_config() -> None:
+    """A --from-backup adopt sees the profile's region and module switches, not defaults."""
+    profile = backup.parse_profile_yaml(_YAML_TEXT, source="test.yaml")
+
+    live = backup.live_config_from_backup(
+        backup.merge_backups(profile=profile), node_id=NodeId.from_hex("deadbe01")
+    )
+
+    assert live.value("lora", "region") == "EU_868"
+    assert live.module_enabled["mqtt"] is True
+
+
+def test_profile_yaml_accepts_the_camel_case_spellings() -> None:
+    text = _YAML_TEXT.replace("owner_short:", "ownerShort:").replace("channel_url:", "channelUrl:")
+
+    parsed = backup.parse_profile_yaml(text, source="test.yaml")
+
+    assert parsed.short_name == "MT02"
+    assert parsed.channel is not None
+
+
 def test_parse_profile_yaml_strips_base64_prefix() -> None:
     parsed = backup.parse_profile_yaml(_YAML_TEXT, source="test.yaml")
     expected_pub = base64.b64decode("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=")
