@@ -6,7 +6,7 @@ import errno
 from collections.abc import Callable
 
 import pytest
-from meshtastic.protobuf import channel_pb2, localonly_pb2
+from meshtastic.protobuf import channel_pb2, config_pb2, localonly_pb2
 
 from meshprovision.errors import (
     EnumMappingError,
@@ -43,6 +43,19 @@ def test_generate_ble_pin_with_injected_rng() -> None:
     assert pin == "000000"
     assert len(pin) == 6
     assert pin.isdigit()
+
+
+def test_generate_ble_pin_draws_each_digit_from_all_ten() -> None:
+    bounds: list[int] = []
+
+    def rng(bound: int) -> int:
+        bounds.append(bound)
+        return bound - 1
+
+    pin = generate_ble_pin(rng=rng)
+
+    assert set(bounds) == {10}
+    assert set(pin) == {"9"}
 
 
 def test_generate_ble_pin_real_calls_are_six_digits() -> None:
@@ -341,3 +354,65 @@ def test_write_section_does_not_swallow_a_programming_error() -> None:
 
     with pytest.raises(ZeroDivisionError):
         write_section(iface, change)  # type: ignore[arg-type]
+
+
+def test_write_section_security_keeps_admin_keys_the_plan_does_not_change() -> None:
+    """A security write for another field must never touch the device's admin keys."""
+    iface = FakeIfaceForApply()
+    held = (b"\x11" * 32, b"\x22" * 32)
+    iface.localNode.localConfig.security.admin_key.extend(held)
+    change = SectionChange(
+        section="security",
+        kind=detect.SectionKind.CONFIG,
+        changes=(
+            FieldChange(section="security", field="serial_enabled", current=True, desired=False),
+        ),
+    )
+
+    write_section(iface, change, key_plan=KeyPlan())  # type: ignore[arg-type]
+
+    assert tuple(iface.localNode.localConfig.security.admin_key) == held
+    assert iface.localNode.localConfig.security.serial_enabled is False
+
+
+def test_write_section_failed_write_restores_the_whole_staged_section() -> None:
+    """Rollback restores the pre-call section, not an empty message."""
+    iface = FakeIfaceRaisesOnWrite(OSError(errno.EIO, "simulated I/O failure"))
+    lora = iface.localNode.localConfig.lora
+    lora.hop_limit = 5
+    lora.region = config_pb2.Config.LoRaConfig.RegionCode.EU_868
+    pre_call = config_pb2.Config.LoRaConfig()
+    pre_call.CopyFrom(lora)
+    change = SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="hop_limit", current=5, desired=7),),
+    )
+
+    with pytest.raises(ProvisioningError):
+        write_section(iface, change)  # type: ignore[arg-type]
+
+    assert iface.localNode.localConfig.lora == pre_call
+
+
+def test_write_default_channel_failed_write_restores_non_default_settings() -> None:
+    iface = FakeIfaceRaisesOnWrite(OSError(errno.EIO, "simulated I/O failure"))
+    settings = iface.localNode.channels[0].settings.module_settings
+    settings.position_precision = 10
+    settings.is_muted = True
+    pre_call = channel_pb2.ModuleSettings()
+    pre_call.CopyFrom(settings)
+    change = SectionChange(
+        section="default_channel",
+        kind=detect.SectionKind.CHANNEL,
+        changes=(
+            FieldChange(
+                section="default_channel", field="position_precision", current=10, desired=12
+            ),
+        ),
+    )
+
+    with pytest.raises(ProvisioningError):
+        write_default_channel(iface, change)  # type: ignore[arg-type]
+
+    assert iface.localNode.channels[0].settings.module_settings == pre_call
