@@ -100,6 +100,39 @@ def test_watch_gives_up_after_three_consecutive_db_errors(
     assert "still broken" in result.stderr
 
 
+def test_watch_success_resets_the_consecutive_db_failure_count(
+    monkeypatch: pytest.MonkeyPatch, cli_env: dict[str, str]
+) -> None:
+    """Two failures, a success, two more failures: never three in a row, so it keeps polling."""
+    outcomes = iter(["err", "err", "ok", "err", "err", "ok"])
+    calls = {"n": 0}
+
+    def fake_run_once(ctx: object, options: object, client: object) -> StatusReport:
+        calls["n"] += 1
+        if next(outcomes) == "err":
+            raise DbIntegrityError(f"transient failure #{calls['n']}")
+        return _ok_report()
+
+    monkeypatch.setattr(status_cli, "_run_once", fake_run_once)
+    sleeps = {"n": 0}
+
+    def fake_sleep(_seconds: float) -> None:
+        sleeps["n"] += 1
+        if sleeps["n"] >= 6:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+    result = CliRunner().invoke(
+        cli, ["status", "--watch", "--interval", "1", "--json"], env=cli_env, catch_exceptions=False
+    )
+
+    assert result.exit_code == 0
+    assert calls["n"] == 6
+    assert result.stderr.count("Poll failed") == 4
+    assert result.stdout.count('"generated_at"') == 2
+
+
 def test_watch_ctrl_c_after_a_failed_last_poll_reports_the_failure_exit_code(
     monkeypatch: pytest.MonkeyPatch, cli_env: dict[str, str]
 ) -> None:
