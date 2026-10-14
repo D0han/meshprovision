@@ -1788,6 +1788,61 @@ def test_read_raw_refuses_a_corrupt_compressed_part(
     )
 
 
+def test_read_raw_refuses_a_file_that_unpacks_past_the_cap(
+    monkeypatch: pytest.MonkeyPatch,
+    db_with_private_key: tuple[bytes, bytes],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(ods_read, "MAX_UNPACKED_BYTES", 1024 * 1024)
+    data, secret = db_with_private_key
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        content = archive.read("content.xml")
+    # 2 MiB of whitespace deflates to a few KB: a small zip bomb.
+    padded = content.replace(
+        b"</office:spreadsheet>", b" " * (2 * 1024 * 1024) + b"</office:spreadsheet>", 1
+    )
+    bomb = rezip_ods(data, {"content.xml": padded})
+    assert len(bomb) < 64 * 1024
+
+    _assert_refused_quietly(bomb, secret, "more than the 1 MiB a database can hold", capsys)
+
+
+@pytest.mark.parametrize("slack", [0, -1], ids=["at_the_cap", "one_byte_under_it"])
+def test_unpacked_size_cap_boundary(
+    monkeypatch: pytest.MonkeyPatch, db_with_private_key: tuple[bytes, bytes], slack: int
+) -> None:
+    data, _secret = db_with_private_key
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        unpacked = sum(info.file_size for info in archive.infolist())
+    monkeypatch.setattr(ods_read, "MAX_UNPACKED_BYTES", unpacked + slack)
+
+    if slack:
+        with pytest.raises(SchemaError, match=f"it would unpack to {unpacked} bytes"):
+            ods_read.read_raw(Path("db.ods"), data=data)
+    else:
+        assert "Nodes" in ods_read.read_raw(Path("db.ods"), data=data).sheets
+
+
+def test_a_member_that_inflates_past_its_declared_size_is_refused(
+    db_with_private_key: tuple[bytes, bytes], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The cap trusts the central directory's sizes: zipfile stops reading a
+    # member there and fails its CRC check, so a lying size cannot inflate.
+    data, secret = db_with_private_key
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        content = archive.read("content.xml")
+    padded = content.replace(
+        b"</office:spreadsheet>", b" " * (2 * 1024 * 1024) + b"</office:spreadsheet>", 1
+    )
+    bomb = bytearray(rezip_ods(data, {"content.xml": padded}))
+    entry = bomb.index(b"PK\x01\x02")
+    while bomb[entry + 46 : entry + 46 + len(b"content.xml")] != b"content.xml":
+        entry = bomb.index(b"PK\x01\x02", entry + 1)
+    bomb[entry + 24 : entry + 28] = len(content).to_bytes(4, "little")
+
+    _assert_refused_quietly(bytes(bomb), secret, "content.xml could not be decompressed", capsys)
+
+
 def test_read_raw_refuses_a_text_document(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

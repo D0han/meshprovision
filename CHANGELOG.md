@@ -1063,6 +1063,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A database file that would unpack to more than 64 MiB (a zip bomb: a
+  small `.ods` whose parts inflate to gigabytes) is refused as unreadable
+  (exit 4) before any part of it is decompressed, for every command that
+  loads the database and for `mesh db restore`. A real database unpacks to
+  well under 1 MiB.
 - `mesh peers` and the `sync_peers` step of `mesh provision` no longer
   favorite a fleet node the database has no public key for when the key the
   device already holds for it fails the weak-key audit or is shared with

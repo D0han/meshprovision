@@ -49,6 +49,7 @@ __all__ = [
     "MAX_BLANK_ROWS",
     "MAX_COLUMNS",
     "MAX_ROW_REPEAT",
+    "MAX_UNPACKED_BYTES",
     "CellValue",
     "DatabaseData",
     "SheetData",
@@ -65,6 +66,15 @@ MAX_BLANK_ROWS: Final[int] = 64
 MAX_ROW_REPEAT: Final[int] = 1024
 """Above this ``table:number-rows-repeated`` count, a blank row is treated as
 LibreOffice's giant trailing filler row and read stops immediately."""
+
+MAX_UNPACKED_BYTES: Final[int] = 64 * 1024 * 1024
+"""Upper bound on the summed uncompressed size of an ODF zip's members.
+
+A real fleet database unpacks to well under a megabyte; the cap keeps a
+small crafted file from inflating to gigabytes in memory (a zip bomb).
+The sizes are the ones the zip's central directory declares, which
+:mod:`zipfile` enforces: a member that inflates past its declared size
+fails its CRC check instead of growing."""
 
 _MANIFEST_PART: Final[str] = "META-INF/manifest.xml"
 _CONTENT_PART: Final[str] = "content.xml"
@@ -520,10 +530,18 @@ def _preflight(path: Path, archive: zipfile.ZipFile) -> None:
         archive: The opened ODF zip.
 
     Raises:
-        SchemaError: If the file is password-protected, has no
+        SchemaError: If the file would unpack to more than
+            :data:`MAX_UNPACKED_BYTES`, is password-protected, has no
             ``content.xml``, or any XML part odfpy would parse is
             damaged or not well-formed.
     """
+    unpacked = sum(info.file_size for info in archive.infolist())
+    if unpacked > MAX_UNPACKED_BYTES:
+        raise _unreadable(
+            path,
+            f"it would unpack to {unpacked} bytes, more than the "
+            f"{MAX_UNPACKED_BYTES // (1024 * 1024)} MiB a database can hold",
+        )
     manifest_bytes = _read_part(path, archive, _MANIFEST_PART)
     _check_well_formed(path, _MANIFEST_PART, manifest_bytes)
     manifest = defusedxml.ElementTree.fromstring(manifest_bytes)
