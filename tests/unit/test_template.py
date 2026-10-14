@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -272,6 +273,16 @@ def test_ensure_capacity_available() -> None:
     assert exc.capacity == 1296
     assert "widen" in (exc.hint or "").lower()
     assert ensure_capacity_available(spec, 1295) is None
+
+
+@pytest.mark.parametrize("floor", [36, 10], ids=["at-floor", "above-floor"])
+def test_strict_capacity_floor_accepts_a_pattern_that_meets_it(floor: int) -> None:
+    cfg = TemplateConfig(
+        short_name_pattern="MT{n}", name_min_capacity=floor, name_capacity_strict=True
+    )
+
+    assert cfg.name_capacity_strict is True
+    assert not any(w.code == "capacity_below_floor" for w in cfg.collect_warnings())
 
 
 # ---------------------------------------------------------------------------
@@ -764,3 +775,32 @@ def test_traffic_management_is_a_known_module_option() -> None:
     """Every module section the planner writes is a known template option."""
     template = TemplateConfig(enabled_options=["traffic_management"])
     assert "unknown_option" not in {w.code for w in template.collect_warnings()}
+
+
+def test_load_template_text_logs_every_collected_warning(caplog: pytest.LogCaptureFixture) -> None:
+    caplog.set_level(logging.WARNING, logger="meshprovision.config.template")
+
+    cfg = load_template_text("version: 1\ndisabled_options: [not_a_real_module]\n")
+
+    messages = [r.getMessage() for r in caplog.records if r.name == "meshprovision.config.template"]
+    assert messages
+    assert messages == [w.message for w in cfg.collect_warnings()]
+
+
+def test_an_empty_option_list_in_yaml_loads_as_no_options() -> None:
+    cfg = load_template_text("version: 1\nenabled_options:\ndisabled_options:\n")
+
+    assert cfg.enabled_options == ()
+    assert cfg.disabled_options == ()
+
+
+def test_a_non_mapping_top_level_is_refused() -> None:
+    with pytest.raises(TemplateValidationError, match="must be a mapping"):
+        load_template_text("- version: 1\n", source="tpl.yaml")
+
+
+def test_a_triplicated_option_is_named_once() -> None:
+    with pytest.raises(TemplateValidationError) as excinfo:
+        load_template_text("version: 1\nenabled_options: [mqtt, mqtt, mqtt]\n")
+
+    assert str(excinfo.value).count("mqtt") == 1
