@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import re
@@ -69,11 +70,22 @@ class TestSecretBytes:
         assert secret.reveal() == b"\x00" * 32
 
     def test_constructor_type_error_on_str(self) -> None:
-        with pytest.raises(TypeError):
+        with pytest.raises(TypeError, match="SecretBytes requires bytes or bytearray"):
             SecretBytes("not bytes")  # type: ignore[arg-type]
+
+    @pytest.mark.parametrize("value", [12345, None], ids=["int", "none"])
+    def test_constructor_type_error_on_other_non_bytes(self, value: object) -> None:
+        with pytest.raises(TypeError, match="SecretBytes requires bytes or bytearray"):
+            SecretBytes(value)  # type: ignore[arg-type]
 
 
 class TestFingerprintRedact:
+    def test_fingerprint_default_is_sha256_prefix_and_eight_hex_digits(self) -> None:
+        """The label users compare across commands and logs: exact format, exact length."""
+        material = b"\x01" * 32
+
+        assert fingerprint(material) == "sha256:" + hashlib.sha256(material).hexdigest()[:8]
+
     def test_fingerprint_stable(self) -> None:
         assert fingerprint(b"x" * 32) == fingerprint(b"x" * 32)
 

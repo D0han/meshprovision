@@ -12,6 +12,7 @@ key bytes, and ``KeyPair``'s length invariants and ``__repr__``.
 from __future__ import annotations
 
 import base64
+import dataclasses
 
 import pytest
 
@@ -21,6 +22,8 @@ from meshprovision.crypto.keys import (
     KeyPair,
     decode_key,
     encode_key,
+    generate_keypair,
+    public_from_private,
     public_key_matches,
 )
 from meshprovision.crypto.redact import SecretBytes
@@ -46,12 +49,30 @@ def test_public_key_matches_raises_on_a_wrong_length_public_key(keypair_factory)
     with pytest.raises(KeyMaterialError) as excinfo:
         public_key_matches(kp.private, kp.public[:31])
     assert excinfo.value.reason == "invalid public key length"
+    assert excinfo.value.actual_length == 31
 
 
 def test_public_key_matches_raises_on_a_wrong_length_private_key() -> None:
     with pytest.raises(KeyMaterialError) as excinfo:
         public_key_matches(b"\x01" * 31, b"\x02" * 32)
     assert excinfo.value.reason == "invalid private key length"
+    assert excinfo.value.actual_length == 31
+
+
+def test_public_key_matches_refuses_a_32_character_string_public_key() -> None:
+    pair = generate_keypair()
+
+    with pytest.raises(KeyMaterialError) as excinfo:
+        public_key_matches(pair.private, "x" * 32)  # type: ignore[arg-type]
+
+    assert excinfo.value.actual_length is None
+
+
+def test_public_from_private_refuses_a_32_character_string() -> None:
+    with pytest.raises(KeyMaterialError) as excinfo:
+        public_from_private("x" * 32)  # type: ignore[arg-type]
+
+    assert excinfo.value.actual_length is None
 
 
 @pytest.mark.parametrize(
@@ -146,6 +167,13 @@ def test_keypair_rejects_a_wrong_length_private_key(keypair_factory) -> None:
     with pytest.raises(KeyMaterialError) as excinfo:
         KeyPair(private=SecretBytes(b"\x01" * 31), public=kp.public)
     assert excinfo.value.reason == "invalid private key length"
+
+
+def test_keypair_is_immutable() -> None:
+    pair = generate_keypair()
+
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        pair.public = b"\x00" * 32  # type: ignore[misc]
 
 
 def test_keypair_repr_and_fingerprint_never_expose_the_private_key(
