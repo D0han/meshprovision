@@ -150,11 +150,13 @@ node of the database as a favorited contact, exactly what
 `mesh peers --apply` does (it never unfavorites archived nodes) (see
 [commands](commands.md)). A device only keeps the nodes it has heard recently and evicts the rest; a favorite is never
 evicted, which matters most for routers and base stations. A node whose
-public key is not in the Keys sheet cannot be added as a contact; a node the
-device already holds under a *different* key, and a node whose recorded key
-fails the weak-key audit or is shared with another node, are reported and
-left alone. A failure in this step is a warning, never a provisioning failure.
-Set `false` to leave the device's contacts alone.
+public key is not in the Keys sheet cannot be added as a contact (it is only
+favorited when the device already holds it under a key that passes the
+weak-key audit); a node the device already holds under a *different* key,
+and a node whose recorded key fails the weak-key audit or is shared with
+another node, are reported and left alone. A failure in this step is a
+warning, never a provisioning failure. Set `false` to leave the device's
+contacts alone.
 
 ### Admin nodes
 

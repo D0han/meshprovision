@@ -519,13 +519,14 @@ idempotent: a second run finds nothing to do. The database is only read.
 
 Three cases are reported and deliberately left alone: a node with no public
 key in the Keys sheet cannot be added as a contact (it is still favorited if
-the device already holds it); a node the device holds under a *different*
-public key is not overwritten — that is either a stale database or a spoofed
-identity, for you to decide (`mesh adopt` re-reads the device); and a node
-whose recorded public key fails the weak-key audit (the structural checks and
-known-bad-keys blocklist of `mesh db verify`) or is shared with another node
-is neither added nor favorited, because a favorite is never evicted — run
-`mesh db verify`, then re-key the node (`mesh provision
+the device already holds it under a key that passes the same weak-key audit;
+otherwise it is reported like a weak key and not favorited); a node the device
+holds under a *different* public key is not overwritten — that is either a
+stale database or a spoofed identity, for you to decide (`mesh adopt` re-reads
+the device); and a node whose recorded public key fails the weak-key audit
+(the structural checks and known-bad-keys blocklist of `mesh db verify`) or is
+shared with another node is neither added nor favorited, because a favorite is
+never evicted — run `mesh db verify`, then re-key the node (`mesh provision
 --force-regenerate-key`). A run that leaves only such cases says so instead of
 reporting the peers in sync; its exit code stays `0`.
 

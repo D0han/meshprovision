@@ -1063,6 +1063,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `mesh peers` and the `sync_peers` step of `mesh provision` no longer
+  favorite a fleet node the database has no public key for when the key the
+  device already holds for it fails the weak-key audit or is shared with
+  another node (a spoofed or cloned identity: a favorite is never evicted).
+  Such a node is reported as a weak key (`weak_key` in `--json`, no longer
+  `no_key`) and nothing is written for it.
 - The HTTP client no longer follows a redirect from an `https` URL to a
   plain-`http` one. Following it sent the request -- including the
   `User-Agent` carrying the operator's `MESHPROVISION_CONTACT` -- in

@@ -65,6 +65,29 @@ class PeersReport:
         return int(ExitCode.PROVISIONING if failed or self.remaining else ExitCode.OK)
 
 
+def _weak_key_warning(contact: peers.PeerContact) -> str:
+    """Word the warning for a contact the weak-key screen refused.
+
+    Args:
+        contact: A contact whose ``weak_reason`` is set.
+
+    Returns:
+        The warning text after the node's id: what failed, what was not
+        written, and what to do about it.
+    """
+    if contact.public_key is not None:
+        return (
+            f"its recorded public key failed the weak-key audit ({contact.weak_reason}); "
+            "not added or favorited. Run `mesh db verify`, then re-key the node "
+            "(`mesh provision --force-regenerate-key`)."
+        )
+    return (
+        "the database records no public key and the key the device holds failed the "
+        f"weak-key audit ({contact.weak_reason}); not favorited. Record the node's real "
+        "key (`mesh adopt` on that node), or remove the entry from the device."
+    )
+
+
 def _plan(
     db: DbSession, session: DeviceSession, *, known_bad: frozenset[bytes], prune_archived: bool
 ) -> tuple[NodeId, peers.PeersPlan, dict[NodeId, str]]:
@@ -77,19 +100,25 @@ def _plan(
         prune_archived: Whether to plan unfavoriting archived nodes.
 
     Returns:
-        The device's own id, the plan, and why each weak-keyed node's key
-        was refused (``{node: reason}``).
+        The device's own id, the plan, and the warning for each
+        weak-keyed node (``{node: message}``, from :func:`_weak_key_warning`).
     """
     iface = session.interface
     own = detect.read_node_id(iface)
     nodes = db.nodes.all()
     public_keys = peers.public_key_map(db.keys, nodes)
-    contacts = peers.screen_contacts(
-        peers.build_contacts(nodes, public_keys), public_keys, known_bad=known_bad
+    live = peers.read_live_peers(iface)
+    contacts = peers.screen_held_keys(
+        peers.screen_contacts(
+            peers.build_contacts(nodes, public_keys), public_keys, known_bad=known_bad
+        ),
+        live,
+        public_keys,
+        known_bad=known_bad,
     )
-    reasons = {c.node_id: c.weak_reason for c in contacts if c.weak_reason}
+    reasons = {c.node_id: _weak_key_warning(c) for c in contacts if c.weak_reason}
     archived = peers.archived_node_ids(nodes) if prune_archived else ()
-    plan = peers.plan_peers(own, contacts, peers.read_live_peers(iface), archived=archived)
+    plan = peers.plan_peers(own, contacts, live, archived=archived)
     return own, plan, reasons
 
 
@@ -142,11 +171,7 @@ def run_peers(
     known_bad = ctx.known_bad_keys()
     own, plan, weak_reasons = _plan(db, session, known_bad=known_bad, prune_archived=prune_archived)
     for node_id in plan.weak_key:
-        ctx.warn(
-            f"{node_id.display}: its recorded public key failed the weak-key audit "
-            f"({weak_reasons[node_id]}); not added or favorited. Run `mesh db verify`, "
-            "then re-key the node (`mesh provision --force-regenerate-key`)."
-        )
+        ctx.warn(f"{node_id.display}: {weak_reasons[node_id]}")
     for node_id in plan.key_mismatch:
         ctx.warn(
             f"{node_id.display}: the device holds a different public key than the database; "

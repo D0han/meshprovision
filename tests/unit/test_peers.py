@@ -297,6 +297,75 @@ def test_a_weak_or_shared_key_is_never_added_or_favorited() -> None:
     assert plan.in_sync == ()
 
 
+GOOD_HELD = hashlib.sha256(b"held").digest()
+
+
+def _held_screen(
+    contacts: list[peers.PeerContact],
+    live: dict[int, peers.LivePeer],
+    public_keys: dict[str, bytes] | None = None,
+) -> dict[NodeId, str]:
+    screened = peers.screen_held_keys(
+        contacts, live, public_keys or {}, known_bad=frozenset(SMALL_ORDER_POINTS)
+    )
+    return {c.node_id: c.weak_reason for c in screened}
+
+
+def test_screen_held_keys_flags_a_weak_key_held_for_a_keyless_node() -> None:
+    reasons = _held_screen([_contact(B)], {int(B): peers.LivePeer(bytes(32), False)})
+
+    assert reasons[B] == "public key is all-zero"
+
+
+def test_screen_held_keys_flags_a_held_key_equal_to_another_nodes_recorded_key() -> None:
+    reasons = _held_screen(
+        [_contact(B), _contact(C, GOOD_HELD)],
+        {int(B): peers.LivePeer(GOOD_HELD, False)},
+        {C.hex: GOOD_HELD},
+    )
+
+    assert "shared with !c0000003" in reasons[B]
+    assert reasons[C] == ""
+
+
+def test_screen_held_keys_flags_a_held_key_the_device_holds_for_another_node() -> None:
+    reasons = _held_screen(
+        [_contact(B)],
+        {int(B): peers.LivePeer(GOOD_HELD, False), 0xD0000004: peers.LivePeer(GOOD_HELD, False)},
+    )
+
+    assert "shared with !d0000004" in reasons[B]
+
+
+def test_screen_held_keys_treats_malformed_held_material_as_weak() -> None:
+    reasons = _held_screen([_contact(B)], {int(B): peers.LivePeer(b"short", False)})
+
+    assert reasons[B] == "malformed key material"
+
+
+def test_screen_held_keys_leaves_a_sound_held_key_and_keyed_contacts_alone() -> None:
+    live = {int(B): peers.LivePeer(GOOD_HELD, False), int(C): peers.LivePeer(bytes(32), False)}
+
+    reasons = _held_screen([_contact(B), _contact(C, KEY_C)], live)
+
+    assert reasons == {B: "", C: ""}
+
+
+def test_a_keyless_node_with_a_weak_held_key_is_never_favorited() -> None:
+    contacts = peers.screen_held_keys(
+        [_contact(B)],
+        {int(B): peers.LivePeer(bytes(32), False)},
+        {},
+        known_bad=frozenset(SMALL_ORDER_POINTS),
+    )
+
+    plan = peers.plan_peers(A, contacts, {int(B): peers.LivePeer(bytes(32), False)})
+
+    assert plan.actions == ()
+    assert plan.weak_key == (B,)
+    assert plan.no_key == ()
+
+
 # --- contact_url -------------------------------------------------------------------------------
 
 

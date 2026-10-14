@@ -27,8 +27,10 @@ A device that already holds a *different* public key for a fleet node is
 never overwritten: that is either a stale database or a spoofed identity,
 and which one is for the operator to decide, so it is reported as a
 mismatch and left alone. Nor is a key that fails the weak-key audit or is
-shared with another node ever sent: a favorite is never evicted, so the
-device would keep it.
+shared with another node ever sent or pinned, whether the database records
+it or the device holds it for a node the database has no key for
+(:func:`screen_held_keys`): a favorite is never evicted, so the device
+would keep it.
 
 Secret hygiene: only *public* keys pass through this module, and none is
 ever logged or printed; a fingerprint is the most any message shows.
@@ -75,6 +77,7 @@ __all__ = [
     "public_key_map",
     "read_live_peers",
     "screen_contacts",
+    "screen_held_keys",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -95,9 +98,11 @@ class PeerContact:
         role: Canonical ``Config.DeviceConfig.Role`` name, or ``""``.
         public_key: Its 32-byte public key, or ``None`` when the database
             records none (such a node cannot be added as a contact).
-        weak_reason: Why the recorded public key must not be shared (it
-            failed the weak-key audit or is shared with another node), or
-            ``""``. Set by :func:`screen_contacts`.
+        weak_reason: Why the recorded public key must not be shared, or,
+            for a node without one, why the key the device holds must not
+            be pinned (it failed the weak-key audit or is shared with
+            another node), or ``""``. Set by :func:`screen_contacts` and
+            :func:`screen_held_keys`.
     """
 
     node_id: NodeId
@@ -146,12 +151,12 @@ class PeersPlan:
         in_sync: Nodes already known and favorited.
         no_key: Nodes the database has no public key for. They cannot be
             added as contacts; they are still favorited when the device
-            already has them.
+            already holds them under a key that passes the weak-key audit.
         key_mismatch: Nodes whose key on the device differs from the
             database's. Nothing is written for them.
-        weak_key: Nodes whose recorded key failed the weak-key audit or is
-            shared with another node. Nothing is written for them, not even
-            a favorite.
+        weak_key: Nodes whose recorded key, or, without one, whose key on
+            the device, failed the weak-key audit or is shared with another
+            node. Nothing is written for them, not even a favorite.
         unfavorite: Archived nodes the device still has favorited, to
             unfavorite; only planned when asked for.
     """
@@ -317,6 +322,84 @@ def screen_contacts(
     return tuple(screened)
 
 
+def _held_key_reason(
+    contact: PeerContact,
+    held_key: bytes,
+    live: Mapping[int, LivePeer],
+    public_keys: Mapping[str, bytes],
+    known_bad: Collection[bytes],
+) -> str:
+    """Say why the key a device holds for a keyless contact must not be pinned, if it must not.
+
+    Args:
+        contact: A contact the database records no public key for.
+        held_key: The public key the device holds for it.
+        live: Everything the device holds, from :func:`read_live_peers`.
+        public_keys: Every node's recorded key, from :func:`public_key_map`.
+        known_bad: The known-bad-keys blocklist.
+
+    Returns:
+        The first critical audit finding, else the nodes the database or
+        the device holds the same key for, else ``""``.
+    """
+    try:
+        audit = weakkeys.audit_public_key(
+            held_key, node_id=contact.node_id.display, known_bad=known_bad
+        )
+    except KeyMaterialError:
+        return "malformed key material"
+    if audit.compromised:
+        return audit.findings[0].reason
+    num = int(contact.node_id)
+    others = {
+        NodeId.from_hex(node_hex)
+        for node_hex, key in public_keys.items()
+        if key == held_key and node_hex != contact.node_id.hex
+    } | {
+        NodeId.from_int(other)
+        for other, peer in live.items()
+        if other != num and peer.public_key == held_key
+    }
+    if others:
+        names = ", ".join(node_id.display for node_id in sorted(others, key=int))
+        return f"public key shared with {names}, the CVE-2025-52464 key-cloning signature"
+    return ""
+
+
+def screen_held_keys(
+    contacts: Iterable[PeerContact],
+    live: Mapping[int, LivePeer],
+    public_keys: Mapping[str, bytes],
+    *,
+    known_bad: Collection[bytes],
+) -> tuple[PeerContact, ...]:
+    """Run the weak-key audit over the keys the device holds for keyless contacts. Pure.
+
+    A contact the database has no key for is favorited with whatever key
+    the device already holds; that key came off the mesh, so it is
+    screened like a recorded one before it is pinned.
+
+    Args:
+        contacts: The fleet, from :func:`screen_contacts`.
+        live: What the device holds, from :func:`read_live_peers`.
+        public_keys: Every node's recorded key, from :func:`public_key_map`.
+        known_bad: The known-bad-keys blocklist.
+
+    Returns:
+        The contacts in the same order, each keyless one whose held key is
+        critically weak or shared with another node carrying
+        :attr:`PeerContact.weak_reason`.
+    """
+    screened: list[PeerContact] = []
+    for contact in contacts:
+        held = live.get(int(contact.node_id))
+        reason = ""
+        if contact.public_key is None and held is not None and held.public_key is not None:
+            reason = _held_key_reason(contact, held.public_key, live, public_keys, known_bad)
+        screened.append(dataclasses.replace(contact, weak_reason=reason) if reason else contact)
+    return tuple(screened)
+
+
 def _decode_public_key(raw: object) -> bytes | None:
     """Decode a ``nodesByNum`` ``user.publicKey`` value, tolerating junk.
 
@@ -381,7 +464,7 @@ def plan_peers(
         own_node: The connected device's own id, excluded from the plan
             (a node does not need itself as a peer).
         contacts: The fleet, from :func:`build_contacts`, screened by
-            :func:`screen_contacts`.
+            :func:`screen_contacts` and :func:`screen_held_keys`.
         live: What the device holds, from :func:`read_live_peers`.
         archived: Nodes archived in the database, from
             :func:`archived_node_ids`, to unfavorite where the device has

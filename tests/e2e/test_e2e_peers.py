@@ -215,6 +215,32 @@ def test_weak_or_shared_keys_are_reported_and_never_sent(
     assert not BASE64_KEY_RE.search(result.stdout + result.stderr)
 
 
+def test_a_keyless_node_held_under_a_cloned_key_is_never_favorited(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    b_num, c_num = int(NodeId.parse(B_HEX)), int(NodeId.parse(C_HEX))
+    device.known_nodes[b_num] = {
+        "num": b_num,
+        "user": {"publicKey": _b64(KEY_B)},
+        "isFavorite": True,
+    }
+    device.known_nodes[c_num] = {"num": c_num, "user": {"publicKey": _b64(KEY_B)}}
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--json"], env)
+
+    assert result.exit_code == 0
+    assert device.peer_calls == []
+    assert f"!{C_HEX}: the database records no public key and the key the device holds" in (
+        result.stderr
+    )
+    assert f"shared with !{B_HEX}" in result.stderr
+    document = json.loads(result.stdout)
+    assert document["weak_key"] == [f"!{C_HEX}"]
+    assert document["no_key"] == []
+    assert not BASE64_KEY_RE.search(result.stdout + result.stderr)
+
+
 def test_provision_never_sends_a_weak_peer_key(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
 ) -> None:
