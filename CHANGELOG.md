@@ -381,6 +381,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `MESHPROVISION_LOCK_TIMEOUT` and `MESHPROVISION_KNOWN_BAD_KEYS` set in the
+  environment no longer trigger an "unrecognized variable, ignored" warning
+  (they were always honoured); set in `.env`, where they have no effect,
+  they now get a warning saying so. The documented lock-timeout default is
+  corrected to 60 seconds.
 - `--env-file` naming a file that does not exist is now an error (exit 2)
   instead of silently running with the default settings and database (a typo
   could make `mesh provision`/`mesh adopt` write to the wrong fleet's
@@ -749,7 +754,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   import` runs against the same database no longer silently discard each
   other's writes. An advisory sidecar file lock (`<database>.lock`) now
   serializes the load-modify-save cycle; a writer that cannot acquire it
-  within `MESHPROVISION_LOCK_TIMEOUT` seconds (default 5) fails fast with
+  within `MESHPROVISION_LOCK_TIMEOUT` seconds (default 60) fails fast with
   `DatabaseLockedError` (exit code 4) instead of racing. `--dry-run` never
   takes the lock; read-only commands (`mesh status`, `mesh db verify`) are
   never blocked by it. Platforms without `fcntl` degrade to a documented

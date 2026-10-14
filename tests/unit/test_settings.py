@@ -10,11 +10,14 @@ import pytest
 from meshprovision.config.settings import (
     APP_NAME,
     DEFAULT_CACHE_TTL,
+    PROCESS_ENV_ONLY,
     Settings,
     default_cache_dir,
     format_validation_error,
     load_settings,
 )
+from meshprovision.crypto.known_bad_keys import KNOWN_BAD_KEYS_ENV
+from meshprovision.db.locking import LOCK_TIMEOUT_ENV
 from meshprovision.errors import MissingContactError, SettingsError
 
 pytestmark = pytest.mark.unit
@@ -88,6 +91,33 @@ def test_recognized_env_vars_never_log_a_warning(caplog: pytest.LogCaptureFixtur
     with caplog.at_level("WARNING", logger="meshprovision.config.settings"):
         load_settings(environ={"MESHPROVISION_CONTACT": "me@example.invalid"}, search_dotenv=False)
     assert caplog.records == []
+
+
+def test_process_env_only_variables_do_not_warn_from_the_environment(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Read straight from ``os.environ`` by their own modules, so they are not "ignored"."""
+    environ = {"MESHPROVISION_LOCK_TIMEOUT": "5", "MESHPROVISION_KNOWN_BAD_KEYS": "/x"}
+    with caplog.at_level("WARNING", logger="meshprovision.config.settings"):
+        load_settings(environ=environ, search_dotenv=False)
+    assert caplog.records == []
+
+
+def test_process_env_only_variable_in_dotenv_warns_it_is_ignored(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_LOCK_TIMEOUT=5\n")
+    with caplog.at_level("WARNING", logger="meshprovision.config.settings"):
+        load_settings(env_file=env_file, environ={}, search_dotenv=False)
+    messages = [r.getMessage() for r in caplog.records]
+    assert len(messages) == 1
+    assert "MESHPROVISION_LOCK_TIMEOUT in .env is ignored" in messages[0]
+    assert "process environment only" in messages[0]
+
+
+def test_process_env_only_names_match_their_readers() -> None:
+    assert frozenset({KNOWN_BAD_KEYS_ENV, LOCK_TIMEOUT_ENV}) == PROCESS_ENV_ONLY
 
 
 def test_invalid_cache_ttl_raises_and_does_not_echo_value() -> None:

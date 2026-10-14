@@ -12,11 +12,13 @@ Part of the meshprovision docs — see the [README](../README.md).
 | `MESHPROVISION_CACHE_TTL` | `300` | Cache time-to-live, seconds |
 | `MESHPROVISION_CONTACT` | (none — REQUIRED) | Your contact address, sent in the `User-Agent` to lorastats.pl |
 | `MESHPROVISION_LOG_LEVEL` | `WARNING` | `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` |
-| `MESHPROVISION_KNOWN_BAD_KEYS` | `data/known_bad_keys.txt` | Override path to the weak-key blocklist. Read directly by the crypto layer; not listed in the bundled `env.example`. |
-| `MESHPROVISION_LOCK_TIMEOUT` | `5.0` | Seconds a write command polls the database write lock before giving up. Not listed in the bundled `env.example`; mainly useful for scripting against a slow/contended database. A value that is not a finite, non-negative number is rejected with exit 2 rather than silently ignored. |
+| `MESHPROVISION_KNOWN_BAD_KEYS` | `data/known_bad_keys.txt` | Override path to the weak-key blocklist. Process environment only: a value in `.env` is ignored (with a warning). Not listed in the bundled `env.example`. |
+| `MESHPROVISION_LOCK_TIMEOUT` | `60` | Seconds a write command polls the database write lock before giving up. Process environment only: a value in `.env` is ignored (with a warning). Not listed in the bundled `env.example`; mainly useful for scripting against a slow/contended database. A value that is not a finite, non-negative number is rejected with exit 2 rather than silently ignored. |
 
 Precedence, highest to lowest: **CLI flag > environment variable > `.env`
-file > built-in default**. `.env` is found by searching upward from the
+file > built-in default** (`MESHPROVISION_KNOWN_BAD_KEYS` and
+`MESHPROVISION_LOCK_TIMEOUT` are the exception: process environment
+only). `.env` is found by searching upward from the
 current working directory, or named explicitly with `--env-file`. The
 upward search never crosses above your home directory (also when `$HOME`
 is a symlink). It skips a `.env` owned by another user in a directory

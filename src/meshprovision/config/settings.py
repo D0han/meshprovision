@@ -46,6 +46,7 @@ __all__ = [
     "DEFAULT_TEMPLATE_PATH",
     "ENV_FIELD_MAP",
     "ENV_PREFIX",
+    "PROCESS_ENV_ONLY",
     "LogLevel",
     "Settings",
     "default_cache_dir",
@@ -87,6 +88,13 @@ ENV_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(
 )
 """Maps every supported ``MESHPROVISION_*`` environment variable to the
 :class:`Settings` field it populates."""
+
+PROCESS_ENV_ONLY: Final[frozenset[str]] = frozenset(
+    {"MESHPROVISION_KNOWN_BAD_KEYS", "MESHPROVISION_LOCK_TIMEOUT"}
+)
+"""``MESHPROVISION_*`` variables read straight from the process environment by
+:mod:`meshprovision.crypto.known_bad_keys` and :mod:`meshprovision.db.locking`
+-- never from ``.env``, and not :class:`Settings` fields."""
 
 
 def default_cache_dir() -> Path:
@@ -263,9 +271,13 @@ def _unrecognized_env_keys(source: Mapping[str, object]) -> set[str]:
 
     Returns:
         Every key starting with :data:`ENV_PREFIX` that is not a name in
-        :data:`ENV_FIELD_MAP`.
+        :data:`ENV_FIELD_MAP` or :data:`PROCESS_ENV_ONLY`.
     """
-    return {k for k in source if k.startswith(ENV_PREFIX) and k not in ENV_FIELD_MAP}
+    return {
+        k
+        for k in source
+        if k.startswith(ENV_PREFIX) and k not in ENV_FIELD_MAP and k not in PROCESS_ENV_ONLY
+    }
 
 
 def load_settings(
@@ -298,7 +310,10 @@ def load_settings(
     doesn't name a field in :data:`ENV_FIELD_MAP` (a typo, most often)
     is logged as a warning rather than silently ignored -- the affected
     field still falls back to its default either way, but the operator
-    at least has a trail back to the cause.
+    at least has a trail back to the cause. A :data:`PROCESS_ENV_ONLY`
+    name is not a typo: from the environment it is silently left to its
+    reader, and in ``.env`` (where it has no effect) it gets a warning
+    saying so.
 
     Args:
         env_file: An explicit ``.env`` file to read. When given, it is
@@ -337,6 +352,14 @@ def load_settings(
         if dotenv_values is not None:
             values.update({k: v for k, v in dotenv_values.items() if v is not None})
             unrecognized.update(_unrecognized_env_keys(dotenv_values))
+            env_only = sorted(PROCESS_ENV_ONLY.intersection(dotenv_values))
+            if env_only:
+                _logger.warning(
+                    "%s in .env %s ignored: read from the process environment only; "
+                    "export it instead.",
+                    ", ".join(env_only),
+                    "is" if len(env_only) == 1 else "are",
+                )
 
     source_environ = environ if environ is not None else os.environ
     values.update({k: v for k, v in source_environ.items() if k in ENV_FIELD_MAP})
