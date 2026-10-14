@@ -1377,6 +1377,41 @@ def test_apply_plan_transaction_scope_security_only_vs_in_place_with_sections(ma
     assert multi_iface.localNode.transaction_calls.count("<commit>") == 1
 
 
+def test_apply_plan_wraps_a_name_only_plan_in_a_settings_transaction(make_live) -> None:
+    template = minimal_template()
+    live = make_live(template, security=make_security(empty=True))
+    plan = build_plan(
+        PlanInputs(
+            live=live,
+            template=template,
+            db_entry=None,
+            state=detect.NodeState.FACTORY,
+            desired_short_name="MT01",
+        )
+    )
+    plan = dataclasses.replace(plan, sections=(), key_plan=KeyPlan())
+    assert not plan.name_change.is_empty
+    iface = FakeIfaceForApply()
+
+    apply_plan(plan, InPlaceSession(iface), keypair=generate_keypair())  # type: ignore[arg-type]
+
+    assert iface.localNode.transaction_calls == ["<begin>", "<commit>"]
+    assert iface.user["shortName"] == "MT01"
+
+
+@pytest.mark.parametrize(
+    ("hint", "expected"),
+    [(None, "link dropped"), ("re-plug the cable", "link dropped (hint: re-plug the cable)")],
+    ids=["no-hint", "hint"],
+)
+def test_backend_error_detail_is_one_line_with_the_hint_only_when_set(
+    hint: str | None, expected: str
+) -> None:
+    exc = ConnectionBackendError("link dropped", transport="serial", hint=hint)
+
+    assert apply_module._backend_error_detail(exc) == expected
+
+
 def test_apply_plan_post_commit_reconnect_only_happens_when_security_remains(make_live) -> None:
     """The post-commit settle+refresh+identity-check runs only when `security` is still to write.
 
