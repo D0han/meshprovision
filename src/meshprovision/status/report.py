@@ -550,7 +550,6 @@ def run_status(
         DbIntegrityError: If loading the database marked the session
             dirty.
     """
-    resolved_now = datetime.now(tz=UTC)
     needs_lorastats = SOURCE_LORASTATS in options.sources
     lorastats_contact = settings.require_contact() if needs_lorastats else None
     owned_client = client is None
@@ -585,6 +584,9 @@ def run_status(
         before = active_client.stats
         collected = collect_observations(sources, ids, force_refresh=options.force_refresh)
         stats = active_client.stats
+        # After collection: every observation predates it, so a node heard
+        # while the sources were being fetched never reads as "in the future".
+        resolved_now = datetime.now(tz=UTC)
         report = build_report(
             records=records,
             observations_by_source=collected.observations,

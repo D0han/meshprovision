@@ -381,6 +381,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status` no longer reports a node heard while the data was being
+  fetched as last seen "in the future".
 - `mesh status` shows `powered` instead of `101%` for a node on external
   power (`--json` still reports the raw `battery_level`, where a value above
   100 means powered).

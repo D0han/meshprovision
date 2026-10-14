@@ -21,7 +21,7 @@ from tests.conftest import BASE64_KEY_RE, SIX_DIGIT_RE
 from tests.e2e.conftest import db_fingerprint, invoke
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Sequence
 
     import respx
     from click.testing import CliRunner
@@ -968,3 +968,54 @@ def test_run_status_counts_only_its_own_requests_on_a_reused_client(
     assert (first.cache_hits, first.cache_misses, first.network_requests) == (0, 2, 2)
     assert (second.cache_hits, second.cache_misses, second.network_requests) == (2, 0, 0)
     assert client.stats.hits == 2
+
+
+def test_a_node_seen_during_the_fetch_is_never_in_the_future(
+    env: dict[str, str], seed_db: Callable[..., Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ages are measured against a clock read after collection, not before it.
+
+    The fake source stamps ``last_seen`` with the time it returns -- what a
+    real source reports for a node heard while its (possibly slow, retried)
+    download was in flight.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from meshprovision.config.settings import Settings
+    from meshprovision.datasources.models import NodeObservation
+    from meshprovision.db.nodes import NodeRecord
+    from meshprovision.status import report as report_module
+    from meshprovision.status.report import StatusOptions, run_status
+
+    class _JustHeardLoranet:
+        name = "loranet"
+        last_fetch_skipped = 0
+        last_fetch_field_coercions = 0
+        last_fetch_data_as_of = None
+
+        def __init__(self, _client: object) -> None:
+            pass
+
+        def fetch_nodes(
+            self, ids: Sequence[NodeId], **_options: object
+        ) -> dict[NodeId, NodeObservation]:
+            heard = datetime.now(tz=UTC)
+            return {
+                node_id: NodeObservation(
+                    node_id=node_id, source="loranet", observed_at=heard, last_seen=heard
+                )
+                for node_id in ids
+            }
+
+    _seed_one_node(seed_db, NodeRecord)
+    monkeypatch.setattr(report_module, "LoranetSource", _JustHeardLoranet)
+    settings = Settings(
+        db_path=Path(env["MESHPROVISION_DB_PATH"]), cache_dir=Path(env["MESHPROVISION_CACHE_DIR"])
+    )
+
+    report = run_status(settings, StatusOptions(sources=("loranet",)))
+
+    node = report.nodes[0]
+    assert node.age is not None
+    assert node.age >= timedelta(0)
+    assert node.age_text == "just now"
