@@ -1147,6 +1147,36 @@ def test_check_stale_private_key_allows(
     adopt_mod.check_stale_private_key(keys, live)
 
 
+def test_check_stale_private_key_ignores_an_all_zero_live_public_key(
+    make_live, template, keys: KeyRepository, keypair_factory
+) -> None:
+    """An all-zero public key is "no key": nothing is recorded, so no ``_priv`` row is stranded."""
+    _seed_keypair(keys, keypair_factory())
+    live = make_live(template, node_id=_STALE_NODE, security=LiveSecurity(public_key=bytes(32)))
+
+    adopt_mod.check_stale_private_key(keys, live)
+
+
+def test_persist_adoption_never_records_an_all_zero_public_key(
+    make_live, template, keys: KeyRepository, nodes: NodeRepository
+) -> None:
+    live = make_live(template, node_id=_STALE_NODE, security=LiveSecurity(public_key=bytes(32)))
+    report = build_adoption_report(
+        live,
+        existing=None,
+        public_keys=keys.public_key_map(),
+        template=template,
+        known_bad=frozenset(),
+    )
+
+    persist_adoption(
+        report, live, nodes=nodes, keys=keys, channel=None, now=datetime(2026, 1, 1, tzinfo=UTC)
+    )
+
+    assert keys.find(f"{_STALE_NODE}_pub") is None
+    assert nodes.find(live.node_id) is not None
+
+
 def test_persist_adoption_refuses_a_stale_private_key_before_writing(
     make_live, template, keys: KeyRepository, nodes: NodeRepository, keypair_factory
 ) -> None:

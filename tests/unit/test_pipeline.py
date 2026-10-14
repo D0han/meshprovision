@@ -252,6 +252,14 @@ def test_audit_node_key_accepts_a_clean_device_keypair(keypair: KeyPair) -> None
     assert audit_node_key(live, known_bad=frozenset()) == (False, "")
 
 
+@pytest.mark.parametrize("public", [bytes(32), b""], ids=["all-zero", "empty"])
+def test_audit_node_key_treats_a_placeholder_public_key_as_no_key(public: bytes) -> None:
+    """An all-zero or empty field is "no key" (the plan regenerates), not a weak-key finding."""
+    live = _live_with_security(detect.LiveSecurity(public_key=public))
+
+    assert audit_node_key(live, known_bad=frozenset()) == (False, "")
+
+
 def test_audit_node_key_flags_a_cross_fleet_duplicate(keypair: KeyPair) -> None:
     """``known_public_keys`` wires a genuine cross-fleet clone into the CVE-2025-52464 audit.
 

@@ -723,6 +723,31 @@ def test_adopt_does_not_claim_to_overwrite_priv_with_an_unproven_private_key(
     assert keys_by_ref["deadbe01_priv"].secret().reveal() == kp.private.reveal()
 
 
+def test_adopt_of_a_device_reporting_an_all_zero_public_key_keeps_the_recorded_key(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """An all-zero field is "no key": no overwrite warning, and the recorded pair survives."""
+    kp = keypair_factory()
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01")],
+        keys=[*KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)],
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = bytes(32)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert "already holds different key material" not in result.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    keys_by_ref = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert keys_by_ref["deadbe01_pub"].material() == kp.public
+
+
 def test_unregistered_admin_key_default_hides_material(
     runner: CliRunner,
     env: dict[str, str],
