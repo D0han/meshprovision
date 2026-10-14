@@ -8,6 +8,7 @@ import pytest
 
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.crypto.keys import encode_key, generate_keypair
+from meshprovision.name_pattern import LONG_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning import readback as readback_module
 from meshprovision.provisioning.apply import WriteStatus
@@ -683,6 +684,37 @@ def test_verify_plan_empty_name_readback_is_unconfirmed_not_truncated(make_live)
     assert "truncated" not in short_result.message
 
 
+@pytest.mark.parametrize(
+    ("desired", "actual"),
+    [("ABCDE", "WXYZ"), ("ABCD", "ABC")],
+    ids=["over-limit-but-not-a-prefix", "prefix-but-desired-fits-the-limit"],
+)
+def test_is_firmware_truncation_rejects_a_non_truncation(desired: str, actual: str) -> None:
+    assert readback_module._is_firmware_truncation(desired, actual, field="short_name") is False
+
+
+def test_is_firmware_truncation_accepts_a_cut_that_falls_three_bytes_short() -> None:
+    """A 4-byte character straddling the limit leaves the read-back 3 bytes short of it."""
+    kept = "x" * (LONG_NAME_MAX_BYTES - 3)
+
+    is_truncation = readback_module._is_firmware_truncation(
+        kept + "\U0001f600tail", kept, field="long_name"
+    )
+
+    assert is_truncation is True
+
+
+def test_is_firmware_truncation_rejects_a_read_back_four_bytes_short() -> None:
+    """No UTF-8 character is wider than 4 bytes, so a real cut is never more than 3 short."""
+    kept = "x" * (LONG_NAME_MAX_BYTES - 4)
+
+    is_truncation = readback_module._is_firmware_truncation(
+        kept + "yyyyyy", kept, field="long_name"
+    )
+
+    assert is_truncation is False
+
+
 def test_verify_plan_key_confirmed_needs_both_agree(make_live) -> None:
     template = _template()
     live = make_live(template, security=make_security(empty=True))
@@ -874,3 +906,78 @@ def test_verify_plan_admin_keys_mismatch_is_unconfirmed(make_live, make_admin_ke
     assert admin_result.status == WriteStatus.UNCONFIRMED
     assert admin_result.expected is not None and admin_result.expected.startswith("sha256:")
     assert admin_result.actual == "<none>"
+
+
+def _role_change_plan_and_stale_after(
+    make_live, *, security: detect.LiveSecurity
+) -> tuple[ChangePlan, detect.LiveConfig]:
+    """Plan a CLIENT -> ROUTER role change, and a read-back still showing CLIENT."""
+    template = _template()
+    router = template.model_copy(
+        update={"device": template.device.model_copy(update={"role": "ROUTER"})}
+    )
+    live = make_live(template, security=make_security(empty=True))
+    plan = build_plan(
+        PlanInputs(live=live, template=router, db_entry=None, state=detect.NodeState.FACTORY)
+    )
+    live_after = make_live(
+        router,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        section_overrides={"device": {"role": "CLIENT"}},
+        security=security,
+    )
+    return plan, live_after
+
+
+def test_verify_plan_skips_a_section_that_was_never_attempted(make_live) -> None:
+    plan, live_after = _role_change_plan_and_stale_after(
+        make_live, security=make_security(empty=True)
+    )
+
+    results = verify_plan(plan, live_after, keypair=None, attempted_sections=frozenset())
+
+    assert [r for r in results if r.section == "device"] == []
+
+
+def test_verify_plan_leaves_admin_keys_alone_when_the_plan_does_not_change_them(
+    make_live, make_admin_key
+) -> None:
+    """A device already holding admin keys is not "mismatched" by a plan that never touched them."""
+    held = make_admin_key("ADMIN1")
+    plan, live_after = _role_change_plan_and_stale_after(
+        make_live, security=make_security(admin_keys=(held.public,))
+    )
+    assert not plan.key_plan.change_admin_keys
+
+    results = verify_plan(plan, live_after, keypair=None)
+
+    assert [r for r in results if r.field == "admin_key"] == []
+
+
+def test_verify_plan_skips_admin_keys_when_security_was_never_attempted(
+    make_live, make_admin_key
+) -> None:
+    admin1 = make_admin_key("ADMIN1")
+    template = _template().model_copy(update={"admin_nodes": ("ADMIN1",)})
+    live = make_live(template, security=make_security(empty=True))
+    plan = build_plan(
+        PlanInputs(
+            live=live,
+            template=template,
+            db_entry=None,
+            state=detect.NodeState.FACTORY,
+            admin_keys=(admin1,),
+        )
+    )
+    assert plan.key_plan.change_admin_keys
+    live_after = make_live(
+        template,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        security=make_security(empty=True),
+    )
+
+    results = verify_plan(plan, live_after, keypair=None, attempted_sections=frozenset({"device"}))
+
+    assert [r for r in results if r.field == "admin_key"] == []
