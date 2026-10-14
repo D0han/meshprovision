@@ -69,6 +69,15 @@ def test_audit_private_key_all_zero() -> None:
     assert WeakKeyCheck.SMALL_ORDER not in checks
 
 
+def test_audit_private_key_flags_a_blocklisted_private_key() -> None:
+    private = generate_keypair().private.reveal()
+
+    result = weakkeys.audit_private_key(private, known_bad=frozenset({private}))
+
+    assert [f.check for f in result.findings] == [WeakKeyCheck.BLOCKLIST]
+    assert result.compromised
+
+
 def test_audit_public_key_monotonic_run_is_critical() -> None:
     """Regression test: MONOTONIC must actually reach audit_public_key, not just is_monotonic_run.
 
@@ -419,6 +428,15 @@ def test_is_low_entropy_flags_abnormal_weight_with_normal_byte_diversity() -> No
     assert len(set(frozen)) == 5  # {0, 1, 2, 4, 8} -- not independently low-distinct
     assert hamming_weight(frozen) == 4  # well below LOW_HAMMING_MIN
     assert is_low_entropy(frozen) is True
+
+
+def test_is_low_entropy_flags_abnormally_high_weight_with_normal_byte_diversity() -> None:
+    """The bitwise complement of the fixture above: only the upper weight bound can flag it."""
+    raw = bytes(byte ^ 0xFF for byte in bytes([1, 2, 4, 8]) + bytes(28))
+    assert len(set(raw)) == 5
+    assert hamming_weight(raw) == 252  # well above LOW_HAMMING_MAX
+
+    assert is_low_entropy(raw) is True
 
 
 def _low_entropy_finding(raw: bytes) -> weakkeys.WeakKeyFinding:
