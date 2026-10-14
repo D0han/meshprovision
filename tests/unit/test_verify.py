@@ -16,6 +16,7 @@ import pytest
 from pydantic import SecretStr
 
 from meshprovision.crypto.keys import encode_key
+from meshprovision.crypto.known_bad_keys import SMALL_ORDER_POINTS
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.observed_keys import observed_key_ref
@@ -24,6 +25,7 @@ from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.db.verify import (
     DbProblemKind,
     ProblemSeverity,
+    VerifyReport,
     _check_admin_key_mismatch,
     _check_duplicate_keys,
     _check_duplicate_observed_refs,
@@ -35,6 +37,7 @@ from meshprovision.db.verify import (
     _check_weak_keys,
     verify_database,
 )
+from meshprovision.errors import ExitCode
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -57,6 +60,44 @@ class _KeysAllOnly:
 
     def all(self) -> tuple[KeyRecord, ...]:
         return self._records
+
+
+_SMALL_ORDER = next(point for point in SMALL_ORDER_POINTS if any(point))
+
+
+def test_check_weak_keys_audits_a_public_row_as_a_public_key() -> None:
+    """A small-order point is a *public*-key weakness: the dispatch must pick that audit."""
+    row = KeyRecord.from_material(
+        "ADMIN1", KeyType.ADMIN_PUBLIC, _SMALL_ORDER, origin=KeyOrigin.IMPORTED
+    )
+
+    problems = _check_weak_keys(_KeysAllOnly([row]), known_bad=frozenset())
+
+    small_order = [p for p in problems if p.message.startswith("small_order:")]
+    assert [(p.kind, p.severity, p.ref) for p in small_order] == [
+        (DbProblemKind.WEAK_KEY, ProblemSeverity.CRITICAL, "ADMIN1_pub")
+    ]
+
+
+def test_check_weak_keys_audits_a_private_row_as_a_private_key() -> None:
+    """The same 32 bytes as a private scalar get only the private-key checks."""
+    row = KeyRecord.from_material(
+        "ADMIN1", KeyType.ADMIN_PRIVATE, _SMALL_ORDER, origin=KeyOrigin.IMPORTED
+    )
+
+    problems = _check_weak_keys(_KeysAllOnly([row]), known_bad=frozenset())
+
+    assert problems
+    assert all(
+        p.message.endswith("private key has abnormally low Hamming weight") for p in problems
+    )
+
+
+def test_strict_verify_of_a_clean_database_exits_ok(tmp_path: Path) -> None:
+    report = VerifyReport(path=tmp_path / "nodes_db.ods", node_count=0, key_count=0, problems=())
+
+    assert report.exit_code(strict=True) == int(ExitCode.OK)
+    assert report.exit_code(strict=False) == int(ExitCode.OK)
 
 
 def test_check_weak_keys_malformed_material_reports_critical_problem() -> None:
