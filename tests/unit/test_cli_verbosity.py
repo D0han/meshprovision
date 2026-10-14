@@ -19,7 +19,7 @@ from meshprovision.config.settings import Settings
 from meshprovision.crypto.keys import KeyPair, generate_keypair
 from tests.conftest import WIDE_TERMINAL_COLUMNS
 
-pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("restore_logging")]
+pytestmark = pytest.mark.unit
 
 _PRIVATE_KEY_TOKEN_RE: Final[re.Pattern[str]] = re.compile(r'private_key: "(?:[^"\\]|\\.)*"')
 """Matches the whole rendered ``private_key: "..."`` field, escapes and all."""

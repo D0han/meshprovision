@@ -204,7 +204,6 @@ def _raise_with_secret_local() -> None:
     raise ValueError(f"boom (length {len(secret_value)})")
 
 
-@pytest.mark.usefixtures("restore_logging")
 class TestConfigureLoggingTracebacks:
     def test_logged_traceback_never_dumps_frame_locals(self) -> None:
         """The plain exception formatter keeps frame locals out of logged tracebacks.

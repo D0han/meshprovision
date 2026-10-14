@@ -24,7 +24,7 @@ from meshprovision.crypto.redact import (
 )
 from meshprovision.nodeid import NodeId
 
-pytestmark = [pytest.mark.unit, pytest.mark.usefixtures("restore_logging")]
+pytestmark = pytest.mark.unit
 
 
 class TestSecretBytes:

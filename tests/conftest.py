@@ -33,6 +33,13 @@ stubs ``os.fsync`` to a no-op: every database write flushes its file and
 directory to disk (see ``meshprovision.db.fs_primitives.fsync_file``),
 which on a real disk would add tens of seconds across the suite; the
 tests of that flushing install their own recorder over the stub.
+
+The autouse ``_isolated_logging_state`` fixture undoes the global logging
+setup a CLI invocation leaves behind (``configure_logging`` replaces the
+root logger's handlers with one on the invocation's own stream, and sets
+the root, third-party library and structlog configuration), so no test
+inherits a handler on a closed ``CliRunner`` stream or another test's
+log levels.
 """
 
 from __future__ import annotations
@@ -41,18 +48,22 @@ import time
 
 time.sleep = lambda *_a, **_k: None
 
+import contextlib  # noqa: E402
 import errno  # noqa: E402
 import io  # noqa: E402
+import logging  # noqa: E402
 import os  # noqa: E402
 import re  # noqa: E402
 import zipfile  # noqa: E402
-from collections.abc import Callable, Mapping  # noqa: E402
+from collections.abc import Callable, Iterator, Mapping  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any, Final  # noqa: E402
 
 import pytest  # noqa: E402
+import structlog  # noqa: E402
 import yaml  # noqa: E402
 
+from meshprovision.cli.logging_setup import _LIBRARY_STAGES  # noqa: E402
 from meshprovision.crypto.keys import KeyPair, generate_keypair  # noqa: E402
 from meshprovision.db import ods_write  # noqa: E402
 
@@ -105,6 +116,67 @@ def _isolated_cwd_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
             monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(time, "sleep", lambda *_a, **_k: None)
     monkeypatch.setattr(os, "fsync", lambda *_a, **_k: None)
+
+
+def _is_pytest_handler(handler: logging.Handler) -> bool:
+    """Tell whether ``handler`` is one of pytest's own log-capture handlers.
+
+    Args:
+        handler: A handler attached to the root logger.
+
+    Returns:
+        ``True`` for a handler defined in a ``_pytest`` module.
+    """
+    return type(handler).__module__.startswith("_pytest.")
+
+
+@contextlib.contextmanager
+def preserved_logging_state() -> Iterator[None]:
+    """Undo every piece of global logging state ``configure_logging`` changes.
+
+    That is: the root logger's handlers and level, the third-party
+    library loggers' levels (:data:`_LIBRARY_STAGES`), and the structlog
+    configuration. Pytest's own capture handlers are left to pytest,
+    which adds and removes them per test phase, so ``caplog`` and log
+    reporting keep working.
+
+    Yields:
+        ``None``, once, with the guarded block running in between.
+    """
+    root = logging.getLogger()
+    saved_handlers = [h for h in root.handlers if not _is_pytest_handler(h)]
+    saved_root_level = root.level
+    library_names = [name for stage in _LIBRARY_STAGES for name in stage]
+    saved_library_levels = {name: logging.getLogger(name).level for name in library_names}
+    was_configured = structlog.is_configured()
+    saved_structlog = structlog.get_config()
+    try:
+        yield
+    finally:
+        for handler in list(root.handlers):
+            if not _is_pytest_handler(handler) and handler not in saved_handlers:
+                root.removeHandler(handler)
+        for handler in saved_handlers:
+            if handler not in root.handlers:
+                root.addHandler(handler)
+        root.setLevel(saved_root_level)
+        for name, level in saved_library_levels.items():
+            logging.getLogger(name).setLevel(level)
+        if was_configured:
+            structlog.configure(**saved_structlog)
+        else:
+            structlog.reset_defaults()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_logging_state() -> Iterator[None]:
+    """Keep a CLI invocation's logging setup from leaking into later tests.
+
+    Yields:
+        ``None``, once, with the test running in between.
+    """
+    with preserved_logging_state():
+        yield
 
 
 @pytest.fixture
