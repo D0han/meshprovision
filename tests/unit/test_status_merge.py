@@ -20,6 +20,7 @@ from meshprovision.status import render, timefmt
 from meshprovision.status.merge import (
     SOURCE_PRIORITY,
     Availability,
+    MergedNode,
     Thresholds,
     _isoformat_z,
     _order_by_recency,
@@ -227,6 +228,109 @@ def test_thresholds_from_hours() -> None:
     thresholds = Thresholds.from_hours(1, 5)
     assert thresholds.stale_after == timedelta(hours=1)
     assert thresholds.offline_after == timedelta(hours=5)
+
+
+def _node(hex_id: str, availability: Availability) -> MergedNode:
+    return MergedNode(node_id=NodeId.from_hex(hex_id), availability=availability)
+
+
+def test_status_report_counts_nodes_by_availability() -> None:
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(
+            _node("a0000001", Availability.ONLINE),
+            _node("a0000002", Availability.ONLINE),
+            _node("a0000003", Availability.STALE),
+            _node("a0000004", Availability.UNKNOWN),
+        ),
+        thresholds=Thresholds(),
+    )
+
+    assert dict(report.counts) == {
+        Availability.ONLINE: 2,
+        Availability.STALE: 1,
+        Availability.OFFLINE: 0,
+        Availability.UNKNOWN: 1,
+    }
+
+
+def test_status_report_summary_is_exactly_the_breakdown_when_nothing_else_happened() -> None:
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(_node("a0000001", Availability.ONLINE), _node("a0000002", Availability.UNKNOWN)),
+        thresholds=Thresholds(),
+    )
+
+    assert report.summary() == "2 node(s): 1 online, 0 stale, 0 offline, 1 unknown"
+
+
+def test_status_report_summary_counts_source_failures() -> None:
+    report = StatusReport(
+        generated_at=NOW,
+        nodes=(),
+        thresholds=Thresholds(),
+        failures=(SourceFailure(source="loranet", message="boom"),),
+    )
+
+    assert report.summary().endswith("; 1 source failure(s)")
+
+
+def _rendered_row(node: MergedNode) -> dict[str, str]:
+    table = render.build_table(
+        StatusReport(generated_at=NOW, nodes=(node,), thresholds=Thresholds())
+    )
+    return {str(column.header): next(iter(column.cells)) for column in table.columns}
+
+
+_METRIC_COLUMNS = ("Batt", "Volt", "ChUtil", "AirTx", "Nbrs", "Sources")
+
+
+def test_status_table_metric_cells_carry_their_units() -> None:
+    node = MergedNode(
+        node_id=NodeId.from_hex("a0000001"),
+        availability=Availability.ONLINE,
+        battery_level=87,
+        voltage=4.1,
+        channel_utilization=12.34,
+        air_util_tx=1.0,
+        neighbor_count=3,
+        sources=("loranet", "lorastats"),
+    )
+
+    row = _rendered_row(node)
+
+    assert {column: row[column] for column in _METRIC_COLUMNS} == {
+        "Batt": "87%",
+        "Volt": "4.10V",
+        "ChUtil": "12.3%",
+        "AirTx": "1.0%",
+        "Nbrs": "3",
+        "Sources": "loranet+lorastats",
+    }
+
+
+def test_status_table_metric_cells_show_a_dash_when_unknown() -> None:
+    row = _rendered_row(_node("a0000001", Availability.UNKNOWN))
+
+    assert {row[column] for column in _METRIC_COLUMNS} == {"-"}
+
+
+def test_status_table_caption_has_no_empty_state_line_when_nodes_are_listed() -> None:
+    report = StatusReport(
+        generated_at=NOW, nodes=(_node("a0000001", Availability.UNKNOWN),), thresholds=Thresholds()
+    )
+
+    caption = str(render.build_table(report).caption)
+
+    assert "No nodes in the database" not in caption
+    assert "No active nodes" not in caption
+
+
+def test_render_json_indents_by_two_spaces_by_default() -> None:
+    text = render.render_json(StatusReport(generated_at=NOW, nodes=(), thresholds=Thresholds()))
+
+    assert text.splitlines()[1].startswith('  "')
+    assert json.loads(text)["counts"]["online"] == 0
 
 
 def test_merged_node_to_json_dict_never_contains_secrets() -> None:

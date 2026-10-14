@@ -22,7 +22,8 @@ from click.testing import CliRunner
 from meshprovision.cli import status as status_cli
 from meshprovision.cli.main import cli
 from meshprovision.errors import DbIntegrityError, ExitCode
-from meshprovision.status.merge import Thresholds
+from meshprovision.nodeid import NodeId
+from meshprovision.status.merge import Availability, MergedNode, Thresholds
 from meshprovision.status.report import StatusReport
 
 if TYPE_CHECKING:
@@ -159,6 +160,34 @@ def test_watch_ctrl_c_after_a_failed_last_poll_reports_the_failure_exit_code(
 
     assert result.exit_code == int(ExitCode.DB)
     assert result.stderr.rstrip().endswith("Stopped.")
+
+
+def test_watch_ctrl_c_after_a_good_poll_exits_with_that_reports_code(
+    monkeypatch: pytest.MonkeyPatch, cli_env: dict[str, str]
+) -> None:
+    """--fail-on-offline still applies when a watch is stopped after a successful poll."""
+    offline = StatusReport(
+        generated_at=datetime.now(UTC),
+        nodes=(MergedNode(node_id=NodeId.from_hex("a0000001"), availability=Availability.OFFLINE),),
+        thresholds=Thresholds(),
+    )
+    expected = offline.exit_code(fail_on_offline=True)
+    assert expected != 0
+    monkeypatch.setattr(status_cli, "_run_once", lambda *_args: offline)
+
+    def fake_sleep(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+    result = CliRunner().invoke(
+        cli,
+        ["status", "--watch", "--interval", "1", "--json", "--fail-on-offline"],
+        env=cli_env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == expected
 
 
 def test_single_shot_status_stays_strict_on_a_db_error(

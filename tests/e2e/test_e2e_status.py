@@ -509,6 +509,77 @@ def test_loranet_only_does_not_require_contact(
         assert lorastats_route.call_count == 0
 
 
+def test_status_with_only_lorastats_never_queries_loranet(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": 1}}}) as router:
+        loranet_route = next(r for r in router.routes if "loranet.pl" in str(r.pattern))
+        result = invoke(runner, ["status", "--json", "--source", "lorastats"], env)
+
+    assert loranet_route.call_count == 0
+    assert json.loads(result.stdout)["cache"]["network_requests"] == 1
+
+
+def test_run_status_leaves_a_caller_supplied_client_open(
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The --watch loop reuses one client across polls; run_status must not close it."""
+    from meshprovision.cache.http import CachedHTTPClient
+    from meshprovision.config.settings import Settings
+    from meshprovision.db.nodes import NodeRecord
+    from meshprovision.status.report import StatusOptions, run_status
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    settings = Settings(
+        db_path=Path(env["MESHPROVISION_DB_PATH"]),
+        cache_dir=Path(env["MESHPROVISION_CACHE_DIR"]),
+        contact=env["MESHPROVISION_CONTACT"],
+    )
+    client = CachedHTTPClient(
+        cache_dir=settings.cache_dir, user_agent=settings.user_agent(), ttl=300.0
+    )
+    really_close = client.close
+    close_calls: list[str] = []
+    monkeypatch.setattr(client, "close", lambda: close_calls.append("close"))
+
+    try:
+        with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": 1}}}):
+            run_status(settings, StatusOptions(), client=client)
+    finally:
+        really_close()
+
+    assert close_calls == []
+
+
+def test_status_json_reports_the_default_thresholds(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": 1}}}):
+        result = invoke(runner, ["status", "--json"], env)
+
+    assert json.loads(result.stdout)["thresholds"] == {
+        "stale_after_seconds": 7200,
+        "offline_after_seconds": 86400,
+    }
+
+
 def test_lorastats_source_still_requires_contact(runner: CliRunner, env: dict[str, str]) -> None:
     env = dict(env)
     del env["MESHPROVISION_CONTACT"]
