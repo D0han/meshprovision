@@ -782,6 +782,42 @@ def test_diff_record_unmappable_hw_model_is_not_drift(make_live) -> None:
     assert not any(d.kind is repair.DriftKind.HARDWARE for d in drifts)
 
 
+@pytest.mark.parametrize(
+    ("hw_model", "hw_model_raw", "drifts"),
+    [("", "FUTURE_BOARD_99", False), ("", None, True), ("TBEAM", None, True)],
+    ids=["unrecognized-model-is-not-evidence", "blank-model-is-drift", "different-model-is-drift"],
+)
+def test_diff_record_hardware_drift_ignores_only_an_unrecognized_live_model(
+    make_live, hw_model: str, hw_model_raw: str | None, drifts: bool
+) -> None:
+    from meshprovision.config.template import load_template_text
+
+    template = load_template_text("version: 1\n")
+    live = make_live(template, hw_model=hw_model, hw_model_raw=hw_model_raw)
+    record = NodeRecord(node_id="deadbe01", hw_model="RAK4631")
+
+    kinds = {(d.kind, d.field) for d in repair.diff_record(live, record)}
+
+    assert ((repair.DriftKind.HARDWARE, "hw_model") in kinds) is drifts
+
+
+def test_diff_record_with_no_recorded_admin_keys_reports_no_admin_key_drift(
+    make_live, make_admin_key
+) -> None:
+    """An empty authorized_admin_keys cell is no claim about the device, like every other blank."""
+    from meshprovision.config.template import load_template_text
+
+    template = load_template_text("version: 1\n")
+    live = make_live(
+        template, security=make_security(admin_keys=(make_admin_key("ADMIN1").public,))
+    )
+    record = NodeRecord(node_id="deadbe01")
+
+    kinds = {d.kind for d in repair.diff_record(live, record)}
+
+    assert repair.DriftKind.ADMIN_KEYS not in kinds
+
+
 def test_drift_describe() -> None:
     drift = repair.Drift(
         kind=repair.DriftKind.RADIO, field="role", recorded="CLIENT", observed="ROUTER"
