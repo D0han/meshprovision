@@ -157,6 +157,36 @@ def test_alphabet_case_collision_error_names_each_pair() -> None:
     assert "differ only in case: 'a'/'A', 'b'/'B'." in str(exc_info.value)
 
 
+def test_render_keeps_the_literals_between_and_after_slots() -> None:
+    spec = PatternSpec.compile("N{n}-{n}Z", BASE36_ALPHABET, field="long_name_pattern")
+
+    assert spec.render(37) == "N1-1Z"
+    assert spec.render_widest() == "N0-0Z"
+    assert spec.widest_byte_length() == 5
+
+
+@pytest.mark.parametrize(
+    "name", ["N1-1Q", "N1-1ZZ", "N1-1"], ids=["wrong-suffix", "extra-tail", "missing-suffix"]
+)
+def test_parse_index_requires_the_exact_trailing_literal(name: str) -> None:
+    spec = PatternSpec.compile("N{n}-{n}Z", BASE36_ALPHABET, field="long_name_pattern")
+
+    assert spec.parse_index(name) is None
+
+
+def test_parse_index_round_trips_a_pattern_with_a_trailing_literal() -> None:
+    spec = PatternSpec.compile("N{n}-{n}Z", BASE36_ALPHABET, field="long_name_pattern")
+
+    assert spec.parse_index("N1-1Z") == 37
+
+
+def test_compile_refuses_an_empty_pattern() -> None:
+    with pytest.raises(TemplateValidationError, match="must not be empty") as excinfo:
+        PatternSpec.compile("", BASE36_ALPHABET, field="short_name_pattern")
+
+    assert excinfo.value.field == "short_name_pattern"
+
+
 # ---------------------------------------------------------------------------
 # Capacity floor / near-exhaustion / exhaustion.
 # ---------------------------------------------------------------------------
