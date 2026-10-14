@@ -67,6 +67,7 @@ class DbProblemKind(StrEnum):
     INSECURE_PERMISSIONS = "insecure_permissions"
     TEMPLATE_UNAVAILABLE = "template_unavailable"
     UNIMPORTED_ADMIN_KEY = "unimported_admin_key"
+    NON_CANONICAL_NODE_OWNER = "non_canonical_node_owner"
 
 
 class ProblemSeverity(StrEnum):
@@ -298,6 +299,7 @@ def verify_database(
         *_check_template_refs(keys, template),
         *_check_weak_keys(keys, known_bad),
         *_check_admin_key_mismatch(keys),
+        *_check_non_canonical_node_owners(nodes, keys),
         *_check_duplicate_keys(keys),
         *_check_duplicate_observed_refs(nodes),
         *_check_unregistered_duplicate_keys(nodes, keys),
@@ -476,6 +478,39 @@ def _check_admin_key_mismatch(keys: KeyRepository) -> list[DbProblem]:
                     ref=record.key_ref,
                 )
             )
+    return problems
+
+
+def _check_non_canonical_node_owners(nodes: NodeRepository, keys: KeyRepository) -> list[DbProblem]:
+    """Flag a Keys row whose owner_node_id is an existing node's id in another case.
+
+    Lookups by node id are exact (``<node_id>_pub``), so such a row is
+    never found as that node's key: ``mesh provision`` then sees "no
+    recorded key" and refuses the node's own key as a clone of this row.
+    An owner naming no node is left alone -- an upper-case 8-hex admin
+    label is legitimate.
+    """
+    node_ids = {record.node_id for record in nodes.all()}
+    problems: list[DbProblem] = []
+    for record in keys.all():
+        owner = record.owner_node_id
+        canonical = owner.lower()
+        if owner == canonical or canonical not in node_ids:
+            continue
+        problems.append(
+            DbProblem(
+                kind=DbProblemKind.NON_CANONICAL_NODE_OWNER,
+                severity=ProblemSeverity.ERROR,
+                message=(
+                    f"{record.key_ref}: owner_node_id {owner!r} names node {canonical!r} in "
+                    "another case, so it is never found as that node's key (mesh provision "
+                    f"then refuses the node as a key clone). Change it to {canonical!r} in the "
+                    "Keys sheet; key_ref follows automatically."
+                ),
+                sheet="Keys",
+                ref=record.key_ref,
+            )
+        )
     return problems
 
 

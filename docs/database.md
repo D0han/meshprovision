@@ -38,7 +38,7 @@ LibreOffice, not a CSV dump.
 | Column | Kind | Notes |
 |---|---|---|
 | `key_ref` | primary key, DERIVED | `owner_node_id` plus a suffix determined by `key_type` (`_pub`/`_priv`/`_psk`) |
-| `owner_node_id` | KEY_REF, required | A node_id hex value, a template `admin_nodes` label, or an `observed-<fingerprint>` synthetic owner `mesh adopt` mints for a key it can't otherwise name (see below) |
+| `owner_node_id` | KEY_REF, required | A node_id hex value, a template `admin_nodes` label, or an `observed-<fingerprint>` synthetic owner `mesh adopt` mints for a key it can't otherwise name (see below). Node ids are lower-case hex; `mesh db verify` reports an existing node's id written in another case |
 | `key_type` | ENUM (dropdown `mp_key_type`) | `admin_public`, `admin_private`, or `channel_psk` |
 | `key_value` | BASE64_KEY, required, SECRET | Base64 of exactly 32 raw bytes: an X25519 key for `admin_public`/`admin_private`, or an AES256 channel PSK for `channel_psk`. Never logged or displayed |
 | `created_ts` | TIMESTAMP | UTC timestamp this key was recorded |

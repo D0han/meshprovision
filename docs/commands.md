@@ -459,7 +459,11 @@ mesh db forget deadbe01
   `unimported_admin_key` — one admin key shared across many nodes is
   the normal fleet setup, not a clone signature, so it never raises
   `verify`'s exit code above what `--strict` already does for a bare
-  warning.
+  warning. A `Keys` row whose `owner_node_id` is an existing node's id
+  written in another case (`DEADBE01` for node `deadbe01`) is an
+  **error**, `non_canonical_node_owner`: lookups by node id are exact, so
+  `mesh provision` would never find that key as the node's own and would
+  refuse the node as a key clone.
 - `backup` writes only into the backup directory and never rewrites the
   database itself.
 - `restore` is the only `db` subcommand that rewrites the live database

@@ -27,6 +27,7 @@ from meshprovision.db.verify import (
     _check_admin_key_mismatch,
     _check_duplicate_keys,
     _check_duplicate_observed_refs,
+    _check_non_canonical_node_owners,
     _check_permissions,
     _check_template_refs,
     _check_unregistered_duplicate_keys,
@@ -403,6 +404,71 @@ def test_check_unresolved_admin_refs_accepts_a_resolvable_ref(
     nodes.upsert(NodeRecord(node_id="deadbe01", authorized_admin_keys=("ADMIN1_pub",)))
 
     assert _check_unresolved_admin_refs(nodes, keys) == []
+
+
+@pytest.mark.parametrize("owner", ["DEADBE01", "DeadBe01"])
+def test_check_non_canonical_node_owners_flags_an_existing_node_in_another_case(
+    nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair, owner: str
+) -> None:
+    """Lookups are by ``deadbe01_pub``: this pair would be invisible to ``mesh provision``."""
+    nodes.upsert(NodeRecord(node_id="deadbe01"))
+    for record in KeyRecord.for_keypair(owner, keypair, origin=KeyOrigin.CAPTURED):
+        keys.upsert(record)
+
+    problems = _check_non_canonical_node_owners(nodes, keys)
+
+    assert {problem.ref for problem in problems} == {f"{owner}_pub", f"{owner}_priv"}
+    assert {problem.kind for problem in problems} == {DbProblemKind.NON_CANONICAL_NODE_OWNER}
+    assert {problem.severity for problem in problems} == {ProblemSeverity.ERROR}
+    assert all("'deadbe01'" in problem.message for problem in problems)
+
+
+def test_check_non_canonical_node_owners_ignores_a_hex_label_with_no_node(
+    nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
+) -> None:
+    """An upper-case 8-hex owner naming no node may be a deliberate admin label."""
+    keys.upsert(
+        KeyRecord.from_material(
+            "DEADBE01", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.IMPORTED
+        )
+    )
+
+    assert _check_non_canonical_node_owners(nodes, keys) == []
+
+
+def test_check_non_canonical_node_owners_ignores_canonical_owners(
+    nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
+) -> None:
+    nodes.upsert(NodeRecord(node_id="deadbe01"))
+    for record in KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.CAPTURED):
+        keys.upsert(record)
+
+    assert _check_non_canonical_node_owners(nodes, keys) == []
+
+
+def test_verify_database_reports_a_non_canonical_node_owner_as_an_error(
+    nodes: NodeRepository, keys: KeyRepository, template, db: OdsDatabase, keypair: KeyPair
+) -> None:
+    """Wired into verify_database, exits 4, and names its kind in ``--json``."""
+    nodes.upsert(NodeRecord(node_id="deadbe01"))
+    keys.upsert(
+        KeyRecord.from_material(
+            "DEADBE01", KeyType.ADMIN_PUBLIC, keypair.public, origin=KeyOrigin.CAPTURED
+        )
+    )
+
+    report = verify_database(
+        path=db.path,
+        warnings=(),
+        nodes=nodes,
+        keys=keys,
+        template=template,
+        known_bad=frozenset(),
+    )
+
+    assert report.exit_code(strict=False) == 4
+    kinds = [problem["kind"] for problem in report.to_json_dict()["problems"]]
+    assert "non_canonical_node_owner" in kinds
 
 
 def test_check_unregistered_duplicate_keys_flags_two_never_imported_shares(

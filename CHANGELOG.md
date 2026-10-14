@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh db verify` reports a `Keys` row whose `owner_node_id` is an existing
+  node's id written in another case (`non_canonical_node_owner`, an error):
+  such a row is never found as that node's key, so `mesh provision` refused
+  the node as a CVE-2025-52464 key clone.
 - `mesh peers`: gives the connected device every other active node of the
   database as a contact (with the public key the Keys sheet records) and
   marks it favorite, so routers and base stations always hold the whole
