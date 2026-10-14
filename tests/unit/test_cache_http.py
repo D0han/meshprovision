@@ -548,6 +548,25 @@ def test_html_body_raises_invalid_response_error(tmp_path: Path) -> None:
     assert "text/html" in exc_info.value.message
 
 
+@respx.mock
+def test_deeply_nested_json_body_raises_invalid_response_error(tmp_path: Path) -> None:
+    depth = 100_000
+    respx.get(URL).mock(return_value=httpx.Response(200, content=b"[" * depth + b"]" * depth))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(InvalidResponseError):
+        client.get(URL).json()
+
+
+@respx.mock
+def test_an_integer_past_the_digit_limit_raises_invalid_response_error(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, content=b'{"a": ' + b"1" * 5000 + b"}"))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(InvalidResponseError):
+        client.get(URL).json()
+
+
 # ---------------------------------------------------------------------------
 # Disk format and robustness.
 # ---------------------------------------------------------------------------

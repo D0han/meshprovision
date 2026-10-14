@@ -277,7 +277,10 @@ def e7_to_degrees(value: object, *, limit: float) -> float | None:
     """
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
-    degrees = value / E7_SCALE
+    try:
+        degrees = value / E7_SCALE
+    except OverflowError:  # an int too large for a float
+        return None
     if not math.isfinite(degrees):
         return None
     if not (-limit <= degrees <= limit):
@@ -406,7 +409,10 @@ def coerce_float(value: object) -> float | None:
     if isinstance(value, bool):
         return None
     if isinstance(value, int | float):
-        result = float(value)
+        try:
+            result = float(value)
+        except OverflowError:  # an int too large for a float
+            return None
         return result if math.isfinite(result) else None
     if isinstance(value, str):
         token = value.strip()
@@ -440,7 +446,10 @@ def coerce_int(value: object) -> int | None:
     if isinstance(value, str):
         token = value.strip()
         if token.isascii() and token.isdigit():
-            return int(token)
+            try:
+                return int(token)
+            except ValueError:  # more digits than int max-str-digits allows
+                return None
         return None
     return None
 

@@ -1445,3 +1445,46 @@ def test_loranet_json_array_payload_raises_invalid_response(tmp_path: Path) -> N
     source = LoranetSource(client)
     with pytest.raises(InvalidResponseError):
         source.raw_index()
+
+
+# --- numbers too large to represent -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [10**400, -(10**400)], ids=["positive", "negative"])
+def test_float_coercions_reject_an_int_too_large_for_a_float(value: int) -> None:
+    assert coerce_float(value) is None
+    assert e7_to_degrees(value, limit=90.0) is None
+
+
+def test_coerce_int_rejects_a_digit_string_past_the_conversion_limit() -> None:
+    assert coerce_int("1" * 5000) is None
+
+
+def test_loranet_parse_node_counts_oversized_numbers_instead_of_raising() -> None:
+    tracker = CoercionTracker()
+    huge = 10**400
+
+    obs = parse_node(
+        NodeId.from_hex("deadbe01"),
+        {"voltage": huge, "chUtil": huge, "latitude": huge, "longitude": huge},
+        observed_at=datetime.now(tz=UTC),
+        coercion_tracker=tracker,
+    )
+
+    assert (obs.voltage, obs.channel_utilization, obs.latitude, obs.longitude) == (None,) * 4
+    assert tracker.failures == 4
+
+
+def test_lorastats_parse_node_counts_an_oversized_digit_string_instead_of_raising() -> None:
+    tracker = CoercionTracker()
+
+    obs = lorastats_module.parse_node(
+        {"NodeId": "deadbe01", "Role": "1" * 5000},
+        region="PL",
+        observed_at=datetime.now(tz=UTC),
+        coercion_tracker=tracker,
+    )
+
+    assert obs is not None
+    assert obs.role_value is None
+    assert tracker.failures == 1

@@ -385,6 +385,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status` (and `--watch`) no longer crashes with a traceback, for the
+  whole cache TTL, when a data source returns JSON nested too deeply to decode
+  or an integer with thousands of digits: that source fails like any other
+  invalid response and the rest of the report is shown. A node value too
+  large to represent (a 400-digit voltage or coordinate, a role with
+  thousands of digits) is skipped and counted as a coercion failure instead
+  of aborting the run.
 - `mesh adopt --from-backup` reports a backup file that nests too deeply,
   holds an integer with thousands of digits or an impossible date, or gives
   a profile `config`/`module_config` field a number it cannot hold (an

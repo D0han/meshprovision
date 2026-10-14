@@ -389,11 +389,15 @@ class CachedResponse:
             The decoded JSON value.
 
         Raises:
-            InvalidResponseError: If the body is not valid JSON.
+            InvalidResponseError: If the body is not valid JSON, nests too
+                deeply to decode, or holds an integer with more digits
+                than Python converts.
         """
         try:
             return json.loads(self.content)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        except (ValueError, RecursionError) as exc:
+            # ValueError covers JSONDecodeError, UnicodeDecodeError and an
+            # integer literal past Python's int max-str-digits limit.
             raise InvalidResponseError(
                 f"{self.url} did not return JSON "
                 f"(content-type {self.content_type!r}, {len(self.content)} bytes)",
