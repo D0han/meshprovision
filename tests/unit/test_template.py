@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -656,6 +657,51 @@ def test_string_list_fields_normalize_and_reject(text: str, check: _Check) -> No
         check(exc)
     else:
         check(cfg)
+
+
+_OUT_OF_RANGE: dict[str, Any] = {"device": {"node_info_broadcast_secs": 2**32}}
+_BOTH_LISTS: dict[str, Any] = {"enabled_options": ["mqtt"], "disabled_options": ["mqtt"]}
+_LONG_SHORT_NAME: dict[str, Any] = {"short_name_pattern": "MESH{n}"}
+_LONG_LONG_NAME: dict[str, Any] = {"long_name_pattern": "X" * 40 + "{n}"}
+_FOUR_ADMINS: dict[str, Any] = {"admin_nodes": ["A1", "A2", "A3", "A4"]}
+_ADMIN_CHANNEL: dict[str, Any] = {"security": {"admin_channel_enabled": True}}
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "expected_type", "expected_field"),
+    [
+        (
+            _OUT_OF_RANGE,
+            _BOTH_LISTS,
+            TemplateValidationError,
+            "device.node_info_broadcast_secs",
+        ),
+        (_BOTH_LISTS, _LONG_SHORT_NAME, TemplateValidationError, "enabled_options"),
+        (_LONG_SHORT_NAME, _LONG_LONG_NAME, NamePatternError, "short_name_pattern"),
+        (_LONG_LONG_NAME, _FOUR_ADMINS, NamePatternError, "long_name_pattern"),
+        (_FOUR_ADMINS, _ADMIN_CHANNEL, AdminKeyCapacityError, None),
+    ],
+    ids=[
+        "ranges-before-lists",
+        "lists-before-names",
+        "short-before-long",
+        "names-before-admins",
+        "admins-before-interlocks",
+    ],
+)
+def test_consistency_checks_report_the_first_group_in_documented_order(
+    first: dict[str, Any],
+    second: dict[str, Any],
+    expected_type: type[Exception],
+    expected_field: str | None,
+) -> None:
+    """Two simultaneous problems: the earlier check group (per the docstring order) wins."""
+    with pytest.raises(expected_type) as excinfo:
+        TemplateConfig(**first, **second)
+
+    assert type(excinfo.value) is expected_type
+    if expected_field is not None:
+        assert getattr(excinfo.value, "field", None) == expected_field
 
 
 # ---------------------------------------------------------------------------
