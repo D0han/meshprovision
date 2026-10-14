@@ -19,6 +19,7 @@ from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.pipeline import (
     adopt_would_rotate_admin_key,
+    alias_would_rotate_admin_key,
     allocate_names,
     audit_live_admin_keys,
     audit_node_key,
@@ -933,6 +934,45 @@ def test_adopt_would_rotate_admin_key_truth_table(
         db_has_private_key=db_has_private_key,
         live_public_key=live_public_key,
         live_private_key=live_private_key,
+    )
+
+    assert rotates is expected
+
+
+_HELD = b"\x11" * 32
+_OTHER = b"\x22" * 32
+
+
+@pytest.mark.parametrize(
+    ("regenerates", "adopts", "live", "db", "expected"),
+    [
+        (True, False, None, None, True),
+        (False, True, _OTHER, _HELD, True),
+        (False, True, _HELD, _OTHER, False),
+        (False, False, _OTHER, _HELD, False),
+        (False, False, _HELD, _OTHER, True),
+        (False, True, None, _OTHER, False),
+        (False, False, _OTHER, None, False),
+    ],
+    ids=[
+        "regenerate-always-rotates",
+        "adopt-different-live-key-rotates",
+        "adopt-same-live-key-is-idempotent",
+        "no-key-change-same-db-key-is-idempotent",
+        "no-key-change-different-db-key-rotates",
+        "adopt-without-live-key-registers-nothing",
+        "no-key-change-without-db-key-registers-nothing",
+    ],
+)
+def test_alias_would_rotate_admin_key_truth_table(
+    regenerates: bool, adopts: bool, live: bytes | None, db: bytes | None, expected: bool
+) -> None:
+    rotates = alias_would_rotate_admin_key(
+        existing_alias_public_key=_HELD,
+        plan_regenerates=regenerates,
+        plan_adopts_device_key=adopts,
+        live_public_key=live,
+        db_public_key=db,
     )
 
     assert rotates is expected
