@@ -91,6 +91,9 @@ AVAILABILITY_LABELS: Final[MappingProxyType[Availability, str]] = MappingProxyTy
 
 _DASH: Final[str] = "-"
 
+_POWERED_BATTERY_THRESHOLD: Final[int] = 100
+"""A Meshtastic ``battery_level`` above this means external power, not a percentage."""
+
 
 def _text_cell(value: str | None) -> str:
     """Render an optional string cell, never as the literal ``"None"``.
@@ -122,12 +125,19 @@ def _battery_cell(value: int | None) -> str:
     """Render an optional battery-percentage cell.
 
     Args:
-        value: The battery level percentage, or ``None``.
+        value: The battery level percentage, or ``None``. Meshtastic
+            reports a level above 100 (101) for a node on external power.
 
     Returns:
-        ``f"{value}%"``, or :data:`_DASH` when ``value`` is ``None``.
+        ``"powered"`` above :data:`_POWERED_BATTERY_THRESHOLD`,
+        ``f"{value}%"`` otherwise, or :data:`_DASH` when ``value`` is
+        ``None``.
     """
-    return _DASH if value is None else f"{value}%"
+    if value is None:
+        return _DASH
+    if value > _POWERED_BATTERY_THRESHOLD:
+        return "powered"
+    return f"{value}%"
 
 
 def _voltage_cell(value: float | None) -> str:

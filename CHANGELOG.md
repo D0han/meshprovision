@@ -381,6 +381,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status` shows `powered` instead of `101%` for a node on external
+  power (`--json` still reports the raw `battery_level`, where a value above
+  100 means powered).
 - A database whose file name contains `[`, `*` or `?` now has its backups
   listed, pruned to the retention limit and swept of interrupted-write temp
   files: a `[...]` in the name made every backup invisible

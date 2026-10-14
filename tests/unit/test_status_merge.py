@@ -950,6 +950,16 @@ def test_build_table_caption_mentions_field_coercions() -> None:
     assert "5 field(s) could not be coerced" in str(table.caption)
 
 
+@pytest.mark.parametrize(
+    ("level", "expected"), [(101, "powered"), (100, "100%"), (0, "0%"), (None, "-")]
+)
+def test_battery_cell_renders_a_level_above_100_as_powered(
+    level: int | None, expected: str
+) -> None:
+    """Meshtastic reports 101 for a node on external power; 0 stays a real empty battery."""
+    assert render._battery_cell(level) == expected
+
+
 def test_timestamp_cell_bare_when_it_matches_the_reference_zone(local_tz: None) -> None:
     """A row sharing the header's (reference's) zone stays bare -- the header already states it."""
     assert (
