@@ -211,6 +211,16 @@ def test_thresholds_validation_errors() -> None:
         Thresholds(offline_after=timedelta(0))
     with pytest.raises(ValueError, match="strictly less"):
         Thresholds(stale_after=timedelta(hours=5), offline_after=timedelta(hours=1))
+    with pytest.raises(ValueError, match="strictly less"):
+        Thresholds(stale_after=timedelta(hours=3), offline_after=timedelta(hours=3))
+
+
+def test_default_status_thresholds_are_two_and_twenty_four_hours() -> None:
+    """The documented ``mesh status`` defaults: ONLINE under 2h, OFFLINE past 24h."""
+    thresholds = Thresholds()
+
+    assert thresholds.stale_after == timedelta(hours=2)
+    assert thresholds.offline_after == timedelta(hours=24)
 
 
 def test_thresholds_from_hours() -> None:
