@@ -168,7 +168,9 @@ def temp_glob(name_glob: str) -> str:
     """Return the sweep pattern matching :func:`temp_sibling` temps of ``name_glob``.
 
     Args:
-        name_glob: A final file name, or a glob over final file names.
+        name_glob: A glob over final file names. A literal file name
+            must go through :func:`glob.escape` first, or a ``[``, ``*``
+            or ``?`` in it acts as a wildcard.
 
     Returns:
         A pattern for :func:`sweep_stale_temps`.

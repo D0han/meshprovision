@@ -26,6 +26,7 @@ disk ever reclaims.
 from __future__ import annotations
 
 import contextlib
+import glob
 import os
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -109,7 +110,7 @@ def atomic_write(
     # Before this call's own temp exists, so it can never sweep it.
     fs_primitives.sweep_stale_temps(
         target.parent,
-        fs_primitives.temp_glob(target.name),
+        fs_primitives.temp_glob(glob.escape(target.name)),
         min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
     )
 

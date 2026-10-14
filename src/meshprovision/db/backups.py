@@ -21,6 +21,7 @@ reclaims.
 from __future__ import annotations
 
 import contextlib
+import glob
 import logging
 import os
 import re
@@ -236,6 +237,23 @@ def _backup_name_re(target: Path) -> re.Pattern[str]:
     )
 
 
+def _backup_glob(target: Path) -> str:
+    """Build the loose prefilter glob over ``target``'s backup names, metacharacter-safe.
+
+    ``target``'s own stem and suffix are escaped: a database named
+    ``fleet[a].ods`` would otherwise turn ``[a]`` into a character class
+    and match none of its own backups, and ``fleet*.ods`` would match a
+    sibling database's. :func:`_backup_name_re` still decides membership.
+
+    Args:
+        target: The file whose backup names to match.
+
+    Returns:
+        ``"<stem>-*<suffix>"``, with the stem and suffix glob-escaped.
+    """
+    return f"{glob.escape(target.stem)}-*{glob.escape(target.suffix)}"
+
+
 def legacy_backup_notice(target: Path, *, backup_dir: Path | None = None) -> str | None:
     """Build a one-line notice about a legacy CWD-relative backup directory, if relevant.
 
@@ -277,7 +295,7 @@ def legacy_backup_notice(target: Path, *, backup_dir: Path | None = None) -> str
     pattern = _backup_name_re(target)
     count = sum(
         1
-        for path in _LEGACY_BACKUP_DIR.glob(f"{target.stem}-*{target.suffix}")
+        for path in _LEGACY_BACKUP_DIR.glob(_backup_glob(target))
         if path.is_file() and pattern.fullmatch(path.name)
     )
     if count == 0:
@@ -446,7 +464,7 @@ def create_backup(
     for name_target in name_targets:
         fs_primitives.sweep_stale_temps(
             resolved_dir,
-            fs_primitives.temp_glob(f"{name_target.stem}-*{name_target.suffix}"),
+            fs_primitives.temp_glob(_backup_glob(name_target)),
             min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
         )
 
@@ -592,7 +610,7 @@ def list_backups(target: Path, *, backup_dir: Path | None = None) -> tuple[Backu
     seen: set[Path] = set()
     for name_target in backup_name_targets(target):
         pattern = _backup_name_re(name_target)
-        for path in resolved_dir.glob(f"{name_target.stem}-*{name_target.suffix}"):
+        for path in resolved_dir.glob(_backup_glob(name_target)):
             if path in seen or not pattern.fullmatch(path.name):
                 continue
             try:

@@ -27,6 +27,7 @@ to date -- only when its sidecar names this same database.
 from __future__ import annotations
 
 import contextlib
+import glob
 import hashlib
 import json
 import logging
@@ -67,7 +68,7 @@ Deliberately a ``.`` immediately after the stem, not a ``-``, so
 ``known_good_name``'s output never matches
 :func:`meshprovision.db.backups.list_backups`'/
 :func:`meshprovision.db.backups.prune_backups`'
-``f"{target.stem}-*{target.suffix}"`` glob -- the known-good copy is a
+``"<stem>-*<suffix>"`` glob -- the known-good copy is a
 single stable slot outside the timestamped rotation, never pruned and
 never listed alongside it.
 """
@@ -574,7 +575,7 @@ def refresh_known_good(
         for name in backup_name_targets(target):
             fs_primitives.sweep_stale_temps(
                 resolved_dir,
-                fs_primitives.temp_glob(known_good_name(name)),
+                fs_primitives.temp_glob(glob.escape(known_good_name(name))),
                 min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
             )
 

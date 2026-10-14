@@ -381,6 +381,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A database whose file name contains `[`, `*` or `?` now has its backups
+  listed, pruned to the retention limit and swept of interrupted-write temp
+  files: a `[...]` in the name made every backup invisible
+  (`mesh db backup --list` said none existed, and none was ever pruned, so
+  key-bearing copies piled up), and a `*` could clean up another database's
+  stale temp files.
 - `MESHPROVISION_LOCK_TIMEOUT` and `MESHPROVISION_KNOWN_BAD_KEYS` set in the
   environment no longer trigger an "unrecognized variable, ignored" warning
   (they were always honoured); set in `.env`, where they have no effect,

@@ -892,3 +892,19 @@ def test_refresh_sweeps_stale_temp_copies_under_every_spelling(
 
     assert [orphan for orphan in orphans if orphan.exists()] == []
     assert unrelated.exists()
+
+
+def test_refresh_sweeps_a_stale_temp_copy_of_a_bracketed_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "fleet[a].ods"
+    target.write_bytes(b"v1")
+    directory = known_good.known_good_path(target).parent
+    directory.mkdir()
+    orphan = directory / ".fleet[a].known-good.ods.tmp-999-deadbeef"
+    orphan.write_bytes(b"killed mid-refresh")
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+
+    _refresh(target)
+
+    assert not orphan.exists()

@@ -1623,3 +1623,107 @@ def test_older_spelling_backups_are_left_to_the_database_that_owns_that_name(
     assert theirs.exists()
     assert theirs not in [info.path for info in list_backups(link)]
     assert backups.backup_name_targets(link) == (real,)
+
+
+# --- glob metacharacters in the database file name -------------------------------
+
+
+@pytest.mark.parametrize("name", ["fleet[a].ods", "fleet*x.ods", "fleet?.ods"])
+def test_retention_applies_to_a_database_name_with_glob_metacharacters(
+    tmp_path: Path, name: str
+) -> None:
+    """``[a]`` in the name must not turn the backup prefilter glob into a character class."""
+    target = tmp_path / name
+    backup_dir = tmp_path / "backups"
+    for i in range(5):
+        target.write_bytes(f"v{i}".encode())
+        create_backup(
+            target,
+            backup_dir=backup_dir,
+            retention=3,
+            now=datetime(2026, 1, 1, 0, 0, i, tzinfo=UTC),
+        )
+
+    assert len(list_backups(target, backup_dir=backup_dir)) == 3
+    assert len(list(backup_dir.iterdir())) == 3
+
+
+def test_backup_sweeps_a_stale_orphan_temp_for_a_bracketed_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "fleet[a].ods"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    backup_dir.mkdir()
+    orphan = (
+        backup_dir / f".{backup_name(target, datetime(2026, 1, 1, tzinfo=UTC))}.tmp-999-deadbeef"
+    )
+    orphan.write_bytes(b"half-copied")
+
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    create_backup(target, backup_dir=backup_dir)
+
+    assert not orphan.exists()
+
+
+def test_backup_sweep_of_a_starred_name_leaves_a_sibling_database_temp_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``*`` in the name is literal: ``fleet*.ods`` must not sweep ``fleet-west.ods``'s temps."""
+    target = tmp_path / "fleet*.ods"
+    sibling = tmp_path / "fleet-west.ods"
+    backup_dir = tmp_path / "backups"
+    target.write_bytes(b"v1")
+    backup_dir.mkdir()
+    sibling_temp = (
+        backup_dir / f".{backup_name(sibling, datetime(2026, 1, 1, tzinfo=UTC))}.tmp-999-deadbeef"
+    )
+    sibling_temp.write_bytes(b"not mine")
+
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    create_backup(target, backup_dir=backup_dir)
+
+    assert sibling_temp.exists()
+
+
+def test_atomic_write_sweeps_a_stale_orphan_for_a_bracketed_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "fleet[a].ods"
+    orphan = tmp_path / f".{target.name}.tmp-999-deadbeef"
+    orphan.write_bytes(b"half-written")
+
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    with atomic_write(target, backup=False) as tmp:
+        tmp.write_bytes(b"v1")
+
+    assert not orphan.exists()
+
+
+def test_atomic_write_of_a_starred_name_leaves_a_sibling_temp_alone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "fleet*.ods"
+    sibling_temp = tmp_path / ".fleet-west.ods.tmp-999-deadbeef"
+    sibling_temp.write_bytes(b"another database, mid-write")
+
+    monkeypatch.setattr(fs_primitives, "STALE_TEMP_MIN_AGE_SECONDS", 0.0)
+    with atomic_write(target, backup=False) as tmp:
+        tmp.write_bytes(b"v1")
+
+    assert sibling_temp.exists()
+
+
+def test_legacy_backup_notice_counts_a_bracketed_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    legacy_dir = tmp_path / "data" / "backups"
+    legacy_dir.mkdir(parents=True)
+    target = tmp_path / "elsewhere" / "fleet[a].ods"
+    (legacy_dir / "fleet[a]-20260101T000000.000000Z.ods").write_bytes(b"x")
+
+    notice = legacy_backup_notice(target)
+
+    assert notice is not None
+    assert "1 older backup " in notice
