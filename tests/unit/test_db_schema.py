@@ -172,6 +172,43 @@ def test_base64_key_list_dedupes_after_canonicalization(keypair) -> None:
     assert result == encoded
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["has space", "-leading-dash", "x" * 65, "semi;colon"],
+    ids=["space", "leading-dash", "too-long", "semicolon"],
+)
+def test_key_ref_cell_rejects_a_malformed_reference(value: str) -> None:
+    spec = schema.NODES_SHEET_SPEC.column("public_key_ref")
+
+    with pytest.raises(DbValidationError, match="does not look like a key reference"):
+        cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value=value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["\uff11\uff12\uff13\uff14\uff15\uff16", "12345a", "12345", "1234567"],
+    ids=["fullwidth-digits", "letter", "too-short", "too-long"],
+)
+def test_ble_pin_cell_accepts_only_six_ascii_digits(value: str) -> None:
+    spec = schema.NODES_SHEET_SPEC.column("ble_pin")
+
+    with pytest.raises(DbValidationError) as exc_info:
+        cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value=value)
+
+    assert exc_info.value.value is None  # a PIN is secret: never echoed back
+
+
+def test_unknown_enum_cell_names_the_known_values() -> None:
+    spec = schema.NODES_SHEET_SPEC.column("region")
+
+    with pytest.raises(DbValidationError) as exc_info:
+        cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value="ATLANTIS")
+
+    assert "unrecognized value" in str(exc_info.value)
+    assert exc_info.value.hint is not None
+    assert "EU_868" in exc_info.value.hint
+
+
 def test_validate_row_fills_every_column() -> None:
     result = cell_validation.validate_row(schema.NODES_SHEET_SPEC, 2, {"node_id": "deadbe01"})
     assert set(result) == set(schema.NODES_SHEET_SPEC.column_names())
