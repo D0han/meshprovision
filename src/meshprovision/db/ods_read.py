@@ -50,6 +50,7 @@ __all__ = [
     "MAX_COLUMNS",
     "MAX_ROW_REPEAT",
     "MAX_UNPACKED_BYTES",
+    "MAX_XML_DEPTH",
     "CellValue",
     "DatabaseData",
     "SheetData",
@@ -75,6 +76,13 @@ small crafted file from inflating to gigabytes in memory (a zip bomb).
 The sizes are the ones the zip's central directory declares, which
 :mod:`zipfile` enforces: a member that inflates past its declared size
 fails its CRC check instead of growing."""
+
+MAX_XML_DEPTH: Final[int] = 256
+"""Upper bound on element nesting in an ODF XML part.
+
+LibreOffice writes about a dozen levels; odfpy walks the tree recursively,
+so a much deeper part would raise ``RecursionError`` instead of a clean
+error."""
 
 _MANIFEST_PART: Final[str] = "META-INF/manifest.xml"
 _CONTENT_PART: Final[str] = "content.xml"
@@ -495,6 +503,32 @@ def _read_part(path: Path, archive: zipfile.ZipFile, part: str) -> bytes:
         raise _unreadable(path, f"{part} could not be decompressed ({exc})") from exc
 
 
+class _TooDeepError(Exception):
+    """An XML part nests elements deeper than :data:`MAX_XML_DEPTH`."""
+
+
+class _DepthLimitedHandler(xml.sax.handler.ContentHandler):
+    """A no-op SAX handler that refuses nesting deeper than :data:`MAX_XML_DEPTH`."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._depth = 0
+
+    def startElement(self, name: str, attrs: Any) -> None:  # noqa: N802, ARG002 -- SAX API
+        """Count one level down.
+
+        Raises:
+            _TooDeepError: If the element is nested too deep.
+        """
+        self._depth += 1
+        if self._depth > MAX_XML_DEPTH:
+            raise _TooDeepError
+
+    def endElement(self, name: str) -> None:  # noqa: N802, ARG002 -- SAX API
+        """Count one level up."""
+        self._depth -= 1
+
+
 def _check_well_formed(path: Path, part: str, xml_bytes: bytes) -> None:
     """Parse one XML part strictly, the way odfpy would, but failing loudly.
 
@@ -504,12 +538,17 @@ def _check_well_formed(path: Path, part: str, xml_bytes: bytes) -> None:
         xml_bytes: The part's bytes.
 
     Raises:
-        SchemaError: If the part is not well-formed XML or uses a
-            construct defusedxml forbids (an entity declaration). The
-            message carries the position, never the part's text.
+        SchemaError: If the part is not well-formed XML, uses a
+            construct defusedxml forbids (an entity declaration), or nests
+            elements deeper than :data:`MAX_XML_DEPTH`. The message
+            carries the position, never the part's text.
     """
     try:
-        defusedxml.sax.parseString(xml_bytes, xml.sax.handler.ContentHandler())
+        defusedxml.sax.parseString(xml_bytes, _DepthLimitedHandler())
+    except _TooDeepError:
+        raise _unreadable(
+            path, f"{part} nests elements more than {MAX_XML_DEPTH} levels deep"
+        ) from None
     except xml.sax.SAXParseException as exc:
         raise _unreadable(
             path,
@@ -533,7 +572,8 @@ def _preflight(path: Path, archive: zipfile.ZipFile) -> None:
         SchemaError: If the file would unpack to more than
             :data:`MAX_UNPACKED_BYTES`, is password-protected, has no
             ``content.xml``, or any XML part odfpy would parse is
-            damaged or not well-formed.
+            damaged, not well-formed, or nested deeper than
+            :data:`MAX_XML_DEPTH`.
     """
     unpacked = sum(info.file_size for info in archive.infolist())
     if unpacked > MAX_UNPACKED_BYTES:

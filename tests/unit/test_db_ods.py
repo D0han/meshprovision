@@ -1688,6 +1688,16 @@ def _encrypted(parts: dict[str, bytes], secret: bytes) -> dict[str, bytes | None
     return {_MANIFEST: parts[_MANIFEST].replace(entry, encrypted_entry)}
 
 
+def _nested_too_deep(parts: dict[str, bytes], _secret: bytes) -> dict[str, bytes | None]:
+    depth = ods_read.MAX_XML_DEPTH + 1
+    nest = b"<text:span>" * depth + b"</text:span>" * depth
+    return {
+        "content.xml": parts["content.xml"].replace(
+            b"</office:spreadsheet>", nest + b"</office:spreadsheet>", 1
+        )
+    }
+
+
 _DAMAGE: dict[str, tuple[Callable[[dict[str, bytes], bytes], dict[str, bytes | None]], str]] = {
     "content_cut_in_a_key_value": (_cut_in_key_value, "content.xml is not well-formed XML"),
     "content_cut_after_keys_header": (_cut_after_keys_header, "content.xml is not well-formed XML"),
@@ -1700,6 +1710,7 @@ _DAMAGE: dict[str, tuple[Callable[[dict[str, bytes], bytes], dict[str, bytes | N
     "no_content_member": (_no_content_member, "it has no content.xml"),
     "content_not_in_manifest": (_content_not_in_manifest, "it has no content.xml"),
     "encrypted": (_encrypted, "is password-protected"),
+    "content_nested_too_deep": (_nested_too_deep, "content.xml nests elements more than 256"),
 }
 
 
@@ -1841,6 +1852,34 @@ def test_a_member_that_inflates_past_its_declared_size_is_refused(
     bomb[entry + 24 : entry + 28] = len(content).to_bytes(4, "little")
 
     _assert_refused_quietly(bytes(bomb), secret, "content.xml could not be decompressed", capsys)
+
+
+@pytest.mark.parametrize("extra", [0, 1], ids=["at_the_limit", "one_past_it"])
+def test_xml_depth_guard_boundary(extra: int) -> None:
+    depth = ods_read.MAX_XML_DEPTH + extra
+    xml_bytes = b"<a>" * depth + b"</a>" * depth
+
+    if extra:
+        with pytest.raises(SchemaError, match="nests elements more than 256 levels deep"):
+            ods_read._check_well_formed(Path("db.ods"), "content.xml", xml_bytes)
+    else:
+        ods_read._check_well_formed(Path("db.ods"), "content.xml", xml_bytes)
+
+
+def test_read_raw_refuses_xml_nested_past_the_interpreter_stack(
+    db_with_private_key: tuple[bytes, bytes], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Deep enough that odfpy's recursive tree walk would raise RecursionError.
+    data, secret = db_with_private_key
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        content = archive.read("content.xml")
+    nest = b"<text:span>" * 5000 + b"</text:span>" * 5000
+    deep = rezip_ods(
+        data,
+        {"content.xml": content.replace(b"</table:table>", nest + b"</table:table>", 1)},
+    )
+
+    _assert_refused_quietly(deep, secret, "content.xml nests elements more than", capsys)
 
 
 def test_read_raw_refuses_a_text_document(

@@ -385,6 +385,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A database file whose XML nests elements absurdly deep (more than 256
+  levels; LibreOffice writes about a dozen) is refused as unreadable (exit 4)
+  instead of crashing `mesh db verify`, `mesh db restore` and every other
+  command that loads it with a `RecursionError` traceback.
 - A database cell holding an absurdly long integer (`gps_alt`) is reported
   as a validation error (exit 4) instead of crashing every command that
   loads the database, including `mesh db verify` and `mesh db restore`, with
