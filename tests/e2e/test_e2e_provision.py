@@ -298,6 +298,20 @@ def test_factory_provisioning_preserves_an_already_licensed_owner(
     assert iface.user["isLicensed"] is True
 
 
+def test_provision_switches_off_a_module_the_template_disables(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    """The shipped template lists mqtt in disabled_options; a device with it on gets it off."""
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.moduleConfig.mqtt.enabled = True
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert iface.localNode.moduleConfig.mqtt.enabled is False
+    assert "mqtt" in iface.localNode.written_sections
+
+
 def test_no_reconnect_skips_the_reconnect_verify_connection(
     runner: CliRunner,
     env: dict[str, str],

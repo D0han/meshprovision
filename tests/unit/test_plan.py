@@ -465,6 +465,47 @@ def test_option_without_an_on_off_switch_is_skipped_silently(make_live, template
     assert not any(w.section == "telemetry" for w in plan.warnings)
 
 
+@pytest.mark.parametrize(
+    ("option_list", "live_enabled", "desired"),
+    [("enabled_options", False, True), ("disabled_options", True, False)],
+    ids=["enable", "disable"],
+)
+def test_module_option_that_differs_from_the_device_is_planned(
+    make_live, template, option_list: str, live_enabled: bool, desired: bool
+) -> None:
+    opinionated = template.model_copy(update={option_list: ("mqtt",)})
+    live = make_live(
+        opinionated,
+        security=make_security(empty=True),
+        module_enabled_overrides={"mqtt": live_enabled},
+    )
+
+    plan = build_plan(
+        PlanInputs(live=live, template=opinionated, db_entry=None, state=detect.NodeState.FACTORY)
+    )
+
+    mqtt = plan.section("mqtt")
+    assert mqtt is not None
+    assert mqtt.kind is detect.SectionKind.MODULE_CONFIG
+    assert [(c.field, c.current, c.desired) for c in mqtt.changes] == [
+        ("enabled", live_enabled, desired)
+    ]
+
+
+def test_module_option_already_matching_the_device_is_not_planned(make_live, template) -> None:
+    opinionated = template.model_copy(update={"enabled_options": ("mqtt",)})
+    live = make_live(
+        opinionated, security=make_security(empty=True), module_enabled_overrides={"mqtt": True}
+    )
+
+    plan = build_plan(
+        PlanInputs(live=live, template=opinionated, db_entry=None, state=detect.NodeState.FACTORY)
+    )
+
+    assert plan.section("mqtt") is None
+    assert not any(w.section == "mqtt" for w in plan.warnings)
+
+
 def test_telemetry_new_fields_are_diffed(make_live, template) -> None:
     template2 = template.model_copy(
         update={
