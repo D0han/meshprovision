@@ -16,6 +16,7 @@ import pytest
 
 from meshprovision.db import fs_primitives, known_good
 from meshprovision.db.backups import BackupInfo, create_backup, list_backups
+from meshprovision.errors import AtomicWriteError
 from tests.unit.conftest import FsyncEvent
 
 pytestmark = pytest.mark.unit
@@ -708,6 +709,19 @@ def test_known_good_status_falls_back_when_the_target_cannot_be_resolved(
 
     assert status is not None
     assert status.provenance is known_good.KnownGoodProvenance.VERIFIED
+
+
+def test_known_good_remediation_is_none_when_the_copy_cannot_be_inspected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A hint builder on an error path must never raise over the original error."""
+
+    def _boom(path: Path) -> object:
+        raise AtomicWriteError("symlink loop", path=str(path))
+
+    monkeypatch.setattr(known_good, "known_good_status", _boom)
+
+    assert known_good.known_good_remediation(tmp_path / "nodes_db.ods") is None
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="no directory fsync on Windows")

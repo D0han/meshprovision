@@ -842,8 +842,8 @@ def test_load_failure_hint_for_an_unverified_known_good_points_at_its_path(
     env_a = _fleet_env(tmp_path, "fleetA")
     assert invoke(runner, ["init", "--yes"], env_a).exit_code == 0
     fleet_a_path = Path(env_a["MESHPROVISION_DB_PATH"])
-    sidecar = backups.backup_dir_for(fleet_a_path) / "nodes_db.known-good.json"
-    sidecar.unlink()  # simulate a copy left by an older meshprovision
+    known_good_dir = backups.backup_dir_for(fleet_a_path)
+    (known_good_dir / "nodes_db.known-good.json").unlink()  # a copy left by an older version
 
     fleet_a_path.write_bytes(b"not a zip file at all")
 
@@ -851,6 +851,9 @@ def test_load_failure_hint_for_an_unverified_known_good_points_at_its_path(
 
     assert result.exit_code == 4
     assert "could not be confirmed" in result.stderr
+    assert str(known_good_dir / "nodes_db.known-good.ods") in result.stderr
+    assert "no provenance record" in result.stderr
+    assert "Inspect it before restoring it by path." in result.stderr
     assert "mesh db restore --known-good" not in result.stderr
 
 
