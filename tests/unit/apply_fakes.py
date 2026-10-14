@@ -14,7 +14,7 @@ from meshtastic.protobuf import channel_pb2, localonly_pb2
 
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.nodeid import NodeId
-from tests.conftest import real_write_config_or_exit
+from tests.conftest import real_set_owner_or_exit, real_write_config_or_exit
 
 
 def default_primary_channel() -> channel_pb2.Channel:
@@ -83,10 +83,12 @@ class FakeLocalNode:
         is_licensed: bool = False,
         is_unmessagable: bool | None = None,
     ) -> None:
+        """Store the owner fields the real library would send, normalized as it does them."""
+        owner = real_set_owner_or_exit(long_name, short_name, is_licensed, is_unmessagable)
         if short_name is not None:
-            self._iface.user["shortName"] = short_name
+            self._iface.user["shortName"] = owner.short_name
         if long_name is not None:
-            self._iface.user["longName"] = long_name
+            self._iface.user["longName"] = owner.long_name
             self._iface.user["isLicensed"] = is_licensed
         if is_unmessagable is not None:
             self._iface.user["isUnmessagable"] = is_unmessagable

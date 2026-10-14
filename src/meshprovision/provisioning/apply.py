@@ -50,8 +50,10 @@ or a ``WriteResult``; nothing here ever does a bare ``except Exception``.
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import logging
+import sys
 import time
 from collections.abc import Callable, Iterable, Sequence
 from typing import TYPE_CHECKING, Final
@@ -182,12 +184,15 @@ def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | Non
         return None
 
     try:
-        iface.localNode.setOwner(
-            long_name=plan.name_change.desired_long_name,
-            short_name=plan.name_change.desired_short_name,
-            is_licensed=plan.name_change.desired_is_licensed,
-            is_unmessagable=plan.name_change.desired_is_unmessagable,
-        )
+        # Node.setOwner print()s its own short-name truncation notice (and
+        # our_exit its errors) to stdout, which would corrupt --json output.
+        with contextlib.redirect_stdout(sys.stderr):
+            iface.localNode.setOwner(
+                long_name=plan.name_change.desired_long_name,
+                short_name=plan.name_change.desired_short_name,
+                is_licensed=plan.name_change.desired_is_licensed,
+                is_unmessagable=plan.name_change.desired_is_unmessagable,
+            )
     except (*DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
         return WriteResult("owner", WriteStatus.FAILED, f"Failed to set owner: {exc}")
     return None

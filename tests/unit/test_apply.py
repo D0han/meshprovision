@@ -76,6 +76,24 @@ def test_fake_local_node_write_config_rejects_what_the_real_library_rejects() ->
     assert iface.localNode.transaction_calls == []
 
 
+def test_fake_local_node_set_owner_normalizes_names_like_the_real_library(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    iface = FakeIfaceForApply()
+
+    iface.localNode.setOwner(long_name="  Fleet one  ", short_name=" ABCDE ")
+
+    assert (iface.user["longName"], iface.user["shortName"]) == ("Fleet one", "ABCD")
+    assert "truncated to ABCD" in capsys.readouterr().out
+
+
+def test_fake_local_node_set_owner_refuses_a_blank_name_like_the_real_library() -> None:
+    iface = FakeIfaceForApply()
+
+    with pytest.raises(SystemExit):
+        iface.localNode.setOwner(short_name="   ")
+
+
 # ---------------------------------------------------------------------------
 # _confirmed_name (verify_plan itself is tested in test_readback.py).
 # ---------------------------------------------------------------------------
@@ -333,6 +351,29 @@ def test_apply_plan_owner_write_failure_reports_failed_not_a_crash(make_live) ->
     owner_result = next(r for r in outcome.results if r.section == "owner")
     assert owner_result.status == WriteStatus.FAILED
     assert "Failed to set owner" in owner_result.message
+
+
+def test_owner_write_keeps_the_librarys_truncation_notice_off_stdout(
+    make_live, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``Node.setOwner`` print()s its short-name cut, which would corrupt ``--json`` stdout."""
+    template = minimal_template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.FACTORY,
+        desired_short_name="ABCDE",
+    )
+    plan = build_plan(inputs)
+    session = InPlaceSession(FakeIfaceForApply())  # type: ignore[arg-type]
+
+    apply_plan(plan, session, keypair=generate_keypair())
+
+    captured = capsys.readouterr()
+    assert "truncated to ABCD" not in captured.out
+    assert "truncated to ABCD" in captured.err
 
 
 def test_apply_plan_preserves_is_licensed_when_only_short_name_changes(make_live) -> None:

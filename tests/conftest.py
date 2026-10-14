@@ -57,15 +57,19 @@ import re  # noqa: E402
 import zipfile  # noqa: E402
 from collections.abc import Callable, Iterator, Mapping  # noqa: E402
 from pathlib import Path  # noqa: E402
-from typing import Any, Final  # noqa: E402
+from typing import TYPE_CHECKING, Any, Final  # noqa: E402
 
 import pytest  # noqa: E402
 import structlog  # noqa: E402
 import yaml  # noqa: E402
+from meshtastic.protobuf import admin_pb2, mesh_pb2  # noqa: E402
 
 from meshprovision.cli.logging_setup import _LIBRARY_STAGES  # noqa: E402
 from meshprovision.crypto.keys import KeyPair, generate_keypair  # noqa: E402
 from meshprovision.db import ods_write  # noqa: E402
+
+if TYPE_CHECKING:
+    from meshtastic.node import Node
 
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
 """Absolute path to the repository root (the parent of ``tests/``)."""
@@ -393,6 +397,27 @@ def device_io_error(request: pytest.FixtureRequest) -> Callable[[], BaseExceptio
     return factories[exc_id]
 
 
+def _offline_admin_node() -> tuple[Node, list[admin_pb2.AdminMessage]]:
+    """Build a real pinned-library ``Node`` with no device behind it.
+
+    ``_sendAdmin`` is replaced by a recorder, so an admin message is built
+    but never sent.
+
+    Returns:
+        The node, and the list every admin message it "sends" lands in.
+    """
+    from types import SimpleNamespace
+
+    from meshtastic.node import Node
+
+    iface = SimpleNamespace(localNode=None)
+    node = Node(iface, 1, noProto=True)
+    iface.localNode = node
+    sent: list[admin_pb2.AdminMessage] = []
+    node._sendAdmin = lambda message, **_kw: sent.append(message)  # type: ignore[method-assign]
+    return node, sent
+
+
 def real_write_config_or_exit(section: str) -> None:
     """Run the pinned meshtastic library's own ``Node.writeConfig(section)``, sending nothing.
 
@@ -405,8 +430,7 @@ def real_write_config_or_exit(section: str) -> None:
     :data:`~meshprovision.provisioning.detect.CONFIG_SECTIONS`/
     :data:`~meshprovision.provisioning.detect.MODULE_SECTIONS`, the lists
     ``tests/unit/test_writable_sections_contract.py`` pins. The node has no
-    device behind it: ``_sendAdmin`` is replaced by a recorder, so the
-    admin message is built but never sent.
+    device behind it (see :func:`_offline_admin_node`).
 
     Args:
         section: The config or module-config section name being written.
@@ -414,14 +438,46 @@ def real_write_config_or_exit(section: str) -> None:
     Raises:
         SystemExit: Exactly when the real library exits for ``section``.
     """
-    from types import SimpleNamespace
-
-    from meshtastic.node import Node
-
-    iface = SimpleNamespace(localNode=None)
-    node = Node(iface, 1, noProto=True)
-    iface.localNode = node
-    sent: list[object] = []
-    node._sendAdmin = lambda message, **_kw: sent.append(message)  # type: ignore[method-assign]
+    node, sent = _offline_admin_node()
     node.writeConfig(section)
     assert len(sent) == 1, f"Node.writeConfig({section!r}) sent {len(sent)} admin messages"
+
+
+def real_set_owner_or_exit(
+    long_name: str | None,
+    short_name: str | None,
+    is_licensed: bool,
+    is_unmessagable: bool | None,
+) -> mesh_pb2.User:
+    """Run the pinned meshtastic library's own ``Node.setOwner``, sending nothing.
+
+    The real method normalizes the names before sending them: it strips
+    both, calls ``meshtastic.util.our_exit`` (prints to stdout, then
+    raises ``SystemExit(1)``) on a blank one, and cuts ``short_name`` to 4
+    characters with a ``print()`` to stdout. Every fake ``setOwner``
+    calls this first, so a fake stores, prints and rejects exactly what
+    the real library does. The node has no device behind it (see
+    :func:`_offline_admin_node`).
+
+    Args:
+        long_name: The new long name, or ``None``.
+        short_name: The new short name, or ``None``.
+        is_licensed: The owner's licensed status.
+        is_unmessagable: The owner's unmessagable flag, or ``None``.
+
+    Returns:
+        The ``set_owner`` user the real library would have sent.
+
+    Raises:
+        SystemExit: Exactly when the real library exits for these names.
+    """
+    node, sent = _offline_admin_node()
+    node.ensureSessionKey = lambda: None  # type: ignore[method-assign]  # no device to ask
+    node.setOwner(
+        long_name=long_name,
+        short_name=short_name,
+        is_licensed=is_licensed,
+        is_unmessagable=is_unmessagable,
+    )
+    assert len(sent) == 1, f"Node.setOwner sent {len(sent)} admin messages"
+    return sent[0].set_owner

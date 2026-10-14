@@ -381,6 +381,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision --json` printed the meshtastic library's own "Maximum is 4
+  characters, truncated to ..." notice to stdout after the JSON document
+  when a node's `short_name` in the database is longer than 4 characters
+  (e.g. hand-edited), so stdout no longer parsed as JSON. That notice (and
+  any error the library prints while setting the owner) now goes to stderr.
 - An unused admin-key slot read back as an empty entry counted as an admin
   key: a factory-named device reporting one was classified as foreign instead
   of factory, and `mesh adopt` counted it in "N admin key(s) will be filed

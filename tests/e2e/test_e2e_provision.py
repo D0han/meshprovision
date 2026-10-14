@@ -1524,6 +1524,33 @@ def test_json_plan_is_fully_redacted(
     _scan_for_secrets(document)
 
 
+def test_provision_json_stdout_stays_one_document_when_the_library_truncates_a_short_name(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair_factory: Callable[[], KeyPair],
+) -> None:
+    """A hand-edited 5-character short_name makes ``Node.setOwner`` print to stdout."""
+    kp = keypair_factory()
+    seed_db(
+        nodes=[
+            NodeRecord(node_id="deadbe01", short_name="ABCDE", management=ManagementMode.TEMPLATE)
+        ],
+        keys=[*KeyRecord.for_keypair("deadbe01", kp, origin=KeyOrigin.CAPTURED)],
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    iface.localNode.localConfig.security.public_key = kp.public
+    iface.localNode.localConfig.security.private_key = kp.private.reveal()
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    assert result.exit_code == 0, result.stderr
+    json.loads(result.stdout)
+    assert "truncated to ABCD" in result.stderr
+    assert iface.user["shortName"] == "ABCD"
+
+
 # ---------------------------------------------------------------------------
 # Round 37 aspect 1 finding #1: CVE-2025-52464 firmware-window convergence.
 # ---------------------------------------------------------------------------

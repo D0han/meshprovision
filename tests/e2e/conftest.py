@@ -51,7 +51,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import ConnectionFailedError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import connection, discovery
-from tests.conftest import real_write_config_or_exit
+from tests.conftest import real_set_owner_or_exit, real_write_config_or_exit
 
 if TYPE_CHECKING:
     from meshtastic.mesh_interface import MeshInterface
@@ -243,7 +243,11 @@ class FakeNode:
     ) -> None:
         """Record a name change onto the owning interface's ``user`` dict.
 
-        Mirrors the real ``Node.setOwner``'s own conditionals exactly:
+        The names are first normalized by the real library (see
+        :func:`~tests.conftest.real_set_owner_or_exit`): stripped, a
+        ``short_name`` over 4 characters cut with a notice print()ed to
+        stdout, a blank name refused with ``SystemExit``. Mirrors the real
+        ``Node.setOwner``'s own conditionals exactly:
         ``is_licensed`` is only recorded when ``long_name`` is set (the
         real admin message only ever carries it alongside a long_name
         write), and ``is_unmessagable`` is only recorded when it is not
@@ -261,13 +265,17 @@ class FakeNode:
 
         A no-op on ``user`` when the interface was built with
         ``owner_write_echoed=False`` (see :class:`FakeMeshInterface`).
+
+        Raises:
+            SystemExit: When the real library refuses a blank name.
         """
+        owner = real_set_owner_or_exit(long_name, short_name, is_licensed, is_unmessagable)
         if not self._iface.owner_write_echoed:
             return
         if short_name is not None:
-            self._iface.user["shortName"] = short_name
+            self._iface.user["shortName"] = owner.short_name
         if long_name is not None:
-            self._iface.user["longName"] = long_name
+            self._iface.user["longName"] = owner.long_name
             self._iface.user["isLicensed"] = is_licensed
         if is_unmessagable is not None:
             self._iface.user["isUnmessagable"] = is_unmessagable
