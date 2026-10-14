@@ -26,7 +26,9 @@ installed.
 
 :data:`MODULE_SECTIONS` (the module-config section names) and
 :data:`MODULES_WITHOUT_ENABLED` live here as the one leaf both the planner and
-the template validator read.
+the template validator read; so does :func:`section_field_bounds`, the
+protobuf-derived range of every numeric template field, read lazily like the
+enum tables.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ from __future__ import annotations
 import importlib
 import logging
 import re
+import sys
 import types
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -57,6 +60,7 @@ __all__ = [
     "rebroadcast_mode_table",
     "region_table",
     "role_table",
+    "section_field_bounds",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -119,6 +123,51 @@ _PACKET_SIGNATURE_POLICY_PATHS: Final[tuple[tuple[str, tuple[str, ...]], ...]] =
     ("meshtastic.protobuf.config_pb2", ("Config", "SecurityConfig", "PacketSignaturePolicy")),
     ("meshtastic.config_pb2", ("Config", "SecurityConfig", "PacketSignaturePolicy")),
 )
+
+_SECTION_MESSAGE_PATHS: Final[Mapping[str, tuple[tuple[str, tuple[str, ...]], ...]]] = (
+    types.MappingProxyType(
+        {
+            "device": (
+                ("meshtastic.protobuf.config_pb2", ("Config", "DeviceConfig")),
+                ("meshtastic.config_pb2", ("Config", "DeviceConfig")),
+            ),
+            "lora": (
+                ("meshtastic.protobuf.config_pb2", ("Config", "LoRaConfig")),
+                ("meshtastic.config_pb2", ("Config", "LoRaConfig")),
+            ),
+            "position": (
+                ("meshtastic.protobuf.config_pb2", ("Config", "PositionConfig")),
+                ("meshtastic.config_pb2", ("Config", "PositionConfig")),
+            ),
+            "power": (
+                ("meshtastic.protobuf.config_pb2", ("Config", "PowerConfig")),
+                ("meshtastic.config_pb2", ("Config", "PowerConfig")),
+            ),
+            "security": (
+                ("meshtastic.protobuf.config_pb2", ("Config", "SecurityConfig")),
+                ("meshtastic.config_pb2", ("Config", "SecurityConfig")),
+            ),
+            "telemetry": (
+                ("meshtastic.protobuf.module_config_pb2", ("ModuleConfig", "TelemetryConfig")),
+                ("meshtastic.module_config_pb2", ("ModuleConfig", "TelemetryConfig")),
+            ),
+            "neighbor_info": (
+                ("meshtastic.protobuf.module_config_pb2", ("ModuleConfig", "NeighborInfoConfig")),
+                ("meshtastic.module_config_pb2", ("ModuleConfig", "NeighborInfoConfig")),
+            ),
+            "default_channel": (
+                ("meshtastic.protobuf.channel_pb2", ("ModuleSettings",)),
+                ("meshtastic.channel_pb2", ("ModuleSettings",)),
+            ),
+        }
+    )
+)
+"""Candidate paths of the protobuf message each template section's fields are
+written into (see ``provisioning/device_write.py``), newest layout first; the
+field names match one-to-one."""
+
+_FLOAT32_MAX: Final[float] = 3.4028234663852886e38
+"""The largest finite float32: a protobuf ``float`` field silently stores inf above it."""
 
 # ---------------------------------------------------------------------------
 # Curated fallback tables, used only when the protobufs cannot be loaded.
@@ -646,6 +695,83 @@ def packet_signature_policy_table() -> EnumTable:
         _PACKET_SIGNATURE_POLICY_PATHS,
         _FALLBACK_PACKET_SIGNATURE_POLICY,
     )
+
+
+@cache
+def section_field_bounds(section: str) -> Mapping[str, tuple[int | float, int | float]]:
+    """Return the inclusive range of every numeric field of a template section's message.
+
+    Read off the installed protobufs' field types, lazily and cached like
+    the enum tables. Integer bounds stay ``int`` so a huge value compares
+    exactly; ``float`` fields are bounded by the largest finite float32.
+
+    Args:
+        section: A template section name (``"device"``, ``"telemetry"``,
+            ``"default_channel"``, ...).
+
+    Returns:
+        ``{field_name: (minimum, maximum)}``; empty, with a warning logged,
+        when the protobufs are unavailable -- the firmware then remains
+        the only range check, as it was before this one existed.
+
+    Raises:
+        KeyError: If ``section`` is not a template section name.
+    """
+    fields = _load_protobuf_fields(_SECTION_MESSAGE_PATHS[section])
+    if fields is None:
+        _logger.warning(
+            "meshtastic protobufs unavailable; %s field ranges are not checked", section
+        )
+        return types.MappingProxyType({})
+
+    # Importable whenever the meshtastic protobufs just were.
+    from google.protobuf.descriptor import FieldDescriptor
+
+    int32 = (-(2**31), 2**31 - 1)
+    uint32 = (0, 2**32 - 1)
+    int64 = (-(2**63), 2**63 - 1)
+    uint64 = (0, 2**64 - 1)
+    by_type: dict[int, tuple[int | float, int | float]] = {
+        FieldDescriptor.TYPE_INT32: int32,
+        FieldDescriptor.TYPE_SINT32: int32,
+        FieldDescriptor.TYPE_SFIXED32: int32,
+        FieldDescriptor.TYPE_UINT32: uint32,
+        FieldDescriptor.TYPE_FIXED32: uint32,
+        FieldDescriptor.TYPE_INT64: int64,
+        FieldDescriptor.TYPE_SINT64: int64,
+        FieldDescriptor.TYPE_SFIXED64: int64,
+        FieldDescriptor.TYPE_UINT64: uint64,
+        FieldDescriptor.TYPE_FIXED64: uint64,
+        FieldDescriptor.TYPE_FLOAT: (-_FLOAT32_MAX, _FLOAT32_MAX),
+        FieldDescriptor.TYPE_DOUBLE: (-sys.float_info.max, sys.float_info.max),
+    }
+    return types.MappingProxyType(
+        {name: by_type[field_type] for name, field_type in fields if field_type in by_type}
+    )
+
+
+def _load_protobuf_fields(
+    paths: tuple[tuple[str, tuple[str, ...]], ...],
+) -> list[tuple[str, int]] | None:
+    """Try each candidate protobuf message path in order.
+
+    Args:
+        paths: Candidate ``(module_path, attribute_chain)`` pairs, newest
+            layout first.
+
+    Returns:
+        The first resolvable message's ``(field name, field type)`` pairs,
+        or ``None`` if every candidate failed.
+    """
+    for module_path, attr_chain in paths:
+        try:
+            obj: object = importlib.import_module(module_path)
+            for attr in attr_chain:
+                obj = getattr(obj, attr)
+            return [(field.name, field.type) for field in obj.DESCRIPTOR.fields]  # type: ignore[attr-defined]
+        except (ImportError, AttributeError, TypeError):
+            continue
+    return None
 
 
 def enum_tables() -> Mapping[str, EnumTable]:

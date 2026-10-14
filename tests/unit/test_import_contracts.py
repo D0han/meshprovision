@@ -141,7 +141,7 @@ STDLIB_PLUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
 only the standard library plus those modules."""
 
 NO_IMPORT_TIME_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
-    ("enums.py", ("meshtastic",)),
+    ("enums.py", ("google.protobuf", "meshtastic")),
 )
 """``(module, prefixes)`` that may be imported lazily, inside a function, but never
 while the module itself is being imported."""

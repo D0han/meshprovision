@@ -25,6 +25,37 @@ def test_load_protobuf_items_returns_none_when_every_candidate_path_fails() -> N
     assert enums._load_protobuf_items(bogus_paths) is None
 
 
+def test_load_protobuf_fields_tries_the_next_candidate_path() -> None:
+    paths = (
+        ("meshprovision._no_such_module_at_all", ("Nope",)),
+        ("meshtastic.protobuf.config_pb2", ("Config", "DeviceConfig")),
+    )
+    fields = enums._load_protobuf_fields(paths)
+
+    assert fields is not None
+    assert "node_info_broadcast_secs" in dict(fields)
+
+
+def test_load_protobuf_fields_returns_none_when_every_candidate_path_fails() -> None:
+    bogus_paths = (
+        ("meshprovision._no_such_module_at_all", ("Nope",)),
+        ("meshprovision.enums", ("_no_such_attribute_at_all",)),
+    )
+    assert enums._load_protobuf_fields(bogus_paths) is None
+
+
+def test_section_field_bounds_are_empty_without_the_protobufs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """No bounds to check against: the template loads as before, with a warning."""
+    monkeypatch.setattr(enums, "_load_protobuf_fields", lambda _paths: None)
+    with caplog.at_level("WARNING", logger="meshprovision.enums"):
+        bounds = enums.section_field_bounds.__wrapped__("device")
+
+    assert dict(bounds) == {}
+    assert "device field ranges are not checked" in caplog.text
+
+
 def test_build_table_falls_back_when_every_protobuf_path_fails() -> None:
     bogus_paths = (("meshprovision._no_such_module_at_all", ("Nope",)),)
     table = enums._build_table("test_enum", bogus_paths, {"ALPHA": 1, "BETA": 2})

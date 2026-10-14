@@ -381,6 +381,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A template number outside its firmware field's range (an interval above
+  4294967295, a float that is not finite or overflows a 32-bit float) is now
+  rejected when the template loads, including by `mesh template validate`,
+  instead of failing partway through `mesh provision` after the device had
+  already been renamed and earlier sections (possibly a new BLE PIN)
+  written.
 - `mesh status` no longer reports a node heard while the data was being
   fetched as last seen "in the future".
 - `mesh status` shows `powered` instead of `101%` for a node on external

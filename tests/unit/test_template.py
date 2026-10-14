@@ -310,6 +310,54 @@ def test_default_channel_section_round_trip() -> None:
     assert dumped == {"position_precision": 12, "is_muted": True}
 
 
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("device", "node_info_broadcast_secs", 2**32),
+        ("telemetry", "device_update_interval", 2**32),
+        ("default_channel", "position_precision", 2**32),
+        ("power", "sds_secs", 2**32),
+        ("position", "position_flags", 10**400),
+        ("lora", "frequency_offset", 1e40),
+        ("lora", "frequency_offset", -1e40),
+        ("lora", "frequency_offset", float("nan")),
+        ("power", "adc_multiplier_override", float("inf")),
+    ],
+    ids=[
+        "uint32-over",
+        "module-uint32-over",
+        "channel-uint32-over",
+        "power-uint32-over",
+        "beyond-float",
+        "float32-over",
+        "float32-under",
+        "nan",
+        "inf",
+    ],
+)
+def test_numeric_field_outside_its_protobuf_range_is_rejected(
+    section: str, field: str, value: float
+) -> None:
+    """Refused at load, not mid-``mesh provision`` after the rename and earlier sections."""
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig(**{section: {field: value}})
+    assert exc_info.value.field == f"{section}.{field}"
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("device", "node_info_broadcast_secs", 2**32 - 1),
+        ("lora", "frequency_offset", -3.4028234663852886e38),
+    ],
+)
+def test_numeric_field_at_its_protobuf_limit_is_accepted(
+    section: str, field: str, value: float
+) -> None:
+    template = TemplateConfig(**{section: {field: value}})
+    assert getattr(getattr(template, section), field) == value
+
+
 def test_is_unmessagable_round_trip() -> None:
     template = TemplateConfig(is_unmessagable=True)
     assert template.is_unmessagable is True

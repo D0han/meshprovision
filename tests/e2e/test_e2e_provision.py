@@ -591,6 +591,29 @@ def test_enroll_graduates_an_observed_node_to_template_management(
     assert persisted.management is ManagementMode.TEMPLATE
 
 
+def test_out_of_range_template_field_writes_nothing(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    db_path: Path,
+) -> None:
+    """Refused at template load: no rename, no earlier section, no BLE PIN left unrecorded."""
+    template_path = write_template(telemetry={"device_update_interval": 5_000_000_000})
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(template_path)
+    iface = bus.use(FakeMeshInterface("deadbe01"))
+    names_before = (iface.user["shortName"], iface.user["longName"])
+    before = db_fingerprint(db_path)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 2
+    assert "telemetry.device_update_interval" in result.stderr
+    assert iface.localNode.written_sections == []
+    assert (iface.user["shortName"], iface.user["longName"]) == names_before
+    assert db_fingerprint(db_path) == before
+
+
 def test_provision_refuses_an_archived_node(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
 ) -> None:

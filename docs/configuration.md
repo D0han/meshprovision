@@ -69,6 +69,11 @@ init`'s source for `config/template.yaml`) starts with:
 version: 1
 ```
 
+Numeric fields are checked against the firmware's own field range when
+the template loads (for example 0-4294967295 for the `*_secs`/`*_interval`
+settings); an out-of-range value is a template error, never a
+half-applied `mesh provision`.
+
 Followed by module options:
 
 ```yaml

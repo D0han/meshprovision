@@ -60,7 +60,7 @@ from meshprovision.db.observed_keys import (
     RefProblem,
     owner_ref_problem,
 )
-from meshprovision.enums import MODULE_SECTIONS, MODULES_WITHOUT_ENABLED
+from meshprovision.enums import MODULE_SECTIONS, MODULES_WITHOUT_ENABLED, section_field_bounds
 from meshprovision.errors import (
     MAX_ADMIN_KEYS,
     AdminKeyCapacityError,
@@ -284,7 +284,8 @@ class TemplateConfig(BaseModel):
     def _check_consistency(self) -> TemplateConfig:
         """Cross-field validation, run once after all fields validate.
 
-        Checks, in order, raising on the first failure: no option in
+        Checks, in order, raising on the first failure: every numeric
+        section field within its firmware field's range; no option in
         both enabled/disabled lists; ``neighbor_info`` not in either
         list (use ``neighbor_info.enabled`` instead); both name patterns
         fit their firmware byte limits; the name capacity floor, against
@@ -311,11 +312,41 @@ class TemplateConfig(BaseModel):
                 :data:`~meshprovision.errors.MAX_ADMIN_KEYS` admin node
                 references are configured.
         """
+        self._check_firmware_field_ranges()
         self._check_option_lists()
         self._check_name_patterns()
         self._check_admin_nodes()
         self._check_security_interlocks()
         return self
+
+    def _check_firmware_field_ranges(self) -> None:
+        """Check every numeric section field against its protobuf field's range.
+
+        A value outside it (a uint32 above 4294967295, a float that is
+        not a finite float32) would otherwise only be refused -- or, for
+        a float, silently stored as inf -- while ``mesh provision`` is
+        already writing to the device, after the rename and every earlier
+        section.
+
+        Raises:
+            TemplateValidationError: Naming the first out-of-range field.
+        """
+        for section_name, value in self:
+            if not isinstance(value, BaseModel):
+                continue
+            bounds = section_field_bounds(section_name)
+            for field_name, field_value in value.model_dump(exclude_none=True).items():
+                limits = bounds.get(field_name)
+                if limits is None or isinstance(field_value, bool):
+                    continue
+                low, high = limits
+                # Also false for NaN, which compares unequal to everything.
+                if not low <= field_value <= high:
+                    raise TemplateValidationError(
+                        f"{section_name}.{field_name} = {field_value!r} is outside the "
+                        f"firmware field's range [{low}, {high}].",
+                        field=f"{section_name}.{field_name}",
+                    )
 
     def _check_option_lists(self) -> None:
         """Check the ``enabled_options``/``disabled_options`` lists.
