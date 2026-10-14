@@ -32,7 +32,9 @@ Only 2xx responses are ever written. A 12.7 MB body (the loranet.pl node
 dump) base64s to roughly 17 MB on disk and is held fully in memory during
 read/write; this is a deliberate simplicity trade-off for a low-volume,
 single-operator tool and should not be "optimised" into a streaming
-format without a concrete reason.
+format without a concrete reason. What is bounded is the body itself: it
+is read under :data:`MAX_RESPONSE_BYTES` (counted after decompression), so
+a hostile server cannot turn that trade-off into gigabytes.
 
 **Contract for the datasources layer** (``datasources/loranet.py``,
 ``datasources/lorastats.py``, written in a later layer): call
@@ -87,6 +89,7 @@ __all__ = [
     "DEFAULT_MAX_RETRIES",
     "DEFAULT_TIMEOUT_SECONDS",
     "DEFAULT_TTL_SECONDS",
+    "MAX_RESPONSE_BYTES",
     "PERSISTED_HEADERS",
     "RETRY_STATUS_MIN",
     "CacheStats",
@@ -102,6 +105,13 @@ CACHE_ENTRY_VERSION: Final[int] = 1
 
 DEFAULT_TTL_SECONDS: Final[float] = 300.0
 """Default freshness window for a cache entry, in seconds."""
+
+MAX_RESPONSE_BYTES: Final[int] = 64 * 1024 * 1024
+"""Upper bound on a response body, counted after ``Content-Encoding`` decoding.
+
+The largest real body (the loranet.pl node dump) is about 13 MB; the cap
+keeps a hostile or broken server from filling memory and the cache with a
+small compressed response that decodes to gigabytes."""
 
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 15.0
 """Default per-request ``httpx`` timeout, in seconds."""
@@ -173,6 +183,48 @@ class _InsecureRedirectError(httpx.RequestError):
             request=request,
         )
         self.target = target
+
+
+class _ResponseTooLargeError(httpx.RequestError):
+    """A response body exceeded :data:`MAX_RESPONSE_BYTES`.
+
+    A :class:`httpx.RequestError` (not a ``TransportError``), like
+    :class:`_InsecureRedirectError`: deterministic, never retried, wrapped
+    as :class:`HttpError`, and never cached.
+    """
+
+    def __init__(self, *, request: httpx.Request) -> None:
+        """Initialize the error.
+
+        Args:
+            request: The request whose response was too large.
+        """
+        super().__init__(
+            f"the response body is larger than {MAX_RESPONSE_BYTES} bytes",
+            request=request,
+        )
+
+
+def _read_capped(response: httpx.Response) -> bytes:
+    """Read a streamed response's decoded body, stopping past :data:`MAX_RESPONSE_BYTES`.
+
+    Args:
+        response: A response opened with ``stream=True``.
+
+    Returns:
+        The decoded body.
+
+    Raises:
+        _ResponseTooLargeError: If the body exceeds the cap.
+    """
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in response.iter_bytes():
+        size += len(chunk)
+        if size > MAX_RESPONSE_BYTES:
+            raise _ResponseTooLargeError(request=response.request)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _refuse_insecure_redirect(response: httpx.Response) -> None:
@@ -1055,7 +1107,8 @@ class CachedHTTPClient:
         Raises:
             HttpError: On a non-retryable failure (including a
                 ``TooManyRedirects`` redirect loop, a refused HTTPS ->
-                non-HTTPS redirect, or an undecodable response body), or
+                non-HTTPS redirect, an undecodable response body, or one
+                larger than :data:`MAX_RESPONSE_BYTES`), or
                 after exhausting retries on a retryable transport error.
             RateLimitError: If the server responds with HTTP 429 (never
                 retried automatically).
@@ -1071,7 +1124,17 @@ class CachedHTTPClient:
                 # `cache_key`'s normalization); httpx's own parameter type is
                 # narrower, so the value is passed through as `Any` here.
                 httpx_params = cast("Any", params)
-                response = self._client.request(method, url, params=httpx_params, headers=headers)
+                request = self._client.build_request(
+                    method, url, params=httpx_params, headers=headers
+                )
+                # Streamed, so the body is read (and decoded) under the cap
+                # instead of whole; a transport error mid-body is still
+                # retried below, as with a buffered request.
+                response = self._client.send(request, stream=True)
+                try:
+                    content = _read_capped(response)
+                finally:
+                    response.close()
             except (httpx.InvalidURL, httpx.UnsupportedProtocol) as exc:
                 raise HttpError(
                     f"Request to {url} is invalid: {exc}", url=url, source=source
@@ -1125,7 +1188,7 @@ class CachedHTTPClient:
                     for name, value in response.headers.items()
                     if name.lower() in PERSISTED_HEADERS
                 },
-                content=response.content,
+                content=content,
                 url=str(response.url),
                 method=method.strip().upper(),
                 fetched_at=self._clock(),

@@ -1080,6 +1080,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A data-source response whose body is larger than 64 MiB after
+  decompression is refused (that source fails for the run, it is not
+  retried) and never cached, so a small compressed response from a hostile
+  or broken server can no longer fill memory and the HTTP cache. The largest
+  real response, the loranet.pl node dump, is about 13 MB.
 - `mesh adopt --from-backup` refuses a profile YAML that uses aliases
   (`*name`), so a few hundred bytes can no longer expand into gigabytes (a
   "billion laughs") and hang the command. `meshtastic --export-config` never

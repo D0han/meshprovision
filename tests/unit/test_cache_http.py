@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import base64
+import gzip
 import json
 import os
 import ssl
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import httpx
@@ -565,6 +566,60 @@ def test_an_integer_past_the_digit_limit_raises_invalid_response_error(tmp_path:
 
     with pytest.raises(InvalidResponseError):
         client.get(URL).json()
+
+
+def _gzip_response(size: int) -> httpx.Response:
+    return httpx.Response(
+        200,
+        content=gzip.compress(b" " * (size - 2) + b"{}"),
+        headers={"content-type": "application/json", "content-encoding": "gzip"},
+    )
+
+
+@respx.mock
+def test_a_body_decoding_past_the_cap_is_refused_once_and_never_cached(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(http_module, "MAX_RESPONSE_BYTES", 4096)
+    route = respx.get(URL).mock(return_value=_gzip_response(4097))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(HttpError, match="response body is larger than 4096 bytes"):
+        client.get(URL)
+
+    assert route.call_count == 1
+    assert client.stats.writes == 0
+    assert not any(path.is_file() for path in (tmp_path / "cache").rglob("*"))
+
+
+@respx.mock
+def test_a_body_exactly_at_the_cap_is_accepted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(http_module, "MAX_RESPONSE_BYTES", 4096)
+    respx.get(URL).mock(return_value=_gzip_response(4096))
+    client = _make_client(tmp_path, now=[0.0])
+
+    assert client.get(URL).json() == {}
+
+
+class _BrokenBody(httpx.SyncByteStream):
+    """A body that fails mid-read, as a dropped connection would."""
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield b'{"a": '
+        raise httpx.ReadError("connection reset mid-body")
+
+
+@respx.mock
+def test_a_transport_error_while_reading_the_body_is_retried(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(
+        side_effect=[httpx.Response(200, stream=_BrokenBody()), httpx.Response(200, json={"a": 1})]
+    )
+    client = _make_client(tmp_path, now=[0.0])
+
+    assert client.get(URL).json() == {"a": 1}
+    assert route.call_count == 2
 
 
 # ---------------------------------------------------------------------------
