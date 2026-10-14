@@ -200,6 +200,33 @@ def test_flock_failure_unrelated_to_contention_raises_atomic_write_error(
     assert "No locks available" in str(excinfo.value)
 
 
+@_POSIX_ONLY
+def test_contended_lock_polls_until_the_holder_releases_within_the_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Contention inside the timeout is waited out, not refused on the first EWOULDBLOCK."""
+    target = tmp_path / "nodes_db.ods"
+    real_flock = locking.fcntl.flock
+    attempts = 0
+
+    def _busy_twice(fd: int, operation: int) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts <= 2:
+            raise OSError(errno.EWOULDBLOCK, "Resource temporarily unavailable")
+        real_flock(fd, operation)
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(locking.fcntl, "flock", _busy_twice)
+    monkeypatch.setattr(locking.time, "sleep", sleeps.append)
+
+    with locking.exclusive_lock(target, timeout=30.0):
+        pass
+
+    assert attempts == 3
+    assert sleeps == [locking._POLL_INTERVAL, locking._POLL_INTERVAL]
+
+
 def test_lock_is_a_noop_without_fcntl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(locking, "fcntl", None)
     monkeypatch.setattr(locking, "_warned_no_fcntl", False)
