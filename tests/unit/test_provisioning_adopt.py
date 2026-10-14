@@ -603,6 +603,56 @@ def test_adopted_record_reuse_replaces_stale_unregistered_keys(
     assert stale_key not in record.unregistered_admin_key_materials()
 
 
+def _re_adopt_record() -> NodeRecord:
+    return NodeRecord(
+        node_id="deadbe01",
+        short_name="MT00",
+        long_name="Meshtastic MT00",
+        hw_model="TBEAM",
+        firmware_version="2.6.0",
+        role="ROUTER",
+        region="US",
+        ble_pin="123456",
+    )
+
+
+def test_re_adopt_with_no_information_keeps_every_recorded_value(make_live, template) -> None:
+    """A backup-only re-adopt reports these as empty: that is no evidence, so nothing is blanked."""
+    live = make_live(template, hw_model="", firmware_version="")
+    report = build_adoption_report(
+        live, existing=_re_adopt_record(), public_keys={}, template=template, known_bad=frozenset()
+    )
+    report = dataclasses.replace(report, role="", region="")
+    assert report.ble_pin is None
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert (record.hw_model, record.firmware_version, record.role, record.region) == (
+        "TBEAM",
+        "2.6.0",
+        "ROUTER",
+        "US",
+    )
+    assert record.ble_pin is not None
+    assert record.ble_pin.get_secret_value() == "123456"
+
+
+def test_re_adopt_with_new_live_values_updates_them(make_live, template) -> None:
+    live = make_live(template, hw_model="RAK4631", firmware_version="2.7.11")
+    report = build_adoption_report(
+        live, existing=_re_adopt_record(), public_keys={}, template=template, known_bad=frozenset()
+    )
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert (record.hw_model, record.firmware_version, record.role, record.region) == (
+        "RAK4631",
+        "2.7.11",
+        "CLIENT",
+        "EU_868",
+    )
+
+
 def test_adopted_record_reuse_drops_stale_ref_and_preserves_history(
     make_live, template, keypair_factory
 ) -> None:
