@@ -97,6 +97,36 @@ def test_dotenv_via_explicit_env_file_is_honored_absent_any_higher_layer(
     assert logging.getLogger().level == logging.ERROR
 
 
+def test_a_missing_explicit_env_file_is_refused(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    """A mistyped ``--env-file`` must not silently fall back to the default settings.
+
+    ``env`` points ``MESHPROVISION_DB_PATH`` at a real (empty) database,
+    so without the refusal ``db list`` would run against it and exit 0 --
+    the wrong fleet's database, with nothing on stderr.
+    """
+    missing = tmp_path / "missing.env"
+
+    result = invoke(runner, ["--env-file", str(missing), "db", "list", "--json"], env)
+
+    assert result.exit_code == 2
+    assert f"--env-file {missing} is not an existing file" in result.stderr
+    assert '"nodes"' not in result.stdout
+
+
+def test_a_missing_explicit_env_file_still_shows_help(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    """``--help`` stays side-effect free: it is not refused over a missing ``--env-file``."""
+    missing = tmp_path / "missing.env"
+
+    result = invoke(runner, ["--env-file", str(missing), "db", "list", "--help"], env)
+
+    assert result.exit_code == 0
+    assert "Usage:" in result.stdout
+
+
 def test_db_path_and_template_path_flags_beat_conflicting_env_vars(
     runner: CliRunner,
     env: dict[str, str],

@@ -25,7 +25,7 @@ lines); logging, prompts, warnings, and errors all go to STDERR — so
 | `--no-cache` | Bypass cache reads; responses are still written back to the cache |
 | `--force-refresh` | Alias for `--no-cache` |
 | `--non-interactive` / `--interactive` | Turn every prompt into an error |
-| `--env-file` | Explicit `.env` file to read instead of searching upward from the CWD |
+| `--env-file` | Explicit `.env` file to read instead of searching upward from the CWD. Must exist (except for `mesh init`, which creates it); a missing file is an error rather than a silent fall-back to the defaults |
 | `--version` | Print the version and exit |
 | `-h`, `--help` | Show help and exit |
 

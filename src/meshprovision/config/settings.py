@@ -302,7 +302,9 @@ def load_settings(
 
     Args:
         env_file: An explicit ``.env`` file to read. When given, it is
-            used instead of searching.
+            used instead of searching; a path that is not an existing
+            file contributes nothing (the ``mesh`` CLI refuses one up
+            front, except for ``mesh init``).
         environ: The environment mapping to read ``MESHPROVISION_*``
             variables from. Defaults to ``os.environ``.
         overrides: Explicit field overrides, highest precedence. A

@@ -381,6 +381,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `--env-file` naming a file that does not exist is now an error (exit 2)
+  instead of silently running with the default settings and database (a typo
+  could make `mesh provision`/`mesh adopt` write to the wrong fleet's
+  database); `mesh --env-file PATH init` still creates it.
 - `mesh provision --json` printed the meshtastic library's own "Maximum is 4
   characters, truncated to ..." notice to stdout after the JSON document
   when a node's `short_name` in the database is longer than 4 characters

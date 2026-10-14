@@ -36,13 +36,14 @@ from meshprovision.cli.common import (
     resolve_non_interactive,
 )
 from meshprovision.cli.db_cmd import db
-from meshprovision.cli.help_format import MeshGroup
+from meshprovision.cli.help_format import MeshGroup, help_requested
 from meshprovision.cli.init_cmd import init, maybe_offer_setup
 from meshprovision.cli.logging_setup import LOG_LEVELS, configure_logging, resolve_log_level
 from meshprovision.cli.peers import peers
 from meshprovision.cli.provision import provision
 from meshprovision.cli.status import status
 from meshprovision.cli.template_cmd import template
+from meshprovision.errors import SettingsError
 
 __all__ = ["cli"]
 
@@ -110,7 +111,10 @@ themselves are declared lowercase to match."""
     "--env-file",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
-    help="Explicit .env file to read instead of searching upward from the CWD.",
+    help=(
+        "Explicit .env file to read instead of searching upward from the CWD; must exist, "
+        "except for `mesh init`, which creates it."
+    ),
 )
 @click.pass_context
 @handle_cli_errors
@@ -159,8 +163,21 @@ def cli(
         env_file: Explicit ``.env`` file to read, from ``--env-file``.
 
     Raises:
-        SettingsError: If the layered settings fail validation.
+        SettingsError: If ``env_file`` is not an existing file (except
+            for ``mesh init``, which creates it, and a help request), or
+            the layered settings fail validation.
     """
+    if (
+        env_file is not None
+        and not env_file.is_file()
+        and ctx.invoked_subcommand != "init"
+        and not help_requested(ctx)
+    ):
+        raise SettingsError(
+            f"--env-file {env_file} is not an existing file; refusing to fall back to "
+            "the default settings.",
+            hint=f"Check the path, or create it with `mesh --env-file {env_file} init`.",
+        )
     settings = build_settings(
         env_file=env_file,
         db_path=db_path,
