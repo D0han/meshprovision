@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 import yaml
-from meshtastic.protobuf import clientonly_pb2, config_pb2
+from meshtastic import mt_config
+from meshtastic.protobuf import clientonly_pb2, config_pb2, localonly_pb2
 
 from meshprovision.datasources.base import SOURCE_LORANET
 from meshprovision.datasources.models import NodeObservation
@@ -1001,3 +1002,167 @@ def test_load_backup_raises_for_unreadable_format(tmp_path) -> None:
 def test_load_backup_raises_for_missing_file(tmp_path) -> None:
     with pytest.raises(BackupParseError):
         backup.load_backup(tmp_path / "does-not-exist.cfg")
+
+
+# --- hostile backup files ----------------------------------------------------------------------
+
+_DEPTH = 100_000
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"nodes": ' + "[" * _DEPTH + "]" * _DEPTH + "}",
+        '{"myNodeNum": 1, "nodes": [{"num": 1, "user": '
+        + '{"a": ' * _DEPTH
+        + "1"
+        + "}" * _DEPTH
+        + "}]}",
+        "owner: x\nconfig: " + "[" * _DEPTH + "]" * _DEPTH + "\n",
+    ],
+    ids=["nodedb_nodes_array", "nodedb_entry_object", "profile_yaml_section"],
+)
+def test_load_backup_refuses_a_deeply_nested_file(tmp_path, text: str) -> None:
+    path = tmp_path / "deep.json"
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(BackupParseError):
+        backup.load_backup(path)
+
+
+@pytest.mark.parametrize(
+    ("parse", "text"),
+    [
+        (
+            lambda t: backup.parse_nodedb_json(t.encode(), source="b.json"),
+            '{"nodes": ' + "[" * _DEPTH + "]" * _DEPTH + "}",
+        ),
+        (
+            lambda t: backup.parse_profile_yaml(t, source="b.yaml"),
+            "owner: x\nconfig: " + "[" * _DEPTH + "]" * _DEPTH,
+        ),
+    ],
+    ids=["nodedb_json", "profile_yaml"],
+)
+def test_parsers_refuse_a_deeply_nested_document(parse, text: str) -> None:
+    with pytest.raises(BackupParseError, match="nested too deeply"):
+        parse(text)
+
+
+def _alias_bomb(tail: str) -> str:
+    # 9**6 strings: big enough to matter, small enough that a regression
+    # fails in about a second instead of hanging the suite.
+    lines = ['a0: &a0 ["lol", "lol", "lol", "lol", "lol", "lol", "lol", "lol", "lol"]']
+    lines += [f"a{i}: &a{i} [" + ", ".join([f"*a{i - 1}"] * 9) + "]" for i in range(1, 7)]
+    return "\n".join([*lines, tail]) + "\n"
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "owner: *a6",
+        "owner: x\nconfig: {lora: *a6}",
+        "owner: x\nmodule_config: {mqtt: {address: *a6}}",
+    ],
+    ids=["owner", "config_section", "module_config_field"],
+)
+def test_profile_yaml_refuses_aliases_before_expanding_them(tmp_path, tail: str) -> None:
+    path = tmp_path / "profile.yaml"
+    path.write_text(_alias_bomb(tail), encoding="utf-8")
+
+    with pytest.raises(BackupParseError, match="aliases are not allowed in a backup"):
+        backup.load_backup(path)
+
+
+@pytest.mark.parametrize("camel_case", [False, True], ids=["snake_case", "camel_case"])
+def test_a_real_export_config_profile_has_no_aliases_and_parses(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, camel_case: bool
+) -> None:
+    # Pins the assumption behind refusing aliases: the pinned meshtastic's
+    # own `--export-config` code never emits one. Imported here: a
+    # console-script module that only this test needs.
+    from meshtastic import __main__ as meshtastic_main
+
+    monkeypatch.setattr(mt_config, "camel_case", camel_case)
+    local_config = localonly_pb2.LocalConfig()
+    local_config.lora.hop_limit = 5
+    local_config.lora.ignore_incoming.extend([1, 2])
+    local_config.security.public_key = bytes(range(1, 33))
+    local_config.security.admin_key.extend([bytes(range(2, 34)), bytes(range(2, 34))])
+    module_config = localonly_pb2.LocalModuleConfig()
+    module_config.mqtt.enabled = True
+    module_config.mqtt.map_report_settings.publish_interval_secs = 3600
+    local_node = type(
+        "LocalNode",
+        (),
+        {"localConfig": local_config, "moduleConfig": module_config, "getURL": lambda _s: ""},
+    )()
+    interface = type(
+        "Interface",
+        (),
+        {
+            "localNode": local_node,
+            "getLongName": lambda _s: "Base Station 1",
+            "getShortName": lambda _s: "BS1",
+            "getMyNodeInfo": lambda _s: {},
+            "getCannedMessage": lambda _s: None,
+            "getRingtone": lambda _s: None,
+        },
+    )()
+    text = meshtastic_main.export_config(interface)
+    path = tmp_path / "profile.yaml"
+    path.write_text(text, encoding="utf-8")
+
+    events = list(yaml.parse(text))
+    profile = backup.load_backup(path)
+
+    assert not any(isinstance(event, yaml.AliasEvent) for event in events)
+    assert isinstance(profile, backup.ProfileBackup)
+    assert profile.long_name == "Base Station 1"
+    assert profile.public_key == bytes(range(1, 33))
+    assert profile.local_config.lora.hop_limit == 5
+    assert list(profile.local_config.security.admin_key) == [bytes(range(2, 34))] * 2
+
+
+_TOO_MANY_DIGITS = "1" * 5000
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("big.json", '{"myNodeNum": 1, "nodes": [{"num": 1, "x": ' + _TOO_MANY_DIGITS + "}]}"),
+        ("big.yaml", "owner: x\nconfig: {lora: {hop_limit: " + _TOO_MANY_DIGITS + "}}\n"),
+        ("date.yaml", "owner: x\nconfig: {}\nnote: 2026-13-45\n"),
+    ],
+    ids=["json_long_integer", "yaml_long_integer", "yaml_impossible_date"],
+)
+def test_load_backup_refuses_a_value_it_cannot_represent(tmp_path, name: str, text: str) -> None:
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(BackupParseError):
+        backup.load_backup(path)
+
+
+def test_parse_profile_yaml_names_an_unreadable_value_without_quoting_it() -> None:
+    with pytest.raises(BackupParseError, match="a value cannot be read") as exc_info:
+        backup.parse_profile_yaml("owner: x\nnote: 2026-13-45\n", source="p.yaml")
+
+    assert "2026-13-45" not in str(exc_info.value)
+
+
+def test_parse_nodedb_json_refuses_an_integer_with_too_many_digits() -> None:
+    raw = ('{"myNodeNum": 1, "nodes": [{"num": ' + _TOO_MANY_DIGITS + "}]}").encode()
+
+    with pytest.raises(BackupParseError, match="invalid JSON"):
+        backup.parse_nodedb_json(raw, source="n.json")
+
+
+@pytest.mark.parametrize(
+    "section",
+    ["power: {adc_multiplier_override: " + "1" * 400 + "}", "device: {role: .inf}"],
+    ids=["int_too_large_for_a_float_field", "infinity_for_an_enum"],
+)
+def test_parse_profile_yaml_refuses_a_number_its_field_cannot_hold(section: str) -> None:
+    with pytest.raises(BackupParseError, match="invalid 'config' section"):
+        backup.parse_profile_yaml(f"owner: x\nconfig: {{{section}}}\n", source="p.yaml")

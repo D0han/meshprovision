@@ -142,13 +142,15 @@ def sniff_format(raw: bytes) -> BackupFormat | None:
         if stripped.startswith("{"):
             try:
                 doc = json.loads(stripped)
-            except json.JSONDecodeError:
+            except (ValueError, RecursionError):
+                # ValueError: a JSONDecodeError, or an integer with more
+                # digits than Python's int max-str-digits limit allows.
                 doc = None
             if isinstance(doc, dict) and _NODEDB_MARKER_KEYS & doc.keys():
                 return BackupFormat.NODEDB_JSON
         try:
             doc = yaml.safe_load(text)
-        except yaml.YAMLError:
+        except (yaml.YAMLError, ValueError, RecursionError):
             doc = None
         if isinstance(doc, dict) and _PROFILE_YAML_MARKER_KEYS & doc.keys():
             return BackupFormat.PROFILE_YAML
@@ -277,15 +279,49 @@ def _apply_yaml_section(section: object, target: Any, *, source: str, name: str)
 
     Raises:
         BackupParseError: If ``section`` is not a mapping, or its
-            contents do not match the target message's shape.
+            contents do not match the target message's shape (a value of
+            the wrong type, or a number the field cannot hold).
     """
     if not isinstance(section, dict):
         raise BackupParseError(f"{source}: {name!r} must be a mapping.", source=source)
     cleaned = {key: _strip_base64_prefix(item) for key, item in section.items()}
     try:
         json_format.ParseDict(cleaned, target, ignore_unknown_fields=True)
-    except json_format.ParseError as exc:
+    except (json_format.ParseError, OverflowError) as exc:
+        # OverflowError: ParseDict lets one through for an integer too large
+        # for a float field, or an infinite number given for an enum.
         raise BackupParseError(f"{source}: invalid {name!r} section: {exc}", source=source) from exc
+
+
+class _NoAliasSafeLoader(yaml.SafeLoader):
+    """``yaml.SafeLoader`` that refuses aliases (``*name``).
+
+    ``meshtastic --export-config`` never writes one (it dumps freshly
+    built dicts, so ``yaml.dump`` has no shared object to anchor), and a
+    crafted file can nest a few aliases into a structure exponentially
+    larger than itself (a "billion laughs"), which converting it to text
+    or protobuf would walk in full.
+    """
+
+    def compose_node(self, parent: Any, index: Any) -> Any:
+        """Compose one node, refusing an alias.
+
+        Args:
+            parent: The parent node, as PyYAML passes it.
+            index: The node's index or key in ``parent``.
+
+        Returns:
+            The composed node.
+
+        Raises:
+            yaml.composer.ComposerError: If the node is an alias.
+        """
+        if self.check_event(yaml.AliasEvent):
+            mark = self.peek_event().start_mark  # type: ignore[no-untyped-call]
+            raise yaml.composer.ComposerError(
+                None, None, "aliases are not allowed in a backup", mark
+            )
+        return super().compose_node(parent, index)
 
 
 def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
@@ -307,15 +343,27 @@ def parse_profile_yaml(text: str, *, source: str) -> ProfileBackup:
         The parsed :class:`ProfileBackup`.
 
     Raises:
-        BackupParseError: If ``text`` is not valid YAML, its top level is
-            not a mapping, ``owner``/``owner_short`` holds a lone UTF-16
-            surrogate (decoded from a YAML escape), a ``config``/
-            ``module_config`` section does not match the expected
-            protobuf shape, or a ``location`` value is not a number in
-            range.
+        BackupParseError: If ``text`` is not valid YAML (including YAML
+            that uses an alias, nests too deeply, or holds a value PyYAML
+            cannot construct), its top level is not a mapping,
+            ``owner``/``owner_short`` holds a lone UTF-16 surrogate
+            (decoded from a YAML escape), a ``config``/``module_config``
+            section does not match the expected protobuf shape, or a
+            ``location`` value is not a number in range.
     """
     try:
-        doc = yaml.safe_load(text)
+        doc = yaml.load(text, Loader=_NoAliasSafeLoader)  # noqa: S506 -- a SafeLoader subclass
+    except RecursionError:
+        raise BackupParseError(
+            f"{source}: invalid YAML: nested too deeply.", source=source
+        ) from None
+    except ValueError as exc:
+        # A scalar PyYAML resolved but cannot construct: a timestamp such as
+        # 2026-13-45, or an integer with too many digits. The message names
+        # the problem, never the source text.
+        raise BackupParseError(
+            f"{source}: invalid YAML: a value cannot be read ({exc}).", source=source
+        ) from None
     except yaml.YAMLError as exc:
         # str(exc) calls MarkedYAMLError.get_snippet(), which quotes the
         # offending source line -- if that line is `privateKey: base64:...`,
@@ -556,8 +604,9 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
         one-bad-entry tolerance.
 
     Raises:
-        BackupParseError: If ``raw`` is not valid UTF-8 JSON, its top
-            level is not an object with a ``"nodes"`` array, or
+        BackupParseError: If ``raw`` is not valid UTF-8 JSON (including
+            JSON nested too deeply or holding an integer with more digits
+            than Python converts), its top level is not an object with a ``"nodes"`` array, or
             ``myNodeNum`` or any entry's ``num`` is a number that cannot
             be a node number (fractional, ``NaN``/``Infinity``, or outside
             ``0..0xFFFFFFFF``) -- a node's identity is never guessed, so
@@ -569,8 +618,12 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
         raise BackupParseError(f"{source}: not valid UTF-8: {exc}", source=source) from exc
     try:
         doc = json.loads(text)
-    except json.JSONDecodeError as exc:
+    except ValueError as exc:  # a JSONDecodeError, or an integer with too many digits
         raise BackupParseError(f"{source}: invalid JSON: {exc}", source=source) from exc
+    except RecursionError:
+        raise BackupParseError(
+            f"{source}: invalid JSON: nested too deeply.", source=source
+        ) from None
     if not isinstance(doc, dict):
         raise BackupParseError(f"{source}: expected a JSON object at the top level.", source=source)
     nodes = doc.get("nodes")

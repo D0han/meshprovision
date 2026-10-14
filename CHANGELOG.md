@@ -385,6 +385,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh adopt --from-backup` reports a backup file that nests too deeply,
+  holds an integer with thousands of digits or an impossible date, or gives
+  a profile `config`/`module_config` field a number it cannot hold (an
+  integer too large for a float, an infinite enum value) as invalid instead
+  of crashing with a `RecursionError`, `ValueError` or `OverflowError`
+  traceback.
 - A database file whose XML nests elements absurdly deep (more than 256
   levels; LibreOffice writes about a dozen) is refused as unreadable (exit 4)
   instead of crashing `mesh db verify`, `mesh db restore` and every other
@@ -1067,6 +1073,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `mesh adopt --from-backup` refuses a profile YAML that uses aliases
+  (`*name`), so a few hundred bytes can no longer expand into gigabytes (a
+  "billion laughs") and hang the command. `meshtastic --export-config` never
+  writes an alias.
 - A database file that would unpack to more than 64 MiB (a zip bomb: a
   small `.ods` whose parts inflate to gigabytes) is refused as unreadable
   (exit 4) before any part of it is decompressed, for every command that
