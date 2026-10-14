@@ -318,3 +318,35 @@ def test_exclusive_lock_contends_across_a_symlink_and_the_real_path(tmp_path: Pa
     ):
         pass
     assert not (link_dir / "nodes_db.ods.lock").exists()
+
+
+@_POSIX_ONLY
+def test_a_lock_path_planted_as_a_symlink_is_never_followed(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me", encoding="utf-8")
+    locking.lock_path_for(target).symlink_to(victim)
+
+    with (
+        pytest.raises(AtomicWriteError, match="Failed to create the database lock file") as excinfo,
+        locking.exclusive_lock(target, timeout=0),
+    ):
+        pass
+
+    assert victim.read_text(encoding="utf-8") == "keep me"
+    assert excinfo.value.hint is not None
+    assert "must be a regular file" in excinfo.value.hint
+
+
+@_POSIX_ONLY
+def test_a_lock_path_that_is_not_a_regular_file_is_refused(tmp_path: Path) -> None:
+    target = tmp_path / "nodes_db.ods"
+    os.mkfifo(locking.lock_path_for(target))
+
+    with (
+        pytest.raises(AtomicWriteError, match="is not a regular file") as excinfo,
+        locking.exclusive_lock(target, timeout=0),
+    ):
+        pass
+
+    assert excinfo.value.hint == f"Delete {locking.lock_path_for(target)}; mesh recreates it."

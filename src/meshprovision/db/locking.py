@@ -46,6 +46,7 @@ import errno
 import logging
 import math
 import os
+import stat
 import time
 from types import ModuleType
 from typing import TYPE_CHECKING, Final
@@ -246,7 +247,8 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
     Raises:
         AtomicWriteError: If the sidecar lock file cannot be created or
             opened (a read-only filesystem, a missing parent directory,
-            a permissions error), or if ``flock`` fails for any reason
+            a permissions error, a symbolic link planted at its path) or
+            is not a regular file, or if ``flock`` fails for any reason
             other than contention (``ENOLCK`` on a filesystem out of
             lock records, for example) -- a filesystem failure unrelated
             to contention, which polling cannot resolve.
@@ -266,14 +268,27 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
     lock_path = lock_path_for(target)
     resolved_timeout = _resolve_timeout(timeout)
     try:
-        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, _LOCK_FILE_MODE)
+        # O_NOFOLLOW: the pid is written into this file, so a lock path
+        # planted as a symlink must not redirect that write elsewhere.
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, _LOCK_FILE_MODE)
     except OSError as exc:
         raise AtomicWriteError(
             f"Failed to create the database lock file {lock_path}: {exc}",
             path=str(target),
+            hint=(
+                f"{lock_path} must be a regular file; delete it and mesh recreates it."
+                if exc.errno == errno.ELOOP
+                else None
+            ),
         ) from exc
 
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise AtomicWriteError(
+                f"The database lock file {lock_path} is not a regular file.",
+                path=str(target),
+                hint=f"Delete {lock_path}; mesh recreates it.",
+            )
         deadline = time.monotonic() + resolved_timeout
         while True:
             try:

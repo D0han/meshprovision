@@ -1080,6 +1080,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The database lock file (`<db>.lock`) is never opened through a symbolic
+  link, and a lock path that is not a regular file is refused with a hint to
+  delete it: mesh writes its pid into that file, so a link planted there
+  (with the database in a shared, world-writable directory) could otherwise
+  redirect the write to another of the operator's files.
 - A data-source response whose body is larger than 64 MiB after
   decompression is refused (that source fails for the run, it is not
   retried) and never cached, so a small compressed response from a hostile
