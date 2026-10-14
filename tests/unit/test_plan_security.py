@@ -276,6 +276,26 @@ def test_node_key_compromised_empty_reason_defaults(make_live, template, keypair
     assert plan.key_plan.regenerate_reason == "weak_key_audit"
 
 
+def test_first_capture_of_a_device_key_does_not_warn_that_it_differs_from_the_db(
+    make_live, template, keypair
+) -> None:
+    live = make_live(template, security=make_security(keypair=keypair))
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+
+    plan = build_plan(
+        PlanInputs(
+            live=live,
+            template=template,
+            db_entry=record,
+            state=detect.NodeState.PROVISIONED,
+            db_public_key=None,
+        )
+    )
+
+    assert plan.key_plan.adopt_device_key is True
+    assert all(w.code != PlanWarningCode.DEVICE_KEY_DIFFERS_FROM_DB for w in plan.warnings)
+
+
 def test_db_public_key_differs_adopts_device_key(
     make_live, template, keypair, keypair_factory
 ) -> None:
@@ -626,6 +646,29 @@ def test_packet_signature_policy_matching_live_value_on_pre_2_8_firmware_is_sile
 
     _assert_policy_not_planned(plan)
     assert all(w.code != PlanWarningCode.FIELD_UNSUPPORTED_BY_FIRMWARE for w in plan.warnings)
+
+
+def test_unset_packet_signature_policy_is_left_alone_on_supporting_firmware(
+    make_live, template, keypair
+) -> None:
+    """A template without an opinion never plans a write, even where the firmware has the field."""
+    assert template.security.packet_signature_policy is None
+    live = make_live(
+        template,
+        firmware_version="2.8.0",
+        security=make_security(
+            keypair=keypair, packet_signature_policy="PACKET_SIGNATURE_POLICY_STRICT"
+        ),
+    )
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+
+    plan = build_plan(
+        PlanInputs(
+            live=live, template=template, db_entry=record, state=detect.NodeState.PROVISIONED
+        )
+    )
+
+    _assert_policy_not_planned(plan)
 
 
 def test_packet_signature_policy_omitted_from_diff_when_template_leaves_it_none(
