@@ -399,6 +399,35 @@ def test_validate_regions_strips_dedups_rejects() -> None:
         validate_regions(["bad region!"])
 
 
+def test_validate_regions_accepts_a_non_ascii_region_name() -> None:
+    assert validate_regions(["Zachód", "PL"]) == ("Zachód", "PL")
+
+
+@pytest.mark.parametrize("region", ["a/b", "..", "a.b", "a?b", "a#b", "a b", "a%2Fb", "x" * 33])
+def test_validate_regions_rejects_anything_that_could_alter_the_url_path(region: str) -> None:
+    with pytest.raises(SettingsError):
+        validate_regions([region])
+
+
+@respx.mock
+def test_lorastats_percent_encodes_a_non_ascii_region_in_the_request_path(tmp_path: Path) -> None:
+    route = respx.get(url__startswith=f"{LORASTATS_BASE_URL}/API/Zach%C3%B3d/Nodes/JSON").mock(
+        return_value=httpx.Response(
+            200,
+            json=[{"NodeId": "deadbe01", "ShortName": "D0h7", "LastBoot": "2026-06-05T01:29:46Z"}],
+        )
+    )
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=["Zachód"])
+
+    obs = source.fetch_node("deadbe01")
+
+    assert route.call_count == 1
+    assert obs is not None
+    assert obs.region_queried == "Zachód"
+    assert obs.last_boot == datetime(2026, 6, 5, 1, 29, 46, tzinfo=UTC)
+
+
 def test_lorastats_blank_contact_raises(tmp_path: Path) -> None:
     from meshprovision.cache.http import CachedHTTPClient as _Client
 

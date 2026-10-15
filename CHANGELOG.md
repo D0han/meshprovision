@@ -399,6 +399,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status --region` (and the lorastats region setting) accepts a region
+  name with non-ASCII letters, such as lorastats' `Zachód`; it was refused
+  as malformed, so nodes in that region could never be looked up. The name
+  is percent-encoded in the request path, and anything that could alter the
+  path (`/`, `.`, `?`, `#`, spaces, `%`) is still refused.
 - `mesh status` (and `--watch`) no longer crashes with a traceback, for the
   whole cache TTL, when a data source returns JSON nested too deeply to decode
   or an integer with thousands of digits: that source fails like any other

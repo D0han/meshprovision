@@ -32,6 +32,7 @@ import re
 from collections.abc import Collection, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import quote
 
 from meshprovision.datasources.base import SOURCE_LORASTATS, BaseHTTPDataSource, require_json_list
 from meshprovision.datasources.models import (
@@ -70,11 +71,13 @@ DEFAULT_REGIONS: Final[tuple[str, ...]] = ("PL",)
 """Default, config-overridable region list (finding #3: no JSON region-list
 endpoint exists, and scraping the HTML site is an IP-bannable offense)."""
 
-REGION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
-"""Shape a region path segment must match. This is a *local* sanity check
-only -- lorastats.pl does not validate the region segment server-side, so
-this pattern can catch a malformed value but can never catch a
-mistyped-but-well-formed one."""
+REGION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[\w-]{1,32}$")
+"""Shape a region path segment must match: letters (any script, since
+lorastats names regions such as ``Zachód``), digits, ``_`` and ``-``.
+This is a *local* sanity check only -- lorastats.pl does not validate the
+region segment server-side, so this pattern can catch a malformed value
+(``/``, ``.``, ``?``, spaces) but can never catch a mistyped-but-well-formed
+one. The region is percent-encoded when it is put into the URL."""
 
 
 class LorastatsSource(BaseHTTPDataSource):
@@ -212,7 +215,8 @@ class LorastatsSource(BaseHTTPDataSource):
         tracker = CoercionTracker()
 
         for candidate in candidates:
-            url = f"{self._base_url}{LORASTATS_NODES_PATH.format(region=candidate)}"
+            region_segment = quote(candidate, safe="")
+            url = f"{self._base_url}{LORASTATS_NODES_PATH.format(region=region_segment)}"
             payload = self.get_json(url, params={"node": nid.hex}, force_refresh=force_refresh)
             records = require_json_list(payload, url=url, source=self.name)
             if not records:
