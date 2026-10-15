@@ -396,14 +396,21 @@ def test_validate_regions_strips_dedups_rejects() -> None:
     with pytest.raises(SettingsError):
         validate_regions(["   "])
     with pytest.raises(SettingsError):
-        validate_regions(["bad region!"])
+        validate_regions(["bad/region"])
 
 
-def test_validate_regions_accepts_a_non_ascii_region_name() -> None:
-    assert validate_regions(["Zachód", "PL"]) == ("Zachód", "PL")
+@pytest.mark.parametrize("region", ["Zachód", "Górny Śląsk", "a.b", "Region-2_x", "x" * 64])
+def test_validate_regions_accepts_any_plausible_region_name(region: str) -> None:
+    assert validate_regions([region]) == (region,)
 
 
-@pytest.mark.parametrize("region", ["a/b", "..", "a.b", "a?b", "a#b", "a b", "a%2Fb", "x" * 33])
+def test_region_pattern_does_not_match_before_a_trailing_newline() -> None:
+    assert lorastats_module.REGION_PATTERN.match("PL\n") is None
+
+
+@pytest.mark.parametrize(
+    "region", ["a/b", "a\\b", ".", "..", "a?b", "a#b", "a%2Fb", "a\x00b", "a\nb", "x" * 65]
+)
 def test_validate_regions_rejects_anything_that_could_alter_the_url_path(region: str) -> None:
     with pytest.raises(SettingsError):
         validate_regions([region])

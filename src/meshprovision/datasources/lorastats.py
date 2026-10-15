@@ -71,13 +71,17 @@ DEFAULT_REGIONS: Final[tuple[str, ...]] = ("PL",)
 """Default, config-overridable region list (finding #3: no JSON region-list
 endpoint exists, and scraping the HTML site is an IP-bannable offense)."""
 
-REGION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[\w-]{1,32}$")
-"""Shape a region path segment must match: letters (any script, since
-lorastats names regions such as ``Zachód``), digits, ``_`` and ``-``.
+REGION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\.{1,2}$)[^\x00-\x1f\x7f/\\?#%]{1,64}\Z")
+"""Shape a region path segment must match: 1-64 characters of any script
+(lorastats names regions such as ``Zachód``, and region names have changed
+over time, so no list of names is assumed), spaces included, but never a
+path separator (``/``, ``\\``), a query or fragment mark (``?``, ``#``), a
+percent sign, a control character, or the bare ``.``/``..`` segments.
 This is a *local* sanity check only -- lorastats.pl does not validate the
-region segment server-side, so this pattern can catch a malformed value
-(``/``, ``.``, ``?``, spaces) but can never catch a mistyped-but-well-formed
-one. The region is percent-encoded when it is put into the URL."""
+region segment server-side (an unknown region just returns an empty list),
+so this pattern can catch a value that would alter the URL path but never
+a mistyped-but-well-formed name. The region is percent-encoded when it is
+put into the URL."""
 
 
 class LorastatsSource(BaseHTTPDataSource):
