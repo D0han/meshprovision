@@ -338,37 +338,27 @@ def _duration_text(duration: timedelta) -> str:
 
 
 def _uptime_cell(node: MergedNode, now: datetime) -> Text:
-    """Render the ``Uptime`` cell.
+    """Render the ``Uptime`` cell: the time since the node's last known boot.
 
-    The uptime is ``now - last_boot`` when a source reported a boot time
-    (lorastats ``LastBoot``). Otherwise it falls back to the uptime the
-    device reported with its metrics, advanced by how long ago those
-    metrics were taken -- or, when that time is unknown too, the raw
-    reported figure, drawn gray.
+    Only a reported boot time (lorastats ``LastBoot``) is used. The uptime
+    figure a device sends with its metrics is deliberately not used as a
+    fallback: it is as old as those metrics, and extrapolating it to now
+    can show an uptime that no longer holds (the node may have rebooted
+    since).
 
     Args:
         node: The merged node.
         now: The report time.
 
     Returns:
-        A dim hyphen when no uptime is known; the duration in the warning
-        style when it is under :data:`UPTIME_WARN_BELOW` (a recent
-        reboot); gray when only the raw figure is known; else unstyled.
+        A gray hyphen when no boot time is known; the duration in the
+        warning style when it is under :data:`UPTIME_WARN_BELOW` (a recent
+        reboot); otherwise the unstyled duration.
     """
-    style: str | None = None
-    if node.last_boot is not None:
-        uptime = now - node.last_boot
-    elif node.uptime_seconds is not None:
-        uptime = timedelta(seconds=node.uptime_seconds)
-        if node.last_device_metrics is not None:
-            uptime += now - node.last_device_metrics
-        else:
-            style = _UNKNOWN_STYLE
-    else:
+    if node.last_boot is None:
         return _cell(_DASH, _UNKNOWN_STYLE)
-    if uptime < UPTIME_WARN_BELOW:
-        style = _WARN_STYLE
-    return _cell(_duration_text(uptime), style)
+    uptime = now - node.last_boot
+    return _cell(_duration_text(uptime), _WARN_STYLE if uptime < UPTIME_WARN_BELOW else None)
 
 
 def build_table(report: StatusReport) -> Table:
@@ -386,7 +376,7 @@ def build_table(report: StatusReport) -> Table:
     orange instead. ``Seen By`` shows how many MQTT gateways relayed the
     node within 1 / 7 / 30 days (warning when none did in 7 days, alarm
     when none did in 30), and ``Uptime`` is the time since the last boot
-    (warning when under an hour). A caption is attached below the table:
+    (from ``LastBoot`` only; warning when under an hour). A caption is attached below the table:
     :meth:`~meshprovision.status.report.StatusReport.summary`, plus --
     when the report has any source failures -- one dim red line per
     failure, plus -- when any source skipped an unparsable entry -- one

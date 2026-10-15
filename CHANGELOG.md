@@ -12,11 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mesh status` shows when the device last reported its metrics (new `Metrics`
   column, loranet's `lastDeviceMetrics`), so the age of `Batt`, `Volt`,
   `ChUtil` and `AirTx` is no longer guessed from `Last seen`. It also gains an
-  `Uptime` column (time since `LastBoot`, or the reported uptime advanced by
-  the metrics age) and drops `Sources`. `Nbrs` is renamed `Seen By` and shows
-  how many MQTT gateways relayed the node in the last 1 / 7 / 30 days
-  (`x/y/z`) instead of one all-time count. `--json` adds `seen_by_counts`,
-  `last_device_metrics` and `last_boot` per node.
+  `Uptime` column (time since lorastats' `LastBoot`; `-` when unknown) and
+  drops `Sources`. `Nbrs` is renamed `Seen By` and shows how many MQTT
+  gateways relayed the node in the last 1 / 7 / 30 days (`x/y/z`) instead of
+  one all-time count. `--json` adds `seen_by_counts`, `last_device_metrics`
+  and `last_boot` per node.
 - `mesh status` colors individual cells instead of whole rows: `Status` by
   availability, `Last seen`/`Timestamp`/`Metrics` and the readings by
   freshness (green, yellow, orange, red; gray when unknown), and suspicious

@@ -176,30 +176,18 @@ def test_duration_text_shows_the_two_most_significant_units(
 # ---------------------------------------------------------------------------
 
 
-def test_uptime_prefers_the_boot_time_over_the_reported_uptime() -> None:
-    node = _node(
-        last_boot=NOW - timedelta(days=2, hours=5),
-        uptime_seconds=60,
-        last_device_metrics=NOW - timedelta(hours=1),
-    )
-
-    cell = render._uptime_cell(node, NOW)
+def test_uptime_is_the_time_since_the_last_boot() -> None:
+    cell = render._uptime_cell(_node(last_boot=NOW - timedelta(days=2, hours=5)), NOW)
 
     assert (cell.plain, cell.style) == ("2d 5h", "")
 
 
-def test_uptime_without_a_boot_time_advances_the_reported_figure_by_the_metrics_age() -> None:
-    node = _node(uptime_seconds=3600 * 24, last_device_metrics=NOW - timedelta(hours=3))
+def test_uptime_never_falls_back_to_the_uptime_a_device_reported_with_its_metrics() -> None:
+    node = _node(uptime_seconds=3600 * 30, last_device_metrics=NOW - timedelta(hours=3))
 
     cell = render._uptime_cell(node, NOW)
 
-    assert (cell.plain, cell.style) == ("1d 3h", "")
-
-
-def test_uptime_with_only_the_raw_figure_is_gray() -> None:
-    cell = render._uptime_cell(_node(uptime_seconds=3600 * 30), NOW)
-
-    assert (cell.plain, cell.style) == ("1d 6h", "grey50")
+    assert (cell.plain, cell.style) == ("-", "grey50")
 
 
 def test_uptime_is_a_gray_dash_when_nothing_is_known() -> None:

@@ -335,9 +335,9 @@ Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime.
   radio-neighbour count. `--json` keeps `neighbor_count` (all time) and adds
   `seen_by_counts` (`day`/`week`/`month`), `last_device_metrics` and
   `last_boot`.
-- **Uptime** is the time since the last boot: `now - LastBoot` when a source
-  reports a boot time, otherwise the device's reported uptime advanced by the
-  age of its metrics.
+- **Uptime** is the time since the last boot: `now - LastBoot` from lorastats,
+  and `-` when no source reports a boot time. The uptime a device sends with
+  its metrics is not used as a fallback, since it is as old as those metrics.
 
 Colors mark individual cells, not whole rows. `Status` is green / yellow / red
 for online / stale / offline. `Last seen`, `Timestamp`, `Metrics` and the four
