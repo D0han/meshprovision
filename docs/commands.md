@@ -324,7 +324,31 @@ mesh status --no-fail-on-offline
 ```
 
 The rendered table columns are: Node, Short, Long, Mgmt, Status, Last seen,
-Timestamp, Batt, Volt, ChUtil, AirTx, Nbrs, Sources.
+Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime.
+
+- **Metrics** is how long ago the device last reported its metrics (loranet's
+  `lastDeviceMetrics`); `Batt`, `Volt`, `ChUtil` and `AirTx` are as of that
+  moment, which can be much older than `Last seen` (a node that is still
+  relayed by gateways keeps a fresh `Last seen`).
+- **Seen By** is `1d/7d/30d`: how many distinct MQTT gateway topics relayed the
+  node within the last day, week and month (loranet's `seenBy`). It is not a
+  radio-neighbour count. `--json` keeps `neighbor_count` (all time) and adds
+  `seen_by_counts` (`day`/`week`/`month`), `last_device_metrics` and
+  `last_boot`.
+- **Uptime** is the time since the last boot: `now - LastBoot` when a source
+  reports a boot time, otherwise the device's reported uptime advanced by the
+  age of its metrics.
+
+Colors mark individual cells, not whole rows. `Status` is green / yellow / red
+for online / stale / offline. `Last seen`, `Timestamp`, `Metrics` and the four
+readings fade green (within 24 h), yellow (2 days), orange (7 days) and red
+(older); gray means the timestamp is unknown. A reading that is itself
+suspicious is drawn bold orange, and an alarming one bold red, whatever its
+age: battery at or below 20% / 10%, voltage at or below 3.5 V / 3.3 V,
+channel utilization above 25% / 40%, transmit air utilization above 5% / 10%.
+`Seen By` is orange when no gateway relayed the node for a week and red when
+none did for a month; `Uptime` is orange under an hour (a recent reboot).
+These thresholds are heuristics, not firmware limits.
 
 Short/Long prefer the most recently observed name; a node no source has seen
 this run still shows the name already on file in the `Nodes` sheet, so it

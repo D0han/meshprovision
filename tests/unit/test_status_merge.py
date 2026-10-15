@@ -279,10 +279,11 @@ def _rendered_row(node: MergedNode) -> dict[str, str]:
     table = render.build_table(
         StatusReport(generated_at=NOW, nodes=(node,), thresholds=Thresholds())
     )
-    return {str(column.header): next(iter(column.cells)) for column in table.columns}
+    return {str(column.header): str(next(iter(column.cells))) for column in table.columns}
 
 
-_METRIC_COLUMNS = ("Batt", "Volt", "ChUtil", "AirTx", "Nbrs", "Sources")
+_SEEN_BY = "Seen By\n1d/7d/30d"
+_METRIC_COLUMNS = ("Metrics", "Batt", "Volt", "ChUtil", "AirTx", _SEEN_BY, "Uptime")
 
 
 def test_status_table_metric_cells_carry_their_units() -> None:
@@ -293,19 +294,21 @@ def test_status_table_metric_cells_carry_their_units() -> None:
         voltage=4.1,
         channel_utilization=12.34,
         air_util_tx=1.0,
-        neighbor_count=3,
-        sources=("loranet", "lorastats"),
+        seen_by_counts=(1, 2, 3),
+        last_device_metrics=NOW - timedelta(hours=3),
+        last_boot=NOW - timedelta(days=2, hours=5),
     )
 
     row = _rendered_row(node)
 
     assert {column: row[column] for column in _METRIC_COLUMNS} == {
+        "Metrics": "3 hours ago",
         "Batt": "87%",
         "Volt": "4.10V",
         "ChUtil": "12.3%",
         "AirTx": "1.0%",
-        "Nbrs": "3",
-        "Sources": "loranet+lorastats",
+        _SEEN_BY: "1/2/3",
+        "Uptime": "2d 5h",
     }
 
 
@@ -1142,7 +1145,7 @@ def test_timestamp_cell_disambiguates_the_repeated_dst_fallback_hour(local_tz: N
 @pytest.mark.parametrize(
     ("age", "expected"),
     [
-        (None, "dim"),
+        (None, "grey50"),
         (timedelta(0), "green"),
         (timedelta(hours=24), "green"),
         (timedelta(hours=24, seconds=1), "yellow"),
@@ -1159,7 +1162,7 @@ def test_age_style_colors_by_how_long_ago_the_node_was_seen(
     assert render.age_style(age) == expected
 
 
-def test_build_table_colors_each_row_by_its_age(local_tz: None) -> None:
+def test_build_table_colors_the_last_seen_cells_by_age_not_the_row(local_tz: None) -> None:
     ages = {
         NodeId.from_hex("deadbe01"): timedelta(hours=3),
         NodeId.from_hex("deadbe02"): timedelta(hours=30),
@@ -1174,7 +1177,11 @@ def test_build_table_colors_each_row_by_its_age(local_tz: None) -> None:
         now=NOW,
     )
     table = render.build_table(report)
-    assert [row.style for row in table.rows] == ["green", "yellow", "dark_orange", "red"]
+    columns = {str(column.header): list(column.cells) for column in table.columns}
+    expected = ["green", "yellow", "dark_orange", "red"]
+    assert [str(cell.style) for cell in columns["Last seen"]] == expected
+    assert [str(cell.style) for cell in columns["Timestamp (CEST)"]] == expected
+    assert [row.style for row in table.rows] == [None] * 4
 
 
 def test_build_table_returns_expected_columns(local_tz: None) -> None:
@@ -1192,12 +1199,13 @@ def test_build_table_returns_expected_columns(local_tz: None) -> None:
         "Status",
         "Last seen",
         "Timestamp (CEST)",
+        "Metrics",
         "Batt",
         "Volt",
         "ChUtil",
         "AirTx",
-        "Nbrs",
-        "Sources",
+        "Seen By\n1d/7d/30d",
+        "Uptime",
     ]
 
 

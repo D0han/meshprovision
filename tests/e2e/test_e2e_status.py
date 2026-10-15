@@ -99,6 +99,35 @@ def test_json_run_reports_an_online_node(
     _scan_document(document)
 
 
+def test_json_run_carries_the_metrics_time_and_the_seen_by_windows(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    now = int(time.time())
+    day = 24 * 3600
+    fields = {
+        "shortName": "MTa1",
+        "batteryLevel": 80,
+        "lastDeviceMetrics": now - 3 * 3600,
+        "seenBy": {"gw1": now - 60, "gw2": now - 3 * day, "gw3": now - 20 * day},
+    }
+
+    with mock_sources(nodes={node_hex: fields}):
+        result = invoke(runner, ["status", "--json", "--source", "loranet"], env)
+
+    assert result.exit_code == 0
+    (node_doc,) = json.loads(result.stdout)["nodes"]
+    assert node_doc["seen_by_counts"] == {"day": 1, "week": 2, "month": 3}
+    assert node_doc["neighbor_count"] == 3
+    assert node_doc["last_device_metrics"].endswith("Z")
+    assert node_doc["last_boot"] is None
+
+
 def test_table_run_shows_short_name_and_online_label(
     runner: CliRunner,
     env: dict[str, str],

@@ -31,6 +31,7 @@ from meshprovision.status.timefmt import isoformat_z as _isoformat_z
 __all__ = [
     "DEFAULT_OFFLINE_AFTER",
     "DEFAULT_STALE_AFTER",
+    "SEEN_BY_WINDOWS",
     "SOURCE_PRIORITY",
     "Availability",
     "MergedNode",
@@ -53,6 +54,13 @@ SOURCE_PRIORITY: Final[tuple[str, ...]] = (SOURCE_LORANET, SOURCE_LORASTATS)
 """Source precedence order for telemetry/identity field resolution: loranet
 first (it reports ``chUtil``/``airUtilTx``/``seenBy``), lorastats second as
 fallback and as last-seen corroboration."""
+
+SEEN_BY_WINDOWS: Final[tuple[timedelta, timedelta, timedelta]] = (
+    timedelta(days=1),
+    timedelta(days=7),
+    timedelta(days=30),
+)
+"""The look-back windows of :attr:`MergedNode.seen_by_counts`: 1 day, 7 days, 30 days."""
 
 _SECONDS_PER_MINUTE: Final[int] = 60
 _SECONDS_PER_HOUR: Final[int] = 3600
@@ -166,8 +174,18 @@ class MergedNode:
         voltage: Best-known battery voltage.
         channel_utilization: Best-known channel utilization percentage.
         air_util_tx: Best-known transmit air utilization percentage.
-        neighbor_count: Best-known neighbor/gateway count.
-        uptime_seconds: Best-known device uptime, seconds.
+        neighbor_count: Best-known count of distinct MQTT gateway topics
+            that have relayed this node (all time).
+        seen_by_counts: How many of those gateway topics relayed this node
+            within the last 1 day, 7 days and 30 days
+            (:data:`SEEN_BY_WINDOWS`), counted against ``now``; ``None``
+            when no source reported ``seenBy``.
+        uptime_seconds: Best-known device uptime, seconds, as of
+            :attr:`last_device_metrics`.
+        last_boot: The most recent boot time any source reported.
+        last_device_metrics: When the device-metrics fields above
+            (battery, voltage, channel/air utilization, uptime) were
+            reported, or ``None`` when unknown.
         last_seen: The most recent ``last_seen`` timestamp across every
             observation, or ``None`` if no observation reported one.
         last_seen_source: The source that supplied :attr:`last_seen`.
@@ -195,7 +213,10 @@ class MergedNode:
     channel_utilization: float | None = None
     air_util_tx: float | None = None
     neighbor_count: int | None = None
+    seen_by_counts: tuple[int, int, int] | None = None
     uptime_seconds: int | None = None
+    last_boot: datetime | None = None
+    last_device_metrics: datetime | None = None
     last_seen: datetime | None = None
     last_seen_source: str | None = None
     age: timedelta | None = None
@@ -274,7 +295,14 @@ class MergedNode:
             "channel_utilization": self.channel_utilization,
             "air_util_tx": self.air_util_tx,
             "neighbor_count": self.neighbor_count,
+            "seen_by_counts": (
+                None
+                if self.seen_by_counts is None
+                else dict(zip(("day", "week", "month"), self.seen_by_counts, strict=True))
+            ),
             "uptime_seconds": self.uptime_seconds,
+            "last_boot": _isoformat_z(self.last_boot),
+            "last_device_metrics": _isoformat_z(self.last_device_metrics),
             "last_seen": _isoformat_z(self.last_seen),
             "last_seen_source": self.last_seen_source,
             "age_seconds": int(self.age.total_seconds()) if self.age is not None else None,
@@ -426,6 +454,30 @@ def _first_non_none(
     return None
 
 
+def _seen_by_counts(
+    by_priority: Sequence[NodeObservation], now: datetime
+) -> tuple[int, int, int] | None:
+    """Count the gateway topics that relayed a node within each look-back window.
+
+    Args:
+        by_priority: The node's observations, in :data:`SOURCE_PRIORITY` order.
+        now: The reference instant (timezone-aware).
+
+    Returns:
+        ``(within 1 day, within 7 days, within 30 days)`` from the first
+        observation that reported ``seenBy`` at all (``neighbor_count`` is
+        not ``None``; an empty ``seenBy`` gives ``(0, 0, 0)``), or ``None``
+        when no observation did.
+    """
+    for obs in by_priority:
+        if obs.neighbor_count is None:
+            continue
+        ages = [now - seen for seen in obs.seen_by_times]
+        day, week, month = (sum(1 for age in ages if age <= window) for window in SEEN_BY_WINDOWS)
+        return day, week, month
+    return None
+
+
 def _pick_last_seen(by_priority: Sequence[NodeObservation]) -> tuple[datetime | None, str | None]:
     """Pick the maximum ``last_seen`` across observations, with tie-break.
 
@@ -472,9 +524,16 @@ def merge_observations(
        ``last_seen_source`` is the source that supplied that maximum; on
        an exact tie, the higher-priority source (loranet) wins. This is
        the "lorastats corroborates last-seen" requirement.
+    2a. ``last_boot``: the maximum non-``None`` value across all
+       observations (the newest boot any source knows of).
+    2b. ``seen_by_counts``: from the first observation in ``by_priority``
+       order that reported ``seenBy`` at all, how many of its gateway
+       topics last relayed the node within 1, 7 and 30 days of ``now``
+       (a relay time in the future counts toward all three).
     3. Telemetry fields (``battery_level``, ``voltage``,
        ``channel_utilization``, ``air_util_tx``, ``neighbor_count``,
-       ``uptime_seconds``): the first non-``None`` value in
+       ``uptime_seconds``) and ``last_device_metrics`` (when that
+       telemetry was reported): the first non-``None`` value in
        ``by_priority`` order, i.e. loranet preferred, lorastats only as
        fallback (loranet is the source that reports
        ``chUtil``/``airUtilTx``/``seenBy``, but omits them frequently).
@@ -554,6 +613,11 @@ def merge_observations(
     air_util_tx = _first_non_none(by_priority, lambda obs: obs.air_util_tx)
     neighbor_count = _first_non_none(by_priority, lambda obs: obs.neighbor_count)
     uptime_seconds = _first_non_none(by_priority, lambda obs: obs.uptime_seconds)
+    last_device_metrics = _first_non_none(by_priority, lambda obs: obs.last_device_metrics)
+    last_boot = max(
+        (obs.last_boot for obs in by_priority if obs.last_boot is not None), default=None
+    )
+    seen_by_counts = _seen_by_counts(by_priority, now)
 
     # Rule 4a: an observed but blank/absent name falls back to the
     # database row before giving up and rendering as unknown.
@@ -591,7 +655,10 @@ def merge_observations(
         channel_utilization=channel_utilization,
         air_util_tx=air_util_tx,
         neighbor_count=neighbor_count,
+        seen_by_counts=seen_by_counts,
         uptime_seconds=uptime_seconds,
+        last_boot=last_boot,
+        last_device_metrics=last_device_metrics,
         last_seen=last_seen,
         last_seen_source=last_seen_source,
         age=age,

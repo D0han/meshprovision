@@ -380,8 +380,8 @@ def _resolve_enum_value(table: EnumTable, raw: object) -> int | None:
 
 def _parse_seen_by(
     raw: object, tracker: CoercionTracker
-) -> tuple[int | None, tuple[str, ...], datetime | None]:
-    """Derive ``neighbor_count``, ``seen_by``, and ``last_seen`` from ``seenBy``.
+) -> tuple[int | None, tuple[str, ...], tuple[datetime, ...], datetime | None]:
+    """Derive ``neighbor_count``, ``seen_by``, its times and ``last_seen`` from ``seenBy``.
 
     Args:
         raw: The raw ``seenBy`` field; expected to be a JSON object
@@ -393,21 +393,24 @@ def _parse_seen_by(
             drift and is never counted.
 
     Returns:
-        A ``(neighbor_count, seen_by, last_seen)`` tuple. All three stay
-        ``(None, (), None)`` when ``raw`` is absent or not a ``dict``.
+        A ``(neighbor_count, seen_by, seen_by_times, last_seen)`` tuple.
+        All four stay ``(None, (), (), None)`` when ``raw`` is absent or
+        not a ``dict``. ``seen_by_times`` holds the parsed relay time of
+        every topic (unparsable values left out), uncapped, so the status
+        report can count the topics seen within a day, a week and a month.
     """
     if raw is None:
-        return None, (), None
+        return None, (), (), None
     if not isinstance(raw, dict):
         tracker.record_failure()
-        return None, (), None
+        return None, (), (), None
     neighbor_count = len(raw)
     seen_by = tuple(sorted(str(topic) for topic in raw))[:MAX_SEEN_BY_TOPICS]
     parsed = [parse_epoch(v) for v in raw.values()]
     if any(p is None for p in parsed):
         tracker.record_failure()
-    last_seen = max((p for p in parsed if p is not None), default=None)
-    return neighbor_count, seen_by, last_seen
+    times = tuple(p for p in parsed if p is not None)
+    return neighbor_count, seen_by, times, max(times, default=None)
 
 
 def parse_node(
@@ -453,7 +456,9 @@ def parse_node(
         latitude = None
         longitude = None
 
-    neighbor_count, seen_by, seen_by_last_seen = _parse_seen_by(payload.get("seenBy"), tracker)
+    neighbor_count, seen_by, seen_by_times, seen_by_last_seen = _parse_seen_by(
+        payload.get("seenBy"), tracker
+    )
     last_device_metrics = tracker.coerce(payload.get("lastDeviceMetrics"), parse_epoch)
     last_map_report = tracker.coerce(payload.get("lastMapReport"), parse_epoch)
     # last_seen is documented as "the node's most recent activity," not
@@ -500,6 +505,7 @@ def parse_node(
         has_default_channel=tracker.coerce(payload.get("hasDefaultCh"), coerce_bool),
         neighbor_count=neighbor_count,
         seen_by=seen_by,
+        seen_by_times=seen_by_times,
         last_seen=last_seen,
         last_device_metrics=last_device_metrics,
         last_map_report=last_map_report,

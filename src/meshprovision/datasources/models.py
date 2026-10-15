@@ -165,6 +165,10 @@ class NodeObservation(BaseModel):
             relayed this node (loranet ``len(seenBy)``), when known.
         seen_by: The (sorted, capped at :data:`MAX_SEEN_BY_TOPICS`) MQTT
             gateway topics that have relayed this node.
+        seen_by_times: When each gateway topic in ``seenBy`` last relayed
+            this node (loranet; one timestamp per topic, uncapped, in
+            ``seenBy`` order; topics whose value is not a valid epoch are
+            left out). ``status`` counts them against the current time.
         last_seen: Timezone-aware UTC timestamp of the node's most recent
             activity, when known.
         last_boot: Timezone-aware UTC timestamp of the node's most recent
@@ -208,6 +212,7 @@ class NodeObservation(BaseModel):
 
     neighbor_count: int | None = None
     seen_by: tuple[str, ...] = ()
+    seen_by_times: tuple[datetime, ...] = ()
     last_seen: datetime | None = None
     last_boot: datetime | None = None
     last_device_metrics: datetime | None = None

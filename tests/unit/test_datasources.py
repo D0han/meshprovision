@@ -938,6 +938,24 @@ def test_loranet_seen_by_derives_neighbor_count_and_last_seen(tmp_path: Path) ->
     assert obs.neighbor_count == 2
     assert obs.seen_by == ("gw1", "gw2")
     assert obs.last_seen == datetime.fromtimestamp(1_700_000_100, tz=UTC)
+    assert obs.seen_by_times == (
+        datetime.fromtimestamp(1_700_000_000, tz=UTC),
+        datetime.fromtimestamp(1_700_000_100, tz=UTC),
+    )
+
+
+@respx.mock
+def test_loranet_seen_by_times_leave_out_an_unparsable_relay_time(tmp_path: Path) -> None:
+    nid = NodeId.from_hex("deadbe01")
+    payload = {nid.decimal: {"seenBy": {"gw1": 1_700_000_000, "gw2": "never"}}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LoranetSource(client)
+
+    obs = source.fetch_all()[nid]
+
+    assert obs.neighbor_count == 2
+    assert obs.seen_by_times == (datetime.fromtimestamp(1_700_000_000, tz=UTC),)
 
 
 @respx.mock

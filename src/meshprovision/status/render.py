@@ -25,7 +25,7 @@ from rich.table import Table
 from rich.text import Text
 
 from meshprovision.status import timefmt
-from meshprovision.status.merge import Availability
+from meshprovision.status.merge import Availability, MergedNode, humanize_age
 from meshprovision.status.report import StatusReport
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
@@ -44,35 +44,62 @@ AGE_STYLES: Final[tuple[tuple[timedelta, str], ...]] = (
     (timedelta(days=2), "yellow"),
     (timedelta(days=7), "dark_orange"),
 )
-"""``rich`` style by how recently a node was last seen: ``(max_age, style)``, ascending.
+"""``rich`` style by how recent a timestamp is: ``(max_age, style)``, ascending.
 
-A node last seen within ``max_age`` (inclusive) gets that row's style; the
+A timestamp within ``max_age`` (inclusive) gets that tier's style; the
 first matching tier wins.
 """
 
 _OLDEST_STYLE: Final[str] = "red"
-"""Style for a node last seen longer ago than the last tier of :data:`AGE_STYLES`."""
+"""Style for a timestamp older than the last tier of :data:`AGE_STYLES`."""
 
-_NEVER_SEEN_STYLE: Final[str] = "dim"
-"""Style for a node no source has ever seen."""
+_UNKNOWN_STYLE: Final[str] = "grey50"
+"""Style for a value or timestamp that is unknown (never seen, no timestamp)."""
+
+_ALARM_STYLE: Final[str] = "bold red"
+"""Style for a value that needs attention now (see the ``*_THRESHOLD`` constants)."""
+
+_WARN_STYLE: Final[str] = "bold dark_orange"
+"""Style for a value that is suspicious or getting there."""
+
+BATTERY_ALARM_PERCENT: Final[int] = 10
+BATTERY_WARN_PERCENT: Final[int] = 20
+VOLTAGE_ALARM_VOLTS: Final[float] = 3.3
+VOLTAGE_WARN_VOLTS: Final[float] = 3.5
+CHANNEL_UTILIZATION_ALARM_PERCENT: Final[float] = 40.0
+CHANNEL_UTILIZATION_WARN_PERCENT: Final[float] = 25.0
+AIR_UTIL_TX_ALARM_PERCENT: Final[float] = 10.0
+AIR_UTIL_TX_WARN_PERCENT: Final[float] = 5.0
+UPTIME_WARN_BELOW: Final[timedelta] = timedelta(hours=1)
+"""Thresholds past which a table cell is drawn in the alarm or warning style.
+
+Heuristics, not firmware limits: a battery at or below 10% / 20%, a cell
+voltage below 3.3 V / 3.5 V, channel utilization above 40% / 25%,
+transmit air utilization above 10% (the common duty-cycle ceiling) / 5%,
+an uptime under an hour (a recent reboot). Boundaries are exclusive of the
+healthy side: exactly the warn value is not flagged for the "above"
+checks and is flagged for the "at or below" battery checks.
+"""
 
 
 def age_style(age: timedelta | None) -> str:
-    """Pick a table row's ``rich`` style from how long ago the node was last seen.
+    """Pick a ``rich`` style from how long ago a timestamp was.
 
-    Independent of the ``Status`` column and the ``--stale-after`` /
-    ``--offline-after`` thresholds: those drive the label and the exit
-    code, this only colors the row.
+    Used for the ``Last seen`` and ``Timestamp`` cells (the node's last
+    activity) and for the device-metrics cells (how old the battery,
+    voltage and utilization readings are). Independent of the ``Status``
+    column and the ``--stale-after`` / ``--offline-after`` thresholds:
+    those drive the label and the exit code, this only colors cells.
 
     Args:
-        age: ``now - last_seen``, or ``None`` when the node was never seen.
+        age: ``now - timestamp``, or ``None`` when the timestamp is unknown.
 
     Returns:
         ``green`` within 24 hours, ``yellow`` within 2 days, ``dark_orange``
-        within a week, ``red`` beyond that, and ``dim`` for ``None``.
+        within a week, ``red`` beyond that, and gray for ``None``.
     """
     if age is None:
-        return _NEVER_SEEN_STYLE
+        return _UNKNOWN_STYLE
     for max_age, style in AGE_STYLES:
         if age <= max_age:
             return style
@@ -88,6 +115,15 @@ AVAILABILITY_LABELS: Final[MappingProxyType[Availability, str]] = MappingProxyTy
     }
 )
 """Display label for the ``Status`` column, by availability."""
+
+_AVAILABILITY_STYLES: Final[MappingProxyType[Availability, str]] = MappingProxyType(
+    {
+        Availability.ONLINE: "green",
+        Availability.STALE: "yellow",
+        Availability.OFFLINE: "red",
+        Availability.UNKNOWN: _UNKNOWN_STYLE,
+    }
+)
 
 _DASH: Final[str] = "-"
 
@@ -197,25 +233,160 @@ def _timestamp_cell(value: datetime | None, *, reference: datetime) -> str:
     return timefmt.format_local(value, include_zone=differs)
 
 
-def _sources_cell(sources: tuple[str, ...]) -> str:
-    """Render a node's contributing sources cell.
+def _cell(text: str, style: str | None) -> Text:
+    """Build a styled cell.
 
     Args:
-        sources: The node's :attr:`~meshprovision.status.merge.MergedNode.sources`.
+        text: The already-rendered, terminal-safe cell text.
+        style: A ``rich`` style, or ``None`` for the default style.
 
     Returns:
-        ``"+".join(sources)``, or :data:`_DASH` when ``sources`` is empty.
+        The cell as a :class:`~rich.text.Text`.
     """
-    return "+".join(sources) if sources else _DASH
+    return Text(text, style=style or "")
+
+
+def _value_cell(text: str, *, flag: str | None, freshness: str) -> Text:
+    """Build a measured-value cell: an alarm/warning style wins over freshness.
+
+    Args:
+        text: The rendered value, or :data:`_DASH` when unknown.
+        flag: :data:`_ALARM_STYLE` / :data:`_WARN_STYLE` when the value
+            itself is alarming or suspicious, else ``None``.
+        freshness: The :func:`age_style` of the reading's timestamp.
+
+    Returns:
+        A dim hyphen when the value is unknown, else the cell styled by
+        ``flag`` if set, otherwise by ``freshness``.
+    """
+    if text == _DASH:
+        return _cell(text, _UNKNOWN_STYLE)
+    return _cell(text, flag or freshness)
+
+
+def _severity(value: float | None, *, alarm: float, warn: float, low_is_bad: bool) -> str | None:
+    """Pick the alarm/warning style for a measured value.
+
+    Args:
+        value: The measurement, or ``None`` (never flagged).
+        alarm: The alarm threshold.
+        warn: The warning threshold.
+        low_is_bad: ``True`` when a value at or below the threshold is the
+            bad side (battery, voltage); ``False`` when a value above the
+            threshold is (utilization).
+
+    Returns:
+        :data:`_ALARM_STYLE`, :data:`_WARN_STYLE` or ``None``.
+    """
+    if value is None:
+        return None
+    if low_is_bad:
+        return _ALARM_STYLE if value <= alarm else _WARN_STYLE if value <= warn else None
+    return _ALARM_STYLE if value > alarm else _WARN_STYLE if value > warn else None
+
+
+def _battery_flag(value: int | None) -> str | None:
+    """Flag a low battery; a node on external power is never flagged."""
+    if value is None or value > _POWERED_BATTERY_THRESHOLD:
+        return None
+    return _severity(value, alarm=BATTERY_ALARM_PERCENT, warn=BATTERY_WARN_PERCENT, low_is_bad=True)
+
+
+def _voltage_flag(value: float | None) -> str | None:
+    """Flag a low cell voltage (a reading of 0 V is an absent sensor, not a flat battery)."""
+    if value is None or value <= 0:
+        return None
+    return _severity(value, alarm=VOLTAGE_ALARM_VOLTS, warn=VOLTAGE_WARN_VOLTS, low_is_bad=True)
+
+
+def _seen_by_cell(counts: tuple[int, int, int] | None) -> Text:
+    """Render the ``Seen By`` cell as ``day/week/month`` gateway counts.
+
+    Args:
+        counts: :attr:`~meshprovision.status.merge.MergedNode.seen_by_counts`.
+
+    Returns:
+        ``"x/y/z"`` -- gateway topics that relayed the node within the last
+        1 / 7 / 30 days -- in the alarm style when no gateway relayed it
+        in 30 days, in the warning style when none did in 7 days, or a
+        dim hyphen when no source reported ``seenBy``.
+    """
+    if counts is None:
+        return _cell(_DASH, _UNKNOWN_STYLE)
+    day, week, month = counts
+    flag = _ALARM_STYLE if month == 0 else _WARN_STYLE if week == 0 else None
+    return _cell(f"{day}/{week}/{month}", flag)
+
+
+def _duration_text(duration: timedelta) -> str:
+    """Render a duration compactly: ``"3d 4h"``, ``"5h 12m"``, ``"42m"`` or ``"<1m"``.
+
+    Args:
+        duration: The duration; negative values (clock skew) render as ``"<1m"``.
+
+    Returns:
+        The two most significant units.
+    """
+    minutes = max(int(duration.total_seconds()), 0) // 60
+    days, minutes = divmod(minutes, 24 * 60)
+    hours, minutes = divmod(minutes, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m" if minutes else "<1m"
+
+
+def _uptime_cell(node: MergedNode, now: datetime) -> Text:
+    """Render the ``Uptime`` cell.
+
+    The uptime is ``now - last_boot`` when a source reported a boot time
+    (lorastats ``LastBoot``). Otherwise it falls back to the uptime the
+    device reported with its metrics, advanced by how long ago those
+    metrics were taken -- or, when that time is unknown too, the raw
+    reported figure, drawn gray.
+
+    Args:
+        node: The merged node.
+        now: The report time.
+
+    Returns:
+        A dim hyphen when no uptime is known; the duration in the warning
+        style when it is under :data:`UPTIME_WARN_BELOW` (a recent
+        reboot); gray when only the raw figure is known; else unstyled.
+    """
+    style: str | None = None
+    if node.last_boot is not None:
+        uptime = now - node.last_boot
+    elif node.uptime_seconds is not None:
+        uptime = timedelta(seconds=node.uptime_seconds)
+        if node.last_device_metrics is not None:
+            uptime += now - node.last_device_metrics
+        else:
+            style = _UNKNOWN_STYLE
+    else:
+        return _cell(_DASH, _UNKNOWN_STYLE)
+    if uptime < UPTIME_WARN_BELOW:
+        style = _WARN_STYLE
+    return _cell(_duration_text(uptime), style)
 
 
 def build_table(report: StatusReport) -> Table:
     """Build the ``rich`` table rendering of a status report.
 
     Every ``None`` field renders as a single dim hyphen, never the
-    literal ``"None"``. Numeric columns are right-justified. Each row's
-    style comes from :func:`age_style`, keyed by how long ago the
-    node was last seen. A caption is attached below the table:
+    literal ``"None"``. Numeric columns are right-justified. Rows are not
+    colored as a whole; individual cells are. ``Last seen`` and
+    ``Timestamp`` use :func:`age_style` on the node's last activity,
+    ``Status`` follows the availability, and ``Metrics`` plus the
+    ``Batt``/``Volt``/``ChUtil``/``AirTx`` readings use :func:`age_style`
+    on when the device last reported its metrics (gray when unknown) --
+    except that a reading that is itself alarming or suspicious (see the
+    ``*_ALARM_*`` / ``*_WARN_*`` constants) is drawn bold red or bold
+    orange instead. ``Seen By`` shows how many MQTT gateways relayed the
+    node within 1 / 7 / 30 days (warning when none did in 7 days, alarm
+    when none did in 30), and ``Uptime`` is the time since the last boot
+    (warning when under an hour). A caption is attached below the table:
     :meth:`~meshprovision.status.report.StatusReport.summary`, plus --
     when the report has any source failures -- one dim red line per
     failure, plus -- when any source skipped an unparsable entry -- one
@@ -250,29 +421,58 @@ def build_table(report: StatusReport) -> Table:
     table.add_column("Status")
     table.add_column("Last seen")
     table.add_column(f"Timestamp ({timefmt.local_tz_abbreviation(report.generated_at)})")
+    table.add_column("Metrics")
     table.add_column("Batt", justify="right")
     table.add_column("Volt", justify="right")
     table.add_column("ChUtil", justify="right")
     table.add_column("AirTx", justify="right")
-    table.add_column("Nbrs", justify="right")
-    table.add_column("Sources")
+    table.add_column("Seen By\n1d/7d/30d", justify="right")
+    table.add_column("Uptime", justify="right")
 
+    now = report.generated_at
     for node in report.nodes:
+        seen_style = age_style(node.age)
+        metrics_age = None if node.last_device_metrics is None else now - node.last_device_metrics
+        fresh = age_style(metrics_age)
         table.add_row(
             node.node_id.display,
             _text_cell(node.short_name),
             _text_cell(node.long_name),
             _text_cell(node.management),
-            AVAILABILITY_LABELS[node.availability],
-            node.age_text,
-            _timestamp_cell(node.last_seen, reference=report.generated_at),
-            _battery_cell(node.battery_level),
-            _voltage_cell(node.voltage),
-            _percent_cell(node.channel_utilization),
-            _percent_cell(node.air_util_tx),
-            _int_cell(node.neighbor_count),
-            _sources_cell(node.sources),
-            style=age_style(node.age),
+            _cell(AVAILABILITY_LABELS[node.availability], _AVAILABILITY_STYLES[node.availability]),
+            _cell(node.age_text, seen_style),
+            _cell(_timestamp_cell(node.last_seen, reference=now), seen_style),
+            _cell(_DASH if metrics_age is None else humanize_age(metrics_age), fresh),
+            _value_cell(
+                _battery_cell(node.battery_level),
+                flag=_battery_flag(node.battery_level),
+                freshness=fresh,
+            ),
+            _value_cell(
+                _voltage_cell(node.voltage), flag=_voltage_flag(node.voltage), freshness=fresh
+            ),
+            _value_cell(
+                _percent_cell(node.channel_utilization),
+                flag=_severity(
+                    node.channel_utilization,
+                    alarm=CHANNEL_UTILIZATION_ALARM_PERCENT,
+                    warn=CHANNEL_UTILIZATION_WARN_PERCENT,
+                    low_is_bad=False,
+                ),
+                freshness=fresh,
+            ),
+            _value_cell(
+                _percent_cell(node.air_util_tx),
+                flag=_severity(
+                    node.air_util_tx,
+                    alarm=AIR_UTIL_TX_ALARM_PERCENT,
+                    warn=AIR_UTIL_TX_WARN_PERCENT,
+                    low_is_bad=False,
+                ),
+                freshness=fresh,
+            ),
+            _seen_by_cell(node.seen_by_counts),
+            _uptime_cell(node, now),
         )
 
     caption = Text(report.summary())
