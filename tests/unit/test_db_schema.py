@@ -173,6 +173,38 @@ def test_base64_key_list_dedupes_after_canonicalization(keypair) -> None:
 
 
 @pytest.mark.parametrize(
+    ("column", "value", "canonical"),
+    [
+        ("gps_alt", "007", "7"),
+        ("gps_alt", "-0", "0"),
+        ("first_added_ts", "2026-08-25T05:14:10+02:00", "2026-08-25T03:14:10Z"),
+        ("first_added_ts", "2026-08-25 03:14:10", "2026-08-25T03:14:10Z"),
+        ("authorized_admin_keys", " a_pub ; b_pub ;a_pub", "a_pub;b_pub"),
+    ],
+    ids=[
+        "int-drops-leading-zeros",
+        "int-negative-zero",
+        "timestamp-offset-to-utc-z",
+        "timestamp-naive-is-utc",
+        "key-ref-list-stripped-and-deduped",
+    ],
+)
+def test_validate_cell_returns_the_canonical_form(column: str, value: str, canonical: str) -> None:
+    """The returned text is what gets written back, so it must be canonical, not just valid."""
+    spec = schema.NODES_SHEET_SPEC.column(column)
+    assert cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value=value) == canonical
+
+
+def test_base64_key_cell_is_stored_in_its_bare_canonical_form(keypair) -> None:
+    encoded = encode_key(keypair.public)
+    spec = schema.KEYS_SHEET_SPEC.column("key_value")
+    result = cell_validation.validate_cell(
+        sheet="Keys", row=2, spec=spec, value=f"base64:{encoded}"
+    )
+    assert result == encoded
+
+
+@pytest.mark.parametrize(
     "value",
     ["has space", "-leading-dash", "x" * 65, "semi;colon"],
     ids=["space", "leading-dash", "too-long", "semicolon"],
