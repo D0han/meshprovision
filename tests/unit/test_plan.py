@@ -97,16 +97,26 @@ def test_ble_pin_plan_turns_bluetooth_on(
     assert enabled == ({expected} if expected is not None else set())
 
 
-def test_reboots_device_on_region_change(make_live, template) -> None:
+@pytest.mark.parametrize(
+    ("field", "live_value"),
+    [("region", "US"), ("modem_preset", "SHORT_FAST")],
+    ids=["region", "modem-preset"],
+)
+def test_reboots_device_on_region_or_modem_preset_change(
+    make_live, template, field: str, live_value: str
+) -> None:
     live = make_live(
         template,
-        section_overrides={"lora": {"region": "US"}},
+        section_overrides={"lora": {field: live_value}},
         security=make_security(empty=True),
         short_name="be01",
         long_name="Meshtastic be01",
     )
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
+    lora_section = plan.section("lora")
+    assert lora_section is not None
+    assert [c.field for c in lora_section.changes] == [field]
     assert plan.reboots_device is True
     assert any(w.code == "region_change_reboots" for w in plan.warnings)
 
@@ -425,6 +435,30 @@ def test_over_long_desired_short_name_warns_not_raises(make_live, template, keyp
     )
     plan = build_plan(inputs)
     assert any(w.code == "name_truncation_risk" and w.field == "short_name" for w in plan.warnings)
+
+
+@pytest.mark.parametrize(
+    ("desired", "field"),
+    [
+        ({"desired_short_name": "Łódź"}, "short_name"),
+        ({"desired_long_name": "Zażółć gęślą jaźń 12345"}, "long_name"),
+    ],
+    ids=["short-4-chars-7-bytes", "long-23-chars-32-bytes"],
+)
+def test_name_truncation_warning_counts_utf8_bytes_not_characters(
+    make_live, template, keypair, desired: dict[str, str], field: str
+) -> None:
+    """The firmware limits are bytes, so a short-enough name with diacritics can still overflow."""
+    live = make_live(template, security=make_security(keypair=keypair))
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=None,
+        state=detect.NodeState.PROVISIONED,
+        **desired,
+    )
+    plan = build_plan(inputs)
+    assert [w.field for w in plan.warnings if w.code == "name_truncation_risk"] == [field]
 
 
 def test_module_diffing_unknown_module_warns(make_live, template) -> None:
