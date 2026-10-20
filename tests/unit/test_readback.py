@@ -7,6 +7,7 @@ import base64
 import pytest
 
 from meshprovision.config.template import TemplateConfig, load_template_text
+from meshprovision.crypto import redact
 from meshprovision.crypto.keys import encode_key, generate_keypair
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
@@ -281,6 +282,77 @@ def test_verify_key_material_nodedb_present_but_wrong_is_unconfirmed(make_live) 
 
     assert result is not None
     assert result.status == WriteStatus.UNCONFIRMED
+
+
+def _regenerate_plan(make_live) -> ChangePlan:
+    template = _template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    return build_plan(inputs)
+
+
+def test_verify_key_material_names_localconfig_when_only_localconfig_differs(make_live) -> None:
+    """A matching NodeDB key must not be shown as the "actual" of a LocalConfig mismatch."""
+    plan = _regenerate_plan(make_live)
+    kp = generate_keypair()
+    wrong_kp = generate_keypair()
+    live_after = make_live(_template(), security=make_security(keypair=wrong_kp))
+
+    result = readback_module._verify_key_material(
+        plan, live_after, keypair=kp, device_public_key=encode_key(kp.public)
+    )
+
+    assert result is not None
+    assert result.status == WriteStatus.UNCONFIRMED
+    assert result.message == "public key mismatch after write (LocalConfig)"
+    assert result.expected == redact.fingerprint(kp.public)
+    assert result.actual == redact.fingerprint(wrong_kp.public)
+
+
+def test_verify_key_material_names_localconfig_when_its_key_is_absent(make_live) -> None:
+    plan = _regenerate_plan(make_live)
+    kp = generate_keypair()
+    live_after = make_live(_template(), security=make_security(empty=True))
+
+    result = readback_module._verify_key_material(
+        plan, live_after, keypair=kp, device_public_key=encode_key(kp.public)
+    )
+
+    assert result is not None
+    assert (result.message, result.actual) == (
+        "public key mismatch after write (LocalConfig)",
+        "<absent>",
+    )
+
+
+def test_verify_key_material_names_nodedb_when_only_nodedb_differs(make_live) -> None:
+    plan = _regenerate_plan(make_live)
+    kp = generate_keypair()
+    wrong_kp = generate_keypair()
+    live_after = make_live(_template(), security=make_security(keypair=kp))
+
+    result = readback_module._verify_key_material(
+        plan, live_after, keypair=kp, device_public_key=encode_key(wrong_kp.public)
+    )
+
+    assert result is not None
+    assert result.message == "public key mismatch after write (NodeDB)"
+    assert result.actual == redact.fingerprint(wrong_kp.public)
+
+
+def test_verify_key_material_names_nodedb_when_its_key_does_not_decode(make_live) -> None:
+    plan = _regenerate_plan(make_live)
+    kp = generate_keypair()
+    live_after = make_live(_template(), security=make_security(keypair=kp))
+
+    result = readback_module._verify_key_material(
+        plan, live_after, keypair=kp, device_public_key="not base64!"
+    )
+
+    assert result is not None
+    assert result.message == "public key mismatch after write (NodeDB)"
+    assert result.actual is not None
+    assert result.actual.startswith("<NodeDB value did not decode: ")
 
 
 def test_verify_plan_secret_field_expected_actual_redacted(make_live) -> None:

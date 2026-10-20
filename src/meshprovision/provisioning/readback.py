@@ -265,17 +265,23 @@ def _verify_key_material(
             "security", WriteStatus.CONFIRMED, f"public key confirmed{note}", field="public_key"
         )
 
-    if nodedb_decode_error is not None:
+    # Report the view that disagreed: LocalConfig first, since a NodeDB
+    # value that matches says nothing about a LocalConfig that does not.
+    actual_bytes: bytes | None
+    if not local_config_ok:
+        view, actual_bytes = "LocalConfig", live_after.security.public_key
+        actual_repr = redact.fingerprint(actual_bytes) if actual_bytes is not None else "<absent>"
+    elif nodedb_decode_error is not None:
         # Distinct from "decoded fine but genuinely differs" below -- the
         # NodeDB value never became comparable at all.
-        actual_repr = f"<NodeDB value did not decode: {nodedb_decode_error}>"
+        view, actual_repr = "NodeDB", f"<NodeDB value did not decode: {nodedb_decode_error}>"
     else:
-        actual_bytes = nodedb_bytes if nodedb_bytes is not None else live_after.security.public_key
+        view, actual_bytes = "NodeDB", nodedb_bytes
         actual_repr = redact.fingerprint(actual_bytes) if actual_bytes is not None else "<absent>"
     return WriteResult(
         "security",
         WriteStatus.UNCONFIRMED,
-        "public key mismatch after write",
+        f"public key mismatch after write ({view})",
         field="public_key",
         expected=redact.fingerprint(keypair.public),
         actual=actual_repr,
