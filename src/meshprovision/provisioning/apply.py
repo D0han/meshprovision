@@ -171,6 +171,14 @@ def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | Non
     ``None``, so this is a no-op whenever neither the template nor the
     live device has ever set one.
 
+    The short name is sent only when it changes: ``Node.setOwner`` strips
+    a name it is given and exits on a blank one, so an unchanged short
+    name could otherwise be rewritten (``"AB "`` becomes ``"AB"``, never
+    verified) or, when the device reports none, fail the whole write.
+    The long name is always sent, since ``setOwner`` sets ``is_licensed``
+    only alongside it; an unchanged padded long name is stripped, which
+    matches the stripped value the database records.
+
     Args:
         iface: The connected interface to write through.
         plan: The plan whose ``name_change`` should be applied.
@@ -180,7 +188,8 @@ def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | Non
         name phase was empty or succeeded (verification happens later,
         in :func:`~meshprovision.provisioning.readback.verify_plan`).
     """
-    if plan.name_change.is_empty:
+    name_change = plan.name_change
+    if name_change.is_empty:
         return None
 
     try:
@@ -188,11 +197,24 @@ def _run_name_phase(iface: MeshInterface, plan: ChangePlan) -> WriteResult | Non
         # our_exit its errors) to stdout, which would corrupt --json output.
         with contextlib.redirect_stdout(sys.stderr):
             iface.localNode.setOwner(
-                long_name=plan.name_change.desired_long_name,
-                short_name=plan.name_change.desired_short_name,
-                is_licensed=plan.name_change.desired_is_licensed,
-                is_unmessagable=plan.name_change.desired_is_unmessagable,
+                long_name=name_change.desired_long_name,
+                # None leaves set_owner.short_name empty, and AdminModule::
+                # handleSetOwner (checked on firmware master, not a release
+                # tag) copies a name only when it is non-empty (meshtastic's
+                # own --set-owner relies on this), so the device keeps its
+                # short name. is_licensed, by contrast, is applied
+                # unconditionally: hence long_name is always sent.
+                short_name=name_change.desired_short_name if name_change.short_changed else None,
+                is_licensed=name_change.desired_is_licensed,
+                is_unmessagable=name_change.desired_is_unmessagable,
             )
+    except SystemExit:
+        # Node.setOwner's our_exit on a blank name: SystemExit(1) says only "1".
+        return WriteResult(
+            "owner",
+            WriteStatus.FAILED,
+            "Failed to set owner: the device library refused an empty or whitespace-only name",
+        )
     except (*DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
         return WriteResult("owner", WriteStatus.FAILED, f"Failed to set owner: {exc}")
     return None

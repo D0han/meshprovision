@@ -400,6 +400,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` changing only a node's long name no longer fails, losing
+  the rename, when the device reports a blank short name, and no longer
+  silently rewrites a padded short name (`AB ` became `AB`): the short name is
+  now sent only when it changes. A name the device library refuses as blank
+  is reported as such instead of as `Failed to set owner: 1`.
 - `mesh adopt --from-backup` no longer overwrites a node's recorded position
   with 0, 0 when the `.cfg` holds a fixed position without latitude and
   longitude (only an altitude, say): such a position is now no position, as

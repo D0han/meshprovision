@@ -10,7 +10,7 @@ from collections.abc import Callable
 from typing import Final
 
 import pytest
-from meshtastic.protobuf import channel_pb2, localonly_pb2
+from meshtastic.protobuf import channel_pb2, localonly_pb2, mesh_pb2
 
 from meshprovision.crypto import redact
 from meshprovision.crypto.keys import generate_keypair
@@ -42,7 +42,9 @@ from meshprovision.provisioning.plan import (
     build_plan,
 )
 from meshprovision.provisioning.plan_admin_keys import KeyPlan
+from meshprovision.provisioning.plan_types import NameChange
 from tests.conftest import real_write_config_or_exit
+from tests.unit import apply_fakes
 from tests.unit.apply_fakes import (
     DEFAULT_NODE_NUM,
     FakeIfaceForApply,
@@ -408,6 +410,106 @@ def test_apply_plan_preserves_is_licensed_when_only_short_name_changes(make_live
 
     assert outcome.ok is True, outcome.describe()
     assert iface.user["isLicensed"] is True
+
+
+def _name_only_plan(make_live: Callable[..., detect.LiveConfig], **names: str) -> ChangePlan:
+    """A plan whose name_change has the given current/desired names (others default)."""
+    template = minimal_template()
+    live = make_live(template, security=make_security(empty=True))
+    plan = build_plan(
+        PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    )
+    fields = {
+        "current_short_name": "MT00",
+        "desired_short_name": "MT00",
+        "current_long_name": "Meshtastic MT00",
+        "desired_long_name": "Meshtastic MT00",
+        **names,
+    }
+    name_change = NameChange(
+        **fields,
+        current_is_unmessagable=None,
+        desired_is_unmessagable=None,
+        current_is_licensed=True,
+        desired_is_licensed=True,
+    )
+    return dataclasses.replace(plan, name_change=name_change)
+
+
+def _record_owner_writes(monkeypatch: pytest.MonkeyPatch) -> list[mesh_pb2.User]:
+    """Capture the ``set_owner`` user the real library builds for each fake setOwner call."""
+    sent: list[mesh_pb2.User] = []
+    real = apply_fakes.real_set_owner_or_exit
+
+    def _recording(
+        long_name: str | None,
+        short_name: str | None,
+        is_licensed: bool,
+        is_unmessagable: bool | None,
+    ) -> mesh_pb2.User:
+        owner = real(long_name, short_name, is_licensed, is_unmessagable)
+        sent.append(owner)
+        return owner
+
+    monkeypatch.setattr(apply_fakes, "real_set_owner_or_exit", _recording)
+    return sent
+
+
+@pytest.mark.parametrize("live_short", ["", "AB "], ids=["blank", "padded"])
+def test_a_long_name_only_rename_never_sends_the_unchanged_short_name(
+    make_live: Callable[..., detect.LiveConfig],
+    monkeypatch: pytest.MonkeyPatch,
+    live_short: str,
+) -> None:
+    plan = _name_only_plan(
+        make_live,
+        current_short_name=live_short,
+        desired_short_name=live_short,
+        desired_long_name="New long",
+    )
+    sent = _record_owner_writes(monkeypatch)
+    iface = FakeIfaceForApply()
+    iface.user["shortName"] = live_short
+
+    result = apply_module._run_name_phase(iface, plan)  # type: ignore[arg-type]
+
+    assert result is None
+    [owner] = sent
+    assert (owner.short_name, owner.long_name) == ("", "New long")
+    assert iface.user["shortName"] == live_short
+
+
+def test_a_short_name_change_sends_the_desired_short_name_and_keeps_is_licensed(
+    make_live: Callable[..., detect.LiveConfig], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plan = _name_only_plan(make_live, desired_short_name="MT01")
+    sent = _record_owner_writes(monkeypatch)
+
+    result = apply_module._run_name_phase(FakeIfaceForApply(), plan)  # type: ignore[arg-type]
+
+    assert result is None
+    [owner] = sent
+    assert (owner.short_name, owner.long_name, owner.is_licensed) == (
+        "MT01",
+        "Meshtastic MT00",
+        True,
+    )
+
+
+def test_a_blank_unchanged_long_name_fails_the_owner_write_with_a_clear_message(
+    make_live: Callable[..., detect.LiveConfig],
+) -> None:
+    plan = _name_only_plan(
+        make_live, current_long_name="", desired_long_name="", desired_short_name="MT01"
+    )
+
+    result = apply_module._run_name_phase(FakeIfaceForApply(), plan)  # type: ignore[arg-type]
+
+    assert result == WriteResult(
+        "owner",
+        WriteStatus.FAILED,
+        "Failed to set owner: the device library refused an empty or whitespace-only name",
+    )
 
 
 def test_apply_plan_writes_is_unmessagable_when_template_configures_it(make_live) -> None:
