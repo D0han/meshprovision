@@ -134,8 +134,9 @@ class Settings(BaseModel):
         lorastats_regions: The lorastats regions ``mesh status`` queries
             when no ``--region`` is given, validated and NFC-normalized by
             :func:`~meshprovision.datasources.lorastats.validate_regions`.
-            ``None`` when unset, meaning
-            :data:`~meshprovision.datasources.lorastats.DEFAULT_REGIONS`.
+            ``None`` when unset, meaning the list lorastats.pl's own site
+            navigation names (see
+            :mod:`~meshprovision.datasources.lorastats_regions`).
         log_level: Logging verbosity for the ``mesh`` console script.
             Defaults to ``"WARNING"`` -- a plain run stays quiet on
             stderr; ``-v`` raises this project's own loggers to

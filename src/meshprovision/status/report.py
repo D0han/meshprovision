@@ -44,7 +44,8 @@ from meshprovision.cache.http import CachedHTTPClient
 from meshprovision.config.settings import Settings
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS, DataSource
 from meshprovision.datasources.loranet import LoranetSource
-from meshprovision.datasources.lorastats import DEFAULT_REGIONS, LorastatsSource
+from meshprovision.datasources.lorastats import LorastatsSource
+from meshprovision.datasources.lorastats_regions import RegionList
 from meshprovision.datasources.models import NodeObservation
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
@@ -133,17 +134,23 @@ class StatusOptions:
         sources: Which data sources to query, by short name. Defaults to
             both, in :data:`~meshprovision.status.merge.SOURCE_PRIORITY`
             order.
-        regions: The lorastats region list to query. Defaults to
-            :data:`~meshprovision.datasources.lorastats.DEFAULT_REGIONS`.
+        regions: The lorastats region list to query. Empty means the
+            list ``region_list`` gives.
         node_ids: Which nodes to report on. An empty tuple means every
             node in the database.
+        region_list: Where the lorastats regions come from when
+            ``regions`` is empty. One instance loads the list once, so the
+            CLI shares one across ``--watch`` polls; ``None`` means a new
+            :class:`~meshprovision.datasources.lorastats_regions.RegionList`
+            per run (cached list, else lorastats.pl's page).
     """
 
     thresholds: Thresholds = field(default_factory=Thresholds)
     force_refresh: bool = False
     sources: tuple[str, ...] = SOURCE_PRIORITY
-    regions: tuple[str, ...] = DEFAULT_REGIONS
+    regions: tuple[str, ...] = ()
     node_ids: tuple[NodeId, ...] = ()
+    region_list: RegionList | None = None
 
 
 _DEFAULT_STATUS_OPTIONS: Final[StatusOptions] = StatusOptions()
@@ -576,7 +583,12 @@ def run_status(
             sources.append(LoranetSource(active_client))
         if lorastats_contact is not None:
             sources.append(
-                LorastatsSource(active_client, contact=lorastats_contact, regions=options.regions)
+                LorastatsSource(
+                    active_client,
+                    contact=lorastats_contact,
+                    regions=options.regions,
+                    region_list=options.region_list or RegionList(),
+                )
             )
 
         # A reused client (the --watch loop's) keeps counting across calls;

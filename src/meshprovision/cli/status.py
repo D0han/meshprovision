@@ -36,7 +36,7 @@ from meshprovision.cli.common import (
 )
 from meshprovision.cli.help_format import MeshCommand
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
-from meshprovision.datasources.lorastats import DEFAULT_REGIONS
+from meshprovision.datasources.lorastats_regions import RegionList
 from meshprovision.errors import DbError, ExitCode, SettingsError, exit_code_for
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
@@ -117,6 +117,7 @@ def _build_options(
     sources: tuple[str, ...],
     regions: tuple[str, ...],
     configured_regions: tuple[str, ...] | None,
+    refresh_regions: bool,
     stale_after: float | None,
     offline_after: float | None,
     force_refresh: bool,
@@ -132,8 +133,12 @@ def _build_options(
         regions: lorastats region codes from ``--region``. Empty means
             ``configured_regions``.
         configured_regions: The ``MESHPROVISION_LORASTATS_REGIONS``
-            setting. ``None`` means
-            :data:`~meshprovision.datasources.lorastats.DEFAULT_REGIONS`.
+            setting. ``None`` means the region list read from
+            lorastats.pl (see
+            :mod:`~meshprovision.datasources.lorastats_regions`), loaded
+            once for every poll of this process.
+        refresh_regions: Whether to request that list again even while
+            the cached one is fresh, from ``--refresh-regions``.
         stale_after: Hours from ``--stale-after``, or ``None`` for the
             default.
         offline_after: Hours from ``--offline-after``, or ``None`` for the
@@ -146,7 +151,8 @@ def _build_options(
 
     Raises:
         SettingsError: If the resolved thresholds are not strictly
-            ordered (``stale_after < offline_after``).
+            ordered (``stale_after < offline_after``), or
+            ``refresh_regions`` is given while regions are configured.
 
     A duplicate or equivalently-spelled id (``--node deadbe01 --node
     '!deadbe01'``) is de-duplicated here, preserving first-seen order --
@@ -170,13 +176,20 @@ def _build_options(
         ) from exc
 
     node_ids = tuple(dict.fromkeys(nodes))
+    resolved_regions = tuple(regions) or configured_regions or ()
+    if refresh_regions and resolved_regions:
+        raise SettingsError(
+            "--refresh-regions has no effect: the lorastats regions are configured.",
+            hint="Drop --region and MESHPROVISION_LORASTATS_REGIONS to use lorastats.pl's list.",
+        )
 
     return StatusOptions(
         thresholds=thresholds,
         force_refresh=force_refresh,
         sources=tuple(sources) or SOURCE_PRIORITY,
-        regions=tuple(regions) or configured_regions or DEFAULT_REGIONS,
+        regions=resolved_regions,
         node_ids=node_ids,
+        region_list=None if resolved_regions else RegionList(refresh=refresh_regions),
     )
 
 
@@ -323,6 +336,15 @@ def _watch_loop(
     help="lorastats region to query (repeatable; overrides MESHPROVISION_LORASTATS_REGIONS).",
 )
 @click.option(
+    "--refresh-regions",
+    is_flag=True,
+    default=False,
+    help=(
+        "Read the lorastats region list from lorastats.pl again now, instead of "
+        "the cached one (only when no region is configured)."
+    ),
+)
+@click.option(
     "--stale-after",
     type=click.FloatRange(min=0.0, min_open=True, max=_MAX_THRESHOLD_HOURS),
     default=None,
@@ -354,6 +376,7 @@ def status(
     nodes: tuple[NodeId, ...],
     sources: tuple[str, ...],
     regions: tuple[str, ...],
+    refresh_regions: bool,
     stale_after: float | None,
     offline_after: float | None,
     fail_on_offline: bool,
@@ -374,6 +397,8 @@ def status(
         sources: Data sources to restrict the report to, from
             ``--source``.
         regions: lorastats regions to query, from ``--region``.
+        refresh_regions: Whether to read lorastats.pl's region list again,
+            from ``--refresh-regions``.
         stale_after: Stale-after threshold override, in hours, from
             ``--stale-after``.
         offline_after: Offline-after threshold override, in hours, from
@@ -401,6 +426,7 @@ def status(
         sources=sources,
         regions=regions,
         configured_regions=ctx.settings.lorastats_regions,
+        refresh_regions=refresh_regions,
         stale_after=stale_after,
         offline_after=offline_after,
         force_refresh=ctx.force_refresh,

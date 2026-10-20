@@ -105,6 +105,57 @@ printed -- is never mistaken for a PIN just because 6 of its 8
 hex characters happen to be ASCII digits.
 """
 
+LORASTATS_NODES_PAGE: Final[str] = """<!DOCTYPE html>
+<html lang="pl"><head><title>Nodes</title>
+<link rel="alternate" href="/Nodes/Linked">
+<script>document.write('<a href="/Nodes/Scripted">x</a>');</script>
+</head><body>
+<nav>
+  <a href="/Nodes">Warszawa</a>
+  <a href="/Nodes/Warszawa/Client">Client</a> <a href="/Nodes/Warszawa/Router">Router</a>
+  <a href="/Nodes/ShortFast">Krak&oacute;w, Katowice</a> <a href="/Nodes/ShortFast/RouterLate">R</a>
+  <a href="/Nodes/Zach%C3%B3d">Wroc&#322;aw</a> <a href="/Nodes/Zach%C3%B3d/Tracker">T</a>
+  <a href="/Nodes/Zacho%CC%81d">NFD spelling of the same region</a>
+  <a href="/Nodes/Gda%C5%84sk">Gda&#324;sk</a> <a href="/Nodes/Rzesz%C3%B3w">Rzesz&oacute;w</a>
+  <A HREF="/Nodes/Szczecin">Szczecin</A> <a href="/Nodes/Lublin">Lublin</a>
+  <a href="https://lorastats.pl/Nodes/Bydgoszcz">Bydgoszcz</a>
+  <a href="/Nodes/Wsch%C3%B3d">Bia&#322;a Podlaska</a> <a href="/Nodes/Kielce">Kielce</a>
+  <a href="/Nodes/Kielce/ClientMute">duplicate</a>
+</nav>
+<ul class="poi">
+  <a href="/Nodes?poi=Krak%C3%B3w">Krak&oacute;w</a> <a href="/Nodes/Lublin?poi=Pu%C5%82awy">x</a>
+</ul>
+<footer>
+  <a href="/Regions">Regions</a> <a href="/API">API</a> <a name="top">no href</a>
+  <a href="/Nodes/Client">a role page is no region</a> <a href="/Nodes/Zach%C3%B3d/Unknown">x</a>
+  <a href="/Nodes/../../etc/passwd">x</a> <a href="/Nodes/..">x</a> <a href="/Nodes/a%2Fb">x</a>
+  <a href="/Nodes/%FF%FE">x</a> <a href="/Nodes/%00">x</a> <a href="/Nodes/Gda%C5%84sk#top">x</a>
+  <a href="/Nodes/RegionNameThatIsFarTooLongToBeOneBecauseItGoesOnAndOnPastSixtyFourChars">x</a>
+  <a href="https://example.com/Nodes/Elsewhere">x</a> <a href="http://lorastats.pl/Nodes/Plain">x</a>
+  <a href="javascript:alert(1)">x</a> <a href="mailto:x@example.invalid">x</a>
+  <a href="/nodes/lowercase">x</a> <a href="Nodes/Relative">x</a>
+  <p>PAGE-TEXT-NEVER-LOGGED</p>
+</footer>
+</body></html>
+"""
+"""A stand-in for lorastats.pl's server-rendered ``/Nodes`` page, modelled on its
+regional navigation (region links, role links, ``?poi=`` locality links) plus
+junk and hostile links that must all be ignored."""
+
+LORASTATS_NODES_PAGE_REGIONS: Final[tuple[str, ...]] = (
+    "Warszawa",
+    "ShortFast",
+    "Zachód",
+    "Gdańsk",
+    "Rzeszów",
+    "Szczecin",
+    "Lublin",
+    "Bydgoszcz",
+    "Wschód",
+    "Kielce",
+)
+"""The regions :data:`LORASTATS_NODES_PAGE` names, in first-seen order."""
+
 
 @pytest.fixture(autouse=True)
 def _isolated_cwd_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

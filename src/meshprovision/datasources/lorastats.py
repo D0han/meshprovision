@@ -8,21 +8,21 @@ rather than pulling region dumps, and deliberately exposes no bulk-dump
 method at all: lorastats.pl's terms treat bulk scraping as grounds for an
 IP ban, so the absence is the safeguard.
 
-Two behaviors verified live and worth restating here because they drive
+Behaviors verified live and worth restating here because they drive
 this module's design:
 
 - ``?node=`` requires **bare lowercase hex**; uppercase or a ``!``-prefix
   both silently return ``[]``. Always pass ``node_id.hex``.
 - An unknown node returns ``[]`` with **HTTP 200** -- not an error.
+- So does a node asked about in a region other than the one it lives in
+  (by its last reported position, so a node can move), and any unknown or
+  mistyped region: ``[]`` with HTTP 200, indistinguishable from "no data".
 
-The region path segment is documented by lorastats.pl itself, but is
-**not validated server-side**: an invalid region still returns HTTP 200
-with real data for a valid node (a silent soft-fallback). This module can
-therefore only validate a region's *local* shape (see
-:func:`validate_regions`); it cannot detect a mistyped region, and there
-is deliberately no discovery endpoint to fall back on -- lorastats.pl
-bans IPs for scraping its HTML site, and no JSON region-list endpoint
-exists.
+The regions to ask are configured, or -- when none is -- read from
+lorastats.pl's own site navigation and cached for a week by
+:class:`~meshprovision.datasources.lorastats_regions.RegionList` (no API
+lists them). Each is checked only for its *local* shape (see
+:func:`validate_regions`) and asked in turn.
 """
 
 from __future__ import annotations
@@ -50,10 +50,11 @@ from meshprovision.nodeid import NodeId, NodeIdLike
 
 if TYPE_CHECKING:
     from meshprovision.cache.http import CachedHTTPClient
+    from meshprovision.datasources.lorastats_regions import RegionList
 
 __all__ = [
-    "DEFAULT_REGIONS",
     "LORASTATS_BASE_URL",
+    "LORASTATS_MAX_REGIONS",
     "LORASTATS_MIN_TTL_SECONDS",
     "LORASTATS_NODES_PATH",
     "REGION_PATTERN",
@@ -78,9 +79,9 @@ for; with this floor, ``--cache-ttl 0`` and a short ``--watch --interval``
 still ask for each node at most once a minute (``--no-cache`` still forces
 a fresh fetch)."""
 
-DEFAULT_REGIONS: Final[tuple[str, ...]] = ("PL",)
-"""Default, config-overridable region list (finding #3: no JSON region-list
-endpoint exists, and scraping the HTML site is an IP-bannable offense)."""
+LORASTATS_MAX_REGIONS: Final[int] = 16
+"""Most regions in a list, configured or read from lorastats.pl: each may be
+asked for a node, so this bounds the requests one node can cost."""
 
 REGION_PATTERN: Final[re.Pattern[str]] = re.compile(r"^(?!\.{1,2}$)[^\x00-\x1f\x7f/\\?#%]{1,64}\Z")
 """Shape a region path segment must match: 1-64 characters of any script
@@ -103,8 +104,9 @@ class LorastatsSource(BaseHTTPDataSource):
         client: CachedHTTPClient,
         *,
         contact: str,
-        regions: Sequence[str] = DEFAULT_REGIONS,
+        regions: Sequence[str] = (),
         base_url: str = LORASTATS_BASE_URL,
+        region_list: RegionList | None = None,
     ) -> None:
         """Initialize the source.
 
@@ -122,23 +124,30 @@ class LorastatsSource(BaseHTTPDataSource):
             contact: The operator's contact string. Only checked for
                 non-blankness here; the actual ``User-Agent`` sent on
                 every request is owned by ``client``.
-            regions: The static, config-overridable region list to query
-                when a call does not specify one explicitly. Validated
-                via :func:`validate_regions`.
+            regions: The configured region list to query when a call does
+                not specify one explicitly. Validated via
+                :func:`validate_regions`. Empty means ``region_list``.
             base_url: The lorastats.pl base URL. Overridable for tests.
+            region_list: Where to get the regions when none are
+                configured, on first use.
 
         Raises:
             meshprovision.errors.MissingContactError: If ``contact`` is
                 empty or whitespace-only.
-            meshprovision.errors.SettingsError: If ``regions`` is empty,
-                contains only blank entries, or contains an entry that
-                does not match :data:`REGION_PATTERN`.
+            meshprovision.errors.SettingsError: If ``regions`` contains
+                only blank entries, an entry that does not match
+                :data:`REGION_PATTERN`, or more than
+                :data:`LORASTATS_MAX_REGIONS` entries, or is empty without
+                a ``region_list``.
         """
         if not contact.strip():
             raise MissingContactError()
         super().__init__(client, source_name=SOURCE_LORASTATS)
         self._base_url = base_url.rstrip("/")
-        self._regions = validate_regions(regions)
+        if not regions and region_list is None:
+            raise SettingsError("No lorastats regions to ask were given.")
+        self._regions = validate_regions(regions) if regions else None
+        self._region_list = region_list
 
     def fetch_nodes(
         self, ids: Collection[NodeId], *, force_refresh: bool | None = None
@@ -224,10 +233,12 @@ class LorastatsSource(BaseHTTPDataSource):
             meshprovision.errors.InvalidResponseError: If a response
                 body does not parse as a JSON array.
             meshprovision.errors.HttpError: If a request itself fails.
+            meshprovision.errors.DataSourceError: If no regions are
+                configured and the region list cannot be had.
         """
         self._begin_fetch()
         nid = NodeId.parse(node_id)
-        candidates = validate_regions((region,)) if region is not None else self._regions
+        candidates = validate_regions((region,)) if region is not None else self._configured()
         skipped = 0
         tracker = CoercionTracker()
 
@@ -266,6 +277,21 @@ class LorastatsSource(BaseHTTPDataSource):
         self._last_fetch_skipped = skipped
         self._last_fetch_field_coercions = tracker.failures
         return None
+
+    def _configured(self) -> tuple[str, ...]:
+        """Return the configured regions, else the region list's (loaded once by it).
+
+        Returns:
+            The validated regions to ask, in order.
+
+        Raises:
+            meshprovision.errors.DataSourceError: If the region list cannot
+                be had.
+        """
+        if self._regions is not None:
+            return self._regions
+        listed = self._region_list.regions(self._client) if self._region_list else ()
+        return validate_regions(listed)
 
 
 def _match_record(records: list[Any], nid: NodeId) -> tuple[Mapping[str, Any] | None, int]:
@@ -372,11 +398,12 @@ def validate_regions(regions: Sequence[str]) -> tuple[str, ...]:
     preserving order, and requires every surviving entry to match
     :data:`REGION_PATTERN`. Nothing else is folded: ``PL`` and ``pl`` stay
     two regions, since lorastats.pl's own matching cannot be verified
-    offline. This is a *local* shape check only:
-    lorastats.pl does not validate the region path segment server-side
-    (an invalid-but-well-formed region silently returns real data for a
-    valid node), so this function cannot detect a mistyped-but-well-
-    formed region -- only a malformed one.
+    offline. At most :data:`LORASTATS_MAX_REGIONS` may remain. This is a
+    *local* shape check only: lorastats.pl does not validate the region
+    path segment server-side (an invalid-but-well-formed region silently
+    returns an empty list, as for a node that is not there), so this
+    function cannot detect a mistyped-but-well-formed region -- only a
+    malformed one.
 
     Args:
         regions: The candidate region list.
@@ -387,7 +414,8 @@ def validate_regions(regions: Sequence[str]) -> tuple[str, ...]:
 
     Raises:
         meshprovision.errors.SettingsError: If no non-blank entry
-            remains, or an entry does not match :data:`REGION_PATTERN`.
+            remains, more than :data:`LORASTATS_MAX_REGIONS` do, or an
+            entry does not match :data:`REGION_PATTERN`.
     """
     deduplicated: list[str] = []
     for raw in regions:
@@ -397,6 +425,11 @@ def validate_regions(regions: Sequence[str]) -> tuple[str, ...]:
 
     if not deduplicated:
         raise SettingsError("At least one lorastats region must be configured.")
+    if len(deduplicated) > LORASTATS_MAX_REGIONS:
+        raise SettingsError(
+            f"At most {LORASTATS_MAX_REGIONS} lorastats regions can be configured, "
+            f"got {len(deduplicated)}."
+        )
 
     for token in deduplicated:
         if not REGION_PATTERN.match(token):

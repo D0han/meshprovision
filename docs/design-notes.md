@@ -10,13 +10,14 @@ documented here rather than buried.
    3), exposed by the Python API camelCase as `adminKey`. There is no
    `adminKeyAuthorized` field. `SecurityConfig` also carries
    `admin_channel_enabled` (field 8) and `is_managed` (field 4).
-2. **The region list is static and config-overridable, never
-   auto-discovered.** No JSON endpoint for it exists —
-   `/API/Regions/JSON` returns the HTML API page and `/Regions` is an
-   HTML map. Discovering regions would require scraping, which
-   lorastats.pl explicitly forbids and bans IP addresses for. Default:
-   `["PL"]`, overridable with `MESHPROVISION_LORASTATS_REGIONS` or
-   `--region`.
+2. **The region list is configured, or read from one HTML page at most
+   weekly.** No JSON endpoint for it exists — `/API/Regions/JSON`
+   returns the HTML API page and `/Regions` is rendered by JavaScript. The
+   names appear only as the navigation links of the server-rendered
+   `https://lorastats.pl/Nodes`. lorastats.pl forbids scraping its HTML
+   pages, so that page is requested only when neither
+   `MESHPROVISION_LORASTATS_REGIONS` nor `--region` is given, cached for a
+   week, and read for its link targets only; there is no built-in list.
 3. **lorastats is queried per node via `?node=<hex>`, not by bulk region
    dump.** `?node=` is a server-side filter that turns a 1.8 MB region
    dump into a ~150 byte response. Related hardening: the region path

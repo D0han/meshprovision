@@ -11,6 +11,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `MESHPROVISION_LORASTATS_REGIONS` (comma-separated) sets the lorastats
   regions `mesh status` queries; `--region` still overrides it.
+- Without either, `mesh status` asks the regions lorastats.pl names in its own
+  site navigation. lorastats.pl has no API for them and asks API clients not
+  to scrape its HTML, so the one page (`/Nodes`) is requested only when no
+  region is configured, at most once a week (cached in
+  `lorastats_region_list.json`; `mesh status --refresh-regions` asks again),
+  and only its links are read. If it cannot be read, the cached list is used;
+  without one lorastats fails as a source, asking you to set the regions.
 - `mesh status` shows when the device last reported its metrics (new `Metrics`
   column, loranet's `lastDeviceMetrics`), so the age of `Batt`, `Volt`,
   `ChUtil` and `AirTx` is no longer guessed from `Last seen`. It also gains an
@@ -260,6 +267,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh status` no longer asks the lorastats region `PL` by default: it is
+  not a region on lorastats.pl, which answers an unknown region with an empty
+  list. At most 16 regions can be configured.
 - `mesh status` now colors each row by how long ago the node was last
   seen: green within 24 hours, yellow within 2 days, orange within a
   week, red beyond that, and dim when it was never seen. Previously the

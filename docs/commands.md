@@ -317,17 +317,42 @@ corroboration); most recent wins. Default thresholds: online < 2 h, stale
 < 24 h, offline beyond.
 
 `--region` (repeatable) names the lorastats region(s) to query, in order. It
-overrides `MESHPROVISION_LORASTATS_REGIONS` (comma-separated), which defaults
-to `PL`. Regions are matched exactly as typed, after Unicode NFC normalization (so
-`Zachód` typed with a combining accent is the same region, and a region given
-twice is queried once); `PL` and `pl` are different regions to this tool.
+overrides `MESHPROVISION_LORASTATS_REGIONS` (comma-separated). Regions are
+matched exactly as typed, after Unicode NFC normalization (so `Zachód` typed
+with a combining accent is the same region, and a region given twice is
+queried once); `Zachód` and `zachód` are different regions to this tool. At
+most 16 regions can be given.
+
+**Region list.** When neither is given, `mesh status` asks the regions
+lorastats.pl publishes in its own site navigation (`Warszawa`, `Zachód`,
+`Gdańsk`, ... at the time of writing; they can change). lorastats.pl has no
+API that lists them, so mesh reads the region links of one server-rendered
+page, `https://lorastats.pl/Nodes`, although lorastats.pl asks API clients
+not to scrape its HTML pages and bans IP addresses that do. To keep that to
+one request a week:
+
+- the page is requested only when no region is configured;
+- the list is kept in `lorastats_region_list.json` in the cache directory for
+  7 days; `--no-cache`, `--force-refresh` and `--watch` polls never request
+  it again, only `mesh status --refresh-regions` does (refused when regions
+  are configured), and at most once per `mesh` process;
+- only the link targets are read: no script runs, no link is followed,
+  nothing of the page is logged, and every name must pass the same check as
+  `--region`.
+
+If the page cannot be read (or names no region) the cached list is used, with
+a warning, however old; without one, lorastats is reported as a failed source
+whose hint asks you to set `MESHPROVISION_LORASTATS_REGIONS`. There is no
+built-in list. To never request the page, configure the regions, for example
+`MESHPROVISION_LORASTATS_REGIONS=Zachód,Warszawa`.
 
 ```bash
 mesh status
 mesh status --json
 mesh status --node deadbe01 --node '!a0cb5cc4'
 mesh status --source loranet
-mesh status --region PL
+mesh status --region Zachód --region Gdańsk
+mesh status --refresh-regions
 mesh status --stale-after 1 --offline-after 12
 mesh status --watch --interval 60
 mesh --no-cache status --json
