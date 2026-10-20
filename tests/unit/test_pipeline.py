@@ -589,6 +589,24 @@ def test_allocate_names_returns_none_when_existing_and_not_renaming(nodes: NodeR
     )
 
 
+def test_allocate_names_rename_keeps_names_that_already_conform(nodes: NodeRepository) -> None:
+    existing = NodeRecord(node_id="deadbe01", short_name="MT03", long_name="Meshtastic 03")
+    assert allocate_names(nodes, _naming_template(), existing=existing, rename=True) == (
+        "MT03",
+        "Meshtastic 03",
+    )
+
+
+def test_allocate_names_rename_reallocates_when_only_the_short_name_conforms(
+    nodes: NodeRepository,
+) -> None:
+    existing = NodeRecord(node_id="deadbe01", short_name="MT03", long_name="Bob's Base")
+    assert allocate_names(nodes, _naming_template(), existing=existing, rename=True) == (
+        "MT00",
+        "Meshtastic 00",
+    )
+
+
 def test_allocate_names_picks_same_index_for_short_and_long_when_free(
     nodes: NodeRepository,
 ) -> None:
@@ -875,7 +893,11 @@ def test_duplicate_candidate_keys_excludes_own_ref_label_and_observed_refs(
 def test_node_key_admin_refs_ignores_an_archived_nodes_authorization(
     keys: KeyRepository, nodes: NodeRepository, keypair: KeyPair
 ) -> None:
-    """An archived node's ``authorized_admin_keys`` entry does not count."""
+    """An archived node's ``authorized_admin_keys`` entry does not count.
+
+    The archived node is TEMPLATE-managed, so the archive check alone is
+    what leaves its authorization out.
+    """
     pub, priv = KeyRecord.for_keypair("deadbe01", keypair, origin=KeyOrigin.GENERATED)
     keys.upsert(pub)
     keys.upsert(priv)
@@ -883,6 +905,7 @@ def test_node_key_admin_refs_ignores_an_archived_nodes_authorization(
     nodes.upsert(
         NodeRecord(
             node_id="bbbb0001",
+            management=ManagementMode.TEMPLATE,
             authorized_admin_keys=("deadbe01_pub",),
             archived_at=datetime(2024, 1, 1, tzinfo=UTC),
         )

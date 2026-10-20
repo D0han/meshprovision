@@ -637,11 +637,11 @@ def allocate_names(
 
     Returns:
         ``(None, None)`` when ``existing`` is set and ``rename`` is
-        ``False``, or when ``existing`` is set, ``rename`` is ``True``,
-        and the node's current ``short_name``/``long_name`` both already
-        parse under the template's current patterns --
-        :func:`~meshprovision.provisioning.plan.build_plan` then keeps
-        the database's (or, failing that, the device's) current names.
+        ``False`` -- :func:`~meshprovision.provisioning.plan.build_plan`
+        then keeps the database's (or, failing that, the device's)
+        current names. ``existing``'s own ``(short_name, long_name)``,
+        unchanged, when ``existing`` is set, ``rename`` is ``True``, and
+        both names already parse under the template's current patterns.
         This is what makes ``--rename`` idempotent: a node already
         conforming to the template isn't reallocated a new name just
         because ``--rename`` was passed again. Otherwise a freshly
