@@ -1290,3 +1290,131 @@ def test_evict_logs_and_never_raises_when_the_entry_cannot_be_removed(
         client.evict(key)
 
     assert "could not drop rejected cache entry" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Accepted non-2xx statuses (lorastats.pl's per-node status endpoint).
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_an_accepted_404_is_returned_instead_of_raised(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(404, text="Not Found"))
+    client = _make_client(tmp_path, now=[0.0])
+
+    response = client.get(URL, accept_statuses={404})
+
+    assert (response.status_code, response.content, response.from_cache) == (
+        404,
+        b"Not Found",
+        False,
+    )
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_an_accepted_500_is_neither_retried_nor_raised(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(500))
+    client = _make_client(tmp_path, now=[0.0])
+
+    assert client.get(URL, accept_statuses={404, 500}).status_code == 500
+    assert (client.stats.network_requests, client.stats.retries) == (1, 0)
+
+
+@respx.mock
+def test_a_5xx_outside_the_accepted_statuses_is_still_retried(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(503))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(HttpError) as exc_info:
+        client.get(URL, accept_statuses={404, 500})
+    assert exc_info.value.status_code == 503
+    assert client.stats.network_requests == DEFAULT_MAX_RETRIES + 1
+
+
+@respx.mock
+def test_a_4xx_outside_the_accepted_statuses_is_still_raised(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(403))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(HttpError) as exc_info:
+        client.get(URL, accept_statuses={404, 500})
+    assert exc_info.value.status_code == 403
+
+
+@respx.mock
+def test_an_accepted_status_is_cached_for_the_ttl(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(404))
+    now = [1000.0]
+    client = _make_client(tmp_path, now=now, ttl=60.0)
+
+    client.get(URL, accept_statuses={404})
+    now[0] += 60
+    cached = client.get(URL, accept_statuses={404})
+    assert (cached.status_code, cached.from_cache, route.call_count) == (404, True, 1)
+
+    now[0] += 1
+    assert client.get(URL, accept_statuses={404}).from_cache is False
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_a_cached_status_is_a_miss_for_a_call_that_does_not_accept_it(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(404))
+    client = _make_client(tmp_path, now=[1000.0])
+    client.get(URL, accept_statuses={404})
+
+    with pytest.raises(HttpError):
+        client.get(URL)
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_429_cannot_be_an_accepted_status(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(429))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(ValueError, match="429"):
+        client.get(URL, accept_statuses={404, 429})
+    assert route.call_count == 0
+
+
+@respx.mock
+def test_accepting_a_status_keeps_a_429_and_its_cool_down(tmp_path: Path) -> None:
+    route = _rate_limited_then_ok("120")
+    client = _make_client(tmp_path, now=[1000.0])
+
+    with pytest.raises(RateLimitError):
+        client.get(URL, accept_statuses={404, 500})
+    with pytest.raises(RateLimitError):
+        client.get(URL, accept_statuses={404, 500})
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_a_call_can_lower_the_response_size_cap(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(200, content=b"x" * 1001))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(HttpError, match="larger than 1000 bytes"):
+        client.get(URL, max_bytes=1000)
+    assert route.call_count == 1
+    assert client.stats.writes == 0
+
+
+@respx.mock
+def test_a_body_at_a_calls_size_cap_is_accepted(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, content=b"x" * 1000))
+    client = _make_client(tmp_path, now=[0.0])
+
+    assert len(client.get(URL, max_bytes=1000).content) == 1000
+
+
+@respx.mock
+def test_a_call_cannot_raise_the_size_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(http_module, "MAX_RESPONSE_BYTES", 4096)
+    respx.get(URL).mock(return_value=httpx.Response(200, content=b"x" * 4097))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(HttpError, match="larger than 4096 bytes"):
+        client.get(URL, max_bytes=10**9)

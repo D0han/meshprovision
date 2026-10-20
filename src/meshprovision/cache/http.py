@@ -28,7 +28,9 @@ still written to disk, refreshing the entry for the next run).
 response's status code, a small allow-listed subset of headers, the body
 base64-encoded (so binary content or a mis-declared encoding can never
 corrupt the file), and metadata (``version``, ``key``, ``fetched_at``).
-Only 2xx responses are ever written. A 12.7 MB body (the loranet.pl node
+Only 2xx responses, and a status the caller explicitly accepts (see
+:meth:`CachedHTTPClient.request`'s ``accept_statuses``), are ever written,
+and an entry is only served to a call that accepts its status. A 12.7 MB body (the loranet.pl node
 dump) base64s to roughly 17 MB on disk and is held fully in memory during
 read/write; this is a deliberate simplicity trade-off for a low-volume,
 single-operator tool and should not be "optimised" into a streaming
@@ -69,7 +71,7 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -226,30 +228,29 @@ class _InvalidRedirectError(httpx.RequestError):
 
 
 class _ResponseTooLargeError(httpx.RequestError):
-    """A response body exceeded :data:`MAX_RESPONSE_BYTES`.
+    """A response body exceeded its cap (:data:`MAX_RESPONSE_BYTES` or a call's lower one).
 
     A :class:`httpx.RequestError` (not a ``TransportError``), like
     :class:`_InsecureRedirectError`: deterministic, never retried, wrapped
     as :class:`HttpError`, and never cached.
     """
 
-    def __init__(self, *, request: httpx.Request) -> None:
+    def __init__(self, limit: int, *, request: httpx.Request) -> None:
         """Initialize the error.
 
         Args:
+            limit: The cap the body exceeded, in bytes.
             request: The request whose response was too large.
         """
-        super().__init__(
-            f"the response body is larger than {MAX_RESPONSE_BYTES} bytes",
-            request=request,
-        )
+        super().__init__(f"the response body is larger than {limit} bytes", request=request)
 
 
-def _read_capped(response: httpx.Response) -> bytes:
-    """Read a streamed response's decoded body, stopping past :data:`MAX_RESPONSE_BYTES`.
+def _read_capped(response: httpx.Response, limit: int) -> bytes:
+    """Read a streamed response's decoded body, stopping past ``limit`` bytes.
 
     Args:
         response: A response opened with ``stream=True``.
+        limit: The largest body accepted, in bytes.
 
     Returns:
         The decoded body.
@@ -261,8 +262,8 @@ def _read_capped(response: httpx.Response) -> bytes:
     size = 0
     for chunk in response.iter_bytes():
         size += len(chunk)
-        if size > MAX_RESPONSE_BYTES:
-            raise _ResponseTooLargeError(request=response.request)
+        if size > limit:
+            raise _ResponseTooLargeError(limit, request=response.request)
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -610,6 +611,19 @@ def _parse_retry_after(value: str | None, *, clock: Callable[[], float]) -> floa
     return max(0.0, parsed.timestamp() - clock())
 
 
+def _answers(status: int, accept_statuses: Collection[int]) -> bool:
+    """Return whether a cached response's status answers a call.
+
+    Args:
+        status: The cached response's HTTP status.
+        accept_statuses: The call's accepted non-2xx statuses.
+
+    Returns:
+        ``True`` for a 2xx status or one in ``accept_statuses``.
+    """
+    return _HTTP_SUCCESS_MIN <= status < _HTTP_SUCCESS_MAX or status in accept_statuses
+
+
 def _rate_limit_key(url: str) -> str:
     """Return what a 429 cool-down is kept under: ``url``'s host.
 
@@ -740,7 +754,8 @@ class CachedHTTPClient:
       hit costs zero network calls; a stale or absent entry triggers a
       network fetch that is written back (2xx responses only).
     - **Exponential backoff** on 5xx responses and network-transport
-      errors only -- never on 4xx, which is never retried.
+      errors only -- never on 4xx, which is never retried, nor on a status
+      the call accepts (``accept_statuses``), which is returned like a 2xx.
     - **A per-host cool-down after HTTP 429.** A host that answered 429 is
       not asked again by this instance for its ``Retry-After`` delay
       (:data:`_RATE_LIMIT_DEFAULT_COOLDOWN_SECONDS` without a usable one,
@@ -903,6 +918,8 @@ class CachedHTTPClient:
         ttl: float | None = None,
         force_refresh: bool | None = None,
         source: str | None = None,
+        accept_statuses: Collection[int] = (),
+        max_bytes: int = MAX_RESPONSE_BYTES,
     ) -> CachedResponse:
         """Perform a cached ``GET`` request.
 
@@ -920,6 +937,10 @@ class CachedHTTPClient:
                 way.
             source: A short label (``"loranet"``, ``"lorastats"``) used
                 in error messages to identify the calling datasource.
+            accept_statuses: Non-2xx statuses that are an answer for this
+                call rather than a failure; see :meth:`request`.
+            max_bytes: The largest response body accepted for this call;
+                see :meth:`request`.
 
         Returns:
             The cached or freshly fetched response. If the fetched
@@ -928,6 +949,7 @@ class CachedHTTPClient:
 
         Raises:
             SettingsError: If the resolved ``ttl`` is negative.
+            ValueError: If ``accept_statuses`` contains 429.
             HttpError: If the request fails and cannot be served from a
                 fresh cache entry.
             RateLimitError: If the server responds with HTTP 429, or the
@@ -941,6 +963,8 @@ class CachedHTTPClient:
             ttl=ttl,
             force_refresh=force_refresh,
             source=source,
+            accept_statuses=accept_statuses,
+            max_bytes=max_bytes,
         )
 
     def request(
@@ -953,6 +977,8 @@ class CachedHTTPClient:
         ttl: float | None = None,
         force_refresh: bool | None = None,
         source: str | None = None,
+        accept_statuses: Collection[int] = (),
+        max_bytes: int = MAX_RESPONSE_BYTES,
     ) -> CachedResponse:
         """Perform a cached HTTP request of any method.
 
@@ -974,6 +1000,16 @@ class CachedHTTPClient:
                 way, refreshing the entry for the next call.
             source: A short label (``"loranet"``, ``"lorastats"``) used
                 in error messages to identify the calling datasource.
+            accept_statuses: Non-2xx statuses that are an answer for this
+                call rather than a failure (lorastats.pl's per-node status
+                endpoint answers 404 for a node it does not know): such a
+                response is neither retried nor raised, and is cached and
+                returned like a 2xx. A cached entry with a status outside
+                2xx and this set is a miss. Never 429, whose cool-down
+                must hold.
+            max_bytes: The largest response body accepted for this call,
+                counted after decoding; a larger one fails like one past
+                :data:`MAX_RESPONSE_BYTES`, which a call can only lower.
 
         Returns:
             The cached or freshly fetched response. If the fetched
@@ -982,6 +1018,7 @@ class CachedHTTPClient:
 
         Raises:
             SettingsError: If the resolved ``ttl`` is negative.
+            ValueError: If ``accept_statuses`` contains 429.
             HttpError: If the request fails and cannot be served from a
                 fresh cache entry.
             RateLimitError: If the server responds with HTTP 429, or the
@@ -990,6 +1027,8 @@ class CachedHTTPClient:
         effective_ttl = self._ttl if ttl is None else ttl
         if effective_ttl < 0:
             raise SettingsError("Cache TTL must not be negative.")
+        if _HTTP_RATE_LIMITED in accept_statuses:
+            raise ValueError("HTTP 429 cannot be an accepted status")
         refresh = self._force_refresh if force_refresh is None else force_refresh
 
         key = cache_key(method, url, params)
@@ -997,7 +1036,11 @@ class CachedHTTPClient:
 
         if not refresh:
             entry = self._read_entry(path, cache_key_value=key)
-            if entry is not None and entry.is_fresh(effective_ttl, now=self._clock()):
+            if (
+                entry is not None
+                and _answers(entry.status_code, accept_statuses)
+                and entry.is_fresh(effective_ttl, now=self._clock())
+            ):
                 self._stats = replace(self._stats, hits=self._stats.hits + 1)
                 _logger.debug("cache hit for %s %s (key=%s)", method, url, key)
                 return replace(entry, from_cache=True)
@@ -1007,7 +1050,14 @@ class CachedHTTPClient:
 
         merged_headers = self._merge_headers(headers)
         response = self._fetch_with_retry(
-            method, url, params=params, headers=merged_headers, source=source, cache_key_value=key
+            method,
+            url,
+            params=params,
+            headers=merged_headers,
+            source=source,
+            cache_key_value=key,
+            accept_statuses=accept_statuses,
+            max_bytes=min(max_bytes, MAX_RESPONSE_BYTES),
         )
         try:
             self._write_entry(path, response)
@@ -1122,8 +1172,8 @@ class CachedHTTPClient:
 
         Args:
             path: Path to write the cache entry to.
-            response: The response to persist. Only 2xx responses should
-                ever be passed here.
+            response: The response to persist. Only a 2xx response, or one
+                whose status the call accepted, should ever be passed here.
 
         Raises:
             CacheError: If the write fails. Write failures are raised,
@@ -1191,6 +1241,8 @@ class CachedHTTPClient:
         headers: Mapping[str, str],
         source: str | None,
         cache_key_value: str,
+        accept_statuses: Collection[int],
+        max_bytes: int,
     ) -> CachedResponse:
         """Perform the network fetch, retrying on 5xx and transport errors.
 
@@ -1202,6 +1254,9 @@ class CachedHTTPClient:
             source: A short label identifying the calling datasource, for
                 error messages.
             cache_key_value: The cache key this fetch is for.
+            accept_statuses: Statuses returned as they are, never retried
+                or raised (see :meth:`request`).
+            max_bytes: The largest response body accepted.
 
         Returns:
             The freshly fetched response, with ``from_cache=False``.
@@ -1211,7 +1266,7 @@ class CachedHTTPClient:
                 ``TooManyRedirects`` redirect loop, a refused HTTPS ->
                 non-HTTPS redirect, a redirect to an invalid URL, an
                 undecodable response body, or one
-                larger than :data:`MAX_RESPONSE_BYTES`), or
+                larger than ``max_bytes``), or
                 after exhausting retries on a retryable transport error.
             RateLimitError: If the server responds with HTTP 429 (never
                 retried automatically; starts the host's cool-down), or
@@ -1238,7 +1293,7 @@ class CachedHTTPClient:
                 # retried below, as with a buffered request.
                 response = self._send_following_redirects(request)
                 try:
-                    content = _read_capped(response)
+                    content = _read_capped(response, max_bytes)
                 finally:
                     response.close()
             except (httpx.InvalidURL, httpx.UnsupportedProtocol) as exc:
@@ -1270,8 +1325,9 @@ class CachedHTTPClient:
                 ) from exc
 
             status = response.status_code
+            accepted = status in accept_statuses
 
-            if status >= RETRY_STATUS_MIN:
+            if status >= RETRY_STATUS_MIN and not accepted:
                 if attempt == self._max_retries:
                     raise HttpError(
                         f"{url} returned HTTP {status} after {attempt + 1} attempt(s)",
@@ -1283,7 +1339,11 @@ class CachedHTTPClient:
                 self._backoff(attempt, url=url)
                 continue
 
-            status_error = _status_error(response, url=url, source=source, clock=self._clock)
+            status_error = (
+                None
+                if accepted
+                else _status_error(response, url=url, source=source, clock=self._clock)
+            )
             if isinstance(status_error, RateLimitError):
                 self._start_rate_limit_cooldown(url, status_error.retry_after)
             if status_error is not None:
