@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from collections.abc import Collection, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
@@ -363,9 +364,13 @@ def parse_node(
 def validate_regions(regions: Sequence[str]) -> tuple[str, ...]:
     """Validate and normalize a candidate region list.
 
-    Strips each entry, drops blanks, de-duplicates while preserving
-    order, and requires every surviving entry to match
-    :data:`REGION_PATTERN`. This is a *local* shape check only:
+    Strips each entry and normalizes it to Unicode NFC (so ``Zachód``
+    typed with a combining accent, as macOS input produces, is the same
+    region as the precomposed spelling), drops blanks, de-duplicates while
+    preserving order, and requires every surviving entry to match
+    :data:`REGION_PATTERN`. Nothing else is folded: ``PL`` and ``pl`` stay
+    two regions, since lorastats.pl's own matching cannot be verified
+    offline. This is a *local* shape check only:
     lorastats.pl does not validate the region path segment server-side
     (an invalid-but-well-formed region silently returns real data for a
     valid node), so this function cannot detect a mistyped-but-well-
@@ -375,7 +380,8 @@ def validate_regions(regions: Sequence[str]) -> tuple[str, ...]:
         regions: The candidate region list.
 
     Returns:
-        The validated, de-duplicated regions, in their original order.
+        The validated, NFC-normalized, de-duplicated regions, in their
+        original order.
 
     Raises:
         meshprovision.errors.SettingsError: If no non-blank entry
@@ -383,7 +389,7 @@ def validate_regions(regions: Sequence[str]) -> tuple[str, ...]:
     """
     deduplicated: list[str] = []
     for raw in regions:
-        token = raw.strip()
+        token = unicodedata.normalize("NFC", raw.strip())
         if token and token not in deduplicated:
             deduplicated.append(token)
 

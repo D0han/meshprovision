@@ -404,6 +404,21 @@ def test_validate_regions_accepts_any_plausible_region_name(region: str) -> None
     assert validate_regions([region]) == (region,)
 
 
+_ZACHOD_NFC = "Zachód"
+_ZACHOD_NFD = "Zachód"
+
+
+def test_validate_regions_treats_nfc_and_nfd_spellings_as_one_region() -> None:
+    """Both spellings were kept, so every node not found cost one request per spelling."""
+    assert validate_regions([_ZACHOD_NFC, _ZACHOD_NFD]) == (_ZACHOD_NFC,)
+    assert validate_regions([_ZACHOD_NFD]) == (_ZACHOD_NFC,)
+
+
+def test_validate_regions_folds_neither_case_nor_compatibility_forms() -> None:
+    """Only canonical equivalence is safe to assume; lorastats.pl's own matching is unknown."""
+    assert validate_regions(["PL", "pl", "\uff30\uff2c"]) == ("PL", "pl", "\uff30\uff2c")
+
+
 def test_region_pattern_does_not_match_before_a_trailing_newline() -> None:
     assert lorastats_module.REGION_PATTERN.match("PL\n") is None
 
@@ -433,6 +448,19 @@ def test_lorastats_percent_encodes_a_non_ascii_region_in_the_request_path(tmp_pa
     assert obs is not None
     assert obs.region_queried == "Zachód"
     assert obs.last_boot == datetime(2026, 6, 5, 1, 29, 46, tzinfo=UTC)
+
+
+@respx.mock
+def test_lorastats_requests_an_nfd_region_by_its_nfc_spelling(tmp_path: Path) -> None:
+    route = respx.get(url__startswith=f"{LORASTATS_BASE_URL}/API/Zach%C3%B3d/Nodes/JSON").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=[_ZACHOD_NFD])
+
+    assert source.fetch_node("deadbe01") is None
+    assert source.fetch_node("deadbe02", region=_ZACHOD_NFD) is None
+    assert route.call_count == 2
 
 
 def test_lorastats_blank_contact_raises(tmp_path: Path) -> None:

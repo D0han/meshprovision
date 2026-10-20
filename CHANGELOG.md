@@ -435,6 +435,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   letters of any script, spaces and punctuation, up to 64 characters, and are
   percent-encoded in the request path; anything that could alter the path
   (`/`, `\`, `?`, `#`, `%`, control characters, `.` and `..`) is still refused.
+  Region names are normalized to Unicode NFC, so the same name typed with a
+  combining accent (as macOS input produces) is queried once, not once per
+  spelling.
 - `mesh status` (and `--watch`) no longer crashes with a traceback, for the
   whole cache TTL, when a data source returns JSON nested too deeply to decode
   or an integer with thousands of digits: that source fails like any other
