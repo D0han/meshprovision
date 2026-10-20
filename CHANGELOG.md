@@ -1142,7 +1142,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   link, and a lock path that is not a regular file is refused with a hint to
   delete it: mesh writes its pid into that file, so a link planted there
   (with the database in a shared, world-writable directory) could otherwise
-  redirect the write to another of the operator's files.
+  redirect the write to another of the operator's files. For the same reason
+  no pid is written into a lock file that has more than one hard link (a
+  warning is logged; the lock is still taken, since backup tools hard-link
+  files legitimately).
 - A data-source response whose body is larger than 64 MiB after
   decompression is refused (that source fails for the run, it is not
   retried) and never cached, so a small compressed response from a hostile

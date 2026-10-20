@@ -229,7 +229,10 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
     block, including an exception. The sidecar is never unlinked: doing
     so would let a third process create a fresh file at the same path
     and lock a different inode while an earlier holder still believes it
-    owns the original one.
+    owns the original one. The holder's pid is written into the sidecar
+    (best effort, for :class:`DatabaseLockedError`'s hint) unless the
+    sidecar has more than one hard link, in which case a WARNING is logged
+    and the lock is still taken.
 
     On a platform without ``fcntl`` this is a no-op that logs a WARNING
     once per process and otherwise proceeds as if the lock were held.
@@ -283,7 +286,8 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
         ) from exc
 
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        lock_stat = os.fstat(fd)
+        if not stat.S_ISREG(lock_stat.st_mode):
             raise AtomicWriteError(
                 f"The database lock file {lock_path} is not a regular file.",
                 path=str(target),
@@ -320,7 +324,17 @@ def exclusive_lock(target: Path, *, timeout: float | None = None) -> Iterator[No
                         ),
                     ) from None
                 time.sleep(_POLL_INTERVAL)
-        _record_holder_pid(fd)
+        # O_NOFOLLOW does not stop a hard link: one planted at the lock path
+        # is another file, which the pid must not overwrite. The lock itself
+        # still works (and backup tools hard-link files legitimately).
+        if lock_stat.st_nlink == 1:
+            _record_holder_pid(fd)
+        else:
+            _logger.warning(
+                "%s has %d hard links; not writing the holder pid into it",
+                lock_path,
+                lock_stat.st_nlink,
+            )
         yield
     finally:
         os.close(fd)

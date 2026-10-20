@@ -377,3 +377,28 @@ def test_a_lock_path_that_is_not_a_regular_file_is_refused(tmp_path: Path) -> No
         pass
 
     assert excinfo.value.hint == f"Delete {locking.lock_path_for(target)}; mesh recreates it."
+
+
+@_POSIX_ONLY
+def test_a_lock_path_hard_linked_to_another_file_is_locked_without_writing_into_it(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """O_NOFOLLOW does not stop a hard link: the pid overwrote the linked file."""
+    target = tmp_path / "nodes_db.ods"
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious contents", encoding="utf-8")
+    os.link(victim, locking.lock_path_for(target))
+
+    with (
+        caplog.at_level(logging.WARNING, logger="meshprovision.db.locking"),
+        locking.exclusive_lock(target, timeout=0),
+        pytest.raises(DatabaseLockedError) as excinfo,
+        locking.exclusive_lock(target, timeout=0),
+    ):
+        pass
+
+    assert victim.read_text(encoding="utf-8") == "precious contents"
+    assert excinfo.value.holder_pid is None
+    assert [record.getMessage() for record in caplog.records] == [
+        f"{locking.lock_path_for(target)} has 2 hard links; not writing the holder pid into it"
+    ]
