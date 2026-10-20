@@ -989,16 +989,27 @@ def test_status_rejects_an_unusable_number_as_a_usage_error(
     assert result.stdout == ""
 
 
-def test_watch_caps_the_cache_ttl_default_poll_at_one_week(
+@pytest.mark.parametrize(
+    ("cache_ttl", "poll"),
+    [
+        pytest.param("inf", 604_800.0, id="infinite-ttl-capped-at-a-week"),
+        pytest.param("0", 5.0, id="zero-ttl-floored-at-five-seconds"),
+    ],
+)
+def test_watch_clamps_the_cache_ttl_default_poll(
     runner: CliRunner,
     env: dict[str, str],
     seed_db: Callable[..., Path],
     mock_sources: Callable[..., respx.MockRouter],
     monkeypatch: pytest.MonkeyPatch,
+    cache_ttl: str,
+    poll: float,
 ) -> None:
-    """An infinite cache TTL ("never expire") must not become an infinite sleep.
+    """The default --watch poll is the cache TTL clamped to [5 s, one week].
 
-    ``time.sleep(inf)`` raised ``OverflowError`` after the first poll.
+    An infinite TTL ("never expire") must not become an infinite sleep:
+    ``time.sleep(inf)`` raised ``OverflowError`` after the first poll. A
+    zero TTL must not become a tight loop re-fetching lorastats.pl.
     """
     from meshprovision.db.nodes import NodeRecord
 
@@ -1013,10 +1024,10 @@ def test_watch_caps_the_cache_ttl_default_poll_at_one_week(
 
     with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": 1}}}):
         result = invoke(
-            runner, ["--cache-ttl", "inf", "status", "--watch", "--no-fail-on-offline"], env
+            runner, ["--cache-ttl", cache_ttl, "status", "--watch", "--no-fail-on-offline"], env
         )
 
-    assert slept == [604_800.0]
+    assert slept == [poll]
     assert result.exit_code == 0
     assert result.stderr.rstrip().endswith("Stopped.")
 
