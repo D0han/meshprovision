@@ -108,6 +108,29 @@ def test_classify_foreign_admin_keys_present_with_factory_names(make_live, keypa
     assert set(detection.reasons) == {"not_in_database", "admin_keys_present"}
 
 
+@pytest.mark.parametrize(
+    ("short_name", "long_name"),
+    [("be01", "Bob's Base"), ("BOB", "Meshtastic be01")],
+    ids=["custom-long-name", "custom-short-name"],
+)
+def test_one_custom_name_makes_an_unknown_node_foreign(
+    make_live, short_name: str, long_name: str
+) -> None:
+    """Factory needs both names factory-default; either one custom is enough to be foreign."""
+    from meshprovision.config.template import load_template_text
+
+    template = load_template_text("version: 1\n")
+    live = make_live(
+        template,
+        short_name=short_name,
+        long_name=long_name,
+        security=make_security(empty=True),
+    )
+    detection = detect.classify(live, db_entry=None)
+    assert detection.state is detect.NodeState.FOREIGN
+    assert set(detection.reasons) == {"not_in_database", "custom_names"}
+
+
 def test_detection_summary_text(factory_live) -> None:
     detection = detect.classify(factory_live, db_entry=None)
     summary = detection.summary()
@@ -135,6 +158,15 @@ def test_is_factory_long_name() -> None:
     assert detect.is_factory_long_name("Meshtastic be01", node_id) is True
     assert detect.is_factory_long_name("Meshtastic ABCD", node_id) is True
     assert detect.is_factory_long_name("Custom Name", node_id) is False
+
+
+@pytest.mark.parametrize(
+    "long_name",
+    ["Meshtastic Bob", "Meshtastic be01x", "Meshtastic "],
+    ids=["custom-remainder", "five-character-remainder", "prefix-only"],
+)
+def test_a_meshtastic_prefix_alone_is_not_a_factory_long_name(long_name: str) -> None:
+    assert detect.is_factory_long_name(long_name, NodeId.from_hex("deadbe01")) is False
 
 
 # ---------------------------------------------------------------------------
