@@ -12,17 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mesh status` shows when the device last reported its metrics (new `Metrics`
   column, loranet's `lastDeviceMetrics`), so the age of `Batt`, `Volt`,
   `ChUtil` and `AirTx` is no longer guessed from `Last seen`. It also gains an
-  `Uptime` column (time since lorastats' `LastBoot`; `-` when unknown) and
-  drops `Sources`. `Nbrs` is renamed `Seen By` and shows how many MQTT
-  gateways relayed the node in the last 1 / 7 / 30 days (`x/y/z`) instead of
-  one all-time count. `--json` adds `seen_by_counts`, `last_device_metrics`
-  and `last_boot` per node.
+  `Uptime` column (time since lorastats' `LastBoot`; for a node that is not
+  online only up to `Last seen`, in gray; `-` when unknown or when the
+  device's own metrics show a newer reboot) and drops `Sources`. `Nbrs` is
+  renamed `Seen By` and shows how many MQTT gateways relayed the node in the
+  last 1 / 7 / 30 days (`x/y/z`) instead of one all-time count. `--json` adds
+  `seen_by_counts`, `last_device_metrics` and `last_boot` per node.
 - `mesh status` colors individual cells instead of whole rows: `Status` by
   availability, `Last seen`/`Timestamp`/`Metrics` and the readings by
   freshness (green, yellow, orange, red; gray when unknown), and suspicious
   or alarming values (low battery or voltage, high channel or transmit
   utilization, no gateway relaying the node, a recent reboot) in bold orange
-  or red.
+  or red. A battery level of 0% or less is no reading and shows `-`.
 - `mesh db verify` reports a `Keys` row whose `owner_node_id` is an existing
   node's id written in another case (`non_canonical_node_owner`, an error):
   such a row is never found as that node's key, so `mesh provision` refused

@@ -1068,12 +1068,13 @@ def test_build_table_caption_mentions_field_coercions() -> None:
 
 
 @pytest.mark.parametrize(
-    ("level", "expected"), [(101, "powered"), (100, "100%"), (0, "0%"), (None, "-")]
+    ("level", "expected"),
+    [(101, "powered"), (100, "100%"), (1, "1%"), (0, "-"), (-5, "-"), (None, "-")],
 )
 def test_battery_cell_renders_a_level_above_100_as_powered(
     level: int | None, expected: str
 ) -> None:
-    """Meshtastic reports 101 for a node on external power; 0 stays a real empty battery."""
+    """Meshtastic reports 101 for a node on external power; 0 or less is no reading."""
     assert render._battery_cell(level) == expected
 
 

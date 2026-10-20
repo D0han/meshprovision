@@ -130,6 +130,12 @@ _DASH: Final[str] = "-"
 _POWERED_BATTERY_THRESHOLD: Final[int] = 100
 """A Meshtastic ``battery_level`` above this means external power, not a percentage."""
 
+_LAST_BOOT_TOLERANCE: Final[timedelta] = timedelta(minutes=65)
+"""How much longer than the device's own uptime the time from ``LastBoot`` to
+its metrics may be before that ``LastBoot`` counts as contradicted (a newer
+reboot). Over an hour, so a one-hour DST error in lorastats' naive Warsaw
+``LastBoot`` never trips it."""
+
 
 def _text_cell(value: str | None) -> str:
     """Render an optional string cell, never as the literal ``"None"``.
@@ -167,9 +173,10 @@ def _battery_cell(value: int | None) -> str:
     Returns:
         ``"powered"`` above :data:`_POWERED_BATTERY_THRESHOLD`,
         ``f"{value}%"`` otherwise, or :data:`_DASH` when ``value`` is
-        ``None``.
+        ``None`` or not above 0 (no reading: a node without a battery
+        sensor reports 0, as it reports 0 V).
     """
-    if value is None:
+    if value is None or value <= 0:
         return _DASH
     if value > _POWERED_BATTERY_THRESHOLD:
         return "powered"
@@ -286,8 +293,8 @@ def _severity(value: float | None, *, alarm: float, warn: float, low_is_bad: boo
 
 
 def _battery_flag(value: int | None) -> str | None:
-    """Flag a low battery; a node on external power is never flagged."""
-    if value is None or value > _POWERED_BATTERY_THRESHOLD:
+    """Flag a low battery; external power or no reading (0 or less) is never flagged."""
+    if value is None or value <= 0 or value > _POWERED_BATTERY_THRESHOLD:
         return None
     return _severity(value, alarm=BATTERY_ALARM_PERCENT, warn=BATTERY_WARN_PERCENT, low_is_bad=True)
 
@@ -337,6 +344,24 @@ def _duration_text(duration: timedelta) -> str:
     return f"{minutes}m" if minutes else "<1m"
 
 
+def _last_boot_contradicted(node: MergedNode) -> bool:
+    """Tell whether the device's own metrics show a reboot newer than ``LastBoot``.
+
+    Args:
+        node: The merged node.
+
+    Returns:
+        ``True`` when the time from ``last_boot`` to ``last_device_metrics``
+        exceeds the ``uptime_seconds`` reported with those metrics by more
+        than :data:`_LAST_BOOT_TOLERANCE`; ``False`` when any of the three
+        is unknown, or when the uptime is the longer one (not a reboot).
+    """
+    if node.last_boot is None or node.uptime_seconds is None or node.last_device_metrics is None:
+        return False
+    since_boot = node.last_device_metrics - node.last_boot
+    return since_boot > timedelta(seconds=node.uptime_seconds) + _LAST_BOOT_TOLERANCE
+
+
 def _uptime_cell(node: MergedNode, now: datetime) -> Text:
     """Render the ``Uptime`` cell: the time since the node's last known boot.
 
@@ -344,19 +369,27 @@ def _uptime_cell(node: MergedNode, now: datetime) -> Text:
     figure a device sends with its metrics is deliberately not used as a
     fallback: it is as old as those metrics, and extrapolating it to now
     can show an uptime that no longer holds (the node may have rebooted
-    since).
+    since). It is only used to notice that ``LastBoot`` is out of date
+    (see :func:`_last_boot_contradicted`). A node that is not online may
+    have gone down since it was last seen, so its uptime is counted only
+    up to ``last_seen`` (up to ``now`` when that is unknown).
 
     Args:
         node: The merged node.
         now: The report time.
 
     Returns:
-        A gray hyphen when no boot time is known; the duration in the
-        warning style when it is under :data:`UPTIME_WARN_BELOW` (a recent
-        reboot); otherwise the unstyled duration.
+        A gray hyphen when no boot time is known or the device's metrics
+        contradict it; for a node that is not online, the uptime as of
+        ``last_seen`` in gray; otherwise the duration in the warning style
+        when it is under :data:`UPTIME_WARN_BELOW` (a recent reboot), or
+        unstyled.
     """
-    if node.last_boot is None:
+    if node.last_boot is None or _last_boot_contradicted(node):
         return _cell(_DASH, _UNKNOWN_STYLE)
+    if node.availability is not Availability.ONLINE:
+        end = now if node.last_seen is None else node.last_seen
+        return _cell(_duration_text(end - node.last_boot), _UNKNOWN_STYLE)
     uptime = now - node.last_boot
     return _cell(_duration_text(uptime), _WARN_STYLE if uptime < UPTIME_WARN_BELOW else None)
 
@@ -376,7 +409,11 @@ def build_table(report: StatusReport) -> Table:
     orange instead. ``Seen By`` shows how many MQTT gateways relayed the
     node within 1 / 7 / 30 days (warning when none did in 7 days, alarm
     when none did in 30), and ``Uptime`` is the time since the last boot
-    (from ``LastBoot`` only; warning when under an hour). A caption is attached below the table:
+    (from ``LastBoot`` only; warning when under an hour; gray and counted
+    only up to ``Last seen`` for a node that is not online; a dim hyphen
+    when the device's metrics show a newer reboot, see
+    :func:`_uptime_cell`). A battery level of 0 or less is no reading and
+    renders as a dim hyphen. A caption is attached below the table:
     :meth:`~meshprovision.status.report.StatusReport.summary`, plus --
     when the report has any source failures -- one dim red line per
     failure, plus -- when any source skipped an unparsable entry -- one

@@ -210,6 +210,130 @@ def test_uptime_under_an_hour_is_a_warning(uptime: timedelta, style: str) -> Non
     assert cell.style == style
 
 
+def test_uptime_of_an_offline_node_stops_at_last_seen_and_is_gray() -> None:
+    node = MergedNode(
+        node_id=NID,
+        availability=Availability.OFFLINE,
+        last_seen=NOW - timedelta(days=30),
+        last_boot=NOW - timedelta(days=40),
+    )
+
+    cell = render._uptime_cell(node, NOW)
+
+    assert (cell.plain, cell.style) == ("10d 0h", "grey50")
+
+
+def test_a_recent_boot_of_a_stale_node_is_gray_not_a_warning() -> None:
+    node = MergedNode(
+        node_id=NID,
+        availability=Availability.STALE,
+        last_seen=NOW - timedelta(hours=3),
+        last_boot=NOW - timedelta(hours=3, minutes=30),
+    )
+
+    cell = render._uptime_cell(node, NOW)
+
+    assert (cell.plain, cell.style) == ("30m", "grey50")
+
+
+def test_uptime_of_a_node_not_online_without_last_seen_runs_to_now_in_gray() -> None:
+    node = MergedNode(
+        node_id=NID, availability=Availability.UNKNOWN, last_boot=NOW - timedelta(days=2)
+    )
+
+    cell = render._uptime_cell(node, NOW)
+
+    assert (cell.plain, cell.style) == ("2d 0h", "grey50")
+
+
+def test_the_uptime_column_of_an_offline_node_stops_at_last_seen() -> None:
+    node = MergedNode(
+        node_id=NID,
+        availability=Availability.OFFLINE,
+        last_seen=NOW - timedelta(days=30),
+        last_boot=NOW - timedelta(days=40),
+    )
+
+    cell = _cells(node)["Uptime"]
+
+    assert (cell.plain, cell.style) == ("10d 0h", "grey50")
+
+
+def test_uptime_is_a_gray_dash_when_the_metrics_show_a_reboot_after_last_boot() -> None:
+    node = _node(
+        last_boot=NOW - timedelta(days=10),
+        uptime_seconds=600,
+        last_device_metrics=NOW - timedelta(minutes=5),
+    )
+
+    cell = render._uptime_cell(node, NOW)
+
+    assert (cell.plain, cell.style) == ("-", "grey50")
+
+
+def test_a_contradicted_last_boot_is_a_dash_for_an_offline_node_too() -> None:
+    node = MergedNode(
+        node_id=NID,
+        availability=Availability.OFFLINE,
+        last_seen=NOW - timedelta(days=1),
+        last_boot=NOW - timedelta(days=10),
+        uptime_seconds=600,
+        last_device_metrics=NOW - timedelta(days=1),
+    )
+
+    cell = render._uptime_cell(node, NOW)
+
+    assert (cell.plain, cell.style) == ("-", "grey50")
+
+
+@pytest.mark.parametrize(
+    ("excess", "text"),
+    [
+        (timedelta(minutes=64), "10d 0h"),
+        (timedelta(minutes=65), "10d 0h"),
+        (timedelta(minutes=65, seconds=1), "-"),
+    ],
+    ids=["within-tolerance", "exactly-the-tolerance", "just-over"],
+)
+def test_last_boot_is_contradicted_only_beyond_65_minutes(excess: timedelta, text: str) -> None:
+    metrics_at = NOW - timedelta(minutes=5)
+    since_boot = metrics_at - (NOW - timedelta(days=10))
+    node = _node(
+        last_boot=NOW - timedelta(days=10),
+        uptime_seconds=int((since_boot - excess).total_seconds()),
+        last_device_metrics=metrics_at,
+    )
+
+    assert render._uptime_cell(node, NOW).plain == text
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["uptime_seconds", "last_device_metrics"],
+)
+def test_last_boot_stands_when_the_metrics_cannot_contradict_it(missing: str) -> None:
+    fields: dict[str, object] = {
+        "last_boot": NOW - timedelta(days=10),
+        "uptime_seconds": 600,
+        "last_device_metrics": NOW - timedelta(minutes=5),
+    }
+    del fields[missing]
+
+    cell = render._uptime_cell(_node(**fields), NOW)
+
+    assert (cell.plain, cell.style) == ("10d 0h", "")
+
+
+def test_an_uptime_longer_than_the_time_since_last_boot_does_not_contradict_it() -> None:
+    node = _node(
+        last_boot=NOW - timedelta(days=1),
+        uptime_seconds=3600 * 24 * 30,
+        last_device_metrics=NOW - timedelta(minutes=5),
+    )
+
+    assert render._uptime_cell(node, NOW).plain == "1d 0h"
+
+
 # ---------------------------------------------------------------------------
 # value flags
 # ---------------------------------------------------------------------------
@@ -222,7 +346,9 @@ WARN = "bold dark_orange"
     ("value", "expected"),
     [
         (None, None),
-        (0, ALARM),
+        (-5, None),
+        (0, None),
+        (1, ALARM),
         (10, ALARM),
         (11, WARN),
         (20, WARN),
@@ -339,6 +465,23 @@ def test_an_alarming_value_overrides_the_freshness_color_of_its_own_cell_only() 
     assert cells["ChUtil"].style == ALARM
     assert cells["AirTx"].style == WARN
     assert cells["Metrics"].style == "green"
+
+
+@pytest.mark.parametrize("level", [0, -5])
+def test_a_battery_level_of_zero_or_less_is_no_reading(level: int) -> None:
+    node = _node(battery_level=level, last_device_metrics=NOW - timedelta(hours=1))
+
+    cell = _cells(node)["Batt"]
+
+    assert (cell.plain, cell.style) == ("-", "grey50")
+
+
+def test_a_one_percent_battery_is_an_alarm() -> None:
+    node = _node(battery_level=1, last_device_metrics=NOW - timedelta(hours=1))
+
+    cell = _cells(node)["Batt"]
+
+    assert (cell.plain, cell.style) == ("1%", ALARM)
 
 
 def test_a_powered_node_is_not_flagged_as_a_low_battery() -> None:

@@ -329,15 +329,22 @@ Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime.
 - **Metrics** is how long ago the device last reported its metrics (loranet's
   `lastDeviceMetrics`); `Batt`, `Volt`, `ChUtil` and `AirTx` are as of that
   moment, which can be much older than `Last seen` (a node that is still
-  relayed by gateways keeps a fresh `Last seen`).
+  relayed by gateways keeps a fresh `Last seen`). A battery level of 0% or
+  less is shown as `-`: it is no reading (a node without a battery sensor
+  reports 0).
 - **Seen By** is `1d/7d/30d`: how many distinct MQTT gateway topics relayed the
   node within the last day, week and month (loranet's `seenBy`). It is not a
   radio-neighbour count. `--json` keeps `neighbor_count` (all time) and adds
   `seen_by_counts` (`day`/`week`/`month`), `last_device_metrics` and
   `last_boot`.
-- **Uptime** is the time since the last boot: `now - LastBoot` from lorastats,
-  and `-` when no source reports a boot time. The uptime a device sends with
-  its metrics is not used as a fallback, since it is as old as those metrics.
+- **Uptime** is the time since the last boot: `now - LastBoot` from lorastats
+  for an online node. For a stale, offline or unknown node it is the uptime
+  as of `Last seen` (`Last seen - LastBoot`, drawn gray), since the node may
+  have gone down after that. It is `-` when no source reports a boot time,
+  and also when the device's own metrics show a reboot after that `LastBoot`
+  (the uptime they report is more than 65 minutes shorter than the time from
+  `LastBoot` to those metrics). The uptime a device sends with its metrics is
+  not used as a fallback, since it is as old as those metrics.
 
 Colors mark individual cells, not whole rows. `Status` is green / yellow / red
 for online / stale / offline. `Last seen`, `Timestamp`, `Metrics` and the four
@@ -347,7 +354,8 @@ suspicious is drawn bold orange, and an alarming one bold red, whatever its
 age: battery at or below 20% / 10%, voltage at or below 3.5 V / 3.3 V,
 channel utilization above 25% / 40%, transmit air utilization above 5% / 10%.
 `Seen By` is orange when no gateway relayed the node for a week and red when
-none did for a month; `Uptime` is orange under an hour (a recent reboot).
+none did for a month; `Uptime` is orange under an hour (a recent reboot) and
+gray for a node that is not online.
 These thresholds are heuristics, not firmware limits.
 
 Short/Long prefer the most recently observed name; a node no source has seen
