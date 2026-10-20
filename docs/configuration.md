@@ -9,7 +9,7 @@ Part of the meshprovision docs — see the [README](../README.md).
 | `MESHPROVISION_DB_PATH` | `data/nodes_db.ods` | ODS node database (relative paths resolve against the CWD) |
 | `MESHPROVISION_TEMPLATE_PATH` | `config/template.yaml` | Provisioning template |
 | `MESHPROVISION_CACHE_DIR` | platformdirs user cache | HTTP TTL disk cache directory. Safe to delete at any time while no `mesh` command is running. |
-| `MESHPROVISION_CACHE_TTL` | `300` | Cache time-to-live, seconds |
+| `MESHPROVISION_CACHE_TTL` | `300` | Cache time-to-live, seconds. lorastats responses are reused for at least 60 s, even with `0` (unless `--no-cache`). |
 | `MESHPROVISION_CONTACT` | (none — REQUIRED) | Your contact address, sent in the `User-Agent` to lorastats.pl |
 | `MESHPROVISION_LOG_LEVEL` | `WARNING` | `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL` |
 | `MESHPROVISION_KNOWN_BAD_KEYS` | `data/known_bad_keys.txt` | Override path to the weak-key blocklist. Process environment only: a value in `.env` is ignored (with a warning). Not listed in the bundled `env.example`. |

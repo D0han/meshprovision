@@ -633,6 +633,59 @@ def test_lorastats_fetch_nodes_last_fetch_data_as_of_resets_between_calls(tmp_pa
     assert source.last_fetch_data_as_of == datetime.fromtimestamp(1_700_001_000.0, tz=UTC)
 
 
+def _lorastats_source_at(
+    tmp_path: Path, now: list[float], *, ttl: float
+) -> tuple[LorastatsSource, respx.Route]:
+    route = respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(200, json=[{"NodeId": "deadbe01", "ShortName": "a"}]))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache",
+        user_agent="mp/1 (+t@example.invalid)",
+        ttl=ttl,
+        clock=lambda: now[0],
+    )
+    return LorastatsSource(client, contact="t@example.invalid"), route
+
+
+@respx.mock
+def test_lorastats_reuses_a_response_for_a_minute_even_with_a_zero_client_ttl(
+    tmp_path: Path,
+) -> None:
+    """`--cache-ttl 0` with a short --watch interval sent one request per node per poll."""
+    now = [1_700_000_000.0]
+    source, route = _lorastats_source_at(tmp_path, now, ttl=0.0)
+    ids = [NodeId.from_hex("deadbe01")]
+
+    source.fetch_nodes(ids)
+    now[0] += 60  # the documented floor
+    source.fetch_nodes(ids)
+    assert route.call_count == 1
+
+    now[0] += 1
+    source.fetch_nodes(ids)
+    assert route.call_count == 2
+
+    source.fetch_nodes(ids, force_refresh=True)
+    assert route.call_count == 3
+
+
+@respx.mock
+def test_lorastats_keeps_a_client_ttl_longer_than_its_floor(tmp_path: Path) -> None:
+    now = [1_700_000_000.0]
+    source, route = _lorastats_source_at(tmp_path, now, ttl=300.0)
+    ids = [NodeId.from_hex("deadbe01")]
+
+    source.fetch_nodes(ids)
+    now[0] += 300
+    source.fetch_nodes(ids)
+    assert route.call_count == 1
+
+    now[0] += 1
+    source.fetch_nodes(ids)
+    assert route.call_count == 2
+
+
 @respx.mock
 def test_lorastats_fetch_nodes_never_files_an_observation_under_a_foreign_id(
     tmp_path: Path,

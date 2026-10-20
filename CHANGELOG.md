@@ -400,6 +400,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status --watch` honours lorastats.pl's HTTP 429: a host that answered
+  429 is not asked again for the `Retry-After` time it gave (10 minutes
+  without one, at most a day; each poll meanwhile lists the source as failed
+  and says when it will retry) instead of on the very next poll. lorastats
+  responses are also reused for at least 60 s, even with `--cache-ttl 0`, so
+  `--watch` with a short `--interval` can no longer send one request per node
+  per poll (the per-node request storm lorastats.pl bans IP addresses for).
 - `mesh status` (and `--watch`) no longer crashes with a traceback when
   lorastats.pl's HTTP 429 carries a malformed `Retry-After` header such as
   `²`: lorastats is reported as failed for that run (exit 7) like any other

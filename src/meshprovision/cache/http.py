@@ -159,6 +159,17 @@ one still running.
 _MAX_REDIRECTS: Final[int] = 20
 """Redirect hops followed for one request before it fails as a loop (``httpx``'s default)."""
 
+_RATE_LIMIT_DEFAULT_COOLDOWN_SECONDS: Final[float] = 600.0
+"""How long a host that answered HTTP 429 without a usable ``Retry-After`` is not asked again."""
+
+_RATE_LIMIT_MAX_COOLDOWN_SECONDS: Final[float] = 86_400.0
+"""Upper bound on a 429 cool-down, whatever ``Retry-After`` asks for (one day)."""
+
+_RATE_LIMIT_HINT: Final[str] = (
+    "lorastats.pl bans IP addresses for misuse; wait before retrying "
+    "and check MESHPROVISION_CONTACT."
+)
+
 _HTTP_RATE_LIMITED: Final[int] = 429
 _HTTP_CLIENT_ERROR_MIN: Final[int] = 400
 _HTTP_CLIENT_ERROR_MAX: Final[int] = 500
@@ -592,6 +603,22 @@ def _parse_retry_after(value: str | None, *, clock: Callable[[], float]) -> floa
     return max(0.0, parsed.timestamp() - clock())
 
 
+def _rate_limit_key(url: str) -> str:
+    """Return what a 429 cool-down is kept under: ``url``'s host.
+
+    Args:
+        url: The request URL.
+
+    Returns:
+        The host, or ``url`` itself when it does not parse (its request
+        then fails as invalid before anything is sent).
+    """
+    try:
+        return httpx.URL(url).host
+    except httpx.InvalidURL:
+        return url
+
+
 def _request_error_hint(exc: httpx.RequestError) -> str | None:
     """Explain a non-retried request failure, when there is more to say.
 
@@ -656,10 +683,7 @@ def _status_error(
             status_code=status,
             source=source,
             retry_after=_parse_retry_after(response.headers.get("retry-after"), clock=clock),
-            hint=(
-                "lorastats.pl bans IP addresses for misuse; wait before retrying "
-                "and check MESHPROVISION_CONTACT."
-            ),
+            hint=_RATE_LIMIT_HINT,
         )
 
     if _HTTP_CLIENT_ERROR_MIN <= status < _HTTP_CLIENT_ERROR_MAX:
@@ -710,9 +734,17 @@ class CachedHTTPClient:
       network fetch that is written back (2xx responses only).
     - **Exponential backoff** on 5xx responses and network-transport
       errors only -- never on 4xx, which is never retried.
+    - **A per-host cool-down after HTTP 429.** A host that answered 429 is
+      not asked again by this instance for its ``Retry-After`` delay
+      (:data:`_RATE_LIMIT_DEFAULT_COOLDOWN_SECONDS` without a usable one,
+      at most :data:`_RATE_LIMIT_MAX_COOLDOWN_SECONDS`); a request to it
+      meanwhile raises :class:`RateLimitError` without being sent, so a
+      ``--watch`` loop sharing one client cannot keep asking. Fresh cache
+      entries are still served.
 
     Attributes are exposed as read-only properties; the client itself is
-    otherwise stateful (it owns cache-hit/miss counters and, unless an
+    otherwise stateful (it owns cache-hit/miss counters, the 429
+    cool-downs and, unless an
     external ``httpx.Client`` was supplied, an ``httpx.Client``
     connection pool that must be closed via :meth:`close` or the context
     manager protocol).
@@ -784,6 +816,7 @@ class CachedHTTPClient:
         self._clock = clock
         self._stats = CacheStats()
         self._chmod_done = False
+        self._cooldown_until: Mapping[str, float] = {}
 
         self._owns_client = client is None
         self._client = client or httpx.Client(
@@ -802,6 +835,15 @@ class CachedHTTPClient:
             The configured cache directory.
         """
         return self._cache_dir
+
+    @property
+    def ttl(self) -> float:
+        """The default freshness window, used when a call passes no ``ttl``.
+
+        Returns:
+            The constructor's ``ttl``, in seconds.
+        """
+        return self._ttl
 
     @property
     def stats(self) -> CacheStats:
@@ -860,7 +902,8 @@ class CachedHTTPClient:
             SettingsError: If the resolved ``ttl`` is negative.
             HttpError: If the request fails and cannot be served from a
                 fresh cache entry.
-            RateLimitError: If the server responds with HTTP 429.
+            RateLimitError: If the server responds with HTTP 429, or the
+                host is still cooling down from one (nothing is sent).
         """
         return self.request(
             "GET",
@@ -913,7 +956,8 @@ class CachedHTTPClient:
             SettingsError: If the resolved ``ttl`` is negative.
             HttpError: If the request fails and cannot be served from a
                 fresh cache entry.
-            RateLimitError: If the server responds with HTTP 429.
+            RateLimitError: If the server responds with HTTP 429, or the
+                host is still cooling down from one (nothing is sent).
         """
         effective_ttl = self._ttl if ttl is None else ttl
         if effective_ttl < 0:
@@ -1142,8 +1186,11 @@ class CachedHTTPClient:
                 larger than :data:`MAX_RESPONSE_BYTES`), or
                 after exhausting retries on a retryable transport error.
             RateLimitError: If the server responds with HTTP 429 (never
-                retried automatically).
+                retried automatically; starts the host's cool-down), or
+                ``url``'s host is still cooling down from one (nothing is
+                sent).
         """
+        self._refuse_while_rate_limited(url, source=source)
         last_exc: Exception | None = None
         display_url = _display_url(url, params)
         for attempt in range(self._max_retries + 1):
@@ -1209,6 +1256,8 @@ class CachedHTTPClient:
                 continue
 
             status_error = _status_error(response, url=url, source=source, clock=self._clock)
+            if isinstance(status_error, RateLimitError):
+                self._start_rate_limit_cooldown(url, status_error.retry_after)
             if status_error is not None:
                 raise status_error
 
@@ -1234,6 +1283,47 @@ class CachedHTTPClient:
         raise HttpError(
             f"Request to {url} failed after retries: {last_exc}", url=url, source=source
         )
+
+    def _refuse_while_rate_limited(self, url: str, *, source: str | None) -> None:
+        """Refuse a request to a host still cooling down after an HTTP 429.
+
+        Args:
+            url: The request URL.
+            source: A short label identifying the calling datasource.
+
+        Raises:
+            RateLimitError: If ``url``'s host answered 429 to this instance
+                and its cool-down has not ended. Nothing is sent.
+        """
+        host = _rate_limit_key(url)
+        until = self._cooldown_until.get(host)
+        if until is None:
+            return
+        remaining = until - self._clock()
+        if remaining <= 0:
+            return
+        raise RateLimitError(
+            f"{url} not requested: {host} rate-limited this client; "
+            f"retrying after {remaining:.0f}s",
+            url=url,
+            source=source,
+            retry_after=remaining,
+            hint=_RATE_LIMIT_HINT,
+        )
+
+    def _start_rate_limit_cooldown(self, url: str, retry_after: float | None) -> None:
+        """Stop asking ``url``'s host for as long as its HTTP 429 asked.
+
+        Args:
+            url: The request URL that was answered with 429.
+            retry_after: The parsed ``Retry-After`` delay (never negative), or
+                ``None``.
+        """
+        delay = _RATE_LIMIT_DEFAULT_COOLDOWN_SECONDS if retry_after is None else retry_after
+        self._cooldown_until = {
+            **self._cooldown_until,
+            _rate_limit_key(url): self._clock() + min(delay, _RATE_LIMIT_MAX_COOLDOWN_SECONDS),
+        }
 
     def _send_following_redirects(self, request: httpx.Request) -> httpx.Response:
         """Send ``request`` streamed, following redirects without reading their bodies.

@@ -52,6 +52,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_REGIONS",
     "LORASTATS_BASE_URL",
+    "LORASTATS_MIN_TTL_SECONDS",
     "LORASTATS_NODES_PATH",
     "REGION_PATTERN",
     "LorastatsSource",
@@ -66,6 +67,14 @@ LORASTATS_BASE_URL: Final[str] = "https://lorastats.pl"
 
 LORASTATS_NODES_PATH: Final[str] = "/API/{region}/Nodes/JSON"
 """Region-scoped nodes endpoint, filterable by the ``node`` query param."""
+
+LORASTATS_MIN_TTL_SECONDS: Final[float] = 60.0
+"""Shortest time a lorastats.pl response is reused, whatever the client's TTL.
+
+One request per node per poll is the request storm lorastats.pl bans IPs
+for; with this floor, ``--cache-ttl 0`` and a short ``--watch --interval``
+still ask for each node at most once a minute (``--no-cache`` still forces
+a fresh fetch)."""
 
 DEFAULT_REGIONS: Final[tuple[str, ...]] = ("PL",)
 """Default, config-overridable region list (finding #3: no JSON region-list
@@ -187,7 +196,9 @@ class LorastatsSource(BaseHTTPDataSource):
                 configured regions. Does not need to already be validated
                 (this call validates it before use).
             force_refresh: Whether to bypass the HTTP cache read for
-                this call.
+                this call. Otherwise a cached response is reused for the
+                client's TTL, but never less than
+                :data:`LORASTATS_MIN_TTL_SECONDS`.
 
         Returns:
             The observation, or ``None`` when the node was not found in
@@ -221,7 +232,12 @@ class LorastatsSource(BaseHTTPDataSource):
         for candidate in candidates:
             region_segment = quote(candidate, safe="")
             url = f"{self._base_url}{LORASTATS_NODES_PATH.format(region=region_segment)}"
-            payload = self.get_json(url, params={"node": nid.hex}, force_refresh=force_refresh)
+            payload = self.get_json(
+                url,
+                params={"node": nid.hex},
+                ttl=max(self._client.ttl, LORASTATS_MIN_TTL_SECONDS),
+                force_refresh=force_refresh,
+            )
             records = require_json_list(payload, url=url, source=self.name)
             if not records:
                 continue

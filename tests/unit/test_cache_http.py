@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import email.utils
 import gzip
 import json
 import os
@@ -354,6 +355,132 @@ def test_429_with_a_superscript_retry_after_is_a_rate_limit_error(tmp_path: Path
     with pytest.raises(RateLimitError) as exc_info:
         client.get(URL)
     assert exc_info.value.retry_after is None
+
+
+# ---------------------------------------------------------------------------
+# 429 cool-down.
+# ---------------------------------------------------------------------------
+
+_OTHER_HOST_URL = "https://other.invalid/data.json"
+
+
+def _rate_limited_then_ok(retry_after: str | None) -> respx.Route:
+    headers = {} if retry_after is None else {"Retry-After": retry_after}
+    return respx.get(URL).mock(
+        side_effect=[httpx.Response(429, headers=headers), httpx.Response(200, json={"a": 1})]
+    )
+
+
+def _assert_refused_unsent(client: CachedHTTPClient, route: respx.Route) -> RateLimitError:
+    requests_before = client.stats.network_requests
+    with pytest.raises(RateLimitError) as exc_info:
+        client.get(URL)
+    assert route.call_count == 1
+    assert client.stats.network_requests == requests_before
+    assert "not requested: example.invalid rate-limited this client" in str(exc_info.value)
+    return exc_info.value
+
+
+@respx.mock
+def test_a_429_stops_requests_to_its_host_until_retry_after_has_passed(tmp_path: Path) -> None:
+    route = _rate_limited_then_ok("120")
+    now = [1000.0]
+    client = _make_client(tmp_path, now=now)
+    with pytest.raises(RateLimitError):
+        client.get(URL)
+
+    now[0] = 1119.0
+    refused = _assert_refused_unsent(client, route)
+    assert refused.retry_after == pytest.approx(1.0)
+    assert "retrying after 1s" in str(refused)
+    assert "lorastats.pl bans IP addresses" in (refused.hint or "")
+
+    now[0] = 1120.0
+    assert client.get(URL).json() == {"a": 1}
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_a_429_without_retry_after_cools_down_for_ten_minutes(tmp_path: Path) -> None:
+    route = _rate_limited_then_ok(None)
+    now = [1000.0]
+    client = _make_client(tmp_path, now=now)
+    with pytest.raises(RateLimitError):
+        client.get(URL)
+
+    now[0] = 1599.0
+    _assert_refused_unsent(client, route)
+    now[0] = 1600.0
+    assert client.get(URL).json() == {"a": 1}
+
+
+@respx.mock
+def test_an_http_date_retry_after_sets_the_cool_down(tmp_path: Path) -> None:
+    route = _rate_limited_then_ok(email.utils.formatdate(_NOW + 300, usegmt=True))
+    now = [_NOW]
+    client = _make_client(tmp_path, now=now)
+    with pytest.raises(RateLimitError):
+        client.get(URL)
+
+    now[0] = _NOW + 299
+    _assert_refused_unsent(client, route)
+    now[0] = _NOW + 300
+    assert client.get(URL).json() == {"a": 1}
+
+
+@respx.mock
+def test_a_huge_retry_after_cools_down_for_one_day_at_most(tmp_path: Path) -> None:
+    route = _rate_limited_then_ok("9" * 400)
+    now = [1000.0]
+    client = _make_client(tmp_path, now=now)
+    with pytest.raises(RateLimitError):
+        client.get(URL)
+
+    now[0] = 1000.0 + 86_399
+    _assert_refused_unsent(client, route)
+    now[0] = 1000.0 + 86_400
+    assert client.get(URL).json() == {"a": 1}
+
+
+@respx.mock
+def test_a_zero_retry_after_allows_the_next_request_at_once(tmp_path: Path) -> None:
+    route = _rate_limited_then_ok("0")
+    client = _make_client(tmp_path, now=[1000.0])
+    with pytest.raises(RateLimitError):
+        client.get(URL)
+
+    assert client.get(URL).json() == {"a": 1}
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_a_429_cool_down_does_not_stop_requests_to_another_host(tmp_path: Path) -> None:
+    route = _rate_limited_then_ok("3600")
+    other = respx.get(_OTHER_HOST_URL).mock(return_value=httpx.Response(200, json={"b": 2}))
+    client = _make_client(tmp_path, now=[1000.0])
+    with pytest.raises(RateLimitError):
+        client.get(URL)
+
+    assert client.get(_OTHER_HOST_URL).json() == {"b": 2}
+    assert other.call_count == 1
+    _assert_refused_unsent(client, route)
+
+
+@respx.mock
+def test_a_fresh_cache_entry_is_still_served_during_a_cool_down(tmp_path: Path) -> None:
+    cached_url = "https://example.invalid/cached.json"
+    cached = respx.get(cached_url).mock(return_value=httpx.Response(200, json={"c": 3}))
+    route = _rate_limited_then_ok("3600")
+    client = _make_client(tmp_path, now=[1000.0])
+    client.get(cached_url)
+    with pytest.raises(RateLimitError):
+        client.get(URL)
+
+    assert client.get(cached_url).from_cache is True
+    with pytest.raises(RateLimitError, match="not requested"):
+        client.get(cached_url, force_refresh=True)
+    assert cached.call_count == 1
+    assert route.call_count == 1
 
 
 @respx.mock

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import pytest
@@ -1067,6 +1067,110 @@ def test_watch_reports_each_polls_own_cache_counts(
         {"hits": 2, "misses": 0, "network_requests": 0},
     ]
     assert result.stderr.count("cache: 2 hit(s), 0 miss(es), 0 request(s)") == 2
+
+
+_WATCH_POLLS = 5
+
+
+def _seed_twenty_nodes(
+    seed_db: Callable[..., Path], node_record_cls: type[NodeRecord]
+) -> dict[str, dict[str, object]]:
+    """Seed twenty nodes and return their loranet-shaped ``mock_sources`` fixture entries."""
+    recent = int(time.time()) - 60
+    hex_ids = [f"deadbe{index:02x}" for index in range(1, 21)]
+    seed_db(
+        nodes=[
+            node_record_cls(
+                node_id=hex_id,
+                short_name=f"M{index:03d}",
+                long_name=f"Meshtastic M{index:03d}",
+                hw_model="RAK4631",
+                role="CLIENT",
+                region="EU_868",
+            )
+            for index, hex_id in enumerate(hex_ids, start=1)
+        ]
+    )
+    return {hex_id: {"shortName": "x", "seenBy": {"gw1": recent}} for hex_id in hex_ids}
+
+
+def _stop_after_polls(monkeypatch: pytest.MonkeyPatch, polls: int) -> None:
+    calls = {"n": 0}
+
+    def fake_sleep(_seconds: float) -> None:
+        calls["n"] += 1
+        if calls["n"] >= polls:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+
+def _json_documents(stdout: str) -> list[Any]:
+    """Decode the JSON documents a ``--watch --json`` run printed, one per poll."""
+    decoder = json.JSONDecoder()
+    text = stdout.lstrip()
+    documents = []
+    while text:
+        document, end = decoder.raw_decode(text)
+        documents.append(document)
+        text = text[end:].lstrip()
+    return documents
+
+
+def test_watch_with_a_zero_cache_ttl_asks_lorastats_once_per_node(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--cache-ttl 0` made every poll ask lorastats about every node: 100 requests here."""
+    from meshprovision.db.nodes import NodeRecord
+
+    nodes = _seed_twenty_nodes(seed_db, NodeRecord)
+    _stop_after_polls(monkeypatch, _WATCH_POLLS)
+
+    with mock_sources(nodes=nodes) as router:
+        lorastats_route = next(r for r in router.routes if "lorastats.pl" in str(r.pattern))
+        result = invoke(
+            runner, ["--cache-ttl", "0", "status", "--watch", "--interval", "1", "--json"], env
+        )
+        assert lorastats_route.call_count == len(nodes)
+
+    assert len(_json_documents(result.stdout)) == _WATCH_POLLS
+    assert result.exit_code == 0
+
+
+def test_watch_stops_asking_lorastats_after_a_429(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every --watch poll asked lorastats again, inside the hour its 429 asked for."""
+    from meshprovision.db.nodes import NodeRecord
+
+    nodes = _seed_twenty_nodes(seed_db, NodeRecord)
+    _stop_after_polls(monkeypatch, _WATCH_POLLS)
+    router = mock_sources(nodes=nodes)
+    router.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(429, headers={"Retry-After": "3600"}))
+
+    with router:
+        lorastats_route = next(r for r in router.routes if "lorastats.pl" in str(r.pattern))
+        result = invoke(runner, ["status", "--watch", "--interval", "1", "--json"], env)
+        assert lorastats_route.call_count == 1
+
+    documents = _json_documents(result.stdout)
+    assert len(documents) == _WATCH_POLLS
+    messages = [[failure["message"] for failure in d["failures"]] for d in documents]
+    assert "returned HTTP 429" in messages[0][0]
+    for later in messages[1:]:
+        (message,) = later
+        assert "not requested: lorastats.pl rate-limited this client" in message
+    assert result.exit_code == 7
 
 
 def test_run_status_counts_only_its_own_requests_on_a_reused_client(

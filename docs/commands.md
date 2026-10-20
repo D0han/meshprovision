@@ -395,6 +395,12 @@ failure, exits `7`. Pass `--no-fail-on-offline` to suppress that.
 **Cache note:** every outbound request goes through the TTL disk cache; a
 second run inside the TTL performs zero network calls. `--no-cache` /
 `--force-refresh` bypasses reads but still writes the response back.
+Otherwise, lorastats responses are reused for at least 60 s, even with
+`--cache-ttl 0`, so a short `--watch --interval` cannot query lorastats about
+every node on every poll. A host that answers HTTP 429 (rate limited) is not
+asked again by the same `mesh` process for the `Retry-After` time it gave (10
+minutes when it gave none, at most a day); meanwhile each `--watch` poll lists
+that source as failed and says when it will retry.
 
 **Archived nodes** (see `mesh db forget` below) are excluded from the
 default report — an explicit `--node` request for one still wins.
