@@ -1272,3 +1272,18 @@ def test_render_console_escapes_terminal_control_sequences_in_long_name(
     assert "\x1b" not in output
     assert "\x9b" not in output
     assert expected_escape in output
+
+
+def test_merged_node_names_the_lorastats_region_it_was_found_in() -> None:
+    merged = merge_observations(
+        NID,
+        [_obs(SOURCE_LORANET, region="EU_868"), _obs(SOURCE_LORASTATS, region_queried="Zachód")],
+        now=NOW,
+    )
+    assert (merged.lorastats_region, merged.region) == ("Zachód", "EU_868")
+    assert merged.to_json_dict()["lorastats_region"] == "Zachód"
+
+
+def test_merged_node_without_a_lorastats_observation_has_no_lorastats_region() -> None:
+    merged = merge_observations(NID, [_obs(SOURCE_LORANET)], now=NOW)
+    assert merged.to_json_dict()["lorastats_region"] is None

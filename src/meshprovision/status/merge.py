@@ -166,6 +166,8 @@ class MergedNode:
         hw_model: Best-known hardware model.
         role: Best-known device role.
         region: Best-known LoRa region.
+        lorastats_region: The lorastats region the node was found in, or
+            ``None`` when lorastats did not report it.
         firmware_version: Best-known firmware version string.
         latitude: Best-known latitude, decimal degrees.
         longitude: Best-known longitude, decimal degrees.
@@ -204,6 +206,7 @@ class MergedNode:
     hw_model: str | None = None
     role: str | None = None
     region: str | None = None
+    lorastats_region: str | None = None
     firmware_version: str | None = None
     latitude: float | None = None
     longitude: float | None = None
@@ -286,6 +289,7 @@ class MergedNode:
             "hw_model": self.hw_model,
             "role": self.role,
             "region": self.region,
+            "lorastats_region": self.lorastats_region,
             "firmware_version": self.firmware_version,
             "latitude": self.latitude,
             "longitude": self.longitude,
@@ -626,6 +630,7 @@ def merge_observations(
     hw_model = _first_non_none(by_recency, lambda obs: obs.hw_model)
     role = _first_non_none(by_recency, lambda obs: obs.role)
     region = _first_non_none(by_recency, lambda obs: obs.region)
+    lorastats_region = _first_non_none(by_priority, lambda obs: obs.region_queried)
     firmware_version = _first_non_none(by_recency, lambda obs: obs.firmware_version)
     latitude = _first_non_none(by_recency, lambda obs: obs.latitude)
     longitude = _first_non_none(by_recency, lambda obs: obs.longitude)
@@ -646,6 +651,7 @@ def merge_observations(
         hw_model=hw_model,
         role=role,
         region=region,
+        lorastats_region=lorastats_region,
         firmware_version=firmware_version,
         latitude=latitude,
         longitude=longitude,

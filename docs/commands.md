@@ -365,7 +365,9 @@ lorastats does not know it, and at most one more than the number of regions
 otherwise (with lorastats.pl's 10 regions: 11, at most 17 with 16 regions).
 Reading the region list adds one request a week. A single region is asked
 directly, one request per node. A status answer other than 200, 404 or 500
-makes lorastats a failed source for that run.
+makes lorastats a failed source for that run. `--json` names the region a
+node was found in as `lorastats_region` (`null` when lorastats did not report
+the node).
 
 ```bash
 mesh status

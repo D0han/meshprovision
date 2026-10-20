@@ -24,7 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   endpoint is asked before trying every region, so a node lorastats does not
   know (HTTP 404) is not asked about in any region for an hour. Per node that
   is one request when the remembered region answers, else at most one more
-  than the number of regions.
+  than the number of regions. `--json` names the region each node was found
+  in (`lorastats_region`).
 - `mesh status` shows when the device last reported its metrics (new `Metrics`
   column, loranet's `lastDeviceMetrics`), so the age of `Batt`, `Volt`,
   `ChUtil` and `AirTx` is no longer guessed from `Last seen`. It also gains an

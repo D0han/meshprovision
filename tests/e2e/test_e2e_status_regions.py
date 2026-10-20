@@ -401,3 +401,21 @@ def test_a_cold_start_on_lorastats_pls_list_costs_the_page_and_one_status_per_un
         assert (page.call_count, unknown.call_count, zachod.call_count) == (1, 1, 0)
 
     assert (_requests(first.stdout), _requests(second.stdout)) == (2, 0)
+
+
+def test_json_names_the_lorastats_region_each_node_was_found_in(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    nodes = _seed(seed_db)
+    env["MESHPROVISION_LORASTATS_REGIONS"] = "Zachód,Gdańsk"
+    router, _ = _two_regions_router(mock_sources, nodes)
+
+    with router:
+        result = invoke(runner, ["status", "--json"], env)
+
+    (node,) = json.loads(result.stdout)["nodes"]
+    assert node["sources"] == ["loranet", "lorastats"]
+    assert node["lorastats_region"] == "Gdańsk"
