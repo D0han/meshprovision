@@ -432,6 +432,33 @@ def test_cache_behaviour_hits_then_force_refresh(
         assert loranet_route.call_count == 2
 
 
+def test_a_maintenance_page_from_loranet_is_not_replayed_from_the_cache(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """The next run refetches a rejected 2xx body instead of failing for the whole TTL."""
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+    router = mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}})
+    loranet_route = next(r for r in router.routes if "loranet.pl" in str(r.pattern))
+    valid_dump = loranet_route.return_value
+    loranet_route.side_effect = [httpx.Response(200, html="<html>maintenance</html>"), valid_dump]
+
+    with router:
+        first = invoke(runner, ["status", "--json"], env)
+        second = invoke(runner, ["status", "--json"], env)
+        assert loranet_route.call_count == 2
+
+    assert first.exit_code == 7
+    assert json.loads(first.stdout)["failures"][0]["source"] == "loranet"
+    assert second.exit_code == 0, second.output
+    assert json.loads(second.stdout)["failures"] == []
+
+
 def test_watch_two_cache_respecting_polls(
     runner: CliRunner,
     env: dict[str, str],

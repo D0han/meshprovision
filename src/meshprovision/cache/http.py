@@ -42,7 +42,14 @@ a hostile server cannot turn that trade-off into gigabytes.
 always call :meth:`CachedResponse.json` rather than trusting the HTTP
 status code -- lorastats.pl returns HTTP 200 with an HTML body for
 invalid paths (a "soft 404"), and only :meth:`CachedResponse.json`
-surfaces that as an error. Cache keys include sorted params, so
+surfaces that as an error. Because only the status decides what is
+written, such a rejected 2xx body is already on disk by then; a caller
+that rejects a response drops it with
+:meth:`CachedHTTPClient.evict` (``evict(response.cache_key)``), and
+:meth:`~meshprovision.datasources.base.BaseHTTPDataSource.get_json` does
+so for every :class:`~meshprovision.errors.InvalidResponseError`, so a
+soft 404 or maintenance page is fetched again on the next call instead
+of being replayed for the whole TTL. Cache keys include sorted params, so
 per-node lorastats queries (``?node=<hex>``) never collide with each
 other or with the bulk loranet dump. :attr:`CacheStats.network_requests`
 increments once per actual ``httpx`` call, including retries, so tests
@@ -865,6 +872,27 @@ class CachedHTTPClient:
             shard keeps individual directories small.
         """
         return self._cache_dir / key[:_CACHE_SHARD_WIDTH] / f"{key}.json"
+
+    def evict(self, key: str) -> None:
+        """Drop one cache entry, best-effort; never raises.
+
+        For a 2xx response the caller rejected (see the module docstring's
+        datasource contract): left in place it would be served again until
+        the TTL expires.
+
+        Args:
+            key: The entry's cache key, for example
+                :attr:`CachedResponse.cache_key`.
+        """
+        path = self.path_for_key(key)
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            _logger.warning("could not drop rejected cache entry %s: %s", path, exc)
+            return
+        _logger.debug("dropped rejected cache entry %s", path)
 
     def get(
         self,

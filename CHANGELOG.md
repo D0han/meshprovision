@@ -400,6 +400,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A maintenance page or malformed response from loranet.pl or lorastats.pl
+  (HTML served with HTTP 200, an empty or unrecognised loranet dump) is no
+  longer kept in the HTTP cache, so `mesh status` (and every `--watch` poll)
+  recovers on the next run instead of failing until the cache expires.
 - `mesh status --watch` honours lorastats.pl's HTTP 429: a host that answered
   429 is not asked again for the `Retry-After` time it gave (10 minutes
   without one, at most a day; each poll meanwhile lists the source as failed

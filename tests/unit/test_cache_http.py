@@ -1247,3 +1247,46 @@ def test_next_write_of_an_entry_sweeps_its_stale_temps_only(tmp_path: Path) -> N
     assert young.exists()
     assert other_key.exists()
     assert path.exists()
+
+
+# ---------------------------------------------------------------------------
+# evict: dropping a response the caller rejected.
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_evict_drops_the_entry_so_the_next_get_is_a_miss(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(200, text="<html>maintenance</html>"))
+    client = _make_client(tmp_path, now=[0.0])
+    first = client.get(URL)
+
+    client.evict(first.cache_key)
+    second = client.get(URL)
+
+    assert not first.from_cache
+    assert not second.from_cache
+    assert route.call_count == 2
+
+
+def test_evict_of_a_missing_entry_is_a_silent_no_op(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = _make_client(tmp_path, now=[0.0])
+
+    with caplog.at_level("WARNING", logger=http_module.__name__):
+        client.evict(cache_key("GET", URL, None))
+
+    assert caplog.records == []
+
+
+def test_evict_logs_and_never_raises_when_the_entry_cannot_be_removed(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    client = _make_client(tmp_path, now=[0.0])
+    key = cache_key("GET", URL, None)
+    client.path_for_key(key).mkdir(parents=True)  # unlink() of a directory fails
+
+    with caplog.at_level("WARNING", logger=http_module.__name__):
+        client.evict(key)
+
+    assert "could not drop rejected cache entry" in caplog.text

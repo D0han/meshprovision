@@ -1623,3 +1623,110 @@ def test_lorastats_parse_node_counts_an_oversized_digit_string_instead_of_raisin
     assert obs is not None
     assert obs.role_value is None
     assert tracker.failures == 1
+
+
+# ---------------------------------------------------------------------------
+# A rejected 2xx response is evicted from the disk cache, not replayed.
+# ---------------------------------------------------------------------------
+
+_VALID_DUMP = {NodeId.from_hex("deadbe01").decimal: {"shortName": "good"}}
+
+
+def _client(tmp_path: Path) -> CachedHTTPClient:
+    return CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        httpx.Response(200, text="<html>maintenance</html>"),
+        httpx.Response(200, json={}),
+        httpx.Response(200, json={"not-a-node-id": {}}),
+        httpx.Response(200, json=[]),
+    ],
+    ids=["html", "empty-object", "no-decimal-keys", "not-an-object"],
+)
+@respx.mock
+def test_loranet_rejected_dump_is_fetched_again_on_the_next_run(
+    tmp_path: Path, bad: httpx.Response
+) -> None:
+    route = respx.get(LORANET_NODES_URL).mock(
+        side_effect=[bad, httpx.Response(200, json=_VALID_DUMP)]
+    )
+
+    with pytest.raises(InvalidResponseError):
+        LoranetSource(_client(tmp_path)).fetch_all()
+    result = LoranetSource(_client(tmp_path)).fetch_all()
+
+    assert route.call_count == 2
+    assert NodeId.from_hex("deadbe01") in result
+
+
+@respx.mock
+def test_loranet_a_rejected_dump_served_from_the_cache_is_evicted_too(tmp_path: Path) -> None:
+    route = respx.get(LORANET_NODES_URL).mock(
+        side_effect=[
+            httpx.Response(200, text="<html>maintenance</html>"),
+            httpx.Response(200, json=_VALID_DUMP),
+        ]
+    )
+    _client(tmp_path).get(LORANET_NODES_URL)  # caches the bad body, as an older run did
+
+    with pytest.raises(InvalidResponseError):
+        LoranetSource(_client(tmp_path)).fetch_all()
+    assert route.call_count == 1  # served from the cache
+    result = LoranetSource(_client(tmp_path)).fetch_all()
+
+    assert route.call_count == 2
+    assert NodeId.from_hex("deadbe01") in result
+
+
+@respx.mock
+def test_loranet_an_unparsable_entry_does_not_evict_a_valid_dump(tmp_path: Path) -> None:
+    payload = {**_VALID_DUMP, "not-a-decimal-key": {"shortName": "bad"}}
+    route = respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+
+    first = LoranetSource(_client(tmp_path))
+    first.fetch_all()
+    second = LoranetSource(_client(tmp_path))
+    second.fetch_all()
+
+    assert first.last_fetch_skipped == 1
+    assert second.last_fetch_skipped == 1
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_lorastats_rejected_node_response_is_fetched_again_on_the_next_run(
+    tmp_path: Path,
+) -> None:
+    route = respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(
+        side_effect=[
+            httpx.Response(200, text="<html>soft 404</html>"),
+            httpx.Response(200, json=[{"NodeId": "deadbe01", "ShortName": "found"}]),
+        ]
+    )
+
+    with pytest.raises(InvalidResponseError):
+        LorastatsSource(_client(tmp_path), contact="t@example.invalid").fetch_node("deadbe01")
+    obs = LorastatsSource(_client(tmp_path), contact="t@example.invalid").fetch_node("deadbe01")
+
+    assert route.call_count == 2
+    assert obs is not None
+    assert obs.short_name == "found"
+
+
+@respx.mock
+def test_lorastats_a_non_array_json_body_is_evicted(tmp_path: Path) -> None:
+    route = respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(side_effect=[httpx.Response(200, json={"error": "busy"}), httpx.Response(200, json=[])])
+
+    with pytest.raises(InvalidResponseError):
+        LorastatsSource(_client(tmp_path), contact="t@example.invalid").fetch_node("deadbe01")
+    obs = LorastatsSource(_client(tmp_path), contact="t@example.invalid").fetch_node("deadbe01")
+
+    assert route.call_count == 2
+    assert obs is None

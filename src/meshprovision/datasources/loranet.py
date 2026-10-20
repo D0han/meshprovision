@@ -111,9 +111,10 @@ class LoranetSource(BaseHTTPDataSource):
             # made" (None).
             self._last_fetch_data_as_of = self._index_fetched_at
             return self._index
-        payload = self.get_json(self._url, force_refresh=force_refresh)
+        payload = self.get_json(
+            self._url, force_refresh=force_refresh, validate=self._validate_dump
+        )
         index = require_json_object(payload, url=self._url, source=self.name)
-        self._check_dump_shape(index, url=self._url, source=self.name)
         self._index = index
         self._index_fetched_at = self._last_fetch_data_as_of
         return index
@@ -206,14 +207,29 @@ class LoranetSource(BaseHTTPDataSource):
         self._last_fetch_field_coercions = tracker.failures
         return result
 
+    def _validate_dump(self, payload: object) -> None:
+        """Reject a dump that is not a usable node index (see :meth:`_check_dump_shape`).
+
+        Args:
+            payload: The decoded response body.
+
+        Raises:
+            meshprovision.errors.InvalidResponseError: If ``payload`` is not
+                a JSON object, or fails :meth:`_check_dump_shape`.
+        """
+        index = require_json_object(payload, url=self._url, source=self.name)
+        self._check_dump_shape(index, url=self._url, source=self.name)
+
     @staticmethod
     def _check_dump_shape(index: Mapping[str, Any], *, url: str, source: str) -> None:
         """Reject a dump that is empty or whose keys aren't decimal node ids.
 
-        Called from :meth:`raw_index` after :func:`require_json_object`
-        succeeds but before the index is memoized, so a bad dump is never
-        cached -- a subsequent successful fetch (e.g. after the upstream
-        API recovers) is never blocked by a stale bad-shape memo.
+        Called from :meth:`_validate_dump` (``raw_index``'s ``get_json``
+        validator) after :func:`require_json_object` succeeds but before
+        the index is memoized, so a bad dump is never cached -- not in the
+        in-memory memo, and ``get_json`` evicts it from the on-disk cache
+        -- and a subsequent successful fetch (e.g. after the upstream API
+        recovers) is never blocked by a stale bad-shape entry.
 
         Args:
             index: The decoded dump, already known to be a JSON object.

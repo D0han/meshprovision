@@ -17,7 +17,7 @@ per-node array).
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
@@ -241,6 +241,7 @@ class BaseHTTPDataSource:
         params: Mapping[str, object] | None = None,
         ttl: float | None = None,
         force_refresh: bool | None = None,
+        validate: Callable[[Any], object] | None = None,
     ) -> Any:
         """Perform a cached ``GET`` and decode the response body as JSON.
 
@@ -256,6 +257,14 @@ class BaseHTTPDataSource:
         older than what has already been seen since the last
         :meth:`_begin_fetch` call.
 
+        A body that does not parse, or that ``validate`` rejects, is
+        evicted from the on-disk cache before the error propagates
+        (whether it was just fetched or served from the cache): the cache
+        writes any 2xx response, so it would otherwise be replayed until
+        the TTL expires. Only whole-response rejections belong in
+        ``validate``; a single unparsable entry inside a valid response
+        must not evict it.
+
         Args:
             url: The request URL.
             params: Query parameters.
@@ -263,6 +272,10 @@ class BaseHTTPDataSource:
             force_refresh: Whether to bypass the cache read for this
                 call. The fetched response is still written to the cache
                 either way.
+            validate: Called with the decoded value; raises
+                :class:`~meshprovision.errors.InvalidResponseError` when
+                the response as a whole is unusable. Its return value is
+                ignored.
 
         Returns:
             The decoded JSON value (of any shape); callers narrow it with
@@ -270,7 +283,7 @@ class BaseHTTPDataSource:
 
         Raises:
             meshprovision.errors.InvalidResponseError: If the response
-                body does not parse as JSON.
+                body does not parse as JSON, or ``validate`` rejects it.
             meshprovision.errors.HttpError: If the request itself fails.
         """
         response = self._client.get(
@@ -282,7 +295,14 @@ class BaseHTTPDataSource:
         )
         if self._last_fetch_data_as_of is None or response.fetched_at < self._last_fetch_data_as_of:
             self._last_fetch_data_as_of = response.fetched_at
-        return response.json()
+        try:
+            payload = response.json()
+            if validate is not None:
+                validate(payload)
+        except InvalidResponseError:
+            self._client.evict(response.cache_key)
+            raise
+        return payload
 
 
 def require_json_list(payload: object, *, url: str, source: str) -> list[Any]:

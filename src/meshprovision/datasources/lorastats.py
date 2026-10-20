@@ -27,6 +27,7 @@ exists.
 
 from __future__ import annotations
 
+import functools
 import logging
 import re
 import unicodedata
@@ -238,6 +239,7 @@ class LorastatsSource(BaseHTTPDataSource):
                 params={"node": nid.hex},
                 ttl=max(self._client.ttl, LORASTATS_MIN_TTL_SECONDS),
                 force_refresh=force_refresh,
+                validate=functools.partial(require_json_list, url=url, source=self.name),
             )
             records = require_json_list(payload, url=url, source=self.name)
             if not records:

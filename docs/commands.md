@@ -398,7 +398,10 @@ error (exit code `2`).
 failure, exits `7`. Pass `--no-fail-on-offline` to suppress that.
 
 **Cache note:** every outbound request goes through the TTL disk cache; a
-second run inside the TTL performs zero network calls. `--no-cache` /
+second run inside the TTL performs zero network calls. A response that is
+rejected as invalid (a maintenance or error page served with HTTP 200, an
+empty or unrecognised loranet dump) is dropped from the cache, so the next
+run fetches it again instead of failing until the TTL expires. `--no-cache` /
 `--force-refresh` bypasses reads but still writes the response back.
 Otherwise, lorastats responses are reused for at least 60 s, even with
 `--cache-ttl 0`, so a short `--watch --interval` cannot query lorastats about
