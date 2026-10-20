@@ -1128,7 +1128,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   KiB of gzip could decode to hundreds of MiB) and kept each hop's body in
   memory until the request ended, before the 64 MiB response cap applied to
   the final response. Redirects are now followed by the client itself, up to
-  20 hops, closing each 3xx response unread.
+  20 hops, closing each 3xx response unread. A redirect to an invalid URL (a
+  `Location` header with a control character or an invalid host name) now
+  fails that source's fetch at once instead of being retried three times.
 - The database lock file (`<db>.lock`) is never opened through a symbolic
   link, and a lock path that is not a regular file is refused with a hint to
   delete it: mesh writes its pid into that file, so a link planted there

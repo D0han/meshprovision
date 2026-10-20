@@ -188,6 +188,25 @@ class _InsecureRedirectError(httpx.RequestError):
         self.target = target
 
 
+class _InvalidRedirectError(httpx.RequestError):
+    """A redirect's ``Location`` header is not a valid URL.
+
+    A :class:`httpx.RequestError` (not a ``TransportError``), like
+    :class:`_InsecureRedirectError`: deterministic, never retried, wrapped
+    as :class:`HttpError`. Left to ``httpx``, it would surface as a
+    ``RemoteProtocolError``, which is a ``TransportError`` and so retried.
+    """
+
+    def __init__(self, reason: str, *, request: httpx.Request) -> None:
+        """Initialize the error.
+
+        Args:
+            reason: Why ``httpx`` could not parse the target.
+            request: The request whose response redirected.
+        """
+        super().__init__(f"the redirect target is not a valid URL: {reason}", request=request)
+
+
 class _ResponseTooLargeError(httpx.RequestError):
     """A response body exceeded :data:`MAX_RESPONSE_BYTES`.
 
@@ -235,9 +254,7 @@ def _refuse_insecure_redirect(response: httpx.Response) -> None:
 
     Runs on every response, before ``httpx`` builds the next request of a
     redirect chain, so the downgraded request is never sent. A redirect
-    between two ``https`` URLs (same host or not) is followed as usual,
-    as is a ``Location`` that ``httpx`` itself cannot parse (left for
-    ``httpx`` to report).
+    between two ``https`` URLs (same host or not) is followed as usual.
 
     Args:
         response: The response just received.
@@ -245,14 +262,15 @@ def _refuse_insecure_redirect(response: httpx.Response) -> None:
     Raises:
         _InsecureRedirectError: If ``response`` redirects from an ``https``
             URL to a non-``https`` one.
+        _InvalidRedirectError: If its ``Location`` is not a valid URL.
     """
     if not response.has_redirect_location:
         return
     source = response.request.url
     try:
         target = source.join(response.headers["location"])
-    except httpx.InvalidURL:
-        return
+    except httpx.InvalidURL as exc:
+        raise _InvalidRedirectError(str(exc), request=response.request) from exc
     if source.scheme == "https" and target.scheme != "https":
         raise _InsecureRedirectError(str(target.copy_with(query=None)), request=response.request)
 
@@ -582,8 +600,9 @@ def _request_error_hint(exc: httpx.RequestError) -> str | None:
             ended the fetch.
 
     Returns:
-        A hint for a ``TooManyRedirects`` redirect loop or a refused
-        HTTPS -> non-HTTPS redirect, else ``None``.
+        A hint for a ``TooManyRedirects`` redirect loop, a refused
+        HTTPS -> non-HTTPS redirect or a redirect to an invalid URL, else
+        ``None``.
     """
     if isinstance(exc, httpx.TooManyRedirects):
         last_url = None
@@ -600,6 +619,8 @@ def _request_error_hint(exc: httpx.RequestError) -> str | None:
             f"the server (or a proxy/captive portal) redirected to {exc.target}, "
             "which would drop HTTPS; check the URL and your network"
         )
+    if isinstance(exc, _InvalidRedirectError):
+        return "the server (or a proxy/captive portal) sent a redirect to an invalid URL"
     return None
 
 
@@ -1116,7 +1137,8 @@ class CachedHTTPClient:
         Raises:
             HttpError: On a non-retryable failure (including a
                 ``TooManyRedirects`` redirect loop, a refused HTTPS ->
-                non-HTTPS redirect, an undecodable response body, or one
+                non-HTTPS redirect, a redirect to an invalid URL, an
+                undecodable response body, or one
                 larger than :data:`MAX_RESPONSE_BYTES`), or
                 after exhausting retries on a retryable transport error.
             RateLimitError: If the server responds with HTTP 429 (never
@@ -1161,10 +1183,10 @@ class CachedHTTPClient:
                 continue
             except httpx.RequestError as exc:
                 # Deterministic for a given server state (a redirect loop, a
-                # refused HTTPS downgrade, an undecodable body), unlike
-                # `TransportError` above -- so this is not retried. Must stay
-                # after the `TransportError` arm, since `TransportError` is
-                # itself a `RequestError` subclass.
+                # refused HTTPS downgrade, an invalid redirect target, an
+                # undecodable body), unlike `TransportError` above -- so this
+                # is not retried. Must stay after the `TransportError` arm,
+                # since `TransportError` is itself a `RequestError` subclass.
                 raise HttpError(
                     f"Request to {url} failed: {exc}",
                     url=url,

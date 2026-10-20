@@ -551,6 +551,31 @@ def test_a_twenty_first_redirect_fails_as_a_loop_without_retry(tmp_path: Path) -
 
 
 @respx.mock
+@pytest.mark.parametrize(
+    "location",
+    [b"/\x1b]52;c;QQ==\x07", b"https://\x9b31mX/"],
+    ids=["control-character-in-path", "c1-byte-in-host"],
+)
+def test_a_redirect_to_an_invalid_url_fails_once_without_retry(
+    tmp_path: Path, location: bytes
+) -> None:
+    """An unparsable Location reached us as httpx's RemoteProtocolError, and was retried."""
+    route = respx.get(URL).mock(return_value=httpx.Response(302, headers={"Location": location}))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(HttpError) as exc_info:
+        client.get(URL)
+    assert isinstance(exc_info.value.__cause__, http_module._InvalidRedirectError)
+    message = str(exc_info.value)
+    assert "the redirect target is not a valid URL" in message
+    assert not [c for c in message if ord(c) < 0x20 or 0x7F <= ord(c) <= 0x9F]
+    assert "sent a redirect to an invalid URL" in (exc_info.value.hint or "")
+    assert route.call_count == 1
+    assert client.stats.network_requests == 1
+    assert client.stats.retries == 0
+
+
+@respx.mock
 def test_cross_host_https_redirect_is_followed(tmp_path: Path) -> None:
     respx.get(URL).mock(
         return_value=httpx.Response(302, headers={"Location": "https://cdn.example.invalid/d.json"})
