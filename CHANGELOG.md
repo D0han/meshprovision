@@ -1123,6 +1123,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The HTTP client no longer reads a redirect's body before following it.
+  `httpx` read every 3xx body in full (with no size limit, so a few hundred
+  KiB of gzip could decode to hundreds of MiB) and kept each hop's body in
+  memory until the request ended, before the 64 MiB response cap applied to
+  the final response. Redirects are now followed by the client itself, up to
+  20 hops, closing each 3xx response unread.
 - The database lock file (`<db>.lock`) is never opened through a symbolic
   link, and a lock path that is not a regular file is refused with a hint to
   delete it: mesh writes its pid into that file, so a link planted there

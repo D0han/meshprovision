@@ -156,6 +156,9 @@ seconds, so an hour-old temp belongs to a writer that was killed, not to
 one still running.
 """
 
+_MAX_REDIRECTS: Final[int] = 20
+"""Redirect hops followed for one request before it fails as a loop (``httpx``'s default)."""
+
 _HTTP_RATE_LIMITED: Final[int] = 429
 _HTTP_CLIENT_ERROR_MIN: Final[int] = 400
 _HTTP_CLIENT_ERROR_MAX: Final[int] = 500
@@ -663,14 +666,17 @@ class CachedHTTPClient:
 
     - **TLS verification always on.** There is no ``verify`` parameter --
       the internal ``httpx.Client`` is always constructed with
-      ``verify=True``, ``follow_redirects=True``, and an explicit
-      ``httpx.Timeout``. This is an invariant of the class, not an
-      option.
-    - **No HTTPS downgrade on redirect.** The internal ``httpx.Client``
-      follows redirects, but a response hook refuses one from an
-      ``https`` URL to a non-``https`` URL before it is sent; the call
-      fails with :class:`HttpError` (not retried, nothing cached).
-      An externally supplied ``client`` gets no such hook -- its
+      ``verify=True`` and an explicit ``httpx.Timeout``. This is an
+      invariant of the class, not an option.
+    - **Redirect bodies are never read.** The internal ``httpx.Client``
+      is built with ``follow_redirects=False`` and this class follows up
+      to :data:`_MAX_REDIRECTS` hops itself, closing each 3xx response
+      unread: ``httpx`` would read every hop's body in full, past
+      :data:`MAX_RESPONSE_BYTES`, and keep it in ``response.history``.
+    - **No HTTPS downgrade on redirect.** A response hook refuses a
+      redirect from an ``https`` URL to a non-``https`` URL before it is
+      sent; the call fails with :class:`HttpError` (not retried, nothing
+      cached). An externally supplied ``client`` gets no such hook -- its
       redirect policy is the caller's responsibility.
     - **A required, non-empty User-Agent.** ``user_agent`` embeds the
       operator's contact string that lorastats.pl requires; a blank
@@ -731,7 +737,8 @@ class CachedHTTPClient:
                 constructing one. When supplied, this instance does not
                 own it and :meth:`close` will not close it. Intended for
                 tests (``respx``-mocked clients). It is used as-is: the
-                HTTPS-downgrade redirect refusal is not added to it.
+                HTTPS-downgrade redirect refusal is not added to it, and
+                if it follows redirects itself their bodies are read.
             sleep: Callable used to wait between retries. Overridable for
                 deterministic tests.
             clock: Callable returning the current unix epoch seconds.
@@ -760,7 +767,7 @@ class CachedHTTPClient:
         self._owns_client = client is None
         self._client = client or httpx.Client(
             timeout=httpx.Timeout(timeout),
-            follow_redirects=True,
+            follow_redirects=False,
             verify=True,
             headers={"User-Agent": user_agent, "Accept": "application/json"},
             event_hooks={"response": [_refuse_insecure_redirect]},
@@ -1132,7 +1139,7 @@ class CachedHTTPClient:
                 # Streamed, so the body is read (and decoded) under the cap
                 # instead of whole; a transport error mid-body is still
                 # retried below, as with a buffered request.
-                response = self._client.send(request, stream=True)
+                response = self._send_following_redirects(request)
                 try:
                     content = _read_capped(response)
                 finally:
@@ -1205,6 +1212,37 @@ class CachedHTTPClient:
         raise HttpError(
             f"Request to {url} failed after retries: {last_exc}", url=url, source=source
         )
+
+    def _send_following_redirects(self, request: httpx.Request) -> httpx.Response:
+        """Send ``request`` streamed, following redirects without reading their bodies.
+
+        Each hop is the ``next_request`` ``httpx`` builds for a 3xx (so its
+        method, header and cross-origin rules stay ``httpx``'s), sent after
+        the 3xx response is closed unread. The client's response hooks run
+        on every hop, so a refused HTTPS downgrade is never sent.
+
+        Args:
+            request: The first request of the chain.
+
+        Returns:
+            The final, still unread response. The caller closes it.
+
+        Raises:
+            httpx.TooManyRedirects: If the chain is longer than
+                :data:`_MAX_REDIRECTS` hops.
+        """
+        response = self._client.send(request, stream=True)
+        hops = 0
+        while response.next_request is not None:
+            next_request = response.next_request
+            response.close()
+            hops += 1
+            if hops > _MAX_REDIRECTS:
+                raise httpx.TooManyRedirects(
+                    "Exceeded maximum allowed redirects.", request=next_request
+                )
+            response = self._client.send(next_request, stream=True)
+        return response
 
     def _backoff(self, attempt: int, *, url: str) -> None:
         """Sleep for an exponential backoff delay before the next retry.

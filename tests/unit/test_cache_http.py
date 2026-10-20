@@ -480,6 +480,76 @@ def test_relative_same_host_redirect_is_followed(tmp_path: Path) -> None:
     assert moved.call_count == 1
 
 
+class _UnreadBody(httpx.SyncByteStream):
+    """A redirect body that records whether it was read or closed."""
+
+    def __init__(self) -> None:
+        self.read = False
+        self.closed = False
+
+    def __iter__(self) -> Iterator[bytes]:
+        self.read = True
+        yield b"x" * 1024
+
+    def close(self) -> None:
+        self.closed = True
+
+
+@respx.mock
+def test_a_redirect_body_is_closed_without_being_read(tmp_path: Path) -> None:
+    """A 3xx body is never read: httpx read each in full, before the size cap, and kept it."""
+    body = _UnreadBody()
+    respx.get(URL).mock(
+        return_value=httpx.Response(302, headers={"Location": "/moved.json"}, stream=body)
+    )
+    respx.get("https://example.invalid/moved.json").mock(
+        return_value=httpx.Response(200, json={"a": 1})
+    )
+    client = _make_client(tmp_path, now=[0.0])
+
+    assert client.get(URL).json() == {"a": 1}
+    assert body.read is False
+    assert body.closed is True
+    assert client.stats.network_requests == 1
+
+
+def _redirect_chain(hops: int) -> respx.Route:
+    """Mock ``URL?hop=n`` to redirect to ``hop=n+1`` until ``hops``, then answer 200."""
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        hop = int(request.url.params.get("hop", "0"))
+        if hop < hops:
+            return httpx.Response(302, headers={"Location": f"{URL}?hop={hop + 1}"})
+        return httpx.Response(200, json={"hops": hop})
+
+    return respx.get(url__startswith=URL).mock(side_effect=_handler)
+
+
+@respx.mock
+def test_a_chain_of_twenty_redirects_is_followed(tmp_path: Path) -> None:
+    route = _redirect_chain(20)
+    client = _make_client(tmp_path, now=[0.0])
+
+    assert client.get(URL).json() == {"hops": 20}
+    assert route.call_count == 21
+
+
+@respx.mock
+def test_a_twenty_first_redirect_fails_as_a_loop_without_retry(tmp_path: Path) -> None:
+    route = _redirect_chain(21)
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(HttpError) as exc_info:
+        client.get(URL)
+    assert isinstance(exc_info.value.__cause__, httpx.TooManyRedirects)
+    assert "redirecting in a loop (last URL: https://example.invalid/data.json)" in (
+        exc_info.value.hint or ""
+    )
+    assert route.call_count == 21
+    assert client.stats.network_requests == 1
+    assert client.stats.retries == 0
+
+
 @respx.mock
 def test_cross_host_https_redirect_is_followed(tmp_path: Path) -> None:
     respx.get(URL).mock(
