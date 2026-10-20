@@ -1344,6 +1344,10 @@ def _blank_run_row_elements(encoding: str) -> list[Any]:
         return [odf_table.TableRow(numberrowsrepeated=2000)]
     if encoding == "single_1048000":
         return [odf_table.TableRow(numberrowsrepeated=1048000)]
+    if encoding == "separate_3_then_single_2000":
+        return [odf_table.TableRow() for _ in range(3)] + [
+            odf_table.TableRow(numberrowsrepeated=2000)
+        ]
     raise ValueError(f"unknown blank-run encoding: {encoding!r}")
 
 
@@ -1445,6 +1449,70 @@ def test_read_raw_blank_run_layouts(
     raw = ods_read.read_raw(path)
     node_id_idx = schema.NODES_SHEET_SPEC.column_index("node_id")
     assert raw.sheets["Nodes"].rows[0][node_id_idx].text == node.node_id
+
+
+@pytest.mark.parametrize(
+    "encoding",
+    [
+        "separate_65",
+        "single_65",
+        "single_1024",
+        "single_2000",
+        "separate_3_then_single_2000",
+    ],
+)
+def test_read_raw_blank_run_error_names_the_row_where_the_gap_starts(
+    tmp_path: Path, keypair, encoding: str
+) -> None:
+    """The gap error points at the first blank row (row 3), not MAX_BLANK_ROWS rows past it."""
+    node, pub, priv = _sample_records(keypair)
+    trailing_node = node.with_updates(node_id="ffff0002")
+    path = tmp_path / "db.ods"
+    _write_nodes_with_blank_run(
+        path, node=node, trailing_node=trailing_node, pub=pub, priv=priv, encoding=encoding
+    )
+
+    with pytest.raises(DbIntegrityError, match="blank rows starting at row 3,") as excinfo:
+        ods_read.read_raw(path)
+
+    assert excinfo.value.cell == "Nodes.A3"
+
+
+def test_read_raw_blank_run_error_names_the_start_of_the_long_gap_not_an_earlier_short_one(
+    tmp_path: Path, keypair
+) -> None:
+    """A short blank run that real data ended does not move the start of the next gap."""
+    from odf import opendocument
+    from odf import table as odf_table
+
+    node, pub, priv = _sample_records(keypair)
+    middle = node.with_updates(node_id="ffff0002")
+    last = node.with_updates(node_id="ffff0003")
+    path = tmp_path / "db.ods"
+    ods_write.write_database(
+        path,
+        nodes=[node.to_row(), middle.to_row(), last.to_row()],
+        keys=[pub.to_row(), priv.to_row()],
+        backup=False,
+    )
+    doc = opendocument.load(str(path))
+    nodes_table = next(
+        t
+        for t in doc.spreadsheet.getElementsByType(odf_table.Table)
+        if t.getAttribute("name") == "Nodes"
+    )
+    row_elems = nodes_table.getElementsByType(odf_table.TableRow)
+    for _ in range(3):  # rows 3-5, then middle at row 6
+        nodes_table.insertBefore(odf_table.TableRow(), row_elems[2])
+    for _ in range(ods_read.MAX_BLANK_ROWS + 1):  # from row 7, then last
+        nodes_table.insertBefore(odf_table.TableRow(), row_elems[3])
+    with path.open("wb") as fh:
+        doc.write(fh)
+
+    with pytest.raises(DbIntegrityError) as excinfo:
+        ods_read.read_raw(path)
+
+    assert excinfo.value.cell == "Nodes.A7"
 
 
 @pytest.mark.parametrize("encoding", ["separate_64", "single_64"])

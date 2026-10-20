@@ -357,6 +357,7 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
 
     data_rows: list[tuple[CellValue, ...]] = []
     consecutive_blank = 0
+    gap_start = 0  # ODS row number of the current blank run's first row
     for index, row_elem in enumerate(row_elems[1:], start=1):
         cells = _read_row_cells(row_elem)
         is_blank = all(not cell.text.strip() for cell in cells)
@@ -364,7 +365,7 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
 
         if is_blank and repeat > MAX_ROW_REPEAT:
             if _has_data_below(row_elems, index):
-                raise _gap_error(name, len(data_rows) + 2)
+                raise _gap_error(name, gap_start if consecutive_blank else len(data_rows) + 2)
             # LibreOffice's giant trailing filler row: treat as end-of-data.
             break
 
@@ -372,6 +373,8 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
         exhausted = False
         for _ in range(count):
             if is_blank:
+                if consecutive_blank == 0:
+                    gap_start = len(data_rows) + 2  # +1 header, +1 for 1-indexing
                 consecutive_blank += 1
                 if consecutive_blank > MAX_BLANK_ROWS:
                     exhausted = True
@@ -391,7 +394,7 @@ def _read_sheet(name: str, table_elem: Any) -> SheetData:
             # harmless to stop at, same as before -- so only refuse when
             # something non-blank is actually waiting past the gap.
             if _has_data_below(row_elems, index):
-                raise _gap_error(name, len(data_rows) + 2)  # +1 header, +1 for 1-indexing
+                raise _gap_error(name, gap_start)
             break
 
     return SheetData(name=name, header=header, rows=tuple(data_rows))

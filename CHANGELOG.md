@@ -400,6 +400,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The database error for a run of too many blank rows with data still below
+  it now names the row where the blank run starts; it pointed 64 rows further
+  down (`Nodes.A68` for a gap starting at row 4).
 - `mesh provision` changing only a node's long name no longer fails, losing
   the rename, when the device reports a blank short name, and no longer
   silently rewrites a padded short name (`AB ` became `AB`): the short name is
