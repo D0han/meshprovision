@@ -22,7 +22,25 @@ The regions to ask are configured, or -- when none is -- read from
 lorastats.pl's own site navigation and cached for a week by
 :class:`~meshprovision.datasources.lorastats_regions.RegionList` (no API
 lists them). Each is checked only for its *local* shape (see
-:func:`validate_regions`) and asked in turn.
+:func:`validate_regions`) and asked in turn. Two things keep that cheap
+when more than one region is asked:
+
+- a :class:`~meshprovision.datasources.region_memo.RegionMemo` remembers
+  the region each node was last found in, which is asked first and alone
+  while it keeps answering;
+- before asking the regions for a node without such an answer, the
+  region-free ``/Node/{hex}/Status`` endpoint is asked whether lorastats
+  knows the node at all. Only its HTTP status is read (the body is Polish
+  free text): 404 means unknown, so no region is asked; 200 (fine) and
+  500 (known, but no packet received) mean known. The answer is reused
+  for at least :data:`LORASTATS_STATUS_TTL_SECONDS`.
+
+Per node and cache window that is one request when the memo's region
+answers, one for a node lorastats does not know, and at most
+``1 + len(regions)`` otherwise (the status probe plus every region, the
+memo's included), with at most :data:`LORASTATS_MAX_REGIONS` regions. A
+single region is asked directly, exactly one request per node, without
+probe or memo.
 """
 
 from __future__ import annotations
@@ -51,12 +69,15 @@ from meshprovision.nodeid import NodeId, NodeIdLike
 if TYPE_CHECKING:
     from meshprovision.cache.http import CachedHTTPClient
     from meshprovision.datasources.lorastats_regions import RegionList
+    from meshprovision.datasources.region_memo import RegionMemo
 
 __all__ = [
     "LORASTATS_BASE_URL",
     "LORASTATS_MAX_REGIONS",
     "LORASTATS_MIN_TTL_SECONDS",
     "LORASTATS_NODES_PATH",
+    "LORASTATS_STATUS_PATH",
+    "LORASTATS_STATUS_TTL_SECONDS",
     "REGION_PATTERN",
     "LorastatsSource",
     "parse_node",
@@ -78,6 +99,22 @@ One request per node per poll is the request storm lorastats.pl bans IPs
 for; with this floor, ``--cache-ttl 0`` and a short ``--watch --interval``
 still ask for each node at most once a minute (``--no-cache`` still forces
 a fresh fetch)."""
+
+LORASTATS_STATUS_PATH: Final[str] = "/Node/{node}/Status"
+"""Region-free per-node status endpoint; only its HTTP status is read."""
+
+LORASTATS_STATUS_TTL_SECONDS: Final[float] = 3600.0
+"""Shortest time a status-endpoint answer is reused, whatever the client's TTL.
+
+Above all for a node lorastats does not know (HTTP 404): it is not asked
+about again, in any region, for an hour (``--no-cache`` still asks)."""
+
+_STATUS_UNKNOWN_NODE: Final[int] = 404
+"""The status endpoint's answer for a node lorastats does not know."""
+
+_STATUS_ANSWERS: Final[frozenset[int]] = frozenset({_STATUS_UNKNOWN_NODE, 500})
+"""Status-endpoint statuses that are answers, not failures: 500 is its normal
+"known, but no packet received" answer, so it must not be retried."""
 
 LORASTATS_MAX_REGIONS: Final[int] = 16
 """Most regions in a list, configured or read from lorastats.pl: each may be
@@ -107,6 +144,7 @@ class LorastatsSource(BaseHTTPDataSource):
         regions: Sequence[str] = (),
         base_url: str = LORASTATS_BASE_URL,
         region_list: RegionList | None = None,
+        region_memo: RegionMemo | None = None,
     ) -> None:
         """Initialize the source.
 
@@ -130,6 +168,9 @@ class LorastatsSource(BaseHTTPDataSource):
             base_url: The lorastats.pl base URL. Overridable for tests.
             region_list: Where to get the regions when none are
                 configured, on first use.
+            region_memo: Where to remember the region each node was found
+                in, when more than one region is asked. ``None``
+                remembers nothing (the status probe still applies).
 
         Raises:
             meshprovision.errors.MissingContactError: If ``contact`` is
@@ -148,6 +189,7 @@ class LorastatsSource(BaseHTTPDataSource):
             raise SettingsError("No lorastats regions to ask were given.")
         self._regions = validate_regions(regions) if regions else None
         self._region_list = region_list
+        self._memo = region_memo
 
     def fetch_nodes(
         self, ids: Collection[NodeId], *, force_refresh: bool | None = None
@@ -198,32 +240,45 @@ class LorastatsSource(BaseHTTPDataSource):
         region: str | None = None,
         force_refresh: bool | None = None,
     ) -> NodeObservation | None:
-        """Fetch one node's observation, trying each configured region in turn.
+        """Fetch one node's observation from the region it lives in.
+
+        With more than one configured region (and no explicit
+        ``region``), the memo's region is asked first; when it does not
+        answer, or there is none, the status endpoint is asked whether
+        lorastats knows the node (no region is asked when it does not),
+        then every other configured region in order. The memo is updated
+        to the region that answered, or the entry is dropped when its
+        region no longer does. See the module docstring for the request
+        budget.
 
         Args:
             node_id: The node id to look up, in any form
                 :meth:`NodeId.parse` accepts.
             region: A single region to query instead of the
-                configured regions. Does not need to already be validated
-                (this call validates it before use).
+                configured regions, without memo or status probe. Does
+                not need to already be validated (this call validates it
+                before use).
             force_refresh: Whether to bypass the HTTP cache read for
                 this call. Otherwise a cached response is reused for the
                 client's TTL, but never less than
-                :data:`LORASTATS_MIN_TTL_SECONDS`.
+                :data:`LORASTATS_MIN_TTL_SECONDS` (a status-endpoint
+                answer: :data:`LORASTATS_STATUS_TTL_SECONDS`).
 
         Returns:
             The observation, or ``None`` when the node was not found in
             any candidate region (a legitimate, non-error outcome:
             lorastats.pl returns ``[]`` with HTTP 200 for an unknown
-            node). Also sets :attr:`last_fetch_skipped` to the number of
+            node) or lorastats does not know it. Also sets
+            :attr:`last_fetch_skipped` to the number of
             candidate records across every queried region that could not
             even be inspected for a match (see :func:`_match_record`) --
             never counting a record that simply belonged to a different
             node, only one this call could not parse at all. Resets and
             sets :attr:`last_fetch_data_as_of` to the oldest fetch time
-            across every request this call made (via :meth:`_begin_fetch`
-            and :meth:`~meshprovision.datasources.base.BaseHTTPDataSource
-            .get_json`).
+            across every region request this call made (via
+            :meth:`_begin_fetch` and :meth:`~meshprovision.datasources.base
+            .BaseHTTPDataSource.get_json`); the status probe does not
+            count, as it carries no node data.
 
         Raises:
             meshprovision.errors.NodeIdError: If ``node_id`` cannot be
@@ -232,17 +287,131 @@ class LorastatsSource(BaseHTTPDataSource):
                 and does not match :data:`REGION_PATTERN`.
             meshprovision.errors.InvalidResponseError: If a response
                 body does not parse as a JSON array.
-            meshprovision.errors.HttpError: If a request itself fails.
+            meshprovision.errors.HttpError: If a request itself fails,
+                the status probe's included (any status but 2xx, 404
+                and 500).
             meshprovision.errors.DataSourceError: If no regions are
                 configured and the region list cannot be had.
         """
         self._begin_fetch()
         nid = NodeId.parse(node_id)
-        candidates = validate_regions((region,)) if region is not None else self._configured()
-        skipped = 0
         tracker = CoercionTracker()
+        self._last_fetch_skipped = 0
+        try:
+            if region is not None:
+                found = self._search(nid, validate_regions((region,)), tracker, force_refresh)
+            else:
+                regions = self._configured()
+                if len(regions) == 1:
+                    found = self._search(nid, regions, tracker, force_refresh)
+                else:
+                    found = self._search_learning(nid, regions, tracker, force_refresh)
+        finally:
+            self._last_fetch_field_coercions = tracker.failures
+        return found[0] if found is not None else None
 
-        for candidate in candidates:
+    def _search_learning(
+        self,
+        nid: NodeId,
+        regions: tuple[str, ...],
+        tracker: CoercionTracker,
+        force_refresh: bool | None,
+    ) -> tuple[NodeObservation, str] | None:
+        """Look ``nid`` up in ``regions``, memo first, and update the memo.
+
+        Args:
+            nid: The node to look up.
+            regions: The regions to ask, in order (more than one).
+            tracker: Collects field-coercion failures.
+            force_refresh: Forwarded to every request.
+
+        Returns:
+            The observation and the region that answered, or ``None``.
+        """
+        remembered = self._remembered_region(nid, regions)
+        if remembered is not None:
+            found = self._search(nid, (remembered,), tracker, force_refresh)
+            if found is not None:
+                return found
+        if self._unknown_to_lorastats(nid, force_refresh):
+            found = None
+        else:
+            others = tuple(candidate for candidate in regions if candidate != remembered)
+            found = self._search(nid, others, tracker, force_refresh)
+        if self._memo is not None:
+            if found is not None:
+                self._memo.remember(nid, found[1])
+            elif remembered is not None:
+                self._memo.forget(nid)
+        return found
+
+    def _remembered_region(self, nid: NodeId, regions: tuple[str, ...]) -> str | None:
+        """Return the memo's region for ``nid`` when it is one of ``regions``.
+
+        A remembered region that is not in the list (any more) is ignored,
+        never asked: the list is the operator's (or lorastats.pl's) choice.
+
+        Args:
+            nid: The node to look up.
+            regions: The regions being asked.
+
+        Returns:
+            The configured region the node was last found in, or ``None``.
+        """
+        if self._memo is None:
+            return None
+        remembered = self._memo.region_for(nid)
+        return remembered if remembered in regions else None
+
+    def _unknown_to_lorastats(self, nid: NodeId, force_refresh: bool | None) -> bool:
+        """Ask the region-free status endpoint whether lorastats knows ``nid``.
+
+        Args:
+            nid: The node to ask about.
+            force_refresh: Forwarded to the request.
+
+        Returns:
+            ``True`` only for HTTP 404. Every other answer -- 200, 500,
+            or a 2xx soft-404 page -- means "ask the regions".
+
+        Raises:
+            meshprovision.errors.HttpError: For any other status, or a
+                failed request (as for a region request).
+        """
+        response = self._client.get(
+            f"{self._base_url}{LORASTATS_STATUS_PATH.format(node=nid.hex)}",
+            ttl=max(self._client.ttl, LORASTATS_STATUS_TTL_SECONDS),
+            force_refresh=force_refresh,
+            source=self.name,
+            accept_statuses=_STATUS_ANSWERS,
+        )
+        if response.status_code != _STATUS_UNKNOWN_NODE:
+            return False
+        _logger.info("lorastats does not know node %s; not asking any region about it", nid.hex)
+        return True
+
+    def _search(
+        self,
+        nid: NodeId,
+        regions: Sequence[str],
+        tracker: CoercionTracker,
+        force_refresh: bool | None,
+    ) -> tuple[NodeObservation, str] | None:
+        """Ask each of ``regions`` in turn for ``nid``, stopping at the first match.
+
+        Adds every record that could not be inspected to
+        :attr:`last_fetch_skipped`.
+
+        Args:
+            nid: The node to look up.
+            regions: The validated regions to ask, in order.
+            tracker: Collects field-coercion failures.
+            force_refresh: Forwarded to every request.
+
+        Returns:
+            The observation and the region that answered, or ``None``.
+        """
+        for candidate in regions:
             region_segment = quote(candidate, safe="")
             url = f"{self._base_url}{LORASTATS_NODES_PATH.format(region=region_segment)}"
             payload = self.get_json(
@@ -256,7 +425,7 @@ class LorastatsSource(BaseHTTPDataSource):
             if not records:
                 continue
             record, record_skipped = _match_record(records, nid)
-            skipped += record_skipped
+            self._last_fetch_skipped += record_skipped
             if record is None:
                 continue
             observation = parse_node(
@@ -271,11 +440,7 @@ class LorastatsSource(BaseHTTPDataSource):
                     nid.hex,
                 )
                 continue
-            self._last_fetch_skipped = skipped
-            self._last_fetch_field_coercions = tracker.failures
-            return observation
-        self._last_fetch_skipped = skipped
-        self._last_fetch_field_coercions = tracker.failures
+            return observation, candidate
         return None
 
     def _configured(self) -> tuple[str, ...]:

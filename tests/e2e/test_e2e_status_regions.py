@@ -10,7 +10,13 @@ from typing import TYPE_CHECKING
 import httpx
 import pytest
 
+from meshprovision.datasources.lorastats import (
+    LORASTATS_BASE_URL,
+    LORASTATS_NODES_PATH,
+    LORASTATS_STATUS_PATH,
+)
 from meshprovision.datasources.lorastats_regions import REGION_LIST_FILENAME
+from meshprovision.datasources.region_memo import REGION_MEMO_FILENAME
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import ExitCode
 from tests.conftest import LORASTATS_NODES_PAGE, LORASTATS_NODES_PAGE_REGIONS
@@ -93,8 +99,11 @@ def _listed_router(
     nodes: dict[str, dict[str, object]],
     *,
     page: httpx.Response | None = None,
+    status: int = 200,
 ) -> tuple[respx.MockRouter, respx.Route, respx.Route]:
     """Serve the fixture navigation page, the nodes in Zachód, every other region empty.
+
+    The status endpoint answers ``status`` for every node.
 
     Returns:
         The router, the page route and the Zachód route.
@@ -103,6 +112,9 @@ def _listed_router(
     zachod = _lorastats_route(router)
     router.get(url__regex=r"^https://lorastats\.pl/API/[^/]+/Nodes/JSON").mock(
         return_value=httpx.Response(200, json=[])
+    )
+    router.get(url__regex=r"^https://lorastats\.pl/Node/[0-9a-f]{8}/Status$").mock(
+        return_value=httpx.Response(status, text="Wszystko OK.")
     )
     page_route = router.get(_PAGE_URL).mock(
         return_value=page or httpx.Response(200, html=LORASTATS_NODES_PAGE)
@@ -131,8 +143,8 @@ def test_without_configured_regions_the_listed_regions_are_asked_in_order(
     document = json.loads(result.stdout)
     (node,) = document["nodes"]
     assert node["sources"] == ["lorastats"]
-    # The page, then Warszawa, ShortFast and Zachód, where the node is.
-    assert document["cache"]["network_requests"] == 1 + 3
+    # The page, the status probe, then Warszawa, ShortFast and Zachód, where the node is.
+    assert document["cache"]["network_requests"] == 1 + 1 + 3
     cached = json.loads(_region_list_file(env).read_text(encoding="utf-8"))
     assert cached["regions"] == list(LORASTATS_NODES_PAGE_REGIONS)
 
@@ -251,3 +263,141 @@ def test_a_failed_refresh_uses_the_stale_list_with_a_warning(
     (node,) = json.loads(result.stdout)["nodes"]
     assert node["sources"] == ["lorastats"]
     assert result.exit_code == 0
+
+
+def _two_regions_router(
+    mock_sources: Callable[..., respx.MockRouter],
+    nodes: dict[str, dict[str, object]],
+    *,
+    status: int = 200,
+) -> tuple[respx.MockRouter, dict[str, respx.Route]]:
+    """Serve the nodes in ``Gdańsk`` only, an empty ``Zachód`` and the status endpoint."""
+    router = mock_sources(nodes=nodes, region="Gda%C5%84sk")
+    routes = {
+        "Gdańsk": _lorastats_route(router),
+        "Zachód": router.get(
+            url__startswith=LORASTATS_BASE_URL + LORASTATS_NODES_PATH.format(region="Zach%C3%B3d")
+        ).mock(return_value=httpx.Response(200, json=[])),
+        "status": router.get(LORASTATS_BASE_URL + LORASTATS_STATUS_PATH.format(node=_NODE)).mock(
+            return_value=httpx.Response(status, text="Wszystko OK.")
+        ),
+    }
+    return router, routes
+
+
+def _calls(routes: dict[str, respx.Route]) -> dict[str, int]:
+    return {name: route.call_count for name, route in routes.items()}
+
+
+def _requests(result_stdout: str) -> int:
+    count = json.loads(result_stdout)["cache"]["network_requests"]
+    assert isinstance(count, int)
+    return count
+
+
+def test_a_node_in_the_second_configured_region_is_found_and_remembered(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    nodes = _seed(seed_db)
+    env["MESHPROVISION_LORASTATS_REGIONS"] = "Zachód,Gdańsk"
+    router, routes = _two_regions_router(mock_sources, nodes)
+
+    with router:
+        first = invoke(runner, ["status", "--json", "--source", "lorastats"], env)
+        assert _calls(routes) == {"Gdańsk": 1, "Zachód": 1, "status": 1}
+        second = invoke(runner, ["--no-cache", "status", "--json", "--source", "lorastats"], env)
+        assert _calls(routes) == {"Gdańsk": 2, "Zachód": 1, "status": 1}
+
+    assert (_requests(first.stdout), _requests(second.stdout)) == (3, 1)
+    for result in (first, second):
+        assert result.exit_code == 0
+        (node,) = json.loads(result.stdout)["nodes"]
+        assert node["sources"] == ["lorastats"]
+    memo = json.loads((Path(env["MESHPROVISION_CACHE_DIR"]) / REGION_MEMO_FILENAME).read_text())
+    assert memo["nodes"][_NODE]["region"] == "Gdańsk"
+
+
+def test_a_node_unknown_to_lorastats_costs_exactly_one_request(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    nodes = _seed(seed_db)
+    env["MESHPROVISION_LORASTATS_REGIONS"] = "Zachód,Gdańsk"
+    router, routes = _two_regions_router(mock_sources, nodes, status=404)
+
+    with router:
+        first = invoke(runner, ["status", "--json", "--source", "lorastats"], env)
+        second = invoke(runner, ["status", "--json", "--source", "lorastats"], env)
+        assert _calls(routes) == {"Gdańsk": 0, "Zachód": 0, "status": 1}
+
+    assert (_requests(first.stdout), _requests(second.stdout)) == (1, 0)
+    (node,) = json.loads(first.stdout)["nodes"]
+    assert node["sources"] == []
+    assert json.loads(first.stdout)["failures"] == []
+
+
+def test_a_single_region_flag_is_asked_directly_without_probe_or_memo(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    nodes = _seed(seed_db)
+    env["MESHPROVISION_LORASTATS_REGIONS"] = "Zachód,Gdańsk"
+    router, routes = _two_regions_router(mock_sources, nodes)
+
+    with router:
+        result = invoke(
+            runner, ["status", "--json", "--source", "lorastats", "--region", "Gdańsk"], env
+        )
+        assert _calls(routes) == {"Gdańsk": 1, "Zachód": 0, "status": 0}
+
+    assert _requests(result.stdout) == 1
+    assert not (Path(env["MESHPROVISION_CACHE_DIR"]) / REGION_MEMO_FILENAME).exists()
+
+
+def test_a_status_probe_failure_is_reported_as_a_lorastats_failure(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    nodes = _seed(seed_db)
+    env["MESHPROVISION_LORASTATS_REGIONS"] = "Zachód,Gdańsk"
+    router, routes = _two_regions_router(mock_sources, nodes, status=403)
+
+    with router:
+        result = invoke(runner, ["status", "--json"], env)
+        assert _calls(routes) == {"Gdańsk": 0, "Zachód": 0, "status": 1}
+
+    document = json.loads(result.stdout)
+    (failure,) = document["failures"]
+    assert failure["source"] == "lorastats"
+    assert "HTTP 403" in failure["message"]
+    (node,) = document["nodes"]
+    assert node["sources"] == ["loranet"]
+    assert result.exit_code == 7
+
+
+def test_a_cold_start_on_lorastats_pls_list_costs_the_page_and_one_status_per_unknown_node(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    nodes = _seed(seed_db)
+    del env["MESHPROVISION_LORASTATS_REGIONS"]
+    router, page, zachod = _listed_router(mock_sources, nodes, status=404)
+    unknown = next(r for r in router.routes if "Status" in str(r.pattern))
+
+    with router:
+        first = invoke(runner, ["status", "--json", "--source", "lorastats"], env)
+        second = invoke(runner, ["status", "--json", "--source", "lorastats"], env)
+        assert (page.call_count, unknown.call_count, zachod.call_count) == (1, 1, 0)
+
+    assert (_requests(first.stdout), _requests(second.stdout)) == (2, 0)

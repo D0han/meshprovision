@@ -546,6 +546,9 @@ def test_lorastats_fetch_node_tolerant_id_forms_still_match(tmp_path: Path) -> N
 
 @respx.mock
 def test_lorastats_fetch_node_tries_next_region_after_a_malformed_record(tmp_path: Path) -> None:
+    respx.get(f"{LORASTATS_BASE_URL}/Node/deadbe01/Status").mock(
+        return_value=httpx.Response(200, text="Wszystko OK.")
+    )
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=[{"ShortName": "no id"}]))

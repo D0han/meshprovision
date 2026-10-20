@@ -450,6 +450,7 @@ def test_a_list_that_cannot_be_cached_is_still_used(tmp_path: Path) -> None:
 @respx.mock
 def test_a_source_without_configured_regions_asks_the_listed_ones(tmp_path: Path) -> None:
     _write_cache(tmp_path, _cached(["Zachód", "Gdańsk"], _NOW))
+    respx.get("https://lorastats.pl/Node/deadbe01/Status").mock(return_value=httpx.Response(200))
     zachod = respx.get(url__startswith="https://lorastats.pl/API/Zach%C3%B3d/Nodes/JSON").mock(
         return_value=httpx.Response(200, json=[])
     )

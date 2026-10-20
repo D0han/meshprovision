@@ -20,10 +20,13 @@ documented here rather than buried.
    week, and read for its link targets only; there is no built-in list.
 3. **lorastats is queried per node via `?node=<hex>`, not by bulk region
    dump.** `?node=` is a server-side filter that turns a 1.8 MB region
-   dump into a ~150 byte response. Related hardening: the region path
-   segment is **not** validated server-side
-   (`/API/NotARealRegion123/Nodes/JSON` returns the same data with HTTP
-   200), and invalid paths elsewhere also return HTML with HTTP 200 — so
+   dump into a ~150 byte response. A node is only found in the region it
+   lives in; any other region, valid or not
+   (`/API/NotARealRegion123/Nodes/JSON`), returns `[]` with HTTP 200, so
+   the regions are asked in turn, the one that answered is remembered per
+   node, and the region-free `/Node/{hex}/Status` (HTTP 404 for a node
+   lorastats does not know) is asked before trying them all. Invalid paths
+   elsewhere return HTML with HTTP 200 — so
    the datasource asserts the body actually parses as JSON and never
    trusts the status code.
 4. **`odfpy` directly, not `pandas`.** pandas type-coerces cells, and a

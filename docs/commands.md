@@ -346,6 +346,27 @@ whose hint asks you to set `MESHPROVISION_LORASTATS_REGIONS`. There is no
 built-in list. To never request the page, configure the regions, for example
 `MESHPROVISION_LORASTATS_REGIONS=Zachód,Warszawa`.
 
+**Which region a node is in.** lorastats.pl only answers for a node in the
+region it lives in (by its last reported position); any other region answers
+like "no data". With more than one region, `mesh status` learns where each
+node lives:
+
+- the region a node was last found in is remembered in
+  `lorastats_regions.json` in the cache directory (for 30 days) and asked
+  first, alone, while it keeps answering; a remembered region that is no
+  longer in the list is ignored;
+- otherwise lorastats.pl's region-free status endpoint is asked first: a node
+  it does not know (HTTP 404) is not asked about in any region, and not asked
+  about again for an hour; for a known one the regions are asked in order
+  until one answers.
+
+So each node costs one request when its remembered region answers, one when
+lorastats does not know it, and at most one more than the number of regions
+otherwise (with lorastats.pl's 10 regions: 11, at most 17 with 16 regions).
+Reading the region list adds one request a week. A single region is asked
+directly, one request per node. A status answer other than 200, 404 or 500
+makes lorastats a failed source for that run.
+
 ```bash
 mesh status
 mesh status --json
@@ -432,9 +453,10 @@ rejected as invalid (a maintenance or error page served with HTTP 200, an
 empty or unrecognised loranet dump) is dropped from the cache, so the next
 run fetches it again instead of failing until the TTL expires. `--no-cache` /
 `--force-refresh` bypasses reads but still writes the response back.
-Otherwise, lorastats responses are reused for at least 60 s, even with
-`--cache-ttl 0`, so a short `--watch --interval` cannot query lorastats about
-every node on every poll. A host that answers HTTP 429 (rate limited) is not
+Otherwise, lorastats responses are reused for at least 60 s (status-endpoint
+answers for at least an hour), even with `--cache-ttl 0`, so a short `--watch
+--interval` cannot query lorastats about every node on every poll. The
+remembered regions are used with `--no-cache` too. A host that answers HTTP 429 (rate limited) is not
 asked again by the same `mesh` process for the `Retry-After` time it gave (10
 minutes when it gave none, at most a day); meanwhile each `--watch` poll lists
 that source as failed and says when it will retry.

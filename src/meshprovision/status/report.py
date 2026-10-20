@@ -47,6 +47,7 @@ from meshprovision.datasources.loranet import LoranetSource
 from meshprovision.datasources.lorastats import LorastatsSource
 from meshprovision.datasources.lorastats_regions import RegionList
 from meshprovision.datasources.models import NodeObservation
+from meshprovision.datasources.region_memo import REGION_MEMO_FILENAME, RegionMemo
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.errors import DataSourceError, DbIntegrityError, ExitCode
@@ -531,6 +532,8 @@ def run_status(
     :class:`~meshprovision.cache.http.CachedHTTPClient`, calling this
     function again on an interval performs zero network calls as long as
     the calls land inside the cache TTL -- there is no watch loop here.
+    Besides the HTTP cache, the only files this writes are the lorastats
+    region list and region memo next to it.
 
     Args:
         settings: Application settings (database path, cache directory,
@@ -588,6 +591,7 @@ def run_status(
                     contact=lorastats_contact,
                     regions=options.regions,
                     region_list=options.region_list or RegionList(),
+                    region_memo=RegionMemo(active_client.cache_dir / REGION_MEMO_FILENAME),
                 )
             )
 

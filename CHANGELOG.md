@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `lorastats_region_list.json`; `mesh status --refresh-regions` asks again),
   and only its links are read. If it cannot be read, the cached list is used;
   without one lorastats fails as a source, asking you to set the regions.
+- `mesh status` learns which lorastats region each node lives in: the region
+  that answered is remembered for 30 days in `lorastats_regions.json` in the
+  cache directory and asked first, and lorastats.pl's region-free status
+  endpoint is asked before trying every region, so a node lorastats does not
+  know (HTTP 404) is not asked about in any region for an hour. Per node that
+  is one request when the remembered region answers, else at most one more
+  than the number of regions.
 - `mesh status` shows when the device last reported its metrics (new `Metrics`
   column, loranet's `lastDeviceMetrics`), so the age of `Batt`, `Volt`,
   `ChUtil` and `AirTx` is no longer guessed from `Last seen`. It also gains an
