@@ -1540,6 +1540,75 @@ def test_read_raw_blank_run_at_exactly_max_blank_rows_reads_cleanly(
     assert raw.sheets["Nodes"].rows[-1][node_id_idx].text == trailing_node.node_id
 
 
+def _row(*texts: str, repeat: int = 1) -> Any:
+    """Build an in-memory ``table:table-row`` with one text cell per entry of ``texts``.
+
+    Args:
+        *texts: Each cell's paragraph text, in column order.
+        repeat: The row's ``table:number-rows-repeated`` count.
+
+    Returns:
+        The odfpy ``TableRow`` element.
+    """
+    from odf import table as odf_table
+
+    row = odf_table.TableRow(numberrowsrepeated=repeat) if repeat > 1 else odf_table.TableRow()
+    for text in texts:
+        cell = odf_table.TableCell()
+        cell.addElement(P(text=text))
+        row.addElement(cell)
+    return row
+
+
+def _read_nodes_sheet(*rows: Any) -> ods_read.SheetData:
+    """Read a ``Nodes`` table built in memory from a ``node_id`` header row plus ``rows``."""
+    from odf import table as odf_table
+
+    table_elem = odf_table.Table(name="Nodes")
+    table_elem.addElement(_row("node_id"))
+    for row in rows:
+        table_elem.addElement(row)
+    return ods_read._read_sheet("Nodes", table_elem)
+
+
+def test_blank_runs_separated_by_data_do_not_add_up_to_a_gap() -> None:
+    half = ods_read.MAX_BLANK_ROWS // 2 + 1
+
+    sheet = _read_nodes_sheet(
+        _row("a"), _row("", repeat=half), _row("b"), _row("", repeat=half), _row("c")
+    )
+
+    assert [cells[0].text for cells in sheet.rows if cells[0].text] == ["a", "b", "c"]
+
+
+def test_a_whitespace_only_row_counts_as_blank() -> None:
+    sheet = _read_nodes_sheet(_row("a"), _row("   ", repeat=ods_read.MAX_BLANK_ROWS + 1))
+
+    assert len(sheet.rows) == 1 + ods_read.MAX_BLANK_ROWS
+
+
+def test_a_whitespace_only_row_below_a_long_blank_run_is_not_data_below_it() -> None:
+    sheet = _read_nodes_sheet(_row("a"), _row("", repeat=ods_read.MAX_BLANK_ROWS + 1), _row("   "))
+
+    assert len(sheet.rows) == 1 + ods_read.MAX_BLANK_ROWS
+
+
+@pytest.mark.parametrize("covered", [False, True], ids=["table_cell", "covered_cell"])
+def test_a_huge_column_repeat_is_capped_at_max_columns(covered: bool) -> None:
+    """A tiny file must not expand one repeated cell into an unbounded row.
+
+    100_000 rather than a realistic attack count keeps an uncapped
+    mutant's failure fast.
+    """
+    from odf import table as odf_table
+
+    cell_type = odf_table.CoveredTableCell if covered else odf_table.TableCell
+    row = odf_table.TableRow()
+    row.addElement(cell_type(numbercolumnsrepeated=100_000))
+
+    assert len(ods_read._read_row_cells(row)) == ods_read.MAX_COLUMNS
+
+
 # ---------------------------------------------------------------------------
 # Known-good refresh is built from the validated bytes, not a later read.
 # ---------------------------------------------------------------------------
