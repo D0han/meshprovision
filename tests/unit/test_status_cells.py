@@ -122,6 +122,35 @@ def test_last_device_metrics_prefers_loranet_and_falls_back_to_lorastats() -> No
     assert only_fallback.last_device_metrics == NOW - timedelta(hours=9)
 
 
+def test_telemetry_and_its_timestamp_follow_priority_when_the_fallback_was_seen_later() -> None:
+    """The readings and their Metrics timestamp must all come from one source.
+
+    The test above sets no last_seen, so priority and recency order
+    coincide there; here the lower-priority lorastats was seen later.
+    """
+    loranet = _obs(
+        SOURCE_LORANET,
+        last_seen=NOW - timedelta(hours=3),
+        last_device_metrics=NOW - timedelta(hours=3),
+        uptime_seconds=100,
+        **_seen(timedelta(hours=3)),
+    )
+    lorastats = _obs(
+        SOURCE_LORASTATS,
+        last_seen=NOW - timedelta(minutes=1),
+        last_device_metrics=NOW - timedelta(days=5),
+        uptime_seconds=999,
+        **_seen(),
+    )
+
+    merged = merge_observations(NID, [lorastats, loranet], now=NOW)
+
+    assert merged.last_device_metrics == NOW - timedelta(hours=3)
+    assert merged.uptime_seconds == 100
+    assert merged.neighbor_count == 1
+    assert merged.seen_by_counts == (1, 1, 1)
+
+
 def test_json_carries_the_new_fields_in_utc() -> None:
     obs = _obs(
         SOURCE_LORANET,

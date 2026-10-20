@@ -540,6 +540,41 @@ def test_more_recent_observation_wins_for_identity_fields() -> None:
     assert merged.battery_level == 11
 
 
+def test_every_identity_field_follows_recency_not_priority() -> None:
+    stale_loranet = _obs(
+        SOURCE_LORANET,
+        last_seen=NOW - timedelta(hours=8),
+        hw_model="RAK4631",
+        role="CLIENT",
+        region="EU_868",
+        firmware_version="2.5.0",
+        latitude=50.0,
+        longitude=19.0,
+        altitude=200,
+    )
+    fresh_lorastats = _obs(
+        SOURCE_LORASTATS,
+        last_seen=NOW - timedelta(minutes=1),
+        hw_model="HELTEC_V3",
+        role="ROUTER",
+        region="EU_433",
+        firmware_version="2.7.11",
+        latitude=52.0,
+        longitude=21.0,
+        altitude=100,
+    )
+
+    merged = merge_observations(NID, [stale_loranet, fresh_lorastats], now=NOW)
+
+    assert (merged.hw_model, merged.role, merged.region, merged.firmware_version) == (
+        "HELTEC_V3",
+        "ROUTER",
+        "EU_433",
+        "2.7.11",
+    )
+    assert (merged.latitude, merged.longitude, merged.altitude) == (52.0, 21.0, 100)
+
+
 def test_order_by_recency_is_most_recent_first_with_none_last() -> None:
     oldest = _obs(SOURCE_LORANET, last_seen=NOW - timedelta(hours=5), short_name="old_")
     never = _obs(SOURCE_LORANET, last_seen=None, short_name="none")
