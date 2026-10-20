@@ -246,6 +246,46 @@ class TestRedactProcessor:
         assert result[key] != "value123"
         assert result[key] == REDACTED
 
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "priv",
+            "private",
+            "privkey",
+            "privatekey",
+            "pubkey",
+            "publickey",
+            "key",
+            "keys",
+            "key_material",
+            "material",
+            "psk",
+            "secret",
+            "password",
+            "passphrase",
+            "passwd",
+            "token",
+            "adminkey",
+            "pin",
+            "node_key",
+            "wifi_psk",
+            "mqtt_secret",
+            "mqtt_password",
+            "api_token",
+            "admin_pin",
+        ],
+    )
+    def test_each_sensitive_key_name_and_suffix_is_redacted(self, key: str) -> None:
+        """A literal list, not one derived from the constants.
+
+        Looping over ``SENSITIVE_KEY_NAMES``/``SENSITIVE_KEY_SUFFIXES``
+        (as the tests above do) cannot notice an entry being deleted: the
+        loop just shrinks with it. The last six cases each cover one
+        suffix with a name that matches nothing else.
+        """
+        result = redact_processor(None, "info", {key: "value123"})
+        assert result[key] == REDACTED
+
     def test_safe_key_name_overrides_sensitive_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """SAFE_KEY_NAMES must win even when it artificially collides with SENSITIVE_KEY_NAMES.
 
