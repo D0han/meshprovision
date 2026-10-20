@@ -400,6 +400,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh --no-cache status --watch` bypasses the cache on the first poll only.
+  It used to bypass it on every poll, so a short `--interval` re-queried
+  lorastats.pl once per node per poll (10 nodes at `--interval 1`: 10
+  requests a second), the request pattern lorastats bans IPs for.
 - A maintenance page or malformed response from loranet.pl or lorastats.pl
   (HTML served with HTTP 200, an empty or unrecognised loranet dump) is no
   longer kept in the HTTP cache, so `mesh status` (and every `--watch` poll)

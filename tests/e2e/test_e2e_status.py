@@ -1144,14 +1144,26 @@ def _json_documents(stdout: str) -> list[Any]:
     return documents
 
 
+@pytest.mark.parametrize(
+    "global_args",
+    [
+        pytest.param(["--cache-ttl", "0"], id="zero-ttl"),
+        pytest.param(["--no-cache", "--cache-ttl", "0"], id="no-cache-and-zero-ttl"),
+    ],
+)
 def test_watch_with_a_zero_cache_ttl_asks_lorastats_once_per_node(
     runner: CliRunner,
     env: dict[str, str],
     seed_db: Callable[..., Path],
     mock_sources: Callable[..., respx.MockRouter],
     monkeypatch: pytest.MonkeyPatch,
+    global_args: list[str],
 ) -> None:
-    """`--cache-ttl 0` made every poll ask lorastats about every node: 100 requests here."""
+    """`--cache-ttl 0` made every poll ask lorastats about every node: 100 requests here.
+
+    With `--no-cache` as well, only the first poll bypasses the cache (and
+    the 60 s lorastats floor); it used to bypass both on every poll.
+    """
     from meshprovision.db.nodes import NodeRecord
 
     nodes = _seed_twenty_nodes(seed_db, NodeRecord)
@@ -1160,7 +1172,7 @@ def test_watch_with_a_zero_cache_ttl_asks_lorastats_once_per_node(
     with mock_sources(nodes=nodes) as router:
         lorastats_route = next(r for r in router.routes if "lorastats.pl" in str(r.pattern))
         result = invoke(
-            runner, ["--cache-ttl", "0", "status", "--watch", "--interval", "1", "--json"], env
+            runner, [*global_args, "status", "--watch", "--interval", "1", "--json"], env
         )
         assert lorastats_route.call_count == len(nodes)
 
@@ -1198,6 +1210,35 @@ def test_watch_stops_asking_lorastats_after_a_429(
         (message,) = later
         assert "not requested: lorastats.pl rate-limited this client" in message
     assert result.exit_code == 7
+
+
+def test_watch_no_cache_refetches_on_the_first_poll_only(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--no-cache --watch --interval 1` must not query lorastats per node on every poll."""
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+    _stop_after_polls(monkeypatch, 3)
+
+    with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}}) as router:
+        warm = invoke(runner, ["status", "--json"], env)  # an older entry for --no-cache to bypass
+        loranet_route = next(r for r in router.routes if "loranet.pl" in str(r.pattern))
+        lorastats_route = next(r for r in router.routes if "lorastats.pl" in str(r.pattern))
+        result = invoke(
+            runner, ["--no-cache", "status", "--watch", "--interval", "1", "--json"], env
+        )
+        assert (loranet_route.call_count, lorastats_route.call_count) == (2, 2)
+
+    assert warm.exit_code == 0
+    assert len(_json_documents(result.stdout)) == 3
+    assert "cache: 0 hit(s)" in result.stderr
+    assert result.stderr.count("0 request(s)") == 2
 
 
 def test_run_status_counts_only_its_own_requests_on_a_reused_client(

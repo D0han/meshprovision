@@ -21,6 +21,7 @@ mtime guarantee above.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import time
 from typing import TYPE_CHECKING, NoReturn
@@ -218,6 +219,10 @@ def _watch_loop(
 ) -> NoReturn:
     """Re-run and re-emit the status report every ``poll`` seconds until Ctrl-C.
 
+    ``options.force_refresh`` (``--no-cache``) applies to the first
+    successful poll only; later polls honour the cache TTL like a plain
+    ``--watch``.
+
     Args:
         ctx: The shared CLI context.
         options: The options shaping each run.
@@ -250,6 +255,11 @@ def _watch_loop(
                 continue
             consecutive_db_failures = 0
             last_db_error = None
+            if options.force_refresh:
+                # The cache now holds this poll's own data. Bypassing it on
+                # every poll would re-query lorastats once per node each
+                # --interval, the request pattern lorastats bans IPs for.
+                options = dataclasses.replace(options, force_refresh=False)
             _emit(ctx, last_report, json_output=json_output)
             ctx.info(
                 f"cache: {last_report.cache_hits} hit(s), {last_report.cache_misses} "

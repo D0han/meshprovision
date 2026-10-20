@@ -24,7 +24,7 @@ from meshprovision.cli.main import cli
 from meshprovision.errors import DbIntegrityError, ExitCode
 from meshprovision.nodeid import NodeId
 from meshprovision.status.merge import Availability, MergedNode, Thresholds
-from meshprovision.status.report import StatusReport
+from meshprovision.status.report import StatusOptions, StatusReport
 
 if TYPE_CHECKING:
     pass
@@ -213,3 +213,63 @@ def test_single_shot_status_stays_strict_on_a_db_error(
     assert calls["n"] == 1
     assert "broken" in result.stderr
     assert "Poll failed" not in result.stderr
+
+
+def _record_force_refresh(
+    monkeypatch: pytest.MonkeyPatch, *, fail_first: bool = False, polls: int = 3
+) -> list[bool]:
+    """Patch ``_run_once``/``time.sleep``; return each poll's ``options.force_refresh``."""
+    seen: list[bool] = []
+
+    def fake_run_once(ctx: object, options: StatusOptions, client: object) -> StatusReport:
+        seen.append(options.force_refresh)
+        if fail_first and len(seen) == 1:
+            raise DbIntegrityError("transient failure")
+        return _ok_report()
+
+    def fake_sleep(_seconds: float) -> None:
+        if len(seen) >= polls:
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(status_cli, "_run_once", fake_run_once)
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+    return seen
+
+
+def test_watch_no_cache_bypasses_the_cache_on_the_first_poll_only(
+    monkeypatch: pytest.MonkeyPatch, cli_env: dict[str, str]
+) -> None:
+    seen = _record_force_refresh(monkeypatch)
+
+    result = CliRunner().invoke(
+        cli, ["--no-cache", "status", "--watch", "--interval", "1", "--json"], env=cli_env
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [True, False, False]
+
+
+def test_watch_no_cache_still_applies_to_the_retry_of_a_failed_first_poll(
+    monkeypatch: pytest.MonkeyPatch, cli_env: dict[str, str]
+) -> None:
+    seen = _record_force_refresh(monkeypatch, fail_first=True)
+
+    result = CliRunner().invoke(
+        cli, ["--no-cache", "status", "--watch", "--interval", "1", "--json"], env=cli_env
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [True, True, False]
+
+
+def test_watch_without_no_cache_never_bypasses_the_cache(
+    monkeypatch: pytest.MonkeyPatch, cli_env: dict[str, str]
+) -> None:
+    seen = _record_force_refresh(monkeypatch)
+
+    result = CliRunner().invoke(
+        cli, ["status", "--watch", "--interval", "1", "--json"], env=cli_env
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == [False, False, False]

@@ -389,7 +389,10 @@ under `data_as_of`.
 
 `--watch` respects the cache TTL (default poll interval = the cache TTL,
 floored at 5 s, capped at one week) and
-prints a per-poll cache hit/miss/request line to stderr. `--interval`
+prints a per-poll cache hit/miss/request line to stderr. With `--no-cache`,
+only the first successful poll bypasses the cache; later polls respect the
+TTL like a plain `--watch` (lower `--cache-ttl` for fresher data), so a
+short `--interval` never re-queries lorastats for every node on every poll. `--interval`
 takes 1 s up to one week, and `--stale-after`/`--offline-after` up to
 1000000 hours; a value outside that range, `nan` or `inf` is a usage
 error (exit code `2`).
