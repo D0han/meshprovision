@@ -367,6 +367,12 @@ class AdoptionReport:
 
         if self.ble_pin is not None:
             lines.append("a fixed BLE PIN was captured and will be preserved on enrollment")
+        elif self.existing is not None and self.existing.ble_pin is not None:
+            # adopted_record keeps the recorded PIN and mesh provision reuses it.
+            lines.append(
+                "no fixed BLE PIN on the device; the PIN already recorded will be kept "
+                "and set on enrollment"
+            )
         else:
             lines.append("no fixed BLE PIN captured; enrolling this node will set a new one")
 
@@ -740,15 +746,17 @@ def adopted_record(
         ``existing`` is ``None``), with ``management`` set to
         :attr:`~meshprovision.db.schema.ManagementMode.OBSERVED`.
         On a **re-adopt** (``report.existing`` was not ``None``),
-        ``hw_model``/``firmware_version``/``role``/``region`` are only
-        overwritten when the corresponding :class:`AdoptionReport`
-        attribute is non-empty -- otherwise the existing recorded value
-        is left untouched, since an empty value here means "this source
-        did not report one" (a ``mesh adopt --from-backup`` profile alone
-        carries neither ``hw_model`` nor ``firmware_version`` at all;
-        an unmapped live ``role``/``region`` behaves the same way), not
-        "clear what we already know." On a **first-time adopt**
-        (``report.existing`` is ``None``), all four are always set
+        ``short_name``/``long_name``/``hw_model``/``firmware_version``/
+        ``role``/``region`` are only overwritten when the corresponding
+        :class:`AdoptionReport` attribute is non-empty -- otherwise the
+        existing recorded value is left untouched, since an empty value
+        here means "this source did not report one" (a ``mesh adopt
+        --from-backup`` profile alone carries neither ``hw_model`` nor
+        ``firmware_version`` at all; an unmapped live ``role``/``region``
+        behaves the same way, and a live adopt right after a reboot, or
+        a backup without an owner, reports blank names), not "clear what
+        we already know." On a **first-time adopt** (``report.existing``
+        is ``None``), all six are always set
         explicitly to the report's value -- including the empty string
         when unreported/unmapped -- so a first-time gap is recorded as
         genuinely unknown rather than silently picking up
@@ -802,8 +810,6 @@ def adopted_record(
             continue
 
     changes: dict[str, object] = {
-        "short_name": report.short_name,
-        "long_name": report.long_name,
         "authorized_admin_keys": tuple(admin_key_refs),
         "unregistered_admin_keys": tuple(unregistered_encoded),
         "management": ManagementMode.OBSERVED,
@@ -813,7 +819,13 @@ def adopted_record(
     # backup-only adopt (mesh adopt --from-backup with no paired node-db
     # export) reports both as "" (a .cfg carries neither at all), and
     # without this guard a re-adopt from such a backup would blank out
-    # values a live adopt had previously recorded.
+    # values a live adopt had previously recorded. The names follow it too:
+    # a NodeDB user not yet repopulated after a reboot, or a backup without
+    # an owner, reports them as "".
+    if report.short_name or report.existing is None:
+        changes["short_name"] = report.short_name
+    if report.long_name or report.existing is None:
+        changes["long_name"] = report.long_name
     if report.hw_model or report.existing is None:
         changes["hw_model"] = report.hw_model
     if report.firmware_version or report.existing is None:

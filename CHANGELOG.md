@@ -400,6 +400,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Re-adopting a node (`mesh adopt`, `mesh adopt --from-backup`) no longer
+  blanks its recorded short or long name when the device or backup reports
+  none (a NodeDB not yet repopulated after a reboot, a backup without an
+  owner). Its report no longer claims that enrolling will set a new BLE PIN
+  when the database already holds one: that recorded PIN is kept and set.
 - The database error for a run of too many blank rows with data still below
   it now names the row where the blank run starts; it pointed 64 rows further
   down (`Nodes.A68` for a gap starting at row 4).

@@ -637,6 +637,104 @@ def test_re_adopt_with_no_information_keeps_every_recorded_value(make_live, temp
     assert record.ble_pin.get_secret_value() == "123456"
 
 
+@pytest.mark.parametrize(
+    ("short_name", "long_name", "expected"),
+    [
+        ("", "", ("MT00", "Meshtastic MT00")),
+        ("", "Renamed", ("MT00", "Renamed")),
+        ("NEW1", "", ("NEW1", "Meshtastic MT00")),
+    ],
+    ids=["both-blank", "short-blank", "long-blank"],
+)
+def test_re_adopt_with_a_blank_name_keeps_the_recorded_name(
+    make_live, template, short_name: str, long_name: str, expected: tuple[str, str]
+) -> None:
+    """A NodeDB not yet repopulated after a reboot, or an owner-less backup, reports ""."""
+    report = build_adoption_report(
+        make_live(template),
+        existing=_re_adopt_record(),
+        public_keys={},
+        template=template,
+        known_bad=frozenset(),
+    )
+    report = dataclasses.replace(report, short_name=short_name, long_name=long_name)
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert (record.short_name, record.long_name) == expected
+
+
+def test_first_adopt_with_blank_names_records_them_blank(make_live, template) -> None:
+    report = build_adoption_report(
+        make_live(template), existing=None, public_keys={}, template=template, known_bad=frozenset()
+    )
+    report = dataclasses.replace(report, short_name="", long_name="")
+
+    record = adopted_record(report, now=datetime(2026, 1, 1, tzinfo=UTC))
+
+    assert (record.short_name, record.long_name) == ("", "")
+
+
+def _pin_lines(report: adopt_mod.AdoptionReport) -> list[str]:
+    return [line for line in report.describe() if "BLE PIN" in line]
+
+
+def test_describe_says_a_recorded_pin_is_kept_when_the_device_has_none(make_live, template) -> None:
+    report = build_adoption_report(
+        make_live(template),
+        existing=_re_adopt_record(),
+        public_keys={},
+        template=template,
+        known_bad=frozenset(),
+    )
+    assert report.ble_pin is None
+
+    lines = report.describe()
+
+    assert _pin_lines(report) == [
+        "no fixed BLE PIN on the device; the PIN already recorded will be kept "
+        "and set on enrollment"
+    ]
+    assert not any("123456" in line for line in lines)
+
+
+@pytest.mark.parametrize(
+    ("bluetooth", "existing", "expected"),
+    [
+        (
+            {"mode": "FIXED_PIN", "fixed_pin": 654321},
+            _re_adopt_record(),
+            "a fixed BLE PIN was captured and will be preserved on enrollment",
+        ),
+        (None, None, "no fixed BLE PIN captured; enrolling this node will set a new one"),
+        (
+            None,
+            _re_adopt_record().with_updates(ble_pin=None),
+            "no fixed BLE PIN captured; enrolling this node will set a new one",
+        ),
+    ],
+    ids=["captured", "first-adopt", "re-adopt-without-recorded-pin"],
+)
+def test_describe_pin_line(
+    make_live,
+    template,
+    bluetooth: dict[str, object] | None,
+    existing: NodeRecord | None,
+    expected: str,
+) -> None:
+    overrides = {"bluetooth": bluetooth} if bluetooth is not None else {}
+    report = build_adoption_report(
+        make_live(template, section_overrides=overrides),
+        existing=existing,
+        public_keys={},
+        template=template,
+        known_bad=frozenset(),
+    )
+
+    assert _pin_lines(report) == [expected]
+    assert not any(pin in line for line in report.describe() for pin in ("123456", "654321"))
+
+
 def test_re_adopt_with_new_live_values_updates_them(make_live, template) -> None:
     live = make_live(template, hw_model="RAK4631", firmware_version="2.7.11")
     report = build_adoption_report(

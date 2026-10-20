@@ -227,6 +227,10 @@ with exactly what's currently live — unlike `mesh provision`'s
 narrow-only rule for a template-managed row, an observed row has no
 desired state to preserve against, so it mirrors reality every time,
 including dropping a ref for a key that's no longer on the device.
+A blank short or long name (a device whose NodeDB is not yet repopulated
+after a reboot, or a backup without an owner) is no evidence and keeps the
+recorded name, and a BLE PIN already recorded is kept when the device has
+no fixed PIN (`mesh provision --enroll` then sets that recorded PIN).
 Re-adopting a `management=template` row is refused unless `--force` is
 passed, and the confirmation prompt names the demotion explicitly. A
 node archived via `mesh db forget` is refused outright, `--force`

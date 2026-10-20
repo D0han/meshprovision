@@ -929,6 +929,40 @@ def test_from_backup_altitude_only_fixed_position_keeps_the_recorded_position(
     assert (node.gps_lat, node.gps_lon, node.gps_alt) == (52.2, 21.0, 110)
 
 
+def test_from_backup_without_owner_names_keeps_the_recorded_names_and_pin(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """A .cfg with blank names neither blanks the recorded ones nor claims a new PIN."""
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="a0cb5cc4",
+                short_name="MT07",
+                long_name="Meshtastic MT07",
+                ble_pin="123456",
+                management=ManagementMode.OBSERVED,
+            )
+        ]
+    )
+    cfg = write_profile_cfg(tmp_path / "profile.cfg", long_name="", short_name="")
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "the PIN already recorded will be kept" in result.output
+    assert "will set a new one" not in result.output
+    assert "123456" not in result.output
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    node = NodeRecord.from_row(loaded.nodes[0])
+    assert (node.short_name, node.long_name) == ("MT07", "Meshtastic MT07")
+    assert node.ble_pin is not None
+    assert node.ble_pin.get_secret_value() == "123456"
+
+
 def test_from_backup_nodedb_with_a_lone_surrogate_name_adopts_without_it(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:
