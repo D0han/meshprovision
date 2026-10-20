@@ -289,10 +289,11 @@ one case this project's `Keys` sheet can hold — see
 [Keys sheet](database.md#keys-sheet)); a 1-byte "default preset" or
 16-byte AES128 PSK is reported as a warning and never written.
 `--no-channel-psk` skips this entirely. A `.cfg`'s `fixed_position`, when
-set, fills `gps_lat`/`gps_lon`/`gps_alt`. Both, like `hw_model` and
-`firmware_version`, are only ever *added* on re-adopt — a `--from-backup`
-run that doesn't report one never blanks a value a previous adopt
-recorded.
+set with a non-zero latitude or longitude, fills `gps_lat`/`gps_lon`/`gps_alt`
+(latitude and longitude both 0 is no position, as in a YAML backup). Both,
+like `hw_model` and `firmware_version`, are only ever *added* on re-adopt — a
+`--from-backup` run that doesn't report one never blanks a value a previous
+adopt recorded.
 
 Because a `.cfg`/YAML profile is the one place `mesh adopt` ever sees a
 node's *private* key without touching the device, it also runs the

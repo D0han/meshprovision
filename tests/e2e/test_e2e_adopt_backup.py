@@ -897,6 +897,38 @@ def test_from_backup_preserves_hw_model_on_re_adopt_without_nodedb(
     assert node.firmware_version == "2.6.11"
 
 
+def test_from_backup_altitude_only_fixed_position_keeps_the_recorded_position(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """A .cfg fixed_position with latitude and longitude 0 must not record 0, 0."""
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="a0cb5cc4",
+                gps_lat=52.2,
+                gps_lon=21.0,
+                gps_alt=110,
+                management=ManagementMode.OBSERVED,
+            )
+        ]
+    )
+    cfg = write_profile_cfg(tmp_path / "profile.cfg")
+    profile = clientonly_pb2.DeviceProfile.FromString(cfg.read_bytes())
+    profile.fixed_position.altitude = 120
+    cfg.write_bytes(profile.SerializeToString())
+
+    result = invoke(
+        runner,
+        ["adopt", "--from-backup", str(cfg), "--node-id", "!a0cb5cc4", "--no-lookup", "--yes"],
+        env,
+    )
+
+    assert result.exit_code == 0
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    node = NodeRecord.from_row(loaded.nodes[0])
+    assert (node.gps_lat, node.gps_lon, node.gps_alt) == (52.2, 21.0, 110)
+
+
 def test_from_backup_nodedb_with_a_lone_surrogate_name_adopts_without_it(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:

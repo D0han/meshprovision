@@ -148,6 +148,36 @@ def test_parse_profile_cfg_extracts_fixed_position() -> None:
     assert parsed.fixed_position.altitude == 100
 
 
+def test_parse_profile_cfg_treats_a_zero_latitude_and_longitude_as_no_position() -> None:
+    profile = clientonly_pb2.DeviceProfile()
+    profile.fixed_position.altitude = 120
+
+    parsed = backup.parse_profile_cfg(profile.SerializeToString(), source="test.cfg")
+
+    assert parsed.fixed_position is None
+
+
+@pytest.mark.parametrize(
+    ("latitude_i", "longitude_i", "expected"),
+    [
+        (0, 200_000_000, backup.FixedPosition(latitude=0.0, longitude=20.0, altitude=120)),
+        (520_000_000, 0, backup.FixedPosition(latitude=52.0, longitude=0.0, altitude=120)),
+    ],
+    ids=["on-the-equator", "on-the-prime-meridian"],
+)
+def test_parse_profile_cfg_keeps_a_position_with_one_zero_coordinate(
+    latitude_i: int, longitude_i: int, expected: backup.FixedPosition
+) -> None:
+    profile = clientonly_pb2.DeviceProfile()
+    profile.fixed_position.latitude_i = latitude_i
+    profile.fixed_position.longitude_i = longitude_i
+    profile.fixed_position.altitude = 120
+
+    parsed = backup.parse_profile_cfg(profile.SerializeToString(), source="test.cfg")
+
+    assert parsed.fixed_position == expected
+
+
 @pytest.mark.parametrize(
     ("latitude_i", "longitude_i", "field"),
     [

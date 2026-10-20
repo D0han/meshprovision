@@ -213,8 +213,11 @@ def _profile_backup_from_message(
         )
 
     fixed_position: FixedPosition | None = None
-    if profile.HasField("fixed_position"):
-        fp = profile.fixed_position
+    fp = profile.fixed_position
+    # Latitude and longitude both 0 is no position, as in a YAML backup
+    # (_yaml_fixed_position) and loranet: an altitude-only fixed_position
+    # must not overwrite a recorded position with 0, 0 on adopt.
+    if profile.HasField("fixed_position") and (fp.latitude_i or fp.longitude_i):
         fixed_position = FixedPosition(
             latitude=_location_number(
                 fp.latitude_i / 1e7,

@@ -400,6 +400,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh adopt --from-backup` no longer overwrites a node's recorded position
+  with 0, 0 when the `.cfg` holds a fixed position without latitude and
+  longitude (only an altitude, say): such a position is now no position, as
+  it already was in a YAML backup and from loranet.
 - `mesh status --region` accepts any region name lorastats uses, not just
   ASCII ones: `Zachód` was refused as malformed, so nodes in that region could
   never be looked up (lorastats answers an unknown or wrong region with an
