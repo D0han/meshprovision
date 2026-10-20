@@ -333,6 +333,29 @@ def test_parse_retry_after_malformed_date_returns_none() -> None:
     assert _parse_retry_after("not a date", clock=lambda: 0.0) is None
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["²", "¹²", "١٢", "୧"],
+    ids=["superscript-two", "superscript-twelve", "arabic-indic-twelve", "oriya-one"],
+)
+def test_parse_retry_after_non_ascii_digits_return_none(value: str) -> None:
+    """``str.isdigit`` accepts these, but ``float`` rejects the superscripts with ValueError."""
+    from meshprovision.cache.http import _parse_retry_after
+
+    assert _parse_retry_after(value, clock=lambda: 0.0) is None
+
+
+@respx.mock
+def test_429_with_a_superscript_retry_after_is_a_rate_limit_error(tmp_path: Path) -> None:
+    """Byte 0xB2 decodes as Latin-1 ``"²"``; it used to escape as a bare ValueError."""
+    respx.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": b"\xb2"}))
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(RateLimitError) as exc_info:
+        client.get(URL)
+    assert exc_info.value.retry_after is None
+
+
 @respx.mock
 def test_connect_error_raises_after_retries(tmp_path: Path) -> None:
     route = respx.get(URL).mock(side_effect=httpx.ConnectError("refused"))

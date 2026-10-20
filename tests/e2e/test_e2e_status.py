@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from meshprovision.datasources.loranet import LORANET_NODES_URL
+from meshprovision.datasources.lorastats import LORASTATS_BASE_URL, LORASTATS_NODES_PATH
 from meshprovision.nodeid import NodeId
 from tests.conftest import BASE64_KEY_RE, SIX_DIGIT_RE
 from tests.e2e.conftest import db_fingerprint, invoke
@@ -370,6 +371,35 @@ def test_a_redirect_loop_on_one_source_degrades_rather_than_crashes(
     (node_doc,) = document["nodes"]
     assert "lorastats" in node_doc["sources"]
     assert "loranet" not in node_doc["sources"]
+
+
+def test_a_malformed_retry_after_on_a_429_degrades_rather_than_crashes(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """A UTF-8 ``"²"`` Retry-After raised ValueError out of the CLI (a traceback, exit 1)."""
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    recent = int(time.time()) - 60
+
+    router = mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": recent}}})
+    router.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(return_value=httpx.Response(429, headers={"Retry-After": "²".encode()}))
+
+    with router:
+        result = invoke(runner, ["--no-cache", "status", "--json"], env)
+
+    assert result.exit_code == 7
+    document = json.loads(result.stdout)
+    (failure,) = document["failures"]
+    assert failure["source"] == "lorastats"
+    assert "HTTP 429" in failure["message"]
+    (node_doc,) = document["nodes"]
+    assert node_doc["sources"] == ["loranet"]
 
 
 def test_cache_behaviour_hits_then_force_refresh(

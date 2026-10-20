@@ -551,14 +551,16 @@ def _parse_retry_after(value: str | None, *, clock: Callable[[], float]) -> floa
 
     Returns:
         The delay in seconds (never negative), or ``None`` if ``value``
-        is absent or could not be parsed.
+        is absent or could not be parsed. Only ASCII digits count as a
+        delay: ``str.isdigit`` also accepts ``"²"`` (byte ``0xB2`` decoded
+        as Latin-1), which ``float`` then rejects.
     """
     if value is None:
         return None
     stripped = value.strip()
     if not stripped:
         return None
-    if stripped.isdigit():
+    if stripped.isascii() and stripped.isdigit():
         return float(stripped)
     try:
         parsed = email.utils.parsedate_to_datetime(stripped)

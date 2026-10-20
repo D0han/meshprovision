@@ -400,6 +400,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status` (and `--watch`) no longer crashes with a traceback when
+  lorastats.pl's HTTP 429 carries a malformed `Retry-After` header such as
+  `²`: lorastats is reported as failed for that run (exit 7) like any other
+  429. Only ASCII digits are read as a delay in seconds.
 - Re-adopting a node (`mesh adopt`, `mesh adopt --from-backup`) no longer
   blanks its recorded short or long name when the device or backup reports
   none (a NodeDB not yet repopulated after a reboot, a backup without an
