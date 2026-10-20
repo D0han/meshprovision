@@ -22,6 +22,7 @@ from meshprovision.datasources.lorastats import (
     validate_regions,
 )
 from meshprovision.datasources.models import (
+    MAX_SEEN_BY_TOPICS,
     CoercionTracker,
     NodeObservation,
     coerce_bool,
@@ -589,6 +590,28 @@ def test_lorastats_fetch_nodes_last_fetch_skipped_sums_across_ids_and_resets(
 
 
 @respx.mock
+def test_lorastats_fetch_nodes_sums_field_coercions_across_ids(tmp_path: Path) -> None:
+    respx.get(
+        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {"NodeId": "deadbe01", "Role": "not-a-number"},
+                {"NodeId": "deadbe02", "Role": "not-a-number"},
+            ],
+        )
+    )
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+
+    result = source.fetch_nodes([NodeId.from_hex("deadbe01"), NodeId.from_hex("deadbe02")])
+
+    assert len(result) == 2
+    assert source.last_fetch_field_coercions == 2
+
+
+@respx.mock
 def test_lorastats_fetch_node_is_none_before_any_fetch_but_set_after_a_miss(
     tmp_path: Path,
 ) -> None:
@@ -1042,6 +1065,18 @@ def test_loranet_zero_zero_position_becomes_none(tmp_path: Path) -> None:
     assert result[nid].longitude is None
 
 
+def test_loranet_a_position_on_the_equator_or_prime_meridian_is_kept() -> None:
+    """Only the (0, 0) pair means "no position", not either coordinate alone."""
+    nid = NodeId.from_hex("deadbe01")
+    now = datetime.now(tz=UTC)
+
+    on_equator = parse_node(nid, {"latitude": 0, "longitude": 210_000_000}, observed_at=now)
+    on_meridian = parse_node(nid, {"latitude": 520_000_000, "longitude": 0}, observed_at=now)
+
+    assert (on_equator.latitude, on_equator.longitude) == (0.0, 21.0)
+    assert (on_meridian.latitude, on_meridian.longitude) == (52.0, 0.0)
+
+
 @respx.mock
 def test_loranet_seen_by_derives_neighbor_count_and_last_seen(tmp_path: Path) -> None:
     nid = NodeId.from_hex("deadbe01")
@@ -1073,6 +1108,20 @@ def test_loranet_seen_by_times_leave_out_an_unparsable_relay_time(tmp_path: Path
 
     assert obs.neighbor_count == 2
     assert obs.seen_by_times == (datetime.fromtimestamp(1_700_000_000, tz=UTC),)
+    assert source.last_fetch_field_coercions == 1
+
+
+def test_loranet_seen_by_times_keep_every_topic_beyond_the_seen_by_cap() -> None:
+    """Only the topic names are capped; the Seen By window counts need every relay time."""
+    topics = {f"gw{i:03d}": 1_700_000_000 + i for i in range(MAX_SEEN_BY_TOPICS + 8)}
+
+    obs = parse_node(
+        NodeId.from_hex("deadbe01"), {"seenBy": topics}, observed_at=datetime.now(tz=UTC)
+    )
+
+    assert len(obs.seen_by) == MAX_SEEN_BY_TOPICS
+    assert len(obs.seen_by_times) == MAX_SEEN_BY_TOPICS + 8
+    assert obs.neighbor_count == MAX_SEEN_BY_TOPICS + 8
 
 
 @respx.mock
@@ -1201,6 +1250,22 @@ def test_loranet_last_seen_prefers_the_most_recent_of_all_three_activity_signals
     assert obs.last_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
     assert obs.last_device_metrics == datetime.fromtimestamp(1_700_000_900, tz=UTC)
     assert obs.last_map_report == datetime.fromtimestamp(1_700_000_500, tz=UTC)
+
+
+@pytest.mark.parametrize("newest", ["seenBy", "lastMapReport", "lastDeviceMetrics"])
+def test_loranet_last_seen_is_the_newest_of_the_three_activity_signals(newest: str) -> None:
+    """Each signal must count: the test above only ever makes lastDeviceMetrics newest."""
+    epochs = dict.fromkeys(("seenBy", "lastMapReport", "lastDeviceMetrics"), 1_700_000_000)
+    epochs[newest] = 1_700_000_900
+    payload = {
+        "seenBy": {"gw1": epochs["seenBy"]},
+        "lastMapReport": epochs["lastMapReport"],
+        "lastDeviceMetrics": epochs["lastDeviceMetrics"],
+    }
+
+    obs = parse_node(NodeId.from_hex("deadbe01"), payload, observed_at=datetime.now(tz=UTC))
+
+    assert obs.last_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
 
 
 @respx.mock
