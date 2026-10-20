@@ -481,7 +481,7 @@ def test_lorastats_fetch_node_empty_array_returns_none(tmp_path: Path) -> None:
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=[]))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
     assert source.fetch_node("deadbe01") is None
 
 
@@ -492,7 +492,7 @@ def test_lorastats_fetch_node_matches_by_node_id(tmp_path: Path) -> None:
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
     obs = source.fetch_node("deadbe01")
     assert obs is not None
     assert obs.short_name == "found"
@@ -508,7 +508,7 @@ def test_lorastats_present_but_uncoercible_field_counted_as_a_field_coercion_not
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
 
     obs = source.fetch_node("deadbe01")
 
@@ -526,7 +526,7 @@ def test_lorastats_fetch_node_ignores_a_record_for_a_different_node(tmp_path: Pa
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
     assert source.fetch_node("deadbe01") is None
     assert route.called  # the request was made; None is a match failure, not a short-circuit
 
@@ -538,7 +538,7 @@ def test_lorastats_fetch_node_tolerant_id_forms_still_match(tmp_path: Path) -> N
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
     obs = source.fetch_node("deadbe01")
     assert obs is not None
     assert obs.short_name == "found"
@@ -620,7 +620,7 @@ def test_lorastats_fetch_node_is_none_before_any_fetch_but_set_after_a_miss(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=[]))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
     assert source.last_fetch_data_as_of is None
 
     assert source.fetch_node("deadbe01") is None
@@ -651,7 +651,7 @@ def test_lorastats_fetch_nodes_last_fetch_data_as_of_is_the_oldest_across_ids(
         user_agent="mp/1 (+t@example.invalid)",
         clock=lambda: next(clock_values),
     )
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
 
     result = source.fetch_nodes([NodeId.from_hex("deadbe01"), NodeId.from_hex("deadbe02")])
 
@@ -675,7 +675,7 @@ def test_lorastats_fetch_nodes_last_fetch_data_as_of_resets_between_calls(tmp_pa
         force_refresh=True,
         clock=lambda: next(clock_values),
     )
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
 
     source.fetch_nodes([NodeId.from_hex("deadbe01")])
     assert source.last_fetch_data_as_of == datetime.fromtimestamp(1_700_000_000.0, tz=UTC)
@@ -696,7 +696,7 @@ def _lorastats_source_at(
         ttl=ttl,
         clock=lambda: now[0],
     )
-    return LorastatsSource(client, contact="t@example.invalid"), route
+    return LorastatsSource(client, contact="t@example.invalid", regions=("PL",)), route
 
 
 @respx.mock
@@ -746,7 +746,7 @@ def test_lorastats_fetch_nodes_never_files_an_observation_under_a_foreign_id(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
     assert source.fetch_nodes([NodeId.from_hex("cafefeed")]) == {}
 
 
@@ -756,7 +756,7 @@ def test_lorastats_fetch_node_passes_lowercase_hex_query(tmp_path: Path) -> None
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=[]))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
     source.fetch_node("DEADBE01")
     assert route.calls[0].request.url.params.get("node") == "deadbe01"
 
@@ -767,7 +767,7 @@ def test_lorastats_html_body_raises_invalid_response(tmp_path: Path) -> None:
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, html="<html>nope</html>"))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
     with pytest.raises(InvalidResponseError):
         source.fetch_node("deadbe01")
 
@@ -778,7 +778,7 @@ def test_lorastats_json_object_instead_of_array_raises(tmp_path: Path) -> None:
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json={"not": "a list"}))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid")
+    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
     with pytest.raises(InvalidResponseError):
         source.fetch_node("deadbe01")
 
@@ -1775,8 +1775,12 @@ def test_lorastats_rejected_node_response_is_fetched_again_on_the_next_run(
     )
 
     with pytest.raises(InvalidResponseError):
-        LorastatsSource(_client(tmp_path), contact="t@example.invalid").fetch_node("deadbe01")
-    obs = LorastatsSource(_client(tmp_path), contact="t@example.invalid").fetch_node("deadbe01")
+        LorastatsSource(_client(tmp_path), contact="t@example.invalid", regions=("PL",)).fetch_node(
+            "deadbe01"
+        )
+    obs = LorastatsSource(
+        _client(tmp_path), contact="t@example.invalid", regions=("PL",)
+    ).fetch_node("deadbe01")
 
     assert route.call_count == 2
     assert obs is not None
@@ -1790,8 +1794,12 @@ def test_lorastats_a_non_array_json_body_is_evicted(tmp_path: Path) -> None:
     ).mock(side_effect=[httpx.Response(200, json={"error": "busy"}), httpx.Response(200, json=[])])
 
     with pytest.raises(InvalidResponseError):
-        LorastatsSource(_client(tmp_path), contact="t@example.invalid").fetch_node("deadbe01")
-    obs = LorastatsSource(_client(tmp_path), contact="t@example.invalid").fetch_node("deadbe01")
+        LorastatsSource(_client(tmp_path), contact="t@example.invalid", regions=("PL",)).fetch_node(
+            "deadbe01"
+        )
+    obs = LorastatsSource(
+        _client(tmp_path), contact="t@example.invalid", regions=("PL",)
+    ).fetch_node("deadbe01")
 
     assert route.call_count == 2
     assert obs is None

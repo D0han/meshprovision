@@ -116,6 +116,7 @@ def _build_options(
     nodes: tuple[NodeId, ...],
     sources: tuple[str, ...],
     regions: tuple[str, ...],
+    configured_regions: tuple[str, ...] | None,
     stale_after: float | None,
     offline_after: float | None,
     force_refresh: bool,
@@ -129,6 +130,9 @@ def _build_options(
         sources: Data source names from ``--source``. Empty means every
             configured source.
         regions: lorastats region codes from ``--region``. Empty means
+            ``configured_regions``.
+        configured_regions: The ``MESHPROVISION_LORASTATS_REGIONS``
+            setting. ``None`` means
             :data:`~meshprovision.datasources.lorastats.DEFAULT_REGIONS`.
         stale_after: Hours from ``--stale-after``, or ``None`` for the
             default.
@@ -171,7 +175,7 @@ def _build_options(
         thresholds=thresholds,
         force_refresh=force_refresh,
         sources=tuple(sources) or SOURCE_PRIORITY,
-        regions=tuple(regions) or DEFAULT_REGIONS,
+        regions=tuple(regions) or configured_regions or DEFAULT_REGIONS,
         node_ids=node_ids,
     )
 
@@ -316,7 +320,7 @@ def _watch_loop(
     "regions",
     multiple=True,
     metavar="REGION",
-    help="lorastats region to query (repeatable).",
+    help="lorastats region to query (repeatable; overrides MESHPROVISION_LORASTATS_REGIONS).",
 )
 @click.option(
     "--stale-after",
@@ -396,6 +400,7 @@ def status(
         nodes=nodes,
         sources=sources,
         regions=regions,
+        configured_regions=ctx.settings.lorastats_regions,
         stale_after=stale_after,
         offline_after=offline_after,
         force_refresh=ctx.force_refresh,

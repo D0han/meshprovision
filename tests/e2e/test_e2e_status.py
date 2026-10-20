@@ -640,7 +640,7 @@ def test_run_status_leaves_a_caller_supplied_client_open(
 
     try:
         with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": 1}}}):
-            run_status(settings, StatusOptions(), client=client)
+            run_status(settings, StatusOptions(regions=("PL",)), client=client)
     finally:
         really_close()
 
@@ -1268,7 +1268,7 @@ def test_run_status_counts_only_its_own_requests_on_a_reused_client(
         cache_dir=Path(env["MESHPROVISION_CACHE_DIR"]),
         contact=env["MESHPROVISION_CONTACT"],
     )
-    options = StatusOptions()
+    options = StatusOptions(regions=("PL",))
 
     with mock_sources(nodes={node_hex: {"shortName": "MTa1", "seenBy": {"gw1": 1}}}):
         client = CachedHTTPClient(

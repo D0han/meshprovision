@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `MESHPROVISION_LORASTATS_REGIONS` (comma-separated) sets the lorastats
+  regions `mesh status` queries; `--region` still overrides it.
 - `mesh status` shows when the device last reported its metrics (new `Metrics`
   column, loranet's `lastDeviceMetrics`), so the age of `Batt`, `Volt`,
   `ChUtil` and `AirTx` is no longer guessed from `Last seen`. It also gains an

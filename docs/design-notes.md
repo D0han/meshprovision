@@ -15,7 +15,8 @@ documented here rather than buried.
    `/API/Regions/JSON` returns the HTML API page and `/Regions` is an
    HTML map. Discovering regions would require scraping, which
    lorastats.pl explicitly forbids and bans IP addresses for. Default:
-   `["PL"]`.
+   `["PL"]`, overridable with `MESHPROVISION_LORASTATS_REGIONS` or
+   `--region`.
 3. **lorastats is queried per node via `?node=<hex>`, not by bulk region
    dump.** `?node=` is a server-side filter that turns a 1.8 MB region
    dump into a ~150 byte response. Related hardening: the region path

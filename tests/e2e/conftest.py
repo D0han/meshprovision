@@ -1047,11 +1047,15 @@ def env(
     Returns:
         ``cli_env`` plus ``MESHPROVISION_DB_PATH`` and
         ``MESHPROVISION_TEMPLATE_PATH`` pointing at ``db_path`` and an
-        unmodified example template, respectively.
+        unmodified example template, respectively, and
+        ``MESHPROVISION_LORASTATS_REGIONS=PL``: the one region
+        :func:`mock_sources` serves by default, so a run asks lorastats
+        exactly once per node (a test of the default regions removes it).
     """
     result = dict(cli_env)
     result["MESHPROVISION_DB_PATH"] = str(db_path)
     result["MESHPROVISION_TEMPLATE_PATH"] = str(write_template())
+    result["MESHPROVISION_LORASTATS_REGIONS"] = "PL"
     return result
 
 

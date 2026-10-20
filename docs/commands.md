@@ -316,8 +316,9 @@ Data sources: loranet.pl's bulk `https://loranet.pl/nodes.json` dump
 corroboration); most recent wins. Default thresholds: online < 2 h, stale
 < 24 h, offline beyond.
 
-`--region` (repeatable, default `PL`) names the lorastats region(s) to query.
-Regions are matched exactly as typed, after Unicode NFC normalization (so
+`--region` (repeatable) names the lorastats region(s) to query, in order. It
+overrides `MESHPROVISION_LORASTATS_REGIONS` (comma-separated), which defaults
+to `PL`. Regions are matched exactly as typed, after Unicode NFC normalization (so
 `Zachód` typed with a combining accent is the same region, and a region given
 twice is queried once); `PL` and `pl` are different regions to this tool.
 

@@ -4,7 +4,8 @@
 ``mesh`` console script needs before it can do anything else: where the
 ODS database and provisioning template live, where the HTTP response
 cache is stored, how long cached entries stay fresh, the operator's
-contact string (required by lorastats.pl), and the logging verbosity.
+contact string (required by lorastats.pl), the lorastats regions to query,
+and the logging verbosity.
 
 :func:`load_settings` builds a :class:`Settings` instance by layering,
 from lowest to highest precedence: an optional ``.env`` file, the process
@@ -16,7 +17,10 @@ leaks state between calls.
 Within the ``config`` group, :mod:`meshprovision.config.template` imports
 :func:`format_validation_error` from here, and this module imports only
 :mod:`meshprovision.config.env_trust` (the upward ``.env`` search and its
-trust checks), never ``meshprovision.config.template``.
+trust checks), never ``meshprovision.config.template``. Outside it, it
+imports :func:`meshprovision.datasources.lorastats.validate_regions`, so a
+malformed ``MESHPROVISION_LORASTATS_REGIONS`` fails at load time like any
+other invalid setting.
 """
 
 from __future__ import annotations
@@ -34,6 +38,7 @@ import platformdirs
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from meshprovision.config.env_trust import find_env_file, read_discovered_env_file
+from meshprovision.datasources.lorastats import validate_regions
 from meshprovision.errors import MissingContactError, SettingsError
 
 _logger = logging.getLogger(__name__)
@@ -83,6 +88,7 @@ ENV_FIELD_MAP: Final[Mapping[str, str]] = MappingProxyType(
         "MESHPROVISION_CACHE_DIR": "cache_dir",
         "MESHPROVISION_CACHE_TTL": "cache_ttl",
         "MESHPROVISION_CONTACT": "contact",
+        "MESHPROVISION_LORASTATS_REGIONS": "lorastats_regions",
         "MESHPROVISION_LOG_LEVEL": "log_level",
     }
 )
@@ -125,6 +131,11 @@ class Settings(BaseModel):
         contact: Operator contact string sent to lorastats.pl in the
             ``User-Agent`` header. ``None`` when unset -- there is
             deliberately no default value.
+        lorastats_regions: The lorastats regions ``mesh status`` queries
+            when no ``--region`` is given, validated and NFC-normalized by
+            :func:`~meshprovision.datasources.lorastats.validate_regions`.
+            ``None`` when unset, meaning
+            :data:`~meshprovision.datasources.lorastats.DEFAULT_REGIONS`.
         log_level: Logging verbosity for the ``mesh`` console script.
             Defaults to ``"WARNING"`` -- a plain run stays quiet on
             stderr; ``-v`` raises this project's own loggers to
@@ -144,6 +155,7 @@ class Settings(BaseModel):
     cache_dir: Path = Field(default_factory=default_cache_dir)
     cache_ttl: float = Field(default=DEFAULT_CACHE_TTL, ge=0.0)
     contact: str | None = None
+    lorastats_regions: tuple[str, ...] | None = None
     log_level: LogLevel = DEFAULT_LOG_LEVEL
 
     @field_validator("db_path", "template_path", "cache_dir", mode="after")
@@ -185,6 +197,38 @@ class Settings(BaseModel):
             stripped = value.strip()
             return stripped or None
         return value
+
+    @field_validator("lorastats_regions", mode="before")
+    @classmethod
+    def _parse_regions(cls, value: object) -> object:
+        """Split and validate a comma-separated lorastats region list.
+
+        ``MESHPROVISION_LORASTATS_REGIONS=Zachód,PL`` arrives as one
+        string. Blank entries are dropped; a list with no entry left is
+        unset (the defaults apply), like a blank value of any other
+        setting.
+
+        Args:
+            value: The raw value supplied for ``lorastats_regions``.
+
+        Returns:
+            ``None`` for a list without a non-blank entry, the validated
+            regions for a string or a sequence of strings, otherwise
+            ``value`` unchanged (for pydantic to reject).
+
+        Raises:
+            ValueError: If an entry is not a valid region (see
+                :func:`~meshprovision.datasources.lorastats.validate_regions`).
+        """
+        entries = value.split(",") if isinstance(value, str) else value
+        if not isinstance(entries, list | tuple) or not all(isinstance(e, str) for e in entries):
+            return value
+        if not any(entry.strip() for entry in entries):
+            return None
+        try:
+            return validate_regions(entries)
+        except SettingsError as exc:
+            raise ValueError(exc.message) from exc
 
     @field_validator("log_level", mode="before")
     @classmethod

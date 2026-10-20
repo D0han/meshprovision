@@ -203,3 +203,57 @@ def test_default_cache_dir_is_app_scoped() -> None:
     cache_dir = default_cache_dir()
     assert cache_dir.name == APP_NAME
     assert cache_dir.is_absolute()
+
+
+_ZACHOD_NFD = "Zacho\u0301d"
+
+
+def test_lorastats_regions_splits_a_comma_separated_value_and_drops_blanks() -> None:
+    settings = load_settings(
+        environ={"MESHPROVISION_LORASTATS_REGIONS": f" {_ZACHOD_NFD} , PL ,, pl,PL"},
+        search_dotenv=False,
+    )
+    assert settings.lorastats_regions == ("Zachód", "PL", "pl")
+
+
+@pytest.mark.parametrize("raw", ["", " , ,", ","])
+def test_lorastats_regions_without_a_name_is_unset(raw: str) -> None:
+    settings = load_settings(environ={"MESHPROVISION_LORASTATS_REGIONS": raw}, search_dotenv=False)
+    assert settings.lorastats_regions is None
+
+
+def test_lorastats_regions_is_unset_by_default() -> None:
+    assert load_settings(environ={}, search_dotenv=False).lorastats_regions is None
+
+
+def test_lorastats_regions_is_read_from_a_dotenv_file(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_LORASTATS_REGIONS=Zachód,PL\n", encoding="utf-8")
+    settings = load_settings(env_file=env_file, environ={}, search_dotenv=False)
+    assert settings.lorastats_regions == ("Zachód", "PL")
+
+
+def test_a_malformed_lorastats_region_fails_settings_validation() -> None:
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={"MESHPROVISION_LORASTATS_REGIONS": "PL,a/b"}, search_dotenv=False)
+    assert "lorastats_regions" in exc_info.value.message
+
+
+def test_lorastats_regions_rejects_a_non_string_entry() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings.model_validate({"lorastats_regions": ["PL", 1]})
+
+
+def test_lorastats_regions_survive_with_overrides() -> None:
+    settings = Settings.model_validate({"lorastats_regions": "Zachód,PL"})
+    assert settings.with_overrides(log_level="debug").lorastats_regions == ("Zachód", "PL")
+
+
+def test_the_bundled_env_example_names_every_settings_variable() -> None:
+    from meshprovision.cli.setup import ENV_EXAMPLE_NAME, read_example_text
+    from meshprovision.config.settings import ENV_FIELD_MAP
+
+    text = read_example_text(ENV_EXAMPLE_NAME)
+    assert [name for name in ENV_FIELD_MAP if name not in text] == []
