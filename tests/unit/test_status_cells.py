@@ -478,6 +478,17 @@ def test_metric_cells_are_gray_when_the_metrics_timestamp_is_unknown() -> None:
     assert cells["Metrics"].plain == "-"
 
 
+def test_an_unknown_reading_is_gray_even_when_the_metrics_are_fresh() -> None:
+    node = _node(voltage=4.1, last_device_metrics=NOW - timedelta(minutes=5))
+
+    cells = _cells(node)
+
+    assert cells["Volt"].plain == "4.10V"
+    assert cells["Volt"].style != "grey50"
+    assert {cells[c].plain for c in ("Batt", "ChUtil", "AirTx")} == {"-"}
+    assert {cells[c].style for c in ("Batt", "ChUtil", "AirTx")} == {"grey50"}
+
+
 def test_an_alarming_value_overrides_the_freshness_color_of_its_own_cell_only() -> None:
     node = _node(
         battery_level=5,
