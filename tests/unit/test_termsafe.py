@@ -55,6 +55,11 @@ def test_other_control_characters_still_escaped_with_allow_newlines() -> None:
     assert "\\x1b" in result
 
 
+def test_carriage_return_is_escaped_even_with_allow_newlines() -> None:
+    """Log values keep newlines and tabs, but a raw CR could overwrite the line."""
+    assert terminal_safe("ok\rFAKE", allow_newlines=True) == "ok\\x0dFAKE"
+
+
 def test_empty_string_unchanged() -> None:
     assert terminal_safe("") == ""
 
