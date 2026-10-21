@@ -40,7 +40,18 @@ _PURE_PLAN_FORBIDDEN: Final[tuple[str, ...]] = (
 """``provisioning/plan.py``'s purity contract, shared by the modules split out of it."""
 
 CLI_COMMAND_MODULES: Final[frozenset[str]] = frozenset(
-    {"admin", "adopt", "db_cmd", "init_cmd", "main", "peers", "provision", "status", "template_cmd"}
+    {
+        "admin",
+        "adopt",
+        "db_cmd",
+        "health",
+        "init_cmd",
+        "main",
+        "peers",
+        "provision",
+        "status",
+        "template_cmd",
+    }
 )
 """``cli/`` modules that define (or, for ``main``, assemble) ``mesh`` commands."""
 
@@ -97,6 +108,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("cli/peers_sync.py", _CLI_COMMANDS),
     ("cli/provision_apply.py", _CLI_COMMANDS),
     ("cli/provision_keys.py", _CLI_COMMANDS),
+    ("cli/health.py", _READ_ONLY_CLI_FORBIDDEN),
     ("cli/status.py", _READ_ONLY_CLI_FORBIDDEN),
     ("cli/template_cmd.py", _READ_ONLY_CLI_FORBIDDEN),
     (

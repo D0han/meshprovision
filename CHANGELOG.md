@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh health [NODE]...`: per-node health from lorastats.pl's packet reports
+  -- a verdict (`ok`/`warn`/`crit`/`unknown`) with its reasons, an importance
+  (`high`/`medium`/`low`: MQTT gateway, only gateway or busiest relay of our
+  other nodes, router role) and configuration suggestions (hop limit,
+  telemetry and position intervals, role, router placement, relay
+  concentration). Without `NODE` every active node gets a table row; with
+  `NODE` each is reported in detail, with sample sizes and limits, and its
+  MQTT gateway role is checked. `--days` (1-30), `--no-fetch`, `--refresh`,
+  `--json`. Each node's history (hourly reception, gateway, hop, relay and SNR
+  counts, telemetry, positions, boots) is kept for 30 days in `health/` in the
+  cache directory (bounded, atomic, owner-only). Per node and refresh: two
+  lorastats requests (three with `NODE`), at most once every 10 minutes (once
+  a minute with `--refresh`), on top of what `mesh status` asks.
 - `MESHPROVISION_LORASTATS_REGIONS` (comma-separated) sets the lorastats
   regions `mesh status` queries; `--region` still overrides it.
 - Without either, `mesh status` asks the regions lorastats.pl names in its own

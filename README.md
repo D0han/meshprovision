@@ -72,7 +72,7 @@ covered in [Installation](docs/installation.md).
 
 ## Command cheat sheet
 
-One console script, `mesh`, with seven subcommands/subcommand groups.
+One console script, `mesh`, with nine subcommands/subcommand groups.
 **Global options go before the subcommand** — `mesh --no-cache status
 --json`, not `mesh status --no-cache`. Every command supports `-h`/`--help`.
 
@@ -83,6 +83,7 @@ One console script, `mesh`, with seven subcommands/subcommand groups.
 | `mesh adopt` | Inventory an already-configured device — strictly read-only toward it. |
 | `mesh peers` | Give the connected device every fleet node as a favorited contact (`--apply` to write). |
 | `mesh status` | Read-only network health from loranet.pl/lorastats.pl, merged with the database. |
+| `mesh health` | Per-node health, importance and suggestions from lorastats packet reports, with a 30-day local history. |
 | `mesh admin` | Admin-key custody: `bootstrap`, `import`, `list`. |
 | `mesh db` | Database integrity/backup: `verify`, `backup`, `restore`, `list`, `forget`. |
 | `mesh template` | `validate` a template file — no database or device needed. |

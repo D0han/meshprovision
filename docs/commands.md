@@ -2,7 +2,7 @@
 
 Part of the meshprovision docs — see the [README](../README.md).
 
-The toolkit installs **one** console script, `mesh`, with seven
+The toolkit installs **one** console script, `mesh`, with nine
 subcommands/subcommand groups. **Global options go before the
 subcommand** — for example `mesh --no-cache status --json`, not
 `mesh status --no-cache`. Every command and subcommand supports
@@ -465,6 +465,160 @@ that source as failed and says when it will retry.
 
 **Archived nodes** (see `mesh db forget` below) are excluded from the
 default report — an explicit `--node` request for one still wins.
+
+## `mesh health`
+
+Per-node health and importance from lorastats.pl's packet reports, with a
+local 30-day history. Read-only like `mesh status`: it never writes to the
+database or to any device; besides what `mesh status` writes it keeps one
+history file per node in the cache directory.
+
+```bash
+mesh health                     # every active node, one row each
+mesh health ab446357            # one node in detail (several can be given)
+mesh health --days 30 --json
+mesh health --no-fetch          # history and database only, no request at all
+mesh health --refresh           # refresh even if refreshed in the last 10 minutes
+```
+
+| Option | Meaning |
+|---|---|
+| `NODE` (any number) | Report on these nodes in detail instead of every active node in a table; also checks what each uplinked as an MQTT gateway |
+| `--days N` | Window of the history to judge, 1 to 30 days (default 7) |
+| `--no-fetch` | Ask nothing: use the local history and the database only (no `MESHPROVISION_CONTACT` needed) |
+| `--refresh` | Refresh the history even if it was refreshed in the last 10 minutes (still at most once a minute per node); refused with `--no-fetch` |
+| `--json` | Emit one JSON document instead of text |
+
+The regions are those of `mesh status` (`MESHPROVISION_LORASTATS_REGIONS`, else
+lorastats.pl's region list); global `--no-cache` applies to the `mesh status`
+part. Exit code `7` when any node's verdict is `crit` or any source or refresh
+failed, else `0`.
+
+**What it asks, and how often.** `mesh health` first runs the collection of
+`mesh status` for the reported nodes (same requests, same caching, see above).
+Then, for every reported node that lorastats reported in a region (a node whose
+region is not known is never looked for and shows "without lorastats data"),
+it refreshes the node's history with two requests:
+`/API/{region}/PacketReports/JSON?fromNode=<id>&since=<time>` and
+`/API/{region}/PacketsParsed/JSON?fromNode=<id>&since=<time>`. With `NODE`
+arguments it adds `/API/{region}/PacketReports/JSON?gateway=<id>&since=<1 h
+ago>` for each, at most once an hour per node. A node's history is refreshed
+at most once every 10 minutes (once a minute with `--refresh`), counted from
+the refresh stored in its history file and, within one process, from the last
+attempt even if it failed or could not be stored. So, beyond `mesh status`:
+
+| Case | lorastats requests |
+|---|---|
+| a node refreshed in the last 10 minutes (1 minute with `--refresh`) | 0 |
+| a node without a known lorastats region | 0 |
+| a due node | 2 |
+| a due node with `mesh health NODE` | 3 (the gateway check at most once an hour) |
+| `--no-fetch` | 0 (and no other request either) |
+| worst case, `N` due nodes | `2 N`, `3 N` with `NODE` arguments |
+
+plus the HTTP client's usual retries of a request that failed with a 5xx or
+transport error. The answers are fetched fresh, at most 8 MiB each, and not
+kept in the HTTP cache (each `since` is a different URL); after a 429 answer
+no further lorastats request is sent for the cool-down `mesh status`
+documents, and each remaining node is reported as failed.
+
+**The history.** lorastats keeps its reports for only a day or two, so each
+node's history is kept in `health/<node id>.json` in the cache directory, for
+30 days: per UTC hour the receptions, packets, direct receptions, receptions
+per gateway and per relay byte (the busiest 64 of each), per hop count and per
+whole-dB SNR step, an RSSI sum/min/max and the decoded packets per port and
+per `HopStart`; plus the telemetry readings, local-stats counters, positions,
+the newest node info, neighbours, boot times (lorastats' `LastBoot` as `mesh
+status` saw it) and gateway checks. A refresh asks from one hour before the
+start of the hour of the previous one (the extra hour absorbs a Warsaw-time
+`since` misread around a DST change) and *replaces* those hours rather than
+adding to them, so running it twice, or two `mesh` processes running it at
+once, never counts a packet twice. An hour that lorastats was asked about and
+heard nothing in is recorded as silent; an hour nobody asked about stays
+unknown (a node's first refresh records silent hours only from its oldest
+reception on). Everything older than 30 days is dropped on every write, a file
+is at most 2 MiB (the oldest days go first), at most 128 node files are kept
+(the least recently written go first), and a file not written for 30 days is
+deleted: at most 256 MiB in all; a month of a node heard by 10-30 gateways an
+hour takes 0.5-1 MB. Files are written atomically and owner-only; a missing,
+corrupt or foreign file reads as an empty history. Deleting the directory only
+loses the history.
+
+**The table** (no `NODE`): Node, Short, Verdict, Importance, Last heard (the
+newer of the last reception in the history and `mesh status`'s last seen),
+Pkt/h, GWs (distinct gateways in the window), Direct (share of direct
+receptions), Hops max/limit (most hops seen / the node's `HopStart`; `?` when
+unknown), SNR median, Top relay (busiest relay byte and its share), Batt, and
+the first two reasons. **The detailed report** (`NODE`) shows every metric with
+its sample size, the gateways, hop counts, relays (with the node of ours each
+byte likely is), decoded packets per port, battery trend, local stats, boots,
+neighbours, the gateway check, every finding and suggestion, and the limits
+below. `--json` carries all of it per node (`verdict`, `findings`,
+`importance`, `suggestions`, `metrics`), plus `failures` (per source or node)
+and `refresh` (`refreshed`, `no_region`, `skipped_rows`).
+
+**Verdict.** `crit` if any rule below says so, else `warn` if any does, else
+`ok`; `unknown` when there is no history and no last-seen time at all. These
+are heuristics, not firmware limits:
+
+| Rule | Warn | Crit | Why |
+|---|---|---|---|
+| not heard (history or `mesh status`) | over 2 h | over 24 h, or never heard in covered hours | `mesh status`'s stale and offline thresholds |
+| battery (newest reading within 24 h; 0% and external power ignored) | at or below 20% | at or below 10% | as `mesh status` colours it |
+| battery trend (6+ readings over 12+ h) | falling 10 points a day or faster | | a node that will be flat within days |
+| one gateway only (20+ receptions) | yes | | one gateway failing loses the node |
+| boots in the window | 3 or more | | crashes or brown-outs |
+| mean channel utilization | over 25% | over 40% | firmware delays sends above 25% |
+| mean transmit air utilization | over 5% | over 10% | 10% is the common duty-cycle limit |
+| longest run of silent covered hours | 6 or more | | outages hidden by a fresh last-seen |
+
+**Importance** (`high` from 5 points, `medium` from 2, else `low`) counts what
+our other nodes (the active database nodes and any `NODE` asked for) would lose
+without the node: 3 if it is an MQTT gateway (it uplinks its own packets or one
+of ours, or its gateway check saw it uplink anything); 3 per node of ours it is
+the only gateway of (with 20+ receptions); 2 per node of ours whose busiest
+relay byte is unambiguously its own and carried at least half of that node's
+relayed receptions (20+); 1 for a router role (`ROUTER`, `ROUTER_LATE`,
+`ROUTER_CLIENT`, `REPEATER`).
+
+**Suggestions** are worded as such; nothing is ever changed on a node:
+
+| Suggestion | When |
+|---|---|
+| lower the hop limit to `max(3, most hops seen + 1)` | its `HopStart` is above that, from 20+ receptions with a hop count |
+| longer telemetry interval | more than 2 telemetry packets an hour on a channel busier than 25% |
+| longer position interval or smart position | more than 2 position packets an hour |
+| check the role | a `CLIENT_MUTE` whose id byte is the busiest relay of one of our nodes (a byte collision, or the role is not what it reports) |
+| check a router's placement | a router role uplinked by fewer than 3 gateways (20+ receptions) |
+| another router within its reach | one relay byte carried 80%+ of its relayed receptions (20+) |
+
+**How the numbers are computed, and their limits.**
+
+- A *reception* is one `PacketReports` row: one packet uplinked by one MQTT
+  gateway. Whether the gateway heard it over radio or MQTT cannot be told, so
+  "heard by" means "uplinked by".
+- *Direct* means the last transmitter (`RelayNode`, the last byte of its id)
+  is the node itself; another node with the same last byte relaying it counts
+  as direct too (1 in 256 per relay).
+- *Hops* are `HopStart - HopLimit`, and only decoded packets
+  (`PacketsParsed`, joined by packet id) carry `HopStart`: in the data seen
+  so far a few percent of the receptions. The hop counts are that sample (the
+  `decoded` share is shown), and the hop limit is the node's most common
+  `HopStart`.
+- *Relays* are known by their last id byte only; a byte is named as a node of
+  ours only when exactly one has it, and then as "likely".
+- *RSSI* is shown as lorastats gives it, a positive number; in the data seen
+  it rises with SNR (as `RSSI + 256` would), so it is not converted to dBm and
+  no rule uses it.
+- Packets per hour count distinct packet ids per covered hour; telemetry and
+  position rates and the battery readings come from decoded packets, so the
+  rates are lower bounds.
+- Battery trend is a least-squares slope of the telemetry battery readings in
+  the window.
+- lorastats times are Warsaw local time; a reception in the repeated hour of
+  the autumn DST change may be filed an hour early.
+- lorastats keeps about a day or two: what is older comes from the local
+  history, so a node first refreshed today has today's data only.
 
 ## `mesh admin`
 
