@@ -73,6 +73,15 @@ _READ_ONLY_CLI_FORBIDDEN: Final[tuple[str, ...]] = (
 ``mesh template validate`` (database-free, device-free) import no database or
 provisioning module at all; ``test_readonly_*_boundary.py`` bans the names."""
 
+_PURE_HEALTH_FORBIDDEN: Final[tuple[str, ...]] = (
+    "httpx",
+    "pathlib",
+    "meshprovision.cache",
+    "meshprovision.db",
+    "meshprovision.cli",
+)
+"""The pure ``health`` modules read no file and no network, and know no CLI."""
+
 FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("errors.py", ("meshprovision",)),
     ("provisioning/plan.py", _PURE_PLAN_FORBIDDEN),
@@ -102,6 +111,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
         ),
     ),
     ("db/verify.py", ("meshprovision.cli",)),
+    ("health/packets.py", _PURE_HEALTH_FORBIDDEN),
     (
         "provisioning/persist.py",
         (
