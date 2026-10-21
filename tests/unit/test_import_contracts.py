@@ -112,7 +112,9 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ),
     ("db/verify.py", ("meshprovision.cli",)),
     ("health/history.py", _PURE_HEALTH_FORBIDDEN),
+    ("health/metrics.py", _PURE_HEALTH_FORBIDDEN),
     ("health/packets.py", _PURE_HEALTH_FORBIDDEN),
+    ("health/rules.py", _PURE_HEALTH_FORBIDDEN),
     (
         "provisioning/persist.py",
         (
