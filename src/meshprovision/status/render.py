@@ -15,12 +15,14 @@ written to stdout.
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from rich import box
-from rich.console import Console
+from rich.console import Console, JustifyMethod, RenderableType
 from rich.table import Table
 from rich.text import Text
 
@@ -29,9 +31,14 @@ from meshprovision.status.merge import Availability, MergedNode, humanize_age
 from meshprovision.status.report import StatusReport
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
+if TYPE_CHECKING:
+    from meshprovision.nodeid import NodeId
+
 __all__ = [
     "AGE_STYLES",
     "AVAILABILITY_LABELS",
+    "BRIEF_COLUMNS",
+    "ExtraColumns",
     "age_style",
     "build_table",
     "render_console",
@@ -80,6 +87,30 @@ an uptime under an hour (a recent reboot). Boundaries are exclusive of the
 healthy side: exactly the warn value is not flagged for the "above"
 checks and is flagged for the "at or below" battery checks.
 """
+
+
+_SEEN_BY_HEADER: Final[str] = "Seen By\n1d/7d/30d"
+
+BRIEF_COLUMNS: Final[frozenset[str]] = frozenset(
+    {"Node", "Short", "Status", "Last seen", "Batt", _SEEN_BY_HEADER, "Uptime"}
+)
+"""The columns ``mesh status --detail brief`` keeps: which node, whether and when it
+was last heard, its battery, whether gateways still relay it, and whether it rebooted."""
+
+
+@dataclass(frozen=True, slots=True)
+class ExtraColumns:
+    """Columns appended to the table (``mesh status --detail full``).
+
+    Attributes:
+        headers: ``(header, justify)`` of each column.
+        cells: Each node's cells, one per header.
+        caption: More caption lines, when any.
+    """
+
+    headers: Sequence[tuple[str, JustifyMethod]]
+    cells: Mapping[NodeId, Sequence[RenderableType]]
+    caption: Text | None = None
 
 
 def age_style(age: timedelta | None) -> str:
@@ -394,7 +425,9 @@ def _uptime_cell(node: MergedNode, now: datetime) -> Text:
     return _cell(_duration_text(uptime), _WARN_STYLE if uptime < UPTIME_WARN_BELOW else None)
 
 
-def build_table(report: StatusReport) -> Table:
+def build_table(
+    report: StatusReport, *, brief: bool = False, extra: ExtraColumns | None = None
+) -> Table:
     """Build the ``rich`` table rendering of a status report.
 
     Every ``None`` field renders as a single dim hyphen, never the
@@ -434,74 +467,102 @@ def build_table(report: StatusReport) -> Table:
     while a long-offline node's row is never silently mislabeled by a
     header that no longer applies to it.
 
+    ``brief`` keeps only :data:`BRIEF_COLUMNS`; ``extra`` appends its
+    columns (a dim hyphen for a node it has no cells for) and its caption.
+
     Args:
         report: The report to render.
+        brief: Keep only the essential columns (``--detail brief``).
+        extra: More columns to append (``--detail full``).
 
     Returns:
         The built, not-yet-printed ``rich`` table.
     """
+    columns: list[tuple[str, JustifyMethod]] = [
+        ("Node", "left"),
+        ("Short", "left"),
+        ("Long", "left"),
+        ("Mgmt", "left"),
+        ("Status", "left"),
+        ("Last seen", "left"),
+        (f"Timestamp ({timefmt.local_tz_abbreviation(report.generated_at)})", "left"),
+        ("Metrics", "left"),
+        ("Batt", "right"),
+        ("Volt", "right"),
+        ("ChUtil", "right"),
+        ("AirTx", "right"),
+        (_SEEN_BY_HEADER, "right"),
+        ("Uptime", "right"),
+    ]
+    rows = [_row(node, report.generated_at) for node in report.nodes]
+    if brief:
+        kept = [index for index, (header, _) in enumerate(columns) if header in BRIEF_COLUMNS]
+        columns = [columns[index] for index in kept]
+        rows = [[row[index] for index in kept] for row in rows]
+    if extra is not None:
+        columns.extend(extra.headers)
+        dashes = [_cell(_DASH, _UNKNOWN_STYLE) for _ in extra.headers]
+        rows = [
+            [*row, *extra.cells.get(node.node_id, dashes)]
+            for row, node in zip(rows, report.nodes, strict=True)
+        ]
+
     table = Table(title=None, box=box.SIMPLE_HEAVY, header_style="bold")
-    table.add_column("Node")
-    table.add_column("Short")
-    table.add_column("Long")
-    table.add_column("Mgmt")
-    table.add_column("Status")
-    table.add_column("Last seen")
-    table.add_column(f"Timestamp ({timefmt.local_tz_abbreviation(report.generated_at)})")
-    table.add_column("Metrics")
-    table.add_column("Batt", justify="right")
-    table.add_column("Volt", justify="right")
-    table.add_column("ChUtil", justify="right")
-    table.add_column("AirTx", justify="right")
-    table.add_column("Seen By\n1d/7d/30d", justify="right")
-    table.add_column("Uptime", justify="right")
+    for header, justify in columns:
+        table.add_column(header, justify=justify)
+    for row in rows:
+        table.add_row(*row)
+    table.caption = _caption(report, extra)
+    return table
 
-    now = report.generated_at
-    for node in report.nodes:
-        seen_style = age_style(node.age)
-        metrics_age = None if node.last_device_metrics is None else now - node.last_device_metrics
-        fresh = age_style(metrics_age)
-        table.add_row(
-            node.node_id.display,
-            _text_cell(node.short_name),
-            _text_cell(node.long_name),
-            _text_cell(node.management),
-            _cell(AVAILABILITY_LABELS[node.availability], _AVAILABILITY_STYLES[node.availability]),
-            _cell(node.age_text, seen_style),
-            _cell(_timestamp_cell(node.last_seen, reference=now), seen_style),
-            _cell(_DASH if metrics_age is None else humanize_age(metrics_age), fresh),
-            _value_cell(
-                _battery_cell(node.battery_level),
-                flag=_battery_flag(node.battery_level),
-                freshness=fresh,
-            ),
-            _value_cell(
-                _voltage_cell(node.voltage), flag=_voltage_flag(node.voltage), freshness=fresh
-            ),
-            _value_cell(
-                _percent_cell(node.channel_utilization),
-                flag=_severity(
-                    node.channel_utilization,
-                    alarm=CHANNEL_UTILIZATION_ALARM_PERCENT,
-                    warn=CHANNEL_UTILIZATION_WARN_PERCENT,
-                    low_is_bad=False,
-                ),
-                freshness=fresh,
-            ),
-            _value_cell(
-                _percent_cell(node.air_util_tx),
-                flag=_severity(
-                    node.air_util_tx,
-                    alarm=AIR_UTIL_TX_ALARM_PERCENT,
-                    warn=AIR_UTIL_TX_WARN_PERCENT,
-                    low_is_bad=False,
-                ),
-                freshness=fresh,
-            ),
-            _seen_by_cell(node.seen_by_counts),
-            _uptime_cell(node, now),
-        )
 
+def _row(node: MergedNode, now: datetime) -> list[RenderableType]:
+    """Build one node's cells of the default table, in column order."""
+    seen_style = age_style(node.age)
+    metrics_age = None if node.last_device_metrics is None else now - node.last_device_metrics
+    fresh = age_style(metrics_age)
+    return [
+        node.node_id.display,
+        _text_cell(node.short_name),
+        _text_cell(node.long_name),
+        _text_cell(node.management),
+        _cell(AVAILABILITY_LABELS[node.availability], _AVAILABILITY_STYLES[node.availability]),
+        _cell(node.age_text, seen_style),
+        _cell(_timestamp_cell(node.last_seen, reference=now), seen_style),
+        _cell(_DASH if metrics_age is None else humanize_age(metrics_age), fresh),
+        _value_cell(
+            _battery_cell(node.battery_level),
+            flag=_battery_flag(node.battery_level),
+            freshness=fresh,
+        ),
+        _value_cell(_voltage_cell(node.voltage), flag=_voltage_flag(node.voltage), freshness=fresh),
+        _value_cell(
+            _percent_cell(node.channel_utilization),
+            flag=_severity(
+                node.channel_utilization,
+                alarm=CHANNEL_UTILIZATION_ALARM_PERCENT,
+                warn=CHANNEL_UTILIZATION_WARN_PERCENT,
+                low_is_bad=False,
+            ),
+            freshness=fresh,
+        ),
+        _value_cell(
+            _percent_cell(node.air_util_tx),
+            flag=_severity(
+                node.air_util_tx,
+                alarm=AIR_UTIL_TX_ALARM_PERCENT,
+                warn=AIR_UTIL_TX_WARN_PERCENT,
+                low_is_bad=False,
+            ),
+            freshness=fresh,
+        ),
+        _seen_by_cell(node.seen_by_counts),
+        _uptime_cell(node, now),
+    ]
+
+
+def _caption(report: StatusReport, extra: ExtraColumns | None) -> Text:
+    """Build the caption below the table (see :func:`build_table`)."""
     caption = Text(report.summary())
     for failure in report.failures:
         caption.append("\n")
@@ -519,11 +580,19 @@ def build_table(report: StatusReport) -> Table:
             else "No nodes in the database"
         )
         caption = Text(empty_state) + Text("\n") + caption
-    table.caption = caption
-    return table
+    if extra is not None and extra.caption is not None:
+        caption.append("\n")
+        caption.append_text(extra.caption)
+    return caption
 
 
-def render_console(report: StatusReport, *, console: Console | None = None) -> None:
+def render_console(
+    report: StatusReport,
+    *,
+    console: Console | None = None,
+    brief: bool = False,
+    extra: ExtraColumns | None = None,
+) -> None:
     """Print a status report's table and summary caption to a console.
 
     The only function in this module permitted to touch a ``Console``.
@@ -532,9 +601,11 @@ def render_console(report: StatusReport, *, console: Console | None = None) -> N
         report: The report to render.
         console: The ``rich`` console to print to. Defaults to a new
             :class:`~rich.console.Console`.
+        brief: See :func:`build_table`.
+        extra: See :func:`build_table`.
     """
     active_console = console if console is not None else Console()
-    table = build_table(report)
+    table = build_table(report, brief=brief, extra=extra)
     active_console.print(table, markup=False, highlight=False)
 
 

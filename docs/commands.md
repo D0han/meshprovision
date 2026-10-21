@@ -380,10 +380,35 @@ mesh status --stale-after 1 --offline-after 12
 mesh status --watch --interval 60
 mesh --no-cache status --json
 mesh status --no-fail-on-offline
+mesh status --detail brief
+mesh status --detail full
 ```
 
 The rendered table columns are: Node, Short, Long, Mgmt, Status, Last seen,
 Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime.
+
+**`--detail`** chooses the table's columns; `--json` is the same for `brief`
+and `default`.
+
+- `default`: the columns above, exactly as without `--detail`.
+- `brief`: Node, Short, Status, Last seen, Batt, Seen By, Uptime -- the least
+  that tells, at a glance, which node it is, whether and when it was last
+  heard, whether its battery holds, whether gateways still relay it and
+  whether it rebooted recently.
+- `full`: the default columns plus the health of [`mesh health`](#mesh-health)
+  over 7 days for every reported node: Health (the verdict), Pkt/h, GWs,
+  Direct, Hops max/limit, SNR median, Top relay, and a caption line on the
+  refresh. It refreshes each node's history exactly as `mesh health` does
+  (two lorastats requests per node with a known region, at most once every 10
+  minutes, never a gateway check; `--watch` polls share that interval), so it
+  costs up to `2 N` requests more than `default`, and none within 10 minutes
+  of the previous refresh. `--json` keeps every key and adds `health` per
+  node (as in `mesh health --json`) and a top-level `health` (`days`,
+  `network_requests`, `refresh`, `failures`). The exit code is decided as
+  without `--detail`: health verdicts and refresh failures do not change it
+  (use `mesh health` for that).
+
+`mesh status` without `--detail full` never asks for packet reports.
 
 - **Metrics** is how long ago the device last reported its metrics (loranet's
   `lastDeviceMetrics`); `Batt`, `Volt`, `ChUtil` and `AirTx` are as of that

@@ -17,6 +17,10 @@ known-good safety copy in a ``backups/`` directory next to the database
 :func:`meshprovision.db.ods.load_database`) -- a side-channel copy, never
 a write to the live database file itself, so it does not affect the
 mtime guarantee above.
+
+``--detail full`` also refreshes and judges each node's health through
+:func:`meshprovision.health.report.assess_status`, which writes only the
+per-node health history files in the cache directory.
 """
 
 from __future__ import annotations
@@ -24,7 +28,8 @@ from __future__ import annotations
 import dataclasses
 import math
 import time
-from typing import TYPE_CHECKING, NoReturn
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, NoReturn
 
 import click
 
@@ -36,8 +41,13 @@ from meshprovision.cli.common import (
 )
 from meshprovision.cli.help_format import MeshCommand
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
+from meshprovision.datasources.lorastats_packets import LorastatsPackets
 from meshprovision.datasources.lorastats_regions import RegionList
 from meshprovision.errors import DbError, ExitCode, SettingsError, exit_code_for
+from meshprovision.health import render as health_render
+from meshprovision.health.refresh import HealthRefresher
+from meshprovision.health.report import assess_status
+from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
 from meshprovision.status.merge import (
@@ -53,6 +63,12 @@ if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
 
 __all__ = ["status"]
+
+DETAIL_BRIEF: Final[str] = "brief"
+DETAIL_DEFAULT: Final[str] = "default"
+DETAIL_FULL: Final[str] = "full"
+DETAIL_LEVELS: Final[tuple[str, ...]] = (DETAIL_BRIEF, DETAIL_DEFAULT, DETAIL_FULL)
+"""``--detail`` levels: ``default`` is the table as it always was."""
 
 _MIN_WATCH_POLL_SECONDS = 5.0
 """Floor applied to the default watch-poll interval when no ``--interval`` is given."""
@@ -193,7 +209,33 @@ def _build_options(
     )
 
 
-def _emit(ctx: CliContext, report: StatusReport, *, json_output: bool) -> None:
+@dataclass(frozen=True, slots=True)
+class _Detail:
+    """How much ``--detail`` shows, and what ``full`` refreshes with.
+
+    Attributes:
+        level: ``brief``, ``default`` or ``full``.
+        refresher: For ``full``: one refresher for every poll, so a node's
+            history is refreshed at most once per its interval.
+        client: For ``full``: the client the refresher uses.
+    """
+
+    level: str = DETAIL_DEFAULT
+    refresher: HealthRefresher | None = None
+    client: CachedHTTPClient | None = None
+
+
+_DEFAULT_DETAIL: Final[_Detail] = _Detail()
+"""The plain table (``--detail default``), with nothing to refresh."""
+
+
+def _emit(
+    ctx: CliContext,
+    report: StatusReport,
+    *,
+    json_output: bool,
+    detail: _Detail = _DEFAULT_DETAIL,
+) -> None:
     """Emit one status report to the appropriate stream.
 
     Args:
@@ -202,11 +244,26 @@ def _emit(ctx: CliContext, report: StatusReport, *, json_output: bool) -> None:
         json_output: When ``True``, emit a single JSON document on
             STDOUT; otherwise render the ``rich`` table on STDOUT via
             ``ctx.out``.
+        detail: The ``--detail`` level; ``full`` refreshes and adds health.
     """
+    health = (
+        assess_status(report, detail.refresher, client=detail.client)
+        if detail.refresher is not None and detail.client is not None
+        else None
+    )
     if json_output:
-        click.echo(render.render_json(report))
+        click.echo(
+            health_render.status_json(report, health)
+            if health is not None
+            else render.render_json(report)
+        )
     else:
-        render.render_console(report, console=ctx.out)
+        render.render_console(
+            report,
+            console=ctx.out,
+            brief=detail.level == DETAIL_BRIEF,
+            extra=health_render.status_columns(health) if health is not None else None,
+        )
 
 
 def _run_once(ctx: CliContext, options: StatusOptions, client: CachedHTTPClient) -> StatusReport:
@@ -233,6 +290,7 @@ def _watch_loop(
     poll: float,
     json_output: bool,
     fail_on_offline: bool,
+    detail: _Detail,
 ) -> NoReturn:
     """Re-run and re-emit the status report every ``poll`` seconds until Ctrl-C.
 
@@ -247,6 +305,7 @@ def _watch_loop(
         poll: Seconds to sleep between polls.
         json_output: Emit JSON instead of the table.
         fail_on_offline: Count offline nodes toward the exit code.
+        detail: The ``--detail`` level, shared by every poll.
 
     Raises:
         DbError: After too many consecutive failed polls.
@@ -277,7 +336,7 @@ def _watch_loop(
                 # every poll would re-query lorastats once per node each
                 # --interval, the request pattern lorastats bans IPs for.
                 options = dataclasses.replace(options, force_refresh=False)
-            _emit(ctx, last_report, json_output=json_output)
+            _emit(ctx, last_report, json_output=json_output, detail=detail)
             ctx.info(
                 f"cache: {last_report.cache_hits} hit(s), {last_report.cache_misses} "
                 f"miss(es), {last_report.network_requests} request(s)"
@@ -361,6 +420,16 @@ def _watch_loop(
     help="Hours before a node is considered offline.",
 )
 @click.option(
+    "--detail",
+    type=click.Choice(DETAIL_LEVELS),
+    default=DETAIL_DEFAULT,
+    show_default=True,
+    help=(
+        "Table columns: brief = the essentials; full = also each node's health from "
+        "lorastats packet reports (refreshes its 30-day history, see mesh health)."
+    ),
+)
+@click.option(
     "--fail-on-offline/--no-fail-on-offline",
     default=True,
     help="Whether an offline node makes the exit code non-zero.",
@@ -379,6 +448,7 @@ def status(
     refresh_regions: bool,
     stale_after: float | None,
     offline_after: float | None,
+    detail: str,
     fail_on_offline: bool,
 ) -> None:
     """Report read-only network health for the configured mesh.
@@ -403,6 +473,7 @@ def status(
             ``--stale-after``.
         offline_after: Offline-after threshold override, in hours, from
             ``--offline-after``.
+        detail: The table's columns, from ``--detail``.
         fail_on_offline: Whether an offline node degrades the exit code,
             from ``--fail-on-offline``/``--no-fail-on-offline``.
 
@@ -433,9 +504,14 @@ def status(
     )
 
     with ctx.http_client(require_contact=SOURCE_LORASTATS in options.sources) as client:
+        shown = _Detail(level=detail)
+        if detail == DETAIL_FULL:
+            store = HistoryStore(ctx.settings.cache_dir / HISTORY_DIRNAME)
+            refresher = HealthRefresher(store, LorastatsPackets(client))
+            shown = _Detail(level=detail, refresher=refresher, client=client)
         if not watch:
             report = _run_once(ctx, options, client)
-            _emit(ctx, report, json_output=json_output)
+            _emit(ctx, report, json_output=json_output, detail=shown)
             code = report.exit_code(fail_on_offline=fail_on_offline)
             if code:
                 raise SystemExit(code)
@@ -453,4 +529,5 @@ def status(
             poll=poll,
             json_output=json_output,
             fail_on_offline=fail_on_offline,
+            detail=shown,
         )

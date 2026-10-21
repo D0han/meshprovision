@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh status --detail {brief,default,full}`: `brief` shows only Node, Short,
+  Status, Last seen, Batt, Seen By and Uptime; `full` adds each node's health
+  over 7 days (verdict, packets per hour, gateways, direct share, hops,
+  SNR, top relay), refreshing its `mesh health` history at most once every 10
+  minutes (two lorastats requests per node). `default` is the table as before,
+  and `--json` is unchanged except that `full` adds `health` keys.
 - `mesh health [NODE]...`: per-node health from lorastats.pl's packet reports
   -- a verdict (`ok`/`warn`/`crit`/`unknown`) with its reasons, an importance
   (`high`/`medium`/`low`: MQTT gateway, only gateway or busiest relay of our

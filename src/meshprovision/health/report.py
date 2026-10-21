@@ -55,7 +55,9 @@ __all__ = [
     "HealthOptions",
     "HealthReport",
     "NodeHealth",
+    "StatusHealth",
     "assess_nodes",
+    "assess_status",
     "run_health",
 ]
 
@@ -233,6 +235,76 @@ def assess_nodes(
     return tuple(result)
 
 
+def _refresh(
+    refresher: HealthRefresher, nodes: Sequence[MergedNode], *, gateway_check: bool
+) -> RefreshOutcome:
+    """Refresh the histories of ``nodes``, in the region lorastats found each in."""
+    return refresher.refresh(
+        [(node.node_id, node.lorastats_region) for node in nodes],
+        boots={
+            node.node_id: node.last_boot.timestamp() for node in nodes if node.last_boot is not None
+        },
+        gateway_check=gateway_check,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StatusHealth:
+    """The health columns of ``mesh status --detail full``.
+
+    Attributes:
+        days: The window, in days.
+        nodes: Each reported node's health.
+        refresh: What the history refresh did.
+        network_requests: Network requests the refresh made.
+    """
+
+    days: int
+    nodes: Mapping[NodeId, NodeHealth]
+    refresh: RefreshOutcome
+    network_requests: int
+
+
+def assess_status(
+    report: StatusReport,
+    refresher: HealthRefresher,
+    *,
+    client: CachedHTTPClient,
+    days: int = DEFAULT_DAYS,
+) -> StatusHealth:
+    """Refresh and judge the nodes of a ``mesh status`` report (``--detail full``).
+
+    The reported nodes are the fleet. Costs what
+    :mod:`meshprovision.health.refresh` documents per due node, never a
+    gateway check.
+
+    Args:
+        report: The status report.
+        refresher: The refresher (one per process, shared by ``--watch`` polls).
+        client: The HTTP client the refresher uses, to count its requests.
+        days: The window, in days.
+
+    Returns:
+        The health of every reported node.
+    """
+    before = client.stats.network_requests
+    outcome = _refresh(refresher, report.nodes, gateway_check=False)
+    fleet = tuple(node.node_id for node in report.nodes)
+    healths = assess_nodes(
+        report.nodes,
+        outcome.histories,
+        fleet=fleet,
+        now=datetime.now(tz=UTC).timestamp(),
+        days=days,
+    )
+    return StatusHealth(
+        days=days,
+        nodes={health.node.node_id: health for health in healths},
+        refresh=outcome,
+        network_requests=client.stats.network_requests - before,
+    )
+
+
 def run_health(
     settings: Settings,
     options: HealthOptions,
@@ -285,15 +357,7 @@ def run_health(
         active_refresher = refresher or HealthRefresher(
             store, LorastatsPackets(client), force=options.refresh
         )
-        outcome = active_refresher.refresh(
-            [(node.node_id, node.lorastats_region) for node in nodes],
-            boots={
-                node.node_id: node.last_boot.timestamp()
-                for node in nodes
-                if node.last_boot is not None
-            },
-            gateway_check=options.gateway_checks,
-        )
+        outcome = _refresh(active_refresher, nodes, gateway_check=options.gateway_checks)
         refreshed: Mapping[NodeId, NodeHistory] = outcome.histories
     else:
         nodes = build_report(

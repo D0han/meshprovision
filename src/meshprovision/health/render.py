@@ -11,12 +11,12 @@ data source or the history is passed through
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from datetime import UTC, datetime
-from typing import Final
+from typing import TYPE_CHECKING, Final, cast
 
 from rich import box
-from rich.console import Console, Group, JustifyMethod
+from rich.console import Console, Group, JustifyMethod, RenderableType
 from rich.table import Table
 from rich.text import Text
 
@@ -27,11 +27,17 @@ from meshprovision.health.packets import (
     PORT_POSITION,
     PORT_TELEMETRY,
 )
-from meshprovision.health.report import HealthReport, NodeHealth
+from meshprovision.health.refresh import RefreshOutcome
+from meshprovision.health.report import HealthReport, NodeHealth, StatusHealth
 from meshprovision.health.rules import Verdict
 from meshprovision.status import timefmt
 from meshprovision.status.merge import humanize_age
+from meshprovision.status.render import ExtraColumns, report_to_json_dict
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
+
+if TYPE_CHECKING:
+    from meshprovision.nodeid import NodeId
+    from meshprovision.status.report import StatusReport
 
 __all__ = [
     "VERDICT_STYLES",
@@ -41,6 +47,8 @@ __all__ = [
     "node_health_to_json_dict",
     "render_console",
     "render_json",
+    "status_columns",
+    "status_json",
 ]
 
 VERDICT_STYLES: Final[dict[Verdict, str]] = {
@@ -146,12 +154,7 @@ def build_table(report: HealthReport) -> Table:
         ("Verdict", "left"),
         ("Importance", "left"),
         ("Last heard", "left"),
-        ("Pkt/h", "right"),
-        ("GWs", "right"),
-        ("Direct", "right"),
-        ("Hops\nmax/limit", "right"),
-        ("SNR\nmedian", "right"),
-        ("Top relay", "right"),
+        *_METRIC_COLUMNS,
         ("Batt", "right"),
         ("Reasons", "left"),
     )
@@ -159,7 +162,6 @@ def build_table(report: HealthReport) -> Table:
         table.add_column(column, justify=justify)
     now = report.generated_at
     for health in report.nodes:
-        metrics = health.metrics
         reasons = "; ".join(f.text for f in health.findings[:_MAX_REASONS])
         if len(health.findings) > _MAX_REASONS:
             reasons += f" (+{len(health.findings) - _MAX_REASONS})"
@@ -169,12 +171,7 @@ def build_table(report: HealthReport) -> Table:
             Text(health.verdict.value.upper(), style=VERDICT_STYLES[health.verdict]),
             Text(health.importance.level, style=_IMPORTANCE_STYLES[health.importance.level]),
             _ago(_last_heard(health), now),
-            _number(metrics.packets_per_hour),
-            str(metrics.gateway_count) if metrics.covered_hours else _DASH,
-            _percent(metrics.direct_share),
-            _hops_cell(metrics),
-            _DASH if metrics.snr_median is None else f"{metrics.snr_median} dB",
-            _relay_cell(metrics.top_relay),
+            *_metric_cells(health.metrics),
             _battery(health),
             terminal_safe(reasons) if reasons else _DASH,
         )
@@ -195,22 +192,130 @@ def _caption(report: HealthReport) -> Text:
     if not report.fetched:
         text.append("; history only, nothing fetched")
     elif report.refresh is not None:
-        text.append(
-            f"; history refreshed for {len(report.refresh.refreshed)} node(s), "
-            f"{report.network_requests} request(s)"
-        )
-        if report.refresh.no_region:
-            text.append(f"; {len(report.refresh.no_region)} node(s) without lorastats data")
+        text.append_text(_refresh_summary(report.refresh, report.network_requests))
     for failure in report.source_failures:
         text.append(f"\n{failure.source}: {failure.message}", style="dim red")
-    for refresh_failure in report.refresh_failures:
-        text.append(f"\n{refresh_failure.node.display}: {refresh_failure.message}", style="dim red")
-    if report.refresh is not None and report.refresh.skipped_rows:
+    if report.refresh is not None:
+        text.append_text(_refresh_problems(report.refresh))
+    return text
+
+
+def _refresh_summary(refresh: RefreshOutcome, requests: int) -> Text:
+    """Say how many histories a refresh updated, at what cost, and what it could not ask."""
+    text = Text(f"; history refreshed for {len(refresh.refreshed)} node(s), {requests} request(s)")
+    if refresh.no_region:
+        text.append(f"; {len(refresh.no_region)} node(s) without lorastats data")
+    return text
+
+
+def _refresh_problems(refresh: RefreshOutcome) -> Text:
+    """List a refresh's failed nodes and unusable rows, one line each."""
+    text = Text()
+    for failure in refresh.failures:
+        text.append(f"\n{failure.node.display}: {failure.message}", style="dim red")
+    if refresh.skipped_rows:
         text.append(
-            f"\nlorastats: {report.refresh.skipped_rows} row(s) could not be used",
-            style="dim yellow",
+            f"\nlorastats: {refresh.skipped_rows} row(s) could not be used", style="dim yellow"
         )
     return text
+
+
+_METRIC_COLUMNS: Final[tuple[tuple[str, JustifyMethod], ...]] = (
+    ("Pkt/h", "right"),
+    ("GWs", "right"),
+    ("Direct", "right"),
+    ("Hops\nmax/limit", "right"),
+    ("SNR\nmedian", "right"),
+    ("Top relay", "right"),
+)
+"""The metric columns shared by the health table and ``mesh status --detail full``."""
+
+
+def _metric_cells(metrics: NodeMetrics) -> list[str]:
+    """Render the cells of :data:`_METRIC_COLUMNS`."""
+    return [
+        _number(metrics.packets_per_hour),
+        str(metrics.gateway_count) if metrics.covered_hours else _DASH,
+        _percent(metrics.direct_share),
+        _hops_cell(metrics),
+        _DASH if metrics.snr_median is None else f"{metrics.snr_median} dB",
+        _relay_cell(metrics.top_relay),
+    ]
+
+
+def status_columns(status_health: StatusHealth) -> ExtraColumns:
+    """Build the columns ``mesh status --detail full`` appends to its table.
+
+    Args:
+        status_health: The reported nodes' health.
+
+    Returns:
+        ``Health`` (the verdict) and the metric columns of the health
+        table, plus a caption line on the window and the refresh.
+    """
+    cells: dict[NodeId, Sequence[RenderableType]] = {
+        node: (
+            Text(health.verdict.value.upper(), style=VERDICT_STYLES[health.verdict]),
+            *_metric_cells(health.metrics),
+        )
+        for node, health in status_health.nodes.items()
+    }
+    caption = Text(f"health over {status_health.days} d")
+    caption.append_text(_refresh_summary(status_health.refresh, status_health.network_requests))
+    caption.append_text(_refresh_problems(status_health.refresh))
+    return ExtraColumns(
+        headers=(("Health", "left"), *_METRIC_COLUMNS), cells=cells, caption=caption
+    )
+
+
+def status_json(report: StatusReport, status_health: StatusHealth) -> str:
+    """Render ``mesh status --json --detail full``: the status JSON plus health keys.
+
+    Every key of the plain document is kept, in place and unchanged; each
+    node gains ``health`` (see :func:`node_health_to_json_dict`) and the
+    document a top-level ``health`` (window, requests, refresh, failures).
+
+    Args:
+        report: The status report.
+        status_health: The reported nodes' health.
+
+    Returns:
+        The JSON text.
+    """
+    document = report_to_json_dict(report)
+    nodes = cast("list[dict[str, object]]", document["nodes"])
+    refresh = status_health.refresh
+    return json_dumps_safe(
+        {
+            **document,
+            "nodes": [
+                {
+                    **node_document,
+                    "health": node_health_to_json_dict(status_health.nodes[node.node_id]),
+                }
+                for node_document, node in zip(nodes, report.nodes, strict=True)
+            ],
+            "health": {
+                "days": status_health.days,
+                "network_requests": status_health.network_requests,
+                "refresh": _refresh_json(refresh),
+                "failures": [
+                    {"node": f.node.hex, "message": f.message, "hint": f.hint}
+                    for f in refresh.failures
+                ],
+            },
+        },
+        indent=2,
+    )
+
+
+def _refresh_json(refresh: RefreshOutcome) -> dict[str, object]:
+    """Render what a refresh did."""
+    return {
+        "refreshed": [node.hex for node in refresh.refreshed],
+        "no_region": [node.hex for node in refresh.no_region],
+        "skipped_rows": refresh.skipped_rows,
+    }
 
 
 def _lines(health: NodeHealth, now: datetime) -> Iterable[str]:
@@ -475,13 +580,7 @@ def health_to_json_dict(report: HealthReport) -> dict[str, object]:
             {"source": "lorastats", "node": f.node.hex, "message": f.message, "hint": f.hint}
             for f in report.refresh_failures
         ],
-        "refresh": None
-        if refresh is None
-        else {
-            "refreshed": [node.hex for node in refresh.refreshed],
-            "no_region": [node.hex for node in refresh.no_region],
-            "skipped_rows": refresh.skipped_rows,
-        },
+        "refresh": None if refresh is None else _refresh_json(refresh),
         "nodes": [
             {
                 "node_id": health.node.node_id.hex,
