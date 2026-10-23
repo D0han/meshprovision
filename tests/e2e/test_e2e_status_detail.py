@@ -59,7 +59,7 @@ def seeded(seed_db: Callable[..., Path]) -> None:
 
 
 @pytest.mark.usefixtures("seeded")
-def test_brief_keeps_only_the_essential_columns_and_asks_no_packets(
+def test_brief_keeps_only_the_essential_columns(
     runner: CliRunner, env: dict[str, str], mock_sources: Callable[..., respx.MockRouter]
 ) -> None:
     result, lorastats = _status(runner, env, mock_sources, ["--detail", "brief"])
@@ -69,11 +69,11 @@ def test_brief_keeps_only_the_essential_columns_and_asks_no_packets(
         ["Node", "Short", "Status", "Last", "seen", "Batt", "Seen", "By", "1d/7d/30d", "Uptime"]
     )
     assert "Mgmt" not in result.stdout
-    assert lorastats.reports == lorastats.parsed == []
+    assert len(lorastats.reports) == len(lorastats.parsed) == 2
 
 
 @pytest.mark.usefixtures("seeded")
-def test_the_default_table_hides_node_and_mgmt_and_asks_no_packets(
+def test_the_default_table_hides_node_and_mgmt(
     runner: CliRunner, env: dict[str, str], mock_sources: Callable[..., respx.MockRouter]
 ) -> None:
     plain, lorastats = _status(runner, env, mock_sources, [])
@@ -84,7 +84,7 @@ def test_the_default_table_hides_node_and_mgmt_and_asks_no_packets(
     assert "Node" not in _headers(plain.stdout).split()
     assert "Short" in _headers(plain.stdout)
     assert "Health" not in plain.stdout
-    assert lorastats.reports == lorastats.parsed == []
+    assert len(lorastats.reports) == len(lorastats.parsed) == 2
 
 
 @pytest.mark.usefixtures("seeded")
@@ -194,3 +194,48 @@ def test_full_waits_ten_minutes_between_refreshes_of_a_node(
     _, lorastats = _status(runner, env, mock_sources, ["--detail", "full"])
 
     assert lorastats.reports == []
+
+
+@pytest.mark.usefixtures("seeded")
+@pytest.mark.parametrize("detail", ["default", "brief"])
+def test_the_table_refreshes_a_stale_history_once_an_hour(
+    runner: CliRunner,
+    env: dict[str, str],
+    mock_sources: Callable[..., respx.MockRouter],
+    detail: str,
+) -> None:
+    first, lorastats = _status(runner, env, mock_sources, ["--detail", detail])
+    _age_histories(env, 3500)
+    soon, soon_requests = _status(runner, env, mock_sources, ["--detail", detail])
+    _age_histories(env, 3700)
+    later, later_requests = _status(runner, env, mock_sources, ["--detail", detail])
+
+    assert first.exit_code == soon.exit_code == later.exit_code == 0
+    assert len(lorastats.reports) == len(lorastats.parsed) == 2
+    assert soon_requests.reports == soon_requests.parsed == []
+    assert len(later_requests.reports) == len(later_requests.parsed) == 2
+
+
+@pytest.mark.usefixtures("seeded")
+def test_no_history_refresh_json_and_loranet_only_ask_no_packets(
+    runner: CliRunner, env: dict[str, str], mock_sources: Callable[..., respx.MockRouter]
+) -> None:
+    opted_out, a = _status(runner, env, mock_sources, ["--no-history-refresh"])
+    as_json, b = _status(runner, env, mock_sources, ["--json"])
+    loranet, c = _status(runner, env, mock_sources, [], source_args=["--source", "loranet"])
+
+    assert opted_out.exit_code == as_json.exit_code == loranet.exit_code == 0
+    assert a.reports == a.parsed == b.reports == b.parsed == c.reports == c.parsed == []
+
+
+@pytest.mark.usefixtures("seeded")
+def test_a_failing_history_refresh_does_not_fail_the_table(
+    runner: CliRunner, env: dict[str, str], mock_sources: Callable[..., respx.MockRouter]
+) -> None:
+    router = mock_sources(nodes=_nodes(time.time()))
+    _Lorastats(router, {}, status=500)
+    with router:
+        result = invoke(runner, ["status"], env)
+
+    assert result.exit_code == 0, result.output
+    assert "D0h5" in result.stdout

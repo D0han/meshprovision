@@ -19,8 +19,10 @@ a write to the live database file itself, so it does not affect the
 mtime guarantee above.
 
 ``--detail full`` also refreshes and judges each node's health through
-:func:`meshprovision.health.report.assess_status`, which writes only the
-per-node health history files in the cache directory.
+:func:`meshprovision.health.report.assess_status`, and the plain table
+refreshes histories over an hour old for its trend arrows
+(:func:`meshprovision.health.report.refresh_status_histories`); both write
+only the per-node health history files in the cache directory.
 """
 
 from __future__ import annotations
@@ -48,8 +50,8 @@ from meshprovision.datasources.lorastats_packets import LorastatsPackets
 from meshprovision.datasources.lorastats_regions import RegionList
 from meshprovision.errors import DbError, ExitCode, SettingsError, exit_code_for
 from meshprovision.health import render as health_render
-from meshprovision.health.refresh import HealthRefresher
-from meshprovision.health.report import assess_status
+from meshprovision.health.refresh import STATUS_REFRESH_INTERVAL_SECONDS, HealthRefresher
+from meshprovision.health.report import assess_status, refresh_status_histories
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
@@ -205,12 +207,15 @@ class _Detail:
         level: ``brief``, ``default`` or ``full``.
         refresher: For ``full``: one refresher for every poll, so a node's
             history is refreshed at most once per its interval.
-        client: For ``full``: the client the refresher uses.
+        client: The client the refreshers use.
+        stale_refresher: Without ``full``: refreshes only histories older than
+            an hour, for the trend arrows; ``None`` for no refresh.
     """
 
     level: str = DETAIL_DEFAULT
     refresher: HealthRefresher | None = None
     client: CachedHTTPClient | None = None
+    stale_refresher: HealthRefresher | None = None
 
 
 _DEFAULT_DETAIL: Final[_Detail] = _Detail()
@@ -239,6 +244,8 @@ def _emit(
         if detail.refresher is not None and detail.client is not None
         else None
     )
+    if health is None and not json_output and detail.stale_refresher is not None:
+        refresh_status_histories(report, detail.stale_refresher)
     if json_output:
         click.echo(
             health_render.status_json(report, health)
@@ -431,6 +438,14 @@ def _watch_loop(
     ),
 )
 @click.option(
+    "--history-refresh/--no-history-refresh",
+    default=True,
+    help=(
+        "Whether the table refreshes a node's health history from lorastats when it is "
+        "over an hour old, for the trend arrows (two requests per node)."
+    ),
+)
+@click.option(
     "--fail-on-offline/--no-fail-on-offline",
     default=True,
     help="Whether an offline node makes the exit code non-zero.",
@@ -451,6 +466,7 @@ def status(
     offline_after: float | None,
     expected_interval: float | None,
     detail: str,
+    history_refresh: bool,
     fail_on_offline: bool,
 ) -> None:
     """Report read-only network health for the configured mesh.
@@ -478,6 +494,8 @@ def status(
         expected_interval: Every node's expected interval, in hours, from
             ``--expected-interval``.
         detail: The table's columns, from ``--detail``.
+        history_refresh: Whether stale histories are refreshed for the trend
+            arrows, from ``--history-refresh``/``--no-history-refresh``.
         fail_on_offline: Whether an offline node degrades the exit code,
             from ``--fail-on-offline``/``--no-fail-on-offline``.
 
@@ -517,6 +535,12 @@ def status(
             store = HistoryStore(ctx.settings.cache_dir / HISTORY_DIRNAME)
             refresher = HealthRefresher(store, LorastatsPackets(client))
             shown = _Detail(level=detail, refresher=refresher, client=client)
+        elif history_refresh and SOURCE_LORASTATS in options.sources and not json_output:
+            store = HistoryStore(ctx.settings.cache_dir / HISTORY_DIRNAME)
+            stale = HealthRefresher(
+                store, LorastatsPackets(client), interval=STATUS_REFRESH_INTERVAL_SECONDS
+            )
+            shown = _Detail(level=detail, client=client, stale_refresher=stale)
         if not watch:
             report = _run_once(ctx, options, client)
             _emit(ctx, report, json_output=json_output, detail=shown)

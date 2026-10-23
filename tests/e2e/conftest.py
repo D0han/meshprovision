@@ -44,7 +44,14 @@ from meshtastic.protobuf import admin_pb2, channel_pb2, clientonly_pb2, config_p
 
 from meshprovision.cli.main import cli
 from meshprovision.datasources.loranet import LORANET_NODES_URL
-from meshprovision.datasources.lorastats import LORASTATS_BASE_URL, LORASTATS_NODES_PATH
+from meshprovision.datasources.lorastats import (
+    LORASTATS_BASE_URL,
+    LORASTATS_NODES_PATH,
+)
+from meshprovision.datasources.lorastats_packets import (
+    LORASTATS_PACKET_REPORTS_PATH,
+    LORASTATS_PACKETS_PARSED_PATH,
+)
 from meshprovision.db import ods_write
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
@@ -1179,6 +1186,12 @@ def mock_sources() -> Callable[..., respx.MockRouter]:
 
         lorastats_url = f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region=region)}"
         router.get(url__startswith=lorastats_url).mock(side_effect=_lorastats_handler)
+        # `mesh status` refreshes stale health histories: no packets by default. A test
+        # that cares registers the same patterns itself, which replaces these routes.
+        for path in (LORASTATS_PACKET_REPORTS_PATH, LORASTATS_PACKETS_PARSED_PATH):
+            router.get(url__startswith=LORASTATS_BASE_URL + path.format(region=region)).mock(
+                return_value=httpx.Response(200, json=[])
+            )
         return router
 
     return _mock

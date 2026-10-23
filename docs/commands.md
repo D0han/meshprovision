@@ -360,7 +360,8 @@ still shown, see [`mesh health`](#mesh-health)). `--json` gives each
 node's `expected_interval_seconds`, `expected_interval_source`,
 `stale_after_seconds` and `offline_after_seconds`; the top-level `thresholds`
 are the floors. Learning reads the history files only (no request); a node
-gets a history from `mesh health` or `mesh status --detail full`.
+gets a history from `mesh health`, `mesh status --detail full` or the refresh
+below.
 
 `--region` (repeatable) names the lorastats region(s) to query, in order. It
 overrides `MESHPROVISION_LORASTATS_REGIONS` (comma-separated). Regions are
@@ -429,6 +430,7 @@ mesh --no-cache status --json
 mesh status --no-fail-on-offline
 mesh status --detail brief
 mesh status --detail full
+mesh status --no-history-refresh
 ```
 
 The table columns are: Node, Short, Long, Mgmt, Status, Last seen, Every,
@@ -447,10 +449,9 @@ none, with the previous history reading, but only if no reading was probably
 missed in between (it is at most 1.5 typical gaps away, the typical gap being
 the median gap between the node's earlier readings, else its expected
 interval). A battery shown as `powered` (external power) or `-` gets no arrow,
-and the history is only as fresh as the last `mesh health` or
-`--detail full` run, so a stale history gives no arrow rather than an old one.
-`mesh status` only reads the history files here and asks
-for nothing; no baseline, no arrow.
+and a history that is stale against the shown reading gives no arrow rather
+than an old one (the table refreshes histories over an hour old, see below).
+No baseline, no arrow.
 
 **`--detail`** chooses the table's columns; `--json` is the same for `brief`
 and `default`.
@@ -473,7 +474,15 @@ and `default`.
   without `--detail`: health verdicts and refresh failures do not change it
   (use `mesh health` for that).
 
-`mesh status` without `--detail full` never asks for packet reports.
+The table (`default` and `brief`, not `--json`) refreshes the health history of
+a node with a known lorastats region when it is over an hour old, so that the
+trend arrows have something recent to compare with and the expected interval
+learns from fresh data: two lorastats requests per such node (packet reports
+and decoded packets, only what is new since the last refresh), at most once an
+hour per node, also across `--watch` polls, never a gateway check. A failed
+refresh is logged and does not change the table or the exit code.
+`--no-history-refresh` skips it (the stored histories are still read), and
+`--json` and `--source loranet` never make it.
 
 - **Every** is the node's expected interval `E` (see above), gray when it is
   only its role's default.

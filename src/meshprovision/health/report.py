@@ -59,6 +59,7 @@ __all__ = [
     "StatusHealth",
     "assess_nodes",
     "assess_status",
+    "refresh_status_histories",
     "run_health",
 ]
 
@@ -295,6 +296,22 @@ class StatusHealth:
     nodes: Mapping[NodeId, NodeHealth]
     refresh: RefreshOutcome
     network_requests: int
+
+
+def refresh_status_histories(report: StatusReport, refresher: HealthRefresher) -> RefreshOutcome:
+    """Refresh the stale histories of a ``mesh status`` report's nodes.
+
+    Costs what :mod:`meshprovision.health.refresh` documents per due node
+    (the refresher decides which are due), never a gateway check.
+
+    Args:
+        report: The status report.
+        refresher: The refresher (one per process, shared by ``--watch`` polls).
+
+    Returns:
+        What the refresh did.
+    """
+    return _refresh(refresher, report.nodes, gateway_check=False)
 
 
 def assess_status(

@@ -54,6 +54,7 @@ __all__ = [
     "GATEWAY_CHECK_WINDOW_SECONDS",
     "REFRESH_INTERVAL_SECONDS",
     "SINCE_MARGIN_SECONDS",
+    "STATUS_REFRESH_INTERVAL_SECONDS",
     "HealthRefresher",
     "RefreshFailure",
     "RefreshOutcome",
@@ -66,6 +67,9 @@ REFRESH_INTERVAL_SECONDS: Final[float] = 600.0
 
 FORCED_REFRESH_INTERVAL_SECONDS: Final[float] = LORASTATS_MIN_TTL_SECONDS
 """When forced, at most once per this (lorastats' 60 s TTL floor)."""
+
+STATUS_REFRESH_INTERVAL_SECONDS: Final[float] = 3600.0
+"""``mesh status`` (without ``--detail full``) refreshes a history older than this."""
 
 GATEWAY_CHECK_INTERVAL_SECONDS: Final[float] = 3600.0
 """A node's gateway check is repeated at most once per this."""
@@ -120,6 +124,7 @@ class HealthRefresher:
         packets: LorastatsPackets,
         *,
         force: bool = False,
+        interval: float | None = None,
         clock: Callable[[], float] = time.time,
     ) -> None:
         """Initialize the refresher. Keep one per process, to keep its refresh times.
@@ -129,9 +134,12 @@ class HealthRefresher:
             packets: What fetches the rows.
             force: Refresh once per :data:`FORCED_REFRESH_INTERVAL_SECONDS`
                 instead of :data:`REFRESH_INTERVAL_SECONDS`.
+            interval: Refresh once per this many seconds instead (wins over
+                ``force``).
             clock: Callable returning the current unix epoch seconds.
         """
         self._store = store
+        self._interval = interval
         self._packets = packets
         self._force = force
         self._clock = clock
@@ -199,7 +207,9 @@ class HealthRefresher:
     def _due(self, node: NodeId, history: NodeHistory) -> bool:
         """Tell whether ``node`` may be refreshed now."""
         now = self._clock()
-        interval = FORCED_REFRESH_INTERVAL_SECONDS if self._force else REFRESH_INTERVAL_SECONDS
+        interval = self._interval
+        if interval is None:
+            interval = FORCED_REFRESH_INTERVAL_SECONDS if self._force else REFRESH_INTERVAL_SECONDS
         times = [t for t in (history.fetched_at, self._refreshed_at.get(node)) if t is not None]
         times = [t for t in times if t <= now + FUTURE_SKEW_SECONDS]
         return not times or now - max(times) >= interval

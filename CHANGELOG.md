@@ -306,7 +306,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   followed by an arrow for how it moved against the median of the previous
   6 hours (or the previous reading, unless one was probably missed): `↑`/`↓`,
   green when the change is good for the node and red when bad, or a yellow `~`
-  (read from the history files, no request).
+  (read from the history files). The table also refreshes a node's health
+  history from lorastats when it is over an hour old (two requests per node,
+  at most once an hour; `--no-history-refresh` skips it, `--json` never does
+  it).
 - `mesh status` judges each node against how often it is expected to be
   heard instead of a fixed 2 h / 24 h: a node is stale after two missed
   intervals plus a quarter interval, and offline (exit code 7) after five,

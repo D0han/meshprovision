@@ -23,6 +23,7 @@ from meshprovision.health.refresh import (
     GATEWAY_CHECK_WINDOW_SECONDS,
     REFRESH_INTERVAL_SECONDS,
     SINCE_MARGIN_SECONDS,
+    STATUS_REFRESH_INTERVAL_SECONDS,
     HealthRefresher,
     RefreshFailure,
 )
@@ -70,7 +71,11 @@ class _Packets:
 
 
 def _setup(
-    tmp_path: Path, *, force: bool = False, packets: _Packets | None = None
+    tmp_path: Path,
+    *,
+    force: bool = False,
+    interval: float | None = None,
+    packets: _Packets | None = None,
 ) -> tuple[HealthRefresher, _Packets, HistoryStore, list[float]]:
     now = [_NOW]
     store = HistoryStore(tmp_path / "cache" / HISTORY_DIRNAME, clock=lambda: now[0])
@@ -83,7 +88,13 @@ def _setup(
         ],
         decoded_rows=[_row(_NODE, 5, HopStart=7, PortNum=67, Payload="50% Bat"), 7],
     )
-    refresher = HealthRefresher(store, fake, force=force, clock=lambda: now[0])  # type: ignore[arg-type]
+    refresher = HealthRefresher(
+        store,
+        fake,  # type: ignore[arg-type]
+        force=force,
+        interval=interval,
+        clock=lambda: now[0],
+    )
     return refresher, fake, store, now
 
 
@@ -147,6 +158,24 @@ def test_a_forced_refresh_still_waits_for_the_lorastats_ttl_floor(tmp_path: Path
     assert len(packets.calls) == 2
 
     now[0] = _NOW + FORCED_REFRESH_INTERVAL_SECONDS
+    refresher.refresh([(_NODE, "PL")])
+
+    assert len(packets.calls) == 4
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_an_explicit_interval_wins_over_the_default_and_forced_ones(
+    tmp_path: Path, force: bool
+) -> None:
+    refresher, packets, _, now = _setup(
+        tmp_path, force=force, interval=STATUS_REFRESH_INTERVAL_SECONDS
+    )
+    refresher.refresh([(_NODE, "PL")])
+    now[0] = _NOW + STATUS_REFRESH_INTERVAL_SECONDS - 1
+    refresher.refresh([(_NODE, "PL")])
+    assert len(packets.calls) == 2
+
+    now[0] = _NOW + STATUS_REFRESH_INTERVAL_SECONDS
     refresher.refresh([(_NODE, "PL")])
 
     assert len(packets.calls) == 4
