@@ -11,7 +11,7 @@ writes the history.
 from __future__ import annotations
 
 import statistics
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from itertools import pairwise
@@ -21,14 +21,15 @@ from meshprovision.health.history import TelemetryPoint
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 
 if TYPE_CHECKING:
-    from datetime import timedelta
     from pathlib import Path
 
     from meshprovision.nodeid import NodeId
+    from meshprovision.status.merge import MergedNode
 
 __all__ = [
     "BASELINE_WINDOW_SECONDS",
     "MISSED_READING_FACTOR",
+    "SAME_READING_SECONDS",
     "Change",
     "NodeTrends",
     "Trend",
@@ -79,6 +80,9 @@ UTILIZATION_EPSILON: Final[float] = 1.0
 
 AIR_UTIL_TX_EPSILON: Final[float] = 0.5
 """Percentage points below which transmit air utilization counts as unchanged."""
+
+SAME_READING_SECONDS: Final[float] = 120.0
+"""How close a history point may be to the shown reading and still be that reading."""
 
 _EXTERNAL_POWER: Final[int] = 101
 """The battery level a node on external power reports (no discharge to follow)."""
@@ -154,55 +158,88 @@ def _is_adjacent(gap: float, earlier_times: Sequence[float], expected_gap: float
     return typical is not None and 0 < gap <= MISSED_READING_FACTOR * typical
 
 
-def node_trends(points: Sequence[TelemetryPoint], expected_gap: float | None = None) -> NodeTrends:
-    """Work out all four trends of a node from its telemetry points.
+def node_trends(node: MergedNode, points: Sequence[TelemetryPoint]) -> NodeTrends:
+    """Work out all four trends of a node: its shown readings against its history.
+
+    The readings are the ones the status table shows, taken when the device
+    last reported its metrics; the history points that are that reading
+    (within :data:`SAME_READING_SECONDS`) or newer are left out of the baseline.
 
     Args:
-        points: The node's device-metrics points.
-        expected_gap: How often the node is expected to report, seconds.
+        node: The merged node.
+        points: The node's device-metrics points from its local history.
 
     Returns:
-        The trends; a battery of 0 or less is no reading and 101 (external
-        power) says nothing about a discharge, so neither is compared.
+        The trends; none for a node whose metrics time is unknown, and none
+        for a battery of 0 or less (no reading) or 101 (external power: no
+        discharge to follow).
     """
-    battery = [
-        (p.time, float(p.battery))
-        for p in points
-        if p.battery is not None and 0 < p.battery < _EXTERNAL_POWER
-    ]
-    voltage = [(p.time, p.voltage) for p in points if p.voltage is not None and p.voltage > 0]
-    channel = [(p.time, p.channel_utilization) for p in points if p.channel_utilization is not None]
-    air = [(p.time, p.air_util_tx) for p in points if p.air_util_tx is not None]
+    if node.last_device_metrics is None:
+        return NodeTrends()
+    time = node.last_device_metrics.timestamp()
+    earlier = [p for p in points if p.time < time - SAME_READING_SECONDS]
+    gap = node.cadence.interval.total_seconds()
+
+    def trend(
+        values: Sequence[tuple[float, float | None]],
+        current: float | None,
+        epsilon: float,
+        *,
+        higher_is_better: bool,
+    ) -> Trend | None:
+        if current is None:
+            return None
+        series = [(t, v) for t, v in values if v is not None]
+        return metric_trend(
+            [*series, (time, current)],
+            epsilon=epsilon,
+            higher_is_better=higher_is_better,
+            expected_gap=gap,
+        )
+
+    battery = node.battery_level
     return NodeTrends(
-        battery=metric_trend(
-            battery, epsilon=BATTERY_EPSILON, higher_is_better=True, expected_gap=expected_gap
+        battery=trend(
+            [(p.time, _battery_percent(p.battery)) for p in earlier],
+            _battery_percent(battery),
+            BATTERY_EPSILON,
+            higher_is_better=True,
         ),
-        voltage=metric_trend(
-            voltage, epsilon=VOLTAGE_EPSILON, higher_is_better=True, expected_gap=expected_gap
+        voltage=trend(
+            [(p.time, p.voltage) for p in earlier],
+            node.voltage,
+            VOLTAGE_EPSILON,
+            higher_is_better=True,
         ),
-        channel_utilization=metric_trend(
-            channel, epsilon=UTILIZATION_EPSILON, higher_is_better=False, expected_gap=expected_gap
+        channel_utilization=trend(
+            [(p.time, p.channel_utilization) for p in earlier],
+            node.channel_utilization,
+            UTILIZATION_EPSILON,
+            higher_is_better=False,
         ),
-        air_util_tx=metric_trend(
-            air, epsilon=AIR_UTIL_TX_EPSILON, higher_is_better=False, expected_gap=expected_gap
+        air_util_tx=trend(
+            [(p.time, p.air_util_tx) for p in earlier],
+            node.air_util_tx,
+            AIR_UTIL_TX_EPSILON,
+            higher_is_better=False,
         ),
     )
 
 
-def load_trends(
-    cache_dir: Path, expected_intervals: Mapping[NodeId, timedelta]
-) -> dict[NodeId, NodeTrends]:
+def _battery_percent(level: int | None) -> float | None:
+    """Return a battery level that can be followed, else ``None`` (none, 0, external power)."""
+    return float(level) if level is not None and 0 < level < _EXTERNAL_POWER else None
+
+
+def load_trends(cache_dir: Path, nodes: Iterable[MergedNode]) -> dict[NodeId, NodeTrends]:
     """Read each node's trends from its health history file. Reads only.
 
     Args:
         cache_dir: The cache directory (the histories are in its ``health/``).
-        expected_intervals: The nodes, each with its expected interval.
+        nodes: The merged nodes.
 
     Returns:
         The trends of every node; a missing or unreadable file is no history.
     """
     store = HistoryStore(cache_dir / HISTORY_DIRNAME)
-    return {
-        node_id: node_trends(store.load(node_id).telemetry, interval.total_seconds())
-        for node_id, interval in expected_intervals.items()
-    }
+    return {node.node_id: node_trends(node, store.load(node.node_id).telemetry) for node in nodes}

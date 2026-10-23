@@ -440,12 +440,16 @@ When the node has a local health history (see `mesh health`), a `Batt`,
 up, `↓` when it went down, green when that is good for the node (a higher
 battery or voltage, a lower channel or air utilization) and red when it is
 bad, or a yellow `~` for little change (under 2 % battery, 0.05 V, 1 point of
-channel utilization or 0.5 point of air utilization). The newest telemetry
-value is compared with the median of the readings in the 6 hours before it;
-when there are none, with the previous reading, but only if no reading was
-probably missed in between (it is at most 1.5 typical gaps away, the typical
-gap being the median gap between the node's earlier readings, else its
-expected interval). `mesh status` only reads the history files here and asks
+channel utilization or 0.5 point of air utilization). The reading shown in
+the table (from when the device last reported its metrics) is compared with
+the median of the history readings in the 6 hours before it; when there are
+none, with the previous history reading, but only if no reading was probably
+missed in between (it is at most 1.5 typical gaps away, the typical gap being
+the median gap between the node's earlier readings, else its expected
+interval). A battery shown as `powered` (external power) or `-` gets no arrow,
+and the history is only as fresh as the last `mesh health` or
+`--detail full` run, so a stale history gives no arrow rather than an old one.
+`mesh status` only reads the history files here and asks
 for nothing; no baseline, no arrow.
 
 **`--detail`** chooses the table's columns; `--json` is the same for `brief`

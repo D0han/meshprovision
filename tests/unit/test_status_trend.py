@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -14,9 +14,11 @@ from meshprovision.health.history import TelemetryPoint
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
+from meshprovision.status.cadence import Cadence, CadenceSource
 from meshprovision.status.merge import MergedNode
 from meshprovision.status.trend import (
     BASELINE_WINDOW_SECONDS,
+    SAME_READING_SECONDS,
     Change,
     NodeTrends,
     Trend,
@@ -104,34 +106,26 @@ def test_two_readings_use_the_expected_gap_to_judge_a_missed_one() -> None:
     assert _trend(series) is None
 
 
-def test_node_trends_ignore_external_power_and_empty_batteries() -> None:
+_REPORTED = datetime(2026, 10, 20, 12, 0, tzinfo=UTC)
+_T = _REPORTED.timestamp()
+
+
+def _shown(**fields: Any) -> MergedNode:
+    return MergedNode(node_id=_A, last_device_metrics=_REPORTED, **fields)
+
+
+def test_node_trends_compare_the_shown_readings_with_the_history() -> None:
     points = [
-        TelemetryPoint(time=0, battery=101, voltage=4.1, channel_utilization=5.0, air_util_tx=1.0),
         TelemetryPoint(
-            time=_HOUR, battery=101, voltage=3.9, channel_utilization=9.0, air_util_tx=1.1
+            time=_T - _HOUR, battery=50, voltage=3.6, channel_utilization=5.0, air_util_tx=1.0
         ),
-        TelemetryPoint(time=2 * _HOUR, battery=0, voltage=0.0),
-    ]
-
-    trends = node_trends(points)
-
-    assert trends == NodeTrends(
-        battery=None,
-        voltage=Trend(Change.DOWN, good=False),
-        channel_utilization=Trend(Change.UP, good=False),
-        air_util_tx=Trend(Change.FLAT),
-    )
-
-
-def test_node_trends_judge_each_metric_by_its_own_good_direction() -> None:
-    points = [
-        TelemetryPoint(time=0, battery=50, voltage=3.6, channel_utilization=5.0, air_util_tx=1.0),
         TelemetryPoint(
-            time=_HOUR, battery=70, voltage=3.9, channel_utilization=2.0, air_util_tx=3.0
+            time=_T - 2 * _HOUR, battery=50, voltage=3.6, channel_utilization=5.0, air_util_tx=1.0
         ),
     ]
+    node = _shown(battery_level=70, voltage=3.9, channel_utilization=2.0, air_util_tx=3.0)
 
-    assert node_trends(points) == NodeTrends(
+    assert node_trends(node, points) == NodeTrends(
         battery=Trend(Change.UP, good=True),
         voltage=Trend(Change.UP, good=True),
         channel_utilization=Trend(Change.DOWN, good=True),
@@ -139,17 +133,85 @@ def test_node_trends_judge_each_metric_by_its_own_good_direction() -> None:
     )
 
 
+def test_a_battery_on_external_power_or_empty_has_no_trend() -> None:
+    points = [TelemetryPoint(time=_T - _HOUR, battery=50, voltage=3.6)]
+
+    assert node_trends(_shown(battery_level=101, voltage=3.0), points).battery is None
+    assert node_trends(_shown(battery_level=0, voltage=3.0), points).battery is None
+    assert node_trends(_shown(battery_level=None, voltage=3.0), points).battery is None
+
+
+def test_external_power_history_points_are_no_baseline() -> None:
+    points = [
+        TelemetryPoint(time=_T - 2 * _HOUR, battery=101),
+        TelemetryPoint(time=_T - _HOUR, battery=101),
+    ]
+
+    assert node_trends(_shown(battery_level=60), points).battery is None
+
+
+def test_history_that_is_far_older_than_the_shown_reading_gives_no_arrow() -> None:
+    # Hourly readings two days ago, a shown reading now: readings were missed.
+    points = [TelemetryPoint(time=_T - (48 + i) * _HOUR, battery=40 + i) for i in range(5)]
+
+    assert node_trends(_shown(battery_level=90), points).battery is None
+
+
+def test_the_history_point_that_is_the_shown_reading_is_not_its_own_baseline() -> None:
+    points = [
+        TelemetryPoint(time=_T - SAME_READING_SECONDS + 1, battery=70),
+        TelemetryPoint(time=_T - _HOUR, battery=60),
+    ]
+
+    trends = node_trends(_shown(battery_level=70), points)
+
+    assert trends.battery == Trend(Change.UP, good=True)
+
+
+def test_a_history_point_just_outside_the_same_reading_limit_counts() -> None:
+    points = [TelemetryPoint(time=_T - SAME_READING_SECONDS - 1, battery=60)]
+
+    assert node_trends(_shown(battery_level=70), points).battery == Trend(Change.UP, good=True)
+
+
+def test_without_a_metrics_time_there_are_no_trends() -> None:
+    points = [TelemetryPoint(time=_T - _HOUR, battery=60)]
+
+    assert node_trends(MergedNode(node_id=_A, battery_level=90), points) == NodeTrends()
+
+
+def test_a_node_reporting_every_six_hours_still_gets_arrows() -> None:
+    node = MergedNode(
+        node_id=_A,
+        last_device_metrics=_REPORTED,
+        channel_utilization=1.0,
+        cadence=Cadence(timedelta(hours=2, minutes=6), CadenceSource.HISTORY),
+    )
+    points = [
+        TelemetryPoint(time=_T - (6 * k) * _HOUR - 300, channel_utilization=5.0) for k in (1, 2, 3)
+    ]
+
+    assert node_trends(node, points).channel_utilization == Trend(Change.DOWN, good=True)
+
+
 def test_load_trends_reads_the_history_files_and_tolerates_none(tmp_path: Path) -> None:
     now = time.time()
     store = HistoryStore(tmp_path / HISTORY_DIRNAME)
     points = (
-        TelemetryPoint(time=now - _HOUR, battery=80),
-        TelemetryPoint(time=now - 60, battery=70),
+        TelemetryPoint(time=now - 2 * _HOUR, battery=80),
+        TelemetryPoint(time=now - 3600 * 1.5, battery=80),
     )
     store.update(_A, lambda history: replace(history, telemetry=points))
     other = NodeId.from_hex("979ed146")
+    reported = datetime.fromtimestamp(now, tz=UTC)
 
-    trends = load_trends(tmp_path, {_A: timedelta(hours=1), other: timedelta(hours=1)})
+    trends = load_trends(
+        tmp_path,
+        [
+            MergedNode(node_id=_A, battery_level=60, last_device_metrics=reported),
+            MergedNode(node_id=other, battery_level=60, last_device_metrics=reported),
+        ],
+    )
 
     assert trends[_A].battery == Trend(Change.DOWN, good=False)
     assert trends[other] == NodeTrends()
@@ -224,3 +286,36 @@ def test_hidden_applies_on_top_of_brief() -> None:
 
     assert "Node" not in _headers(table)
     assert "Short" in _headers(table)
+
+
+def test_a_history_point_exactly_at_the_same_reading_limit_is_the_shown_reading() -> None:
+    points = [
+        TelemetryPoint(time=_T - SAME_READING_SECONDS, battery=60),
+        TelemetryPoint(time=_T - _HOUR, battery=70),
+    ]
+
+    assert node_trends(_shown(battery_level=70), points).battery == Trend(Change.FLAT)
+
+
+def test_a_newer_history_point_is_not_a_baseline() -> None:
+    points = [
+        TelemetryPoint(time=_T + 60, battery=10),
+        TelemetryPoint(time=_T - _HOUR, battery=70),
+    ]
+
+    assert node_trends(_shown(battery_level=70), points).battery == Trend(Change.FLAT)
+
+
+def test_the_nodes_expected_interval_judges_a_single_earlier_reading() -> None:
+    points = [TelemetryPoint(time=_T - 8 * _HOUR, battery=80)]
+
+    def node(hours: float) -> MergedNode:
+        return MergedNode(
+            node_id=_A,
+            last_device_metrics=_REPORTED,
+            battery_level=60,
+            cadence=Cadence(timedelta(hours=hours), CadenceSource.HISTORY),
+        )
+
+    assert node_trends(node(8), points).battery == Trend(Change.DOWN, good=False)
+    assert node_trends(node(2), points).battery is None
