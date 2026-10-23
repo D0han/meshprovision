@@ -29,6 +29,7 @@ import dataclasses
 import math
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import TYPE_CHECKING, Final, NoReturn
 
 import click
@@ -50,6 +51,7 @@ from meshprovision.health.report import assess_status
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
+from meshprovision.status.cadence import MAX_EXPECTED_INTERVAL, template_interval
 from meshprovision.status.merge import (
     DEFAULT_OFFLINE_AFTER,
     DEFAULT_STALE_AFTER,
@@ -61,6 +63,7 @@ from meshprovision.status.report import StatusOptions, StatusReport, run_status
 if TYPE_CHECKING:
     from meshprovision.cache.http import CachedHTTPClient
     from meshprovision.cli.common import CliContext
+    from meshprovision.config.template import TemplateConfig
 
 __all__ = ["status"]
 
@@ -86,6 +89,9 @@ _MAX_THRESHOLD_HOURS = 1_000_000.0
 Any longer threshold already means "never" for a mesh node; the bound
 keeps the value convertible to a :class:`~datetime.timedelta`, which
 overflows past about 2.4e10 hours."""
+
+MAX_EXPECTED_INTERVAL_HOURS: Final[float] = MAX_EXPECTED_INTERVAL.total_seconds() / 3600
+"""Upper bound on ``--expected-interval``, in hours (the longest expected interval)."""
 
 _WATCH_MAX_CONSECUTIVE_DB_FAILURES = 3
 """How many consecutive per-poll :class:`~meshprovision.errors.DbError`\\ s
@@ -137,6 +143,8 @@ def _build_options(
     stale_after: float | None,
     offline_after: float | None,
     force_refresh: bool,
+    expected_interval: float | None = None,
+    template: TemplateConfig | None = None,
 ) -> StatusOptions:
     """Build a validated :class:`StatusOptions` from raw CLI values.
 
@@ -161,6 +169,10 @@ def _build_options(
             default.
         force_refresh: Whether to bypass the HTTP cache read, from the
             global ``--no-cache``/``--force-refresh``.
+        expected_interval: Hours from ``--expected-interval``, or ``None``
+            to resolve each node's interval.
+        template: The provisioning template, when one was read: its
+            node-info interval is the template-managed nodes'.
 
     Returns:
         The validated :class:`~meshprovision.status.report.StatusOptions`.
@@ -206,6 +218,12 @@ def _build_options(
         regions=resolved_regions,
         node_ids=node_ids,
         region_list=None if resolved_regions else RegionList(refresh=refresh_regions),
+        expected_interval=None if expected_interval is None else timedelta(hours=expected_interval),
+        template_interval=(
+            None
+            if template is None
+            else template_interval(template.device.node_info_broadcast_secs, template.device.role)
+        ),
     )
 
 
@@ -409,7 +427,9 @@ def _watch_loop(
     default=None,
     callback=_finite_float_callback,
     metavar="HOURS",
-    help="Hours before a node stops being considered online.",
+    help=(
+        "Hours a node is online for at least (default 2); its expected interval can make it longer."
+    ),
 )
 @click.option(
     "--offline-after",
@@ -417,7 +437,21 @@ def _watch_loop(
     default=None,
     callback=_finite_float_callback,
     metavar="HOURS",
-    help="Hours before a node is considered offline.",
+    help=(
+        "Hours before a node can be offline, at least (default 24); its expected "
+        "interval can make it longer."
+    ),
+)
+@click.option(
+    "--expected-interval",
+    type=click.FloatRange(min=0.0, min_open=True, max=MAX_EXPECTED_INTERVAL_HOURS),
+    default=None,
+    callback=_finite_float_callback,
+    metavar="HOURS",
+    help=(
+        "Expect every reported node every HOURS (at most 48) instead of learning it "
+        "from its history, the template or its role; 0.5 gives the fixed thresholds."
+    ),
 )
 @click.option(
     "--detail",
@@ -448,6 +482,7 @@ def status(
     refresh_regions: bool,
     stale_after: float | None,
     offline_after: float | None,
+    expected_interval: float | None,
     detail: str,
     fail_on_offline: bool,
 ) -> None:
@@ -473,6 +508,8 @@ def status(
             ``--stale-after``.
         offline_after: Offline-after threshold override, in hours, from
             ``--offline-after``.
+        expected_interval: Every node's expected interval, in hours, from
+            ``--expected-interval``.
         detail: The table's columns, from ``--detail``.
         fail_on_offline: Whether an offline node degrades the exit code,
             from ``--fail-on-offline``/``--no-fail-on-offline``.
@@ -501,6 +538,8 @@ def status(
         stale_after=stale_after,
         offline_after=offline_after,
         force_refresh=ctx.force_refresh,
+        expected_interval=expected_interval,
+        template=None if expected_interval is not None else ctx.read_template_quietly(),
     )
 
     with ctx.http_client(require_contact=SOURCE_LORASTATS in options.sources) as client:

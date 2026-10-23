@@ -324,7 +324,9 @@ packets, taken from the first of:
 
 | Source (`--json` `expected_interval_source`) | `E` |
 |---|---|
+| `override` | `--expected-interval HOURS` (every reported node; combine with `--node`) |
 | `history` | the mean gap between the hours its [`mesh health`](#mesh-health) history heard it in (last 7 days; needs 3 heard hours; hours after the last heard one do not count, so an outage does not stretch its own interval) |
+| `template` | for a template-managed node: the template's `device.node_info_broadcast_secs` (raised to the firmware's minimum of 1 h; unset means the role default of the template's `device.role`) |
 | `role` | its role's node-info default: 3 h; 24 h for `TAK`/`TAK_TRACKER`; 48 h for `CLIENT_HIDDEN`/`REPEATER`, which send none |
 
 `E` is at most 48 h. Then
@@ -349,7 +351,11 @@ it, and unlike telemetry and position the firmware never stretches its
 interval on a crowded mesh (above 40 nodes online it multiplies those by up to
 14 on `LONG_FAST`), nor holds it back below 40% channel utilization; device
 telemetry is also off by default in recent firmware. `--stale-after` and
-`--offline-after` (default 2 and 24 hours) are the floors. `--json` gives each
+`--offline-after` (default 2 and 24 hours) are the floors, so
+`--expected-interval 0.5` gives the fixed 2 h / 24 h thresholds of earlier
+versions. The template is the one `MESHPROVISION_TEMPLATE_PATH` names: a
+missing file is skipped silently, one that does not load with one warning, and
+it is not read at all with `--expected-interval`. `--json` gives each
 node's `expected_interval_seconds`, `expected_interval_source`,
 `stale_after_seconds` and `offline_after_seconds`; the top-level `thresholds`
 are the floors. Learning reads the history files only (no request); a node
@@ -416,6 +422,7 @@ mesh status --source loranet
 mesh status --region Zachód --region Gdańsk
 mesh status --refresh-regions
 mesh status --stale-after 1 --offline-after 12
+mesh status --node deadbe01 --expected-interval 6
 mesh status --watch --interval 60
 mesh --no-cache status --json
 mesh status --no-fail-on-offline
@@ -474,7 +481,10 @@ and `default`.
 Colors mark individual cells, not whole rows. `Status` is green / yellow / red
 for online / stale / offline. `Last seen`, `Timestamp`, `Metrics` and the four
 readings fade green (within 24 h), yellow (2 days), orange (7 days) and red
-(older); gray means the timestamp is unknown. A reading that is itself
+(older), each tier stretched to the node's own thresholds: green at least
+until the node is stale, yellow and orange at least until it is offline (so
+the colors only differ from the fixed tiers for a node expected less often
+than about every 9 h 36 m); gray means the timestamp is unknown. A reading that is itself
 suspicious is drawn bold orange, and an alarming one bold red, whatever its
 age: battery at or below 20% / 10%, voltage at or below 3.5 V / 3.3 V,
 channel utilization above 25% / 40%, transmit air utilization above 5% / 10%.
@@ -508,9 +518,9 @@ prints a per-poll cache hit/miss/request line to stderr. With `--no-cache`,
 only the first successful poll bypasses the cache; later polls respect the
 TTL like a plain `--watch` (lower `--cache-ttl` for fresher data), so a
 short `--interval` never re-queries lorastats for every node on every poll. `--interval`
-takes 1 s up to one week, and `--stale-after`/`--offline-after` up to
-1000000 hours; a value outside that range, `nan` or `inf` is a usage
-error (exit code `2`).
+takes 1 s up to one week, `--stale-after`/`--offline-after` up to
+1000000 hours and `--expected-interval` up to 48 hours (all above 0); a value
+outside that range, `nan` or `inf` is a usage error (exit code `2`).
 
 `--fail-on-offline` is **on by default**: an offline node, or any source
 failure, exits `7`. Pass `--no-fail-on-offline` to suppress that.

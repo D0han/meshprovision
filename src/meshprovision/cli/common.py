@@ -655,6 +655,27 @@ class CliContext:
             return None
         return self.choose
 
+    def read_template_quietly(self) -> TemplateConfig | None:
+        """Read the provisioning template for a read-only report, if there is one.
+
+        ``mesh status`` and ``mesh health`` only take the node-info interval,
+        role and modem preset from it, so a template that is missing is
+        silently skipped and one that fails to load is skipped with one
+        warning, never an error.
+
+        Returns:
+            The template, or ``None`` when the file does not exist or does
+            not load.
+        """
+        path = self.settings.template_path
+        if not path.is_file():
+            return None
+        try:
+            return template_module.load_template(path)
+        except MeshprovisionError as exc:
+            self.warn(f"Not using the template {path}: {exc.user_message}")
+            return None
+
     def load_template(self) -> TemplateConfig:
         """Load and validate the configured provisioning template.
 

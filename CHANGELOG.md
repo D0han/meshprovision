@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh status --expected-interval HOURS` (up to 48) sets every reported
+  node's expected interval instead of learning it; `0.5` gives the fixed
+  2 h / 24 h thresholds. For a template-managed node, `mesh status` takes the
+  expected interval from the template's `device.node_info_broadcast_secs`
+  (`MESHPROVISION_TEMPLATE_PATH`; a missing template is skipped silently, an
+  unloadable one with one warning).
 - `mesh status --detail {brief,default,full}`: `brief` shows only Node, Short,
   Status, Last seen, Batt, Seen By and Uptime; `full` adds each node's health
   over 7 days (verdict, packets per hour, gateways, direct share, hops,
@@ -310,6 +316,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `offline_after_seconds` per node; the top-level `thresholds` are the
   floors. `mesh status` reads the history files to learn the intervals (no
   request).
+  The freshness colors of `Last seen`, `Timestamp`, `Metrics` and the
+  readings stretch to the node's own thresholds (green at least until it is
+  stale, yellow and orange at least until it is offline).
 - `mesh status` no longer asks the lorastats region `PL` by default: it is
   not a region on lorastats.pl, which answers an unknown region with an empty
   list. At most 16 regions can be configured.

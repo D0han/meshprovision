@@ -1,8 +1,9 @@
-"""`run_status` learns each node's interval from its health history (read only)."""
+"""Each node's expected interval: learned by `run_status`, the template, `--expected-interval`."""
 
 from __future__ import annotations
 
 import dataclasses
+import json
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,6 +14,7 @@ import pytest
 from meshprovision.config.settings import Settings
 from meshprovision.datasources.models import NodeObservation
 from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.schema import ManagementMode
 from meshprovision.health.history import HourBucket
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
@@ -20,9 +22,13 @@ from meshprovision.status import report as report_module
 from meshprovision.status.cadence import CadenceSource
 from meshprovision.status.merge import Availability
 from meshprovision.status.report import StatusOptions, run_status
+from tests.e2e.conftest import invoke
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+
+    import respx
+    from click.testing import CliRunner, Result
 
 pytestmark = pytest.mark.e2e
 
@@ -116,3 +122,139 @@ def test_an_override_reads_no_history(
 
     assert node.cadence.source is CadenceSource.OVERRIDE
     assert node.availability is Availability.STALE
+
+
+# ---------------------------------------------------------------------------
+# The CLI: --expected-interval and the template.
+# ---------------------------------------------------------------------------
+
+
+def _seed_managed(seed_db: Callable[..., Path]) -> None:
+    seed_db(
+        nodes=[
+            NodeRecord(node_id="deadbe01", role="CLIENT", management=ManagementMode.TEMPLATE),
+            NodeRecord(node_id="deadbe02", role="CLIENT", management=ManagementMode.OBSERVED),
+        ]
+    )
+
+
+def _status_json(
+    runner: CliRunner,
+    env: dict[str, str],
+    mock_sources: Callable[..., respx.MockRouter],
+    *args: str,
+) -> tuple[Result, list[dict[str, object]]]:
+    recent = int(time.time()) - 60
+    nodes = {hex_id: {"seenBy": {"gw1": recent}} for hex_id in ("deadbe01", "deadbe02")}
+    with mock_sources(nodes=nodes):
+        result = invoke(runner, ["status", "--json", "--source", "loranet", *args], env)
+    documents = json.loads(result.stdout)["nodes"] if result.exit_code == 0 else []
+    return result, documents
+
+
+def _cadences(documents: list[dict[str, object]]) -> list[tuple[object, object]]:
+    return [
+        (doc["expected_interval_source"], doc["expected_interval_seconds"]) for doc in documents
+    ]
+
+
+def test_a_template_managed_node_gets_the_template_interval(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    write_template: Callable[..., Path],
+) -> None:
+    _seed_managed(seed_db)
+    template = write_template(device={"role": "CLIENT", "node_info_broadcast_secs": 21600})
+    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(template)}
+
+    result, documents = _status_json(runner, env, mock_sources)
+
+    assert result.exit_code == 0
+    assert _cadences(documents) == [("template", 21600), ("role", 10800)]
+    assert documents[0]["stale_after_seconds"] == 13.5 * 3600
+    assert "template" not in result.stderr
+
+
+def test_an_unloadable_template_is_skipped_with_a_warning(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    tmp_path: Path,
+) -> None:
+    _seed_managed(seed_db)
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("device: [unclosed\n", encoding="utf-8")
+    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(broken)}
+
+    result, documents = _status_json(runner, env, mock_sources)
+
+    assert result.exit_code == 0
+    assert _cadences(documents) == [("role", 10800), ("role", 10800)]
+    assert result.stderr.count("Not using the template") == 1
+
+
+def test_a_missing_template_is_skipped_silently(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    tmp_path: Path,
+) -> None:
+    _seed_managed(seed_db)
+    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(tmp_path / "absent.yaml")}
+
+    result, documents = _status_json(runner, env, mock_sources)
+
+    assert result.exit_code == 0
+    assert _cadences(documents) == [("role", 10800), ("role", 10800)]
+    assert "template" not in result.stderr
+
+
+def test_expected_interval_overrides_every_node_and_reads_no_template(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    tmp_path: Path,
+) -> None:
+    _seed_managed(seed_db)
+    broken = tmp_path / "broken.yaml"
+    broken.write_text("device: [unclosed\n", encoding="utf-8")
+    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(broken)}
+
+    result, documents = _status_json(runner, env, mock_sources, "--expected-interval", "0.5")
+
+    assert result.exit_code == 0
+    assert _cadences(documents) == [("override", 1800), ("override", 1800)]
+    assert {(doc["stale_after_seconds"], doc["offline_after_seconds"]) for doc in documents} == {
+        (7200, 86400)
+    }
+    assert "template" not in result.stderr
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "48.01", "nan", "inf"])
+def test_expected_interval_outside_its_range_is_a_usage_error(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    value: str,
+) -> None:
+    _seed_managed(seed_db)
+    result, _ = _status_json(runner, env, mock_sources, "--expected-interval", value)
+    assert result.exit_code == 2
+
+
+def test_expected_interval_accepts_its_upper_bound(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    _seed_managed(seed_db)
+    result, documents = _status_json(runner, env, mock_sources, "--expected-interval", "48")
+    assert result.exit_code == 0
+    assert _cadences(documents)[0] == ("override", 48 * 3600)

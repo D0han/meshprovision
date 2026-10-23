@@ -28,7 +28,7 @@ from rich.text import Text
 
 from meshprovision.status import timefmt
 from meshprovision.status.cadence import Cadence, CadenceSource
-from meshprovision.status.merge import Availability, MergedNode, humanize_age
+from meshprovision.status.merge import Availability, MergedNode, Thresholds, humanize_age
 from meshprovision.status.report import StatusReport
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
@@ -114,25 +114,48 @@ class ExtraColumns:
     caption: Text | None = None
 
 
-def age_style(age: timedelta | None) -> str:
+def _stretched_tiers(thresholds: Thresholds) -> tuple[tuple[timedelta, str], ...]:
+    """Stretch :data:`AGE_STYLES` to a node's own thresholds.
+
+    Args:
+        thresholds: The node's thresholds.
+
+    Returns:
+        The green tier up to at least ``stale_after`` and the yellow tier up
+        to at least ``offline_after`` (which leaves the orange tier empty
+        when ``offline_after`` is longer than it), the rest as they are.
+    """
+    (green_age, green), (yellow_age, yellow), *rest = AGE_STYLES
+    return (
+        (max(green_age, thresholds.stale_after), green),
+        (max(yellow_age, thresholds.offline_after), yellow),
+        *rest,
+    )
+
+
+def age_style(age: timedelta | None, thresholds: Thresholds | None = None) -> str:
     """Pick a ``rich`` style from how long ago a timestamp was.
 
     Used for the ``Last seen`` and ``Timestamp`` cells (the node's last
     activity) and for the device-metrics cells (how old the battery,
-    voltage and utilization readings are). Independent of the ``Status``
-    column and the ``--stale-after`` / ``--offline-after`` thresholds:
-    those drive the label and the exit code, this only colors cells.
+    voltage and utilization readings are). With ``thresholds`` (the
+    node's own), a node expected to be heard rarely keeps its colors
+    longer: green at least until it is stale, yellow at least until it
+    is offline.
 
     Args:
         age: ``now - timestamp``, or ``None`` when the timestamp is unknown.
+        thresholds: The node's thresholds, or ``None`` for the fixed tiers.
 
     Returns:
         ``green`` within 24 hours, ``yellow`` within 2 days, ``dark_orange``
-        within a week, ``red`` beyond that, and gray for ``None``.
+        within a week (each tier stretched to ``thresholds``), ``red``
+        beyond that, and gray for ``None``.
     """
     if age is None:
         return _UNKNOWN_STYLE
-    for max_age, style in AGE_STYLES:
+    tiers = AGE_STYLES if thresholds is None else _stretched_tiers(thresholds)
+    for max_age, style in tiers:
         if age <= max_age:
             return style
     return _OLDEST_STYLE
@@ -551,9 +574,9 @@ def build_table(
 
 def _row(node: MergedNode, now: datetime) -> list[RenderableType]:
     """Build one node's cells of the default table, in column order."""
-    seen_style = age_style(node.age)
+    seen_style = age_style(node.age, node.thresholds)
     metrics_age = None if node.last_device_metrics is None else now - node.last_device_metrics
-    fresh = age_style(metrics_age)
+    fresh = age_style(metrics_age, node.thresholds)
     return [
         node.node_id.display,
         _text_cell(node.short_name),

@@ -307,3 +307,58 @@ def test_brief_leaves_every_out() -> None:
     report = StatusReport(generated_at=NOW, nodes=(MergedNode(NID),), thresholds=Thresholds())
     headers = [str(column.header) for column in render.build_table(report, brief=True).columns]
     assert "Every" not in headers
+
+
+# ---------------------------------------------------------------------------
+# Freshness colors stretched to the node's thresholds.
+# ---------------------------------------------------------------------------
+
+_TWELVE_HOURLY = Thresholds(stale_after=27 * _H, offline_after=63 * _H)
+_CAPPED = Thresholds(stale_after=108 * _H, offline_after=252 * _H)
+_SECOND = timedelta(seconds=1)
+
+
+@pytest.mark.parametrize(
+    ("age", "thresholds", "expected"),
+    [
+        (27 * _H, _TWELVE_HOURLY, "green"),
+        (27 * _H + _SECOND, _TWELVE_HOURLY, "yellow"),
+        (63 * _H, _TWELVE_HOURLY, "yellow"),
+        (63 * _H + _SECOND, _TWELVE_HOURLY, "dark_orange"),
+        (7 * 24 * _H, _TWELVE_HOURLY, "dark_orange"),
+        (7 * 24 * _H + _SECOND, _TWELVE_HOURLY, "red"),
+        (108 * _H, _CAPPED, "green"),
+        (252 * _H, _CAPPED, "yellow"),
+        (252 * _H + _SECOND, _CAPPED, "red"),
+        (24 * _H, Thresholds(), "green"),
+        (24 * _H + _SECOND, Thresholds(), "yellow"),
+        (48 * _H + _SECOND, Thresholds(), "dark_orange"),
+        (None, _CAPPED, "grey50"),
+    ],
+)
+def test_freshness_tiers_reach_at_least_the_node_thresholds(
+    age: timedelta | None, thresholds: Thresholds, expected: str
+) -> None:
+    assert render.age_style(age, thresholds) == expected
+
+
+def test_the_table_colors_by_the_node_thresholds() -> None:
+    seen = NOW - 26 * _H
+    node = MergedNode(
+        node_id=NID,
+        last_seen=seen,
+        age=26 * _H,
+        last_device_metrics=seen,
+        battery_level=80,
+        cadence=Cadence(12 * _H, CadenceSource.HISTORY),
+        thresholds=_TWELVE_HOURLY,
+    )
+    report = StatusReport(generated_at=NOW, nodes=(node,), thresholds=Thresholds())
+    table = render.build_table(report)
+    styles = {
+        str(column.header): str(getattr(next(iter(column.cells)), "style", ""))
+        for column in table.columns
+    }
+    assert styles["Last seen"] == "green"
+    assert styles["Metrics"] == "green"
+    assert styles["Batt"] == "green"
