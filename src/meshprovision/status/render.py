@@ -30,7 +30,7 @@ from meshprovision.status import timefmt
 from meshprovision.status.cadence import Cadence, CadenceSource, interval_text
 from meshprovision.status.merge import Availability, MergedNode, Thresholds, humanize_age
 from meshprovision.status.report import StatusReport
-from meshprovision.status.trend import NodeTrends, Trend
+from meshprovision.status.trend import Change, NodeTrends, Trend
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -106,14 +106,15 @@ DEFAULT_HIDDEN_COLUMNS: Final[frozenset[str]] = frozenset({"Node", "Mgmt"})
 """The columns ``mesh status --detail default`` leaves out: the names identify a node,
 and the management mode is in ``--json`` and ``--detail full``."""
 
-_TREND_ARROWS: Final[Mapping[Trend, tuple[str, str]]] = MappingProxyType(
-    {
-        Trend.UP: ("\u2191", "green"),
-        Trend.DOWN: ("\u2193", "red"),
-        Trend.FLAT: ("~", "yellow"),
-    }
+_TREND_ARROWS: Final[Mapping[Change, str]] = MappingProxyType(
+    {Change.UP: "\u2191", Change.DOWN: "\u2193", Change.FLAT: "~"}
 )
-"""The arrow and its style that follow a reading that went up, down or stayed."""
+"""The arrow that follows a reading that went up or down, or ``~`` when it stayed."""
+
+_TREND_STYLES: Final[Mapping[bool | None, str]] = MappingProxyType(
+    {True: "green", False: "red", None: "yellow"}
+)
+"""Its colour: green for a change for the better, red for the worse, yellow for none."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -532,8 +533,8 @@ def build_table(
     columns (:data:`DEFAULT_HIDDEN_COLUMNS` for ``--detail default``);
     ``extra`` appends its columns (a dim hyphen for a node it has no cells
     for) and its caption. A reading that has a known ``trends`` entry is
-    followed by a green up arrow, a red down arrow or a yellow ``~``
-    (little change) -- the direction it moved, not whether that is good.
+    followed by an arrow for the direction it moved -- green when that is
+    better for the node, red when worse -- or a yellow ``~`` (little change).
 
     Args:
         report: The report to render.
@@ -595,8 +596,7 @@ def _with_trend(cell: Text, trend: Trend | None) -> Text:
     """Follow a reading with its trend arrow (nothing for an unknown reading or trend)."""
     if trend is None or cell.plain == _DASH:
         return cell
-    arrow, style = _TREND_ARROWS[trend]
-    cell.append(arrow, style=style)
+    cell.append(_TREND_ARROWS[trend.change], style=_TREND_STYLES[trend.good])
     return cell
 
 

@@ -251,7 +251,10 @@ def _emit(
             console=ctx.out,
             brief=detail.level == DETAIL_BRIEF,
             extra=health_render.status_columns(health) if health is not None else None,
-            trends=load_trends(ctx.settings.cache_dir, [node.node_id for node in report.nodes]),
+            trends=load_trends(
+                ctx.settings.cache_dir,
+                {node.node_id: node.cadence.interval for node in report.nodes},
+            ),
             hidden=render.DEFAULT_HIDDEN_COLUMNS if detail.level == DETAIL_DEFAULT else frozenset(),
         )
 

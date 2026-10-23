@@ -436,13 +436,17 @@ Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime; the default
 view leaves out Node and Mgmt (they are in `--json` and `--detail full`).
 
 When the node has a local health history (see `mesh health`), a `Batt`,
-`Volt`, `ChUtil` or `AirTx` reading is followed by how it moved: a green `↑`
-(went up), a red `↓` (went down) or a yellow `~` (little change: under 2 %
-battery, 0.05 V, 1 point of channel utilization or 0.5 point of air
-utilization). The newest telemetry value is compared with the median of the
-readings in the 48 hours before it, so the arrow shows direction, not whether
-the move is good (a rising `ChUtil` is a green `↑`). `mesh status` only reads
-the history files here and asks for nothing; no history, no arrow.
+`Volt`, `ChUtil` or `AirTx` reading is followed by an arrow: `↑` when it went
+up, `↓` when it went down, green when that is good for the node (a higher
+battery or voltage, a lower channel or air utilization) and red when it is
+bad, or a yellow `~` for little change (under 2 % battery, 0.05 V, 1 point of
+channel utilization or 0.5 point of air utilization). The newest telemetry
+value is compared with the median of the readings in the 6 hours before it;
+when there are none, with the previous reading, but only if no reading was
+probably missed in between (it is at most 1.5 typical gaps away, the typical
+gap being the median gap between the node's earlier readings, else its
+expected interval). `mesh status` only reads the history files here and asks
+for nothing; no baseline, no arrow.
 
 **`--detail`** chooses the table's columns; `--json` is the same for `brief`
 and `default`.
