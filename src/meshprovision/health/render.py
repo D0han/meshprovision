@@ -29,11 +29,11 @@ from meshprovision.health.packets import (
 )
 from meshprovision.health.refresh import RefreshOutcome
 from meshprovision.health.report import HealthReport, NodeHealth, StatusHealth
-from meshprovision.health.rules import Verdict
+from meshprovision.health.rules import CHATTY_REFERENCE_PRESET, Verdict, chatty_limit
 from meshprovision.status import timefmt
-from meshprovision.status.cadence import CadenceSource
+from meshprovision.status.cadence import CadenceSource, interval_text
 from meshprovision.status.merge import humanize_age
-from meshprovision.status.render import ExtraColumns, every_cell, interval_text, report_to_json_dict
+from meshprovision.status.render import ExtraColumns, every_cell, report_to_json_dict
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -354,6 +354,7 @@ def _lines(health: NodeHealth, now: datetime) -> Iterable[str]:
         f"{interval_text(node.thresholds.stale_after)}, offline after "
         f"{interval_text(node.thresholds.offline_after)}"
     )
+    yield _preset_line(node.modem_preset, node.online_local_nodes)
     yield (
         f"Traffic: {metrics.packets} packets ({_number(metrics.packets_per_hour)}/h), "
         f"{metrics.receptions} receptions, {_percent(metrics.direct_share)} direct"
@@ -408,6 +409,16 @@ def _lines(health: NodeHealth, now: datetime) -> Iterable[str]:
         )
     if health.advice:
         yield "Suggestions:" + "".join(f"\n  - {advice.text}" for advice in health.advice)
+
+
+def _preset_line(preset: str | None, online: int | None) -> str:
+    """Render the modem preset, the nodes online around the node and the chatty limit."""
+    name = terminal_safe(preset) if preset else f"unknown ({CHATTY_REFERENCE_PRESET} assumed)"
+    around = "" if online is None else f", {online} nodes online around it"
+    return (
+        f"Preset: {name}{around}; more than {chatty_limit(preset):.1f} telemetry or position "
+        "packets an hour are suggested to be reduced"
+    )
 
 
 def _relay_text(relay: RelayShare) -> str:
@@ -580,7 +591,8 @@ def health_to_json_dict(report: HealthReport) -> dict[str, object]:
     Returns:
         ``generated_at``, ``days``, ``fetched``, ``network_requests``,
         ``failures``, ``refresh`` and ``nodes`` (each node's identity, its
-        expected interval and thresholds, plus
+        expected interval and thresholds, its modem preset and the nodes
+        online around it, plus
         :func:`node_health_to_json_dict`), with insertion-ordered keys.
     """
     refresh = report.refresh
@@ -609,6 +621,8 @@ def health_to_json_dict(report: HealthReport) -> dict[str, object]:
                 "expected_interval_source": health.node.cadence.source.value,
                 "stale_after_seconds": int(health.node.thresholds.stale_after.total_seconds()),
                 "offline_after_seconds": int(health.node.thresholds.offline_after.total_seconds()),
+                "modem_preset": health.node.modem_preset,
+                "online_local_nodes": health.node.online_local_nodes,
                 **node_health_to_json_dict(health),
             }
             for health in report.nodes

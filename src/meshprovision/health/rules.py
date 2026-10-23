@@ -26,12 +26,14 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import timedelta
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Final
 
 from meshprovision.health.metrics import NodeMetrics
 from meshprovision.nodeid import NodeId
-from meshprovision.status.cadence import OFFLINE_MISSED, CadenceSource
+from meshprovision.status.cadence import OFFLINE_MISSED, CadenceSource, interval_text
 
 __all__ = [
     "AIR_UTIL_TX_CRIT_PERCENT",
@@ -42,12 +44,18 @@ __all__ = [
     "BATTERY_WARN_PERCENT",
     "CHANNEL_UTILIZATION_CRIT_PERCENT",
     "CHANNEL_UTILIZATION_WARN_PERCENT",
+    "CHATTY_MAX_PER_HOUR",
+    "CHATTY_MIN_PER_HOUR",
     "CHATTY_PER_HOUR",
+    "CHATTY_REFERENCE_PRESET",
     "DEFAULT_HOP_LIMIT",
     "HOP_ADVICE_MIN_SAMPLES",
     "IMPORTANCE_HIGH_SCORE",
     "IMPORTANCE_MEDIUM_SCORE",
+    "LONG_PRESETS",
+    "LONG_PRESET_MAX_NODES",
     "MIN_RECEPTIONS",
+    "PRESET_AIRTIME_MS",
     "REBOOTS_WARN",
     "REBOOTS_WINDOW_DAYS",
     "RELAY_CONCENTRATION_SHARE",
@@ -65,6 +73,7 @@ __all__ = [
     "Verdict",
     "advise",
     "assess",
+    "chatty_limit",
     "rank_importance",
 ]
 
@@ -125,7 +134,43 @@ HOP_ADVICE_MIN_SAMPLES: Final[int] = 20
 """Fewest receptions with a hop count before a hop limit is suggested."""
 
 CHATTY_PER_HOUR: Final[float] = 2.0
-"""More telemetry or position packets an hour than this is suggested to be reduced."""
+"""More telemetry or position packets an hour than this, on :data:`CHATTY_REFERENCE_PRESET`,
+is suggested to be reduced; other presets get the same airtime (see :func:`chatty_limit`)."""
+
+CHATTY_REFERENCE_PRESET: Final[str] = "LONG_FAST"
+"""The preset :data:`CHATTY_PER_HOUR` is stated for (the default, and assumed when unknown)."""
+
+CHATTY_MIN_PER_HOUR: Final[float] = 1.0
+"""The lowest chatty limit: hourly packets are never suggested to be reduced."""
+
+CHATTY_MAX_PER_HOUR: Final[float] = 6.0
+"""The highest chatty limit, however cheap a packet: more is a lot on any shared mesh."""
+
+PRESET_AIRTIME_MS: Final[Mapping[str, int]] = MappingProxyType(
+    {
+        "SHORT_TURBO": 23,
+        "SHORT_FAST": 45,
+        "SHORT_SLOW": 85,
+        "MEDIUM_TURBO": 80,
+        "MEDIUM_FAST": 160,
+        "MEDIUM_SLOW": 300,
+        "LONG_TURBO": 378,
+        "LONG_FAST": 559,
+        "LONG_MODERATE": 1642,
+        "LONG_SLOW": 3023,
+    }
+)
+"""Airtime of a typical 40-byte packet per modem preset, milliseconds (LoRa time-on-air
+formula: 16-symbol preamble, explicit header, CRC)."""
+
+LONG_PRESETS: Final[frozenset[str]] = frozenset(
+    {"LONG_FAST", "LONG_MODERATE", "LONG_SLOW", "LONG_TURBO", "VERY_LONG_SLOW"}
+)
+"""The long-range presets, whose packets are the most expensive."""
+
+LONG_PRESET_MAX_NODES: Final[int] = 60
+"""More nodes online around a node on a long preset than this: suggest a faster preset
+(the Meshtastic project's own advice for ``LONG_FAST``)."""
 
 RELAY_DEPENDENCY_SHARE: Final[float] = 0.5
 """A node of ours depends on a relay that carried at least this share of its relayed receptions."""
@@ -246,6 +291,9 @@ class NodeContext:
             when known.
         cadence_source: Where that came from
             (:class:`~meshprovision.status.cadence.CadenceSource` value).
+        preset: Its modem preset, when known.
+        online_local_nodes: How many nodes it counted online around it,
+            when known.
     """
 
     role: str | None = None
@@ -256,6 +304,8 @@ class NodeContext:
     offline_after: float = SILENT_CRIT_SECONDS
     expected_interval: float | None = None
     cadence_source: str | None = None
+    preset: str | None = None
+    online_local_nodes: int | None = None
 
 
 def _duration(seconds: float) -> str:
@@ -270,9 +320,9 @@ def _expectation(context: NodeContext) -> str:
     """Name the node's expected interval for a finding, or nothing when unknown."""
     if context.expected_interval is None:
         return ""
-    hours = round(context.expected_interval / _SECONDS_PER_HOUR, 1)
+    every = interval_text(timedelta(seconds=context.expected_interval))
     source = _SOURCE_TEXTS.get(context.cadence_source or "", "")
-    return f" (expected every {hours:g} h" + (f", {source})" if source else ")")
+    return f" (expected every {every}" + (f", {source})" if source else ")")
 
 
 def _current_battery(metrics: NodeMetrics, context: NodeContext) -> int | None:
@@ -512,6 +562,34 @@ def rank_importance(
     return result
 
 
+def chatty_limit(preset: str | None) -> float:
+    """Return how many telemetry or position packets an hour a preset affords.
+
+    The airtime of :data:`CHATTY_PER_HOUR` packets on
+    :data:`CHATTY_REFERENCE_PRESET`, in packets of ``preset``, between
+    :data:`CHATTY_MIN_PER_HOUR` and :data:`CHATTY_MAX_PER_HOUR`.
+
+    Args:
+        preset: The modem preset; unknown or ``None`` counts as the
+            reference preset.
+
+    Returns:
+        The limit, packets an hour.
+    """
+    airtime = PRESET_AIRTIME_MS.get(preset or "")
+    if airtime is None:
+        return CHATTY_PER_HOUR
+    budget = CHATTY_PER_HOUR * PRESET_AIRTIME_MS[CHATTY_REFERENCE_PRESET]
+    return min(CHATTY_MAX_PER_HOUR, max(CHATTY_MIN_PER_HOUR, budget / airtime))
+
+
+def _preset_name(preset: str | None) -> str:
+    """Name the preset a chatty limit was computed for."""
+    if preset in PRESET_AIRTIME_MS:
+        return f"on {preset}"
+    return f"on {CHATTY_REFERENCE_PRESET}, assumed"
+
+
 def advise(
     metrics: NodeMetrics, context: NodeContext, importance: Importance
 ) -> tuple[Advice, ...]:
@@ -542,21 +620,33 @@ def advise(
                     f"of {enough}",
                 )
             )
+    limit = chatty_limit(context.preset)
+    afforded = f"(more than {limit:.1f} an hour {_preset_name(context.preset)})"
     busy = (metrics.channel_utilization or 0.0) > CHANNEL_UTILIZATION_WARN_PERCENT
-    if busy and (metrics.telemetry_per_hour or 0.0) > CHATTY_PER_HOUR:
+    if busy and (metrics.telemetry_per_hour or 0.0) > limit:
         advice.append(
             Advice(
                 "telemetry_interval",
                 f"at least {metrics.telemetry_per_hour:.1f} telemetry packets an hour on a busy "
-                "channel: consider a longer telemetry interval",
+                f"channel {afforded}: consider a longer telemetry interval",
             )
         )
-    if (metrics.positions_per_hour or 0.0) > CHATTY_PER_HOUR:
+    if (metrics.positions_per_hour or 0.0) > limit:
         advice.append(
             Advice(
                 "position_interval",
-                f"at least {metrics.positions_per_hour:.1f} position packets an hour: consider a "
-                "longer position interval or smart position",
+                f"at least {metrics.positions_per_hour:.1f} position packets an hour {afforded}: "
+                "consider a longer position interval or smart position",
+            )
+        )
+    online = context.online_local_nodes
+    if context.preset in LONG_PRESETS and online is not None and online > LONG_PRESET_MAX_NODES:
+        advice.append(
+            Advice(
+                "preset_congested",
+                f"{online} nodes online around it on {context.preset}: a mesh of more than "
+                f"{LONG_PRESET_MAX_NODES} nodes is better served by a faster preset such as "
+                "MEDIUM_FAST (a change for the whole mesh, not for this node alone)",
             )
         )
     if context.role == "CLIENT_MUTE" and importance.dependents:

@@ -213,17 +213,16 @@ def test_a_missing_template_is_skipped_silently(
     assert "template" not in result.stderr
 
 
-def test_expected_interval_overrides_every_node_and_reads_no_template(
+def test_expected_interval_beats_the_template_interval(
     runner: CliRunner,
     env: dict[str, str],
     seed_db: Callable[..., Path],
     mock_sources: Callable[..., respx.MockRouter],
-    tmp_path: Path,
+    write_template: Callable[..., Path],
 ) -> None:
     _seed_managed(seed_db)
-    broken = tmp_path / "broken.yaml"
-    broken.write_text("device: [unclosed\n", encoding="utf-8")
-    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(broken)}
+    template = write_template(device={"role": "CLIENT", "node_info_broadcast_secs": 21600})
+    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(template)}
 
     result, documents = _status_json(runner, env, mock_sources, "--expected-interval", "0.5")
 
@@ -232,7 +231,40 @@ def test_expected_interval_overrides_every_node_and_reads_no_template(
     assert {(doc["stale_after_seconds"], doc["offline_after_seconds"]) for doc in documents} == {
         (7200, 86400)
     }
-    assert "template" not in result.stderr
+
+
+def test_the_template_preset_is_shown_for_template_managed_nodes_only(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    write_template: Callable[..., Path],
+) -> None:
+    _seed_managed(seed_db)
+    template = write_template(lora={"use_preset": True, "modem_preset": "MEDIUM_FAST"})
+    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(template)}
+
+    result, documents = _status_json(runner, env, mock_sources, "--expected-interval", "2")
+
+    assert result.exit_code == 0
+    assert [doc["modem_preset"] for doc in documents] == ["MEDIUM_FAST", None]
+
+
+def test_a_template_without_use_preset_gives_no_preset(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    write_template: Callable[..., Path],
+) -> None:
+    _seed_managed(seed_db)
+    template = write_template(lora={"use_preset": False, "modem_preset": "MEDIUM_FAST"})
+    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(template)}
+
+    result, documents = _status_json(runner, env, mock_sources)
+
+    assert result.exit_code == 0, result.output
+    assert [doc["modem_preset"] for doc in documents] == [None, None]
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "48.01", "nan", "inf"])

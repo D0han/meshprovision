@@ -96,16 +96,16 @@ def test_silence_is_judged_against_the_node_thresholds(
 
 def test_a_silence_finding_names_the_expected_interval() -> None:
     _, findings = assess(_m(last_heard=_NOW - 20 * _H), _SIX_HOURLY)
-    assert findings[0].text == "not heard for 20 h (expected every 6 h, learned from its history)"
+    assert findings[0].text == "not heard for 20 h (expected every 6h, learned from its history)"
 
 
 @pytest.mark.parametrize(
     ("source", "suffix"),
     [
-        ("override", " (expected every 3.5 h, as given)"),
-        ("template", " (expected every 3.5 h, from the template)"),
-        ("role", " (expected every 3.5 h, its role's default)"),
-        (None, " (expected every 3.5 h)"),
+        ("override", " (expected every 3h 30m, as given)"),
+        ("template", " (expected every 3h 30m, from the template)"),
+        ("role", " (expected every 3h 30m, its role's default)"),
+        (None, " (expected every 3h 30m)"),
     ],
 )
 def test_each_source_is_named(source: str | None, suffix: str) -> None:
@@ -132,7 +132,7 @@ def test_never_heard_is_judged_by_the_covered_hours(covered: int, expected: Verd
 def test_never_heard_uses_the_node_thresholds() -> None:
     verdict, findings = assess(_m(last_heard=None, covered_hours=13), _SIX_HOURLY)
     assert verdict is Verdict.UNKNOWN
-    assert findings[0].text.endswith("(expected every 6 h, learned from its history)")
+    assert findings[0].text.endswith("(expected every 6h, learned from its history)")
     assert assess(_m(last_heard=None, covered_hours=14), _SIX_HOURLY)[0] is Verdict.WARN
     assert assess(_m(last_heard=None, covered_hours=32), _SIX_HOURLY)[0] is Verdict.CRIT
 
@@ -186,7 +186,7 @@ def test_a_silent_run_finding_names_the_expected_interval() -> None:
     _, findings = assess(_m(longest_silence_hours=30), _SIX_HOURLY)
     texts = [finding.text for finding in findings if finding.code == "silent_hours"]
     assert texts == [
-        "30 hours in a row without a reception (expected every 6 h, learned from its history)"
+        "30 hours in a row without a reception (expected every 6h, learned from its history)"
     ]
 
 
@@ -291,7 +291,7 @@ def test_assess_nodes_without_a_history_keeps_the_role_default() -> None:
 
     assert health.node.cadence == _ROLE
     assert health.verdict is Verdict.WARN
-    assert health.findings[0].text == "not heard for 10 h (expected every 3 h, its role's default)"
+    assert health.findings[0].text == "not heard for 10 h (expected every 3h, its role's default)"
 
 
 def test_assess_nodes_passes_the_floor() -> None:

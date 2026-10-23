@@ -34,6 +34,7 @@ import logging
 import math
 import sys
 from dataclasses import dataclass, replace
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, ParamSpec, TypeVar
 
 import click
@@ -55,7 +56,7 @@ from meshprovision.errors import (
     exit_code_for,
 )
 from meshprovision.nodeid import NodeId
-from meshprovision.status.cadence import MAX_EXPECTED_INTERVAL
+from meshprovision.status.cadence import MAX_EXPECTED_INTERVAL, template_interval
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -71,15 +72,19 @@ if TYPE_CHECKING:
 __all__ = [
     "CONTEXT_SETTINGS",
     "DEFAULT_JSON_INDENT",
+    "EXPECTED_INTERVAL_MAX_HOURS",
     "CliContext",
     "DbSession",
     "build_settings",
     "echo_json",
+    "expected_interval_option",
+    "finite_float_callback",
     "handle_cli_errors",
     "node_id_callback",
     "node_ids_callback",
     "pass_cli",
     "resolve_non_interactive",
+    "template_hints",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -314,6 +319,26 @@ def expected_interval_option(*, help_text: str) -> Callable[[Callable[P, R]], Ca
         metavar="HOURS",
         help=help_text,
     )
+
+
+def template_hints(template: TemplateConfig | None) -> tuple[timedelta | None, str | None]:
+    """Take what ``mesh status`` and ``mesh health`` use from the template.
+
+    Args:
+        template: The template, or ``None`` when none was read.
+
+    Returns:
+        ``(node-info interval, modem preset)`` of the template-managed
+        nodes: the interval per
+        :func:`~meshprovision.status.cadence.template_interval`, the preset
+        only when ``lora.use_preset`` is on; ``(None, None)`` without a
+        template.
+    """
+    if template is None:
+        return None, None
+    interval = template_interval(template.device.node_info_broadcast_secs, template.device.role)
+    preset = template.lora.modem_preset if template.lora.use_preset else None
+    return interval, preset
 
 
 def handle_cli_errors(func: Callable[P, R]) -> Callable[P, R | None]:

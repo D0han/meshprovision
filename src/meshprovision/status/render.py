@@ -27,7 +27,7 @@ from rich.table import Table
 from rich.text import Text
 
 from meshprovision.status import timefmt
-from meshprovision.status.cadence import Cadence, CadenceSource
+from meshprovision.status.cadence import Cadence, CadenceSource, interval_text
 from meshprovision.status.merge import Availability, MergedNode, Thresholds, humanize_age
 from meshprovision.status.report import StatusReport
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
@@ -43,7 +43,6 @@ __all__ = [
     "age_style",
     "build_table",
     "every_cell",
-    "interval_text",
     "render_console",
     "render_json",
     "report_to_json_dict",
@@ -399,22 +398,6 @@ def _duration_text(duration: timedelta) -> str:
     if hours:
         return f"{hours}h {minutes}m"
     return f"{minutes}m" if minutes else "<1m"
-
-
-def interval_text(interval: timedelta) -> str:
-    """Render an expected interval: ``"3h"``, ``"3h 30m"`` or ``"45m"``.
-
-    Args:
-        interval: The interval (a few days at most, so hours suffice).
-
-    Returns:
-        Whole hours and the remaining whole minutes, each left out when 0
-        (``"0m"`` for an interval under a minute).
-    """
-    hours, minutes = divmod(int(interval.total_seconds()) // 60, 60)
-    if not hours:
-        return f"{minutes}m"
-    return f"{hours}h {minutes}m" if minutes else f"{hours}h"
 
 
 def every_cell(cadence: Cadence) -> Text:

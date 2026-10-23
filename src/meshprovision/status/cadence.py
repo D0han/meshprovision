@@ -48,6 +48,7 @@ __all__ = [
     "CadenceHint",
     "CadenceSource",
     "availability_thresholds",
+    "interval_text",
     "learned_interval",
     "resolve_cadence",
     "role_interval",
@@ -222,6 +223,22 @@ def resolve_cadence(hint: CadenceHint, role: str | None) -> Cadence:
     if hint.configured is not None:
         return Cadence(_capped(hint.configured), CadenceSource.TEMPLATE)
     return Cadence(role_interval(role), CadenceSource.ROLE)
+
+
+def interval_text(interval: timedelta) -> str:
+    """Render an expected interval: ``"3h"``, ``"3h 30m"`` or ``"45m"``.
+
+    Args:
+        interval: The interval (a few days at most, so hours suffice).
+
+    Returns:
+        Whole hours and the remaining whole minutes, each left out when 0
+        (``"0m"`` for an interval under a minute).
+    """
+    hours, minutes = divmod(int(interval.total_seconds()) // 60, 60)
+    if not hours:
+        return f"{minutes}m"
+    return f"{hours}h {minutes}m" if minutes else f"{hours}h"
 
 
 def availability_thresholds(

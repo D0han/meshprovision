@@ -159,6 +159,8 @@ class StatusOptions:
         template_interval: The provisioning template's node-info
             interval, used for template-managed nodes; ``None`` when no
             template was read.
+        template_preset: The template's modem preset, shown for a
+            template-managed node no source reports one for.
     """
 
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -169,6 +171,7 @@ class StatusOptions:
     region_list: RegionList | None = None
     expected_interval: timedelta | None = None
     template_interval: timedelta | None = None
+    template_preset: str | None = None
 
 
 _DEFAULT_STATUS_OPTIONS: Final[StatusOptions] = StatusOptions()
@@ -485,6 +488,11 @@ def collect_observations(
     )
 
 
+def _is_template_managed(record: NodeRecord | None) -> bool:
+    """Tell whether a node's record says the template manages it."""
+    return record is not None and record.management is ManagementMode.TEMPLATE
+
+
 def _cadence_hints(
     records: Mapping[NodeId, NodeRecord],
     node_ids: Sequence[NodeId],
@@ -505,8 +513,7 @@ def _cadence_hints(
     """
     hints: dict[NodeId, CadenceHint] = {}
     for node_id in node_ids:
-        record = records.get(node_id)
-        managed = record is not None and record.management is ManagementMode.TEMPLATE
+        managed = _is_template_managed(records.get(node_id))
         hints[node_id] = CadenceHint(
             override=options.expected_interval,
             learned=learned.get(node_id),
@@ -567,9 +574,10 @@ def build_report(
         failures: Data sources that failed during collection.
         now: The current time. Must be timezone-aware.
         options: The floors to classify availability against
-            (``options.thresholds``) and what decides each node's expected
+            (``options.thresholds``), what decides each node's expected
             interval (``options.expected_interval``,
-            ``options.template_interval``); other fields of ``options`` are
+            ``options.template_interval``) and the template's preset
+            (``options.template_preset``); other fields of ``options`` are
             not read here -- they shape what the caller already collected.
         learned: Each node's interval learned from its health history,
             when there is one.
@@ -587,6 +595,15 @@ def build_report(
         now=now,
         thresholds=options.thresholds,
         cadences=_cadence_hints(records, node_ids, options, learned or {}),
+        template_presets=(
+            {}
+            if options.template_preset is None
+            else {
+                node_id: options.template_preset
+                for node_id in node_ids
+                if _is_template_managed(records.get(node_id))
+            }
+        ),
     )
     return StatusReport(
         generated_at=now,

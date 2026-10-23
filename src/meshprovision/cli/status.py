@@ -40,6 +40,7 @@ from meshprovision.cli.common import (
     handle_cli_errors,
     node_ids_callback,
     pass_cli,
+    template_hints,
 )
 from meshprovision.cli.help_format import MeshCommand
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
@@ -52,7 +53,6 @@ from meshprovision.health.report import assess_status
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
-from meshprovision.status.cadence import template_interval
 from meshprovision.status.merge import (
     DEFAULT_OFFLINE_AFTER,
     DEFAULT_STALE_AFTER,
@@ -64,7 +64,6 @@ from meshprovision.status.report import StatusOptions, StatusReport, run_status
 if TYPE_CHECKING:
     from meshprovision.cache.http import CachedHTTPClient
     from meshprovision.cli.common import CliContext
-    from meshprovision.config.template import TemplateConfig
 
 __all__ = ["status"]
 
@@ -114,7 +113,8 @@ def _build_options(
     offline_after: float | None,
     force_refresh: bool,
     expected_interval: float | None = None,
-    template: TemplateConfig | None = None,
+    template_interval: timedelta | None = None,
+    template_preset: str | None = None,
 ) -> StatusOptions:
     """Build a validated :class:`StatusOptions` from raw CLI values.
 
@@ -141,8 +141,10 @@ def _build_options(
             global ``--no-cache``/``--force-refresh``.
         expected_interval: Hours from ``--expected-interval``, or ``None``
             to resolve each node's interval.
-        template: The provisioning template, when one was read: its
-            node-info interval is the template-managed nodes'.
+        template_interval: The template's node-info interval, the
+            template-managed nodes' (see
+            :func:`~meshprovision.cli.common.template_hints`).
+        template_preset: The template's modem preset, likewise.
 
     Returns:
         The validated :class:`~meshprovision.status.report.StatusOptions`.
@@ -189,11 +191,8 @@ def _build_options(
         node_ids=node_ids,
         region_list=None if resolved_regions else RegionList(refresh=refresh_regions),
         expected_interval=None if expected_interval is None else timedelta(hours=expected_interval),
-        template_interval=(
-            None
-            if template is None
-            else template_interval(template.device.node_info_broadcast_secs, template.device.role)
-        ),
+        template_interval=template_interval,
+        template_preset=template_preset,
     )
 
 
@@ -494,6 +493,7 @@ def status(
         SystemExit: With the degraded exit code, when the run (or the
             last poll, for ``--watch``) is degraded.
     """
+    interval_of_template, preset_of_template = template_hints(ctx.read_template_quietly())
     options = _build_options(
         nodes=nodes,
         sources=sources,
@@ -504,7 +504,8 @@ def status(
         offline_after=offline_after,
         force_refresh=ctx.force_refresh,
         expected_interval=expected_interval,
-        template=None if expected_interval is not None else ctx.read_template_quietly(),
+        template_interval=interval_of_template,
+        template_preset=preset_of_template,
     )
 
     with ctx.http_client(require_contact=SOURCE_LORASTATS in options.sources) as client:

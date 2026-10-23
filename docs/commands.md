@@ -354,8 +354,9 @@ telemetry is also off by default in recent firmware. `--stale-after` and
 `--offline-after` (default 2 and 24 hours) are the floors, so
 `--expected-interval 0.5` gives the fixed 2 h / 24 h thresholds of earlier
 versions. The template is the one `MESHPROVISION_TEMPLATE_PATH` names: a
-missing file is skipped silently, one that does not load with one warning, and
-it is not read at all with `--expected-interval`. `--json` gives each
+missing file is skipped silently, one that does not load with one warning;
+with `--expected-interval` only its interval is unused (its modem preset is
+still shown, see [`mesh health`](#mesh-health)). `--json` gives each
 node's `expected_interval_seconds`, `expected_interval_source`,
 `stale_after_seconds` and `offline_after_seconds`; the top-level `thresholds`
 are the floors. Learning reads the history files only (no request); a node
@@ -669,11 +670,38 @@ relayed receptions (20+); 1 for a router role (`ROUTER`, `ROUTER_LATE`,
 | Suggestion | When |
 |---|---|
 | lower the hop limit to `max(3, most hops seen + 1)` | its `HopStart` is above that, from 20+ receptions with a hop count |
-| longer telemetry interval | more than 2 telemetry packets an hour on a channel busier than 25% |
-| longer position interval or smart position | more than 2 position packets an hour |
+| longer telemetry interval | more than the preset's limit (below) of telemetry packets an hour on a channel busier than 25% |
+| longer position interval or smart position | more than the preset's limit of position packets an hour |
+| a faster preset for the whole mesh | a `LONG_*` preset and more than 60 nodes online around the node (its own count, from its loranet map report) |
 | check the role | a `CLIENT_MUTE` whose id byte is the busiest relay of one of our nodes (a byte collision, or the role is not what it reports) |
 | check a router's placement | a router role uplinked by fewer than 3 gateways (20+ receptions) |
 | another router within its reach | one relay byte carried 80%+ of its relayed receptions (20+) |
+
+**Presets.** The preset is the newest one loranet reports for the node (only
+with a map report), else, for a template-managed node, the template's
+`lora.modem_preset` (when `lora.use_preset` is on); `--json` has it as
+`modem_preset`, with `online_local_nodes`. The chatty limit is an airtime
+budget: 2 packets an hour on `LONG_FAST` (as before), i.e. about 1.1 s of
+airtime an hour, converted with a typical 40-byte packet's airtime per preset
+and kept between 1 (a second or more per packet on `LONG_MODERATE` and
+`LONG_SLOW`) and 6 an hour (a lot from one node on any shared mesh, however
+cheap):
+
+| Preset | ms per packet | Limit (packets an hour) |
+|---|---|---|
+| `SHORT_TURBO`, `SHORT_FAST`, `SHORT_SLOW`, `MEDIUM_TURBO`, `MEDIUM_FAST` | 23-160 | 6 |
+| `MEDIUM_SLOW` | 300 | 3.7 |
+| `LONG_TURBO` | 378 | 3.0 |
+| `LONG_FAST`, or unknown | 559 | 2 |
+| `LONG_MODERATE`, `LONG_SLOW` | 1642, 3023 | 1 |
+
+Channel and transmit air utilization are judged the same on every preset:
+they are shares of time, and 25% / 40% are where the firmware itself holds
+back telemetry and position / node info, 5% and 10% the EU duty cycle's
+polite and legal transmit limits; a faster preset only takes more nodes to get
+there. The hop-limit suggestion does not depend on the preset either: no
+guidance distinguishes presets, and it never suggests fewer hops than were
+seen.
 
 **How the numbers are computed, and their limits.**
 

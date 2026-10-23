@@ -60,18 +60,24 @@ def test_no_fetch_uses_the_template_and_the_role(
 
 
 def test_expected_interval_overrides_every_node(
-    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    write_template: Callable[..., Path],
 ) -> None:
     _seed(seed_db)
-    broken = tmp_path / "broken.yaml"
-    broken.write_text("device: [unclosed\n", encoding="utf-8")
-    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(broken)}
+    template = write_template(
+        device={"role": "CLIENT", "node_info_broadcast_secs": 7200},
+        lora={"use_preset": True, "modem_preset": "SHORT_FAST"},
+    )
+    env = {**env, "MESHPROVISION_TEMPLATE_PATH": str(template)}
 
     result = invoke(runner, ["health", "--no-fetch", "--json", "--expected-interval", "6"], env)
 
     assert result.exit_code == 0, result.output
     assert _cadences(result.stdout) == [("override", 21600), ("override", 21600)]
-    assert "template" not in result.stderr
+    nodes = json.loads(result.stdout)["nodes"]
+    assert [node["modem_preset"] for node in nodes] == ["SHORT_FAST", None]
 
 
 def test_an_unloadable_template_is_skipped_with_a_warning(

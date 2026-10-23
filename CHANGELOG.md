@@ -331,6 +331,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The table gains `Every`, the detailed report names the interval and the
   thresholds, `--json` adds the same four keys per node as `mesh status`, and
   `mesh health --expected-interval HOURS` overrides it.
+- `mesh health` suggests a longer telemetry or position interval from the
+  node's modem preset: the limit is the airtime of 2 packets an hour on
+  `LONG_FAST` (as before), between 1 and 6 packets an hour (6 on
+  `MEDIUM_FAST` and faster, 1 on `LONG_MODERATE`/`LONG_SLOW`; an unknown
+  preset counts as `LONG_FAST`). New suggestion: a faster preset for a mesh
+  where a node on a `LONG_*` preset counts more than 60 nodes online. The
+  preset comes from loranet (map reports), else the template's
+  `lora.modem_preset` for a template-managed node; `mesh status --json` and
+  `mesh health --json` add `modem_preset` and `online_local_nodes`, and the
+  detailed report names the preset and its limit. `mesh status` and `mesh
+  health` now read the template even with `--expected-interval` (for the
+  preset).
 - `mesh status` no longer asks the lorastats region `PL` by default: it is
   not a region on lorastats.pl, which answers an unknown region with an empty
   list. At most 16 regions can be configured.

@@ -87,6 +87,8 @@ class HealthOptions:
             (``--expected-interval``), as for ``mesh status``.
         template_interval: The template's node-info interval, for the
             template-managed nodes.
+        template_preset: The template's modem preset, for the
+            template-managed nodes no source reports one for.
     """
 
     days: int = DEFAULT_DAYS
@@ -99,6 +101,7 @@ class HealthOptions:
     force_refresh: bool = False
     expected_interval: timedelta | None = None
     template_interval: timedelta | None = None
+    template_preset: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -197,6 +200,8 @@ def _context(node: MergedNode, role: str | None) -> NodeContext:
         offline_after=node.thresholds.offline_after.total_seconds(),
         expected_interval=node.cadence.interval.total_seconds(),
         cadence_source=node.cadence.source.value,
+        preset=node.modem_preset,
+        online_local_nodes=node.online_local_nodes,
     )
 
 
@@ -377,6 +382,7 @@ def run_health(
         region_list=options.region_list,
         expected_interval=options.expected_interval,
         template_interval=options.template_interval,
+        template_preset=options.template_preset,
     )
     if options.fetch:
         status = run_status(settings, status_options, client=client)

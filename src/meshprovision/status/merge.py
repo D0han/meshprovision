@@ -210,6 +210,8 @@ class MergedNode:
         hw_model: Best-known hardware model.
         role: Best-known device role.
         region: Best-known LoRa region.
+        modem_preset: Best-known modem preset name (loranet reports it with
+            a map report; else the template's, for a template-managed node).
         lorastats_region: The lorastats region the node was found in, or
             ``None`` when lorastats did not report it.
         firmware_version: Best-known firmware version string.
@@ -220,6 +222,8 @@ class MergedNode:
         voltage: Best-known battery voltage.
         channel_utilization: Best-known channel utilization percentage.
         air_util_tx: Best-known transmit air utilization percentage.
+        online_local_nodes: How many nodes the node itself counted online
+            (heard within 2 hours) with its newest map report, when known.
         neighbor_count: Best-known count of distinct MQTT gateway topics
             that have relayed this node (all time).
         seen_by_counts: How many of those gateway topics relayed this node
@@ -253,6 +257,7 @@ class MergedNode:
     hw_model: str | None = None
     role: str | None = None
     region: str | None = None
+    modem_preset: str | None = None
     lorastats_region: str | None = None
     firmware_version: str | None = None
     latitude: float | None = None
@@ -262,6 +267,7 @@ class MergedNode:
     voltage: float | None = None
     channel_utilization: float | None = None
     air_util_tx: float | None = None
+    online_local_nodes: int | None = None
     neighbor_count: int | None = None
     seen_by_counts: tuple[int, int, int] | None = None
     uptime_seconds: int | None = None
@@ -338,6 +344,7 @@ class MergedNode:
             "hw_model": self.hw_model,
             "role": self.role,
             "region": self.region,
+            "modem_preset": self.modem_preset,
             "lorastats_region": self.lorastats_region,
             "firmware_version": self.firmware_version,
             "latitude": self.latitude,
@@ -347,6 +354,7 @@ class MergedNode:
             "voltage": self.voltage,
             "channel_utilization": self.channel_utilization,
             "air_util_tx": self.air_util_tx,
+            "online_local_nodes": self.online_local_nodes,
             "neighbor_count": self.neighbor_count,
             "seen_by_counts": (
                 None
@@ -598,6 +606,7 @@ def merge_observations(
     now: datetime,
     thresholds: Thresholds = _DEFAULT_THRESHOLDS,
     cadence: CadenceHint = _NO_HINT,
+    template_preset: str | None = None,
 ) -> MergedNode:
     """Combine every source's observation of one node into a single view.
 
@@ -626,8 +635,9 @@ def merge_observations(
        fallback (loranet is the source that reports
        ``chUtil``/``airUtilTx``/``seenBy``, but omits them frequently).
     4. Identity/descriptive fields (``short_name``, ``long_name``,
-       ``hw_model``, ``role``, ``region``, ``firmware_version``,
-       ``latitude``, ``longitude``, ``altitude``): the first non-``None``
+       ``hw_model``, ``role``, ``region``, ``modem_preset``,
+       ``online_local_nodes``, ``firmware_version``, ``latitude``,
+       ``longitude``, ``altitude``): the first non-``None``
        value in *recency* order -- observations sorted by their own
        ``last_seen`` descending (``None`` last), ties broken by
        :data:`SOURCE_PRIORITY`. A node that was renamed shows its newest
@@ -639,6 +649,9 @@ def merge_observations(
         already knows. A blank cell (``""``, the field's default) counts
         as absent and falls through, same as ``None``. This fallback does
         *not* apply to the other identity fields in rule 4.
+    4b. ``modem_preset`` only: when no observation supplied one, fall back
+        to ``template_preset`` (the template's, given for a
+        template-managed node).
     5. ``sources`` = the ``source`` of every observation, in
        :data:`SOURCE_PRIORITY` order.
     6. ``age = now - last_seen`` when ``last_seen`` is set; ``age_text =
@@ -669,6 +682,8 @@ def merge_observations(
         thresholds: The shortest age boundaries to classify availability
             against.
         cadence: What is known about how often the node is heard.
+        template_preset: The modem preset to show when no source reports
+            one (rule 4b).
 
     Returns:
         The combined :class:`MergedNode`.
@@ -695,6 +710,7 @@ def merge_observations(
             long_name=db_long_name,
             age_text="never",
             availability=Availability.UNKNOWN,
+            modem_preset=template_preset,
             cadence=node_cadence,
             thresholds=node_thresholds(thresholds, node_cadence),
         )
@@ -723,6 +739,8 @@ def merge_observations(
     hw_model = _first_non_none(by_recency, lambda obs: obs.hw_model)
     role = _first_non_none(by_recency, lambda obs: obs.role)
     region = _first_non_none(by_recency, lambda obs: obs.region)
+    modem_preset = _first_non_none(by_recency, lambda obs: obs.modem_preset) or template_preset
+    online_local_nodes = _first_non_none(by_recency, lambda obs: obs.online_local_nodes)
     lorastats_region = _first_non_none(by_priority, lambda obs: obs.region_queried)
     firmware_version = _first_non_none(by_recency, lambda obs: obs.firmware_version)
     latitude = _first_non_none(by_recency, lambda obs: obs.latitude)
@@ -746,6 +764,7 @@ def merge_observations(
         hw_model=hw_model,
         role=role,
         region=region,
+        modem_preset=modem_preset,
         lorastats_region=lorastats_region,
         firmware_version=firmware_version,
         latitude=latitude,
@@ -755,6 +774,7 @@ def merge_observations(
         voltage=voltage,
         channel_utilization=channel_utilization,
         air_util_tx=air_util_tx,
+        online_local_nodes=online_local_nodes,
         neighbor_count=neighbor_count,
         seen_by_counts=seen_by_counts,
         uptime_seconds=uptime_seconds,
@@ -811,6 +831,7 @@ def merge_all(
     now: datetime,
     thresholds: Thresholds = _DEFAULT_THRESHOLDS,
     cadences: Mapping[NodeId, CadenceHint] | None = None,
+    template_presets: Mapping[NodeId, str] | None = None,
 ) -> tuple[MergedNode, ...]:
     """Merge every node's observations across every source.
 
@@ -831,6 +852,8 @@ def merge_all(
             against.
         cadences: What is known about how often each node is heard
             (a node absent here: only its role).
+        template_presets: The template's modem preset of each
+            template-managed node (rule 4b of :func:`merge_observations`).
 
     Returns:
         One :class:`MergedNode` per entry in ``node_ids``, in that same
@@ -841,6 +864,7 @@ def merge_all(
     """
     records_map = records if records is not None else {}
     cadence_map = cadences if cadences is not None else {}
+    preset_map = template_presets if template_presets is not None else {}
     merged: list[MergedNode] = []
     for node_id in node_ids:
         observations = _gather_observations(observations_by_source, node_id)
@@ -852,6 +876,7 @@ def merge_all(
                 now=now,
                 thresholds=thresholds,
                 cadence=cadence_map.get(node_id, _NO_HINT),
+                template_preset=preset_map.get(node_id),
             )
         )
     return tuple(merged)

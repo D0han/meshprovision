@@ -24,13 +24,13 @@ from meshprovision.cli.common import (
     handle_cli_errors,
     node_ids_callback,
     pass_cli,
+    template_hints,
 )
 from meshprovision.cli.help_format import MeshCommand
 from meshprovision.datasources.lorastats_regions import RegionList
 from meshprovision.errors import SettingsError
 from meshprovision.health import render
 from meshprovision.health.report import DEFAULT_DAYS, MAX_DAYS, HealthOptions, run_health
-from meshprovision.status.cadence import template_interval
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
@@ -110,7 +110,7 @@ def health(
     if refresh and no_fetch:
         raise SettingsError("--refresh has no effect with --no-fetch.", hint="Drop one of the two.")
     regions = ctx.settings.lorastats_regions or ()
-    template = None if expected_interval is not None else ctx.read_template_quietly()
+    interval_of_template, preset_of_template = template_hints(ctx.read_template_quietly())
     options = HealthOptions(
         days=days,
         fetch=not no_fetch,
@@ -121,11 +121,8 @@ def health(
         region_list=None if regions else RegionList(),
         force_refresh=ctx.force_refresh,
         expected_interval=None if expected_interval is None else timedelta(hours=expected_interval),
-        template_interval=(
-            None
-            if template is None
-            else template_interval(template.device.node_info_broadcast_secs, template.device.role)
-        ),
+        template_interval=interval_of_template,
+        template_preset=preset_of_template,
     )
     with ctx.http_client(require_contact=not no_fetch) as client:
         report = run_health(ctx.settings, options, client=client)
