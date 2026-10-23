@@ -12,6 +12,10 @@ a fixed clock, and what makes :mod:`meshprovision.status.report`'s
 node into a single :class:`MergedNode`, applying the field-precedence
 rules documented on that function. :func:`merge_all` does the same for
 every node in a caller-supplied, never-re-sorted id order.
+
+A node's availability is judged against its own thresholds: the fixed
+:class:`Thresholds` are floors, stretched by how often the node is expected
+to be heard (:mod:`meshprovision.status.cadence`).
 """
 
 from __future__ import annotations
@@ -26,6 +30,12 @@ from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.models import NodeObservation
 from meshprovision.db.node_record import NodeRecord
 from meshprovision.nodeid import NodeId
+from meshprovision.status.cadence import (
+    Cadence,
+    CadenceHint,
+    availability_thresholds,
+    resolve_cadence,
+)
 from meshprovision.status.timefmt import isoformat_z as _isoformat_z
 
 __all__ = [
@@ -40,15 +50,17 @@ __all__ = [
     "humanize_age",
     "merge_all",
     "merge_observations",
+    "node_thresholds",
 ]
 
 _T = TypeVar("_T")
 
 DEFAULT_STALE_AFTER: Final[timedelta] = timedelta(hours=2)
-"""A node last seen more recently than this is :attr:`Availability.ONLINE`."""
+"""The shortest stale threshold: a node seen this recently is always :attr:`Availability.ONLINE`."""
 
 DEFAULT_OFFLINE_AFTER: Final[timedelta] = timedelta(hours=24)
-"""A node last seen longer ago than this is :attr:`Availability.OFFLINE`."""
+"""The shortest offline threshold: a node seen this recently is never
+:attr:`Availability.OFFLINE`."""
 
 SOURCE_PRIORITY: Final[tuple[str, ...]] = (SOURCE_LORANET, SOURCE_LORASTATS)
 """Source precedence order for telemetry/identity field resolution: loranet
@@ -71,7 +83,7 @@ class Availability(StrEnum):
     """A node's coarse online/stale/offline classification.
 
     Attributes:
-        ONLINE: Seen more recently than the configured ``stale_after``.
+        ONLINE: Seen more recently than its ``stale_after``.
         STALE: Seen longer ago than ``stale_after`` but within
             ``offline_after``.
         OFFLINE: Not seen within ``offline_after``.
@@ -87,6 +99,9 @@ class Availability(StrEnum):
 @dataclass(frozen=True, slots=True)
 class Thresholds:
     """The age boundaries used to classify a node's availability.
+
+    As given to :func:`merge_all` (``--stale-after``/``--offline-after``)
+    they are floors; each node's own are :func:`node_thresholds`.
 
     Attributes:
         stale_after: A node last seen within this age is
@@ -146,6 +161,33 @@ _DEFAULT_THRESHOLDS: Final[Thresholds] = Thresholds()
 avoids constructing a fresh :class:`Thresholds` on every call/def evaluation
 (``Thresholds`` is immutable, so sharing one instance is always safe)."""
 
+_NO_HINT: Final[CadenceHint] = CadenceHint()
+"""Nothing known about a node's interval but its role."""
+
+
+def node_thresholds(floor: Thresholds, cadence: Cadence) -> Thresholds:
+    """Return a node's own thresholds: its expected interval's, at least ``floor``.
+
+    Args:
+        floor: The shortest thresholds (``--stale-after``/``--offline-after``).
+        cadence: The node's expected interval.
+
+    Returns:
+        The thresholds from
+        :func:`~meshprovision.status.cadence.availability_thresholds`.
+    """
+    stale_after, offline_after = availability_thresholds(
+        cadence.interval, stale_floor=floor.stale_after, offline_floor=floor.offline_after
+    )
+    return Thresholds(stale_after=stale_after, offline_after=offline_after)
+
+
+_DEFAULT_CADENCE: Final[Cadence] = resolve_cadence(_NO_HINT, None)
+"""The expected interval of a node nothing is known about (the role default)."""
+
+_DEFAULT_NODE_THRESHOLDS: Final[Thresholds] = node_thresholds(_DEFAULT_THRESHOLDS, _DEFAULT_CADENCE)
+"""The thresholds that go with :data:`_DEFAULT_CADENCE` and the default floors."""
+
 
 @dataclass(frozen=True, slots=True)
 class MergedNode:
@@ -195,7 +237,10 @@ class MergedNode:
             ``None``.
         age_text: Human-readable rendering of :attr:`age`, from
             :func:`humanize_age`.
-        availability: The classification from :func:`classify_age`.
+        availability: The classification from :func:`classify_age`
+            against :attr:`thresholds`.
+        cadence: How often the node is expected to be heard, and why.
+        thresholds: Its own thresholds (:func:`node_thresholds`).
     """
 
     node_id: NodeId
@@ -225,6 +270,8 @@ class MergedNode:
     age: timedelta | None = None
     age_text: str = "never"
     availability: Availability = Availability.UNKNOWN
+    cadence: Cadence = _DEFAULT_CADENCE
+    thresholds: Thresholds = _DEFAULT_NODE_THRESHOLDS
 
     @property
     def in_database(self) -> bool:
@@ -312,6 +359,10 @@ class MergedNode:
             "age_seconds": int(self.age.total_seconds()) if self.age is not None else None,
             "age_text": self.age_text,
             "availability": self.availability.value,
+            "expected_interval_seconds": int(self.cadence.interval.total_seconds()),
+            "expected_interval_source": self.cadence.source.value,
+            "stale_after_seconds": int(self.thresholds.stale_after.total_seconds()),
+            "offline_after_seconds": int(self.thresholds.offline_after.total_seconds()),
             "in_database": self.in_database,
             "database": database,
         }
@@ -514,6 +565,7 @@ def merge_observations(
     record: NodeRecord | None = None,
     now: datetime,
     thresholds: Thresholds = _DEFAULT_THRESHOLDS,
+    cadence: CadenceHint = _NO_HINT,
 ) -> MergedNode:
     """Combine every source's observation of one node into a single view.
 
@@ -559,7 +611,10 @@ def merge_observations(
        :data:`SOURCE_PRIORITY` order.
     6. ``age = now - last_seen`` when ``last_seen`` is set; ``age_text =
        humanize_age(age)``; ``availability = classify_age(age,
-       thresholds)``.
+       node_thresholds(thresholds, cadence))``, where the node's
+       cadence is :func:`~meshprovision.status.cadence.resolve_cadence`
+       of ``cadence`` and its role (the observed one, else
+       ``record.role``).
     7. ``now`` must be timezone-aware.
 
     An empty ``observations`` sequence is valid: it returns a
@@ -579,7 +634,9 @@ def merge_observations(
         record: This node's ``Nodes`` sheet row, when it exists in the
             database.
         now: The current time. Must be timezone-aware.
-        thresholds: The age boundaries to classify availability against.
+        thresholds: The shortest age boundaries to classify availability
+            against.
+        cadence: What is known about how often the node is heard.
 
     Returns:
         The combined :class:`MergedNode`.
@@ -594,8 +651,10 @@ def merge_observations(
     # name -- treat it the same as absent so it falls through to `None`.
     db_short_name = record.short_name or None if record is not None else None
     db_long_name = record.long_name or None if record is not None else None
+    db_role = record.role if record is not None else None
 
     if not observations:
+        node_cadence = resolve_cadence(cadence, db_role)
         return MergedNode(
             node_id=node_id,
             sources=(),
@@ -604,6 +663,8 @@ def merge_observations(
             long_name=db_long_name,
             age_text="never",
             availability=Availability.UNKNOWN,
+            cadence=node_cadence,
+            thresholds=node_thresholds(thresholds, node_cadence),
         )
 
     by_priority = _order_by_priority(observations)
@@ -640,7 +701,9 @@ def merge_observations(
 
     age = now - last_seen if last_seen is not None else None
     age_text = humanize_age(age)
-    availability = classify_age(age, thresholds)
+    node_cadence = resolve_cadence(cadence, role or db_role)
+    own_thresholds = node_thresholds(thresholds, node_cadence)
+    availability = classify_age(age, own_thresholds)
 
     return MergedNode(
         node_id=node_id,
@@ -670,6 +733,8 @@ def merge_observations(
         age=age,
         age_text=age_text,
         availability=availability,
+        cadence=node_cadence,
+        thresholds=own_thresholds,
     )
 
 
@@ -713,6 +778,7 @@ def merge_all(
     records: Mapping[NodeId, NodeRecord] | None = None,
     now: datetime,
     thresholds: Thresholds = _DEFAULT_THRESHOLDS,
+    cadences: Mapping[NodeId, CadenceHint] | None = None,
 ) -> tuple[MergedNode, ...]:
     """Merge every node's observations across every source.
 
@@ -729,7 +795,10 @@ def merge_all(
             the desired output order.
         records: Each node's ``Nodes`` sheet row, when known.
         now: The current time. Must be timezone-aware.
-        thresholds: The age boundaries to classify availability against.
+        thresholds: The shortest age boundaries to classify availability
+            against.
+        cadences: What is known about how often each node is heard
+            (a node absent here: only its role).
 
     Returns:
         One :class:`MergedNode` per entry in ``node_ids``, in that same
@@ -739,6 +808,7 @@ def merge_all(
         ValueError: If ``now`` is not timezone-aware.
     """
     records_map = records if records is not None else {}
+    cadence_map = cadences if cadences is not None else {}
     merged: list[MergedNode] = []
     for node_id in node_ids:
         observations = _gather_observations(observations_by_source, node_id)
@@ -749,6 +819,7 @@ def merge_all(
                 record=records_map.get(node_id),
                 now=now,
                 thresholds=thresholds,
+                cadence=cadence_map.get(node_id, _NO_HINT),
             )
         )
     return tuple(merged)

@@ -313,8 +313,47 @@ file's mtime is unchanged across a full status run.
 
 Data sources: loranet.pl's bulk `https://loranet.pl/nodes.json` dump
 (preferred for telemetry) and lorastats.pl per-node queries (last-seen
-corroboration); most recent wins. Default thresholds: online < 2 h, stale
-< 24 h, offline beyond.
+corroboration); most recent wins. Whether a node is online, stale or offline
+depends on how often it is expected to be heard (see **Online, stale,
+offline** below): a client with default settings is stale after 6 h 45 m and
+offline after 24 h; nothing is ever stale before 2 h or offline before 24 h.
+
+**Online, stale, offline.** A node is judged against its *expected interval*
+`E`, the longest gap a healthy node of its configuration leaves between two
+packets, taken from the first of:
+
+| Source (`--json` `expected_interval_source`) | `E` |
+|---|---|
+| `history` | the mean gap between the hours its [`mesh health`](#mesh-health) history heard it in (last 7 days; needs 3 heard hours; hours after the last heard one do not count, so an outage does not stretch its own interval) |
+| `role` | its role's node-info default: 3 h; 24 h for `TAK`/`TAK_TRACKER`; 48 h for `CLIENT_HIDDEN`/`REPEATER`, which send none |
+
+`E` is at most 48 h. Then
+
+- stale after `max(2 h, 2 E + E/4)`: two expected packets missed (the firmware
+  itself forgets a neighbour after twice its interval), plus a quarter
+  interval for send jitter and upload delays;
+- offline after `max(24 h, 5 E + E/4)`: five in a row missed, which happens
+  well under once a month for a 6-hourly node even at 30% packet loss
+  (broadcasts are never retried).
+
+| `E` | stale after | offline after |
+|---|---|---|
+| 1 h | 2 h 15 m | 24 h |
+| 3 h (role default) | 6 h 45 m | 24 h |
+| 6 h | 13 h 30 m | 31 h 30 m |
+| 12 h | 27 h | 63 h |
+| 24 h (TAK) | 54 h | 126 h |
+
+Node info anchors the defaults because every role but `CLIENT_HIDDEN` sends
+it, and unlike telemetry and position the firmware never stretches its
+interval on a crowded mesh (above 40 nodes online it multiplies those by up to
+14 on `LONG_FAST`), nor holds it back below 40% channel utilization; device
+telemetry is also off by default in recent firmware. `--stale-after` and
+`--offline-after` (default 2 and 24 hours) are the floors. `--json` gives each
+node's `expected_interval_seconds`, `expected_interval_source`,
+`stale_after_seconds` and `offline_after_seconds`; the top-level `thresholds`
+are the floors. Learning reads the history files only (no request); a node
+gets a history from `mesh health` or `mesh status --detail full`.
 
 `--region` (repeatable) names the lorastats region(s) to query, in order. It
 overrides `MESHPROVISION_LORASTATS_REGIONS` (comma-separated). Regions are
@@ -385,7 +424,7 @@ mesh status --detail full
 ```
 
 The rendered table columns are: Node, Short, Long, Mgmt, Status, Last seen,
-Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime.
+Every, Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime.
 
 **`--detail`** chooses the table's columns; `--json` is the same for `brief`
 and `default`.
@@ -410,6 +449,8 @@ and `default`.
 
 `mesh status` without `--detail full` never asks for packet reports.
 
+- **Every** is the node's expected interval `E` (see above), gray when it is
+  only its role's default.
 - **Metrics** is how long ago the device last reported its metrics (loranet's
   `lastDeviceMetrics`); `Batt`, `Volt`, `ChUtil` and `AirTx` are as of that
   moment, which can be much older than `Last seen` (a node that is still
@@ -588,7 +629,7 @@ are heuristics, not firmware limits:
 
 | Rule | Warn | Crit | Why |
 |---|---|---|---|
-| not heard (history or `mesh status`) | over 2 h | over 24 h, or never heard in covered hours | `mesh status`'s stale and offline thresholds |
+| not heard (history or `mesh status`) | over 2 h | over 24 h, or never heard in covered hours | the floors of `mesh status`'s stale and offline thresholds |
 | battery (newest reading within 24 h; 0% and external power ignored) | at or below 20% | at or below 10% | as `mesh status` colours it |
 | battery trend (6+ readings over 12+ h) | falling 10 points a day or faster | | a node that will be flat within days |
 | one gateway only (20+ receptions) | yes | | one gateway failing loses the node |

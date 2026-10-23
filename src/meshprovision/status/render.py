@@ -27,6 +27,7 @@ from rich.table import Table
 from rich.text import Text
 
 from meshprovision.status import timefmt
+from meshprovision.status.cadence import Cadence, CadenceSource
 from meshprovision.status.merge import Availability, MergedNode, humanize_age
 from meshprovision.status.report import StatusReport
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
@@ -375,6 +376,35 @@ def _duration_text(duration: timedelta) -> str:
     return f"{minutes}m" if minutes else "<1m"
 
 
+def _interval_text(interval: timedelta) -> str:
+    """Render an expected interval: ``"3h"``, ``"3h 30m"`` or ``"45m"``.
+
+    Args:
+        interval: The interval (at most two days, so hours suffice).
+
+    Returns:
+        Whole hours and the remaining whole minutes, each left out when 0
+        (``"0m"`` for an interval under a minute).
+    """
+    hours, minutes = divmod(int(interval.total_seconds()) // 60, 60)
+    if not hours:
+        return f"{minutes}m"
+    return f"{hours}h {minutes}m" if minutes else f"{hours}h"
+
+
+def _every_cell(cadence: Cadence) -> Text:
+    """Render the ``Every`` cell: the node's expected interval.
+
+    Args:
+        cadence: :attr:`~meshprovision.status.merge.MergedNode.cadence`.
+
+    Returns:
+        The interval, gray when it is only the role's default.
+    """
+    style = _UNKNOWN_STYLE if cadence.source is CadenceSource.ROLE else None
+    return _cell(_interval_text(cadence.interval), style)
+
+
 def _last_boot_contradicted(node: MergedNode) -> bool:
     """Tell whether the device's own metrics show a reboot newer than ``LastBoot``.
 
@@ -434,7 +464,9 @@ def build_table(
     literal ``"None"``. Numeric columns are right-justified. Rows are not
     colored as a whole; individual cells are. ``Last seen`` and
     ``Timestamp`` use :func:`age_style` on the node's last activity,
-    ``Status`` follows the availability, and ``Metrics`` plus the
+    ``Status`` follows the availability (judged against the node's own
+    thresholds), ``Every`` is the node's expected interval (gray when
+    only its role's default is known), and ``Metrics`` plus the
     ``Batt``/``Volt``/``ChUtil``/``AirTx`` readings use :func:`age_style`
     on when the device last reported its metrics (gray when unknown) --
     except that a reading that is itself alarming or suspicious (see the
@@ -485,6 +517,7 @@ def build_table(
         ("Mgmt", "left"),
         ("Status", "left"),
         ("Last seen", "left"),
+        ("Every", "right"),
         (f"Timestamp ({timefmt.local_tz_abbreviation(report.generated_at)})", "left"),
         ("Metrics", "left"),
         ("Batt", "right"),
@@ -528,6 +561,7 @@ def _row(node: MergedNode, now: datetime) -> list[RenderableType]:
         _text_cell(node.management),
         _cell(AVAILABILITY_LABELS[node.availability], _AVAILABILITY_STYLES[node.availability]),
         _cell(node.age_text, seen_style),
+        _every_cell(node.cadence),
         _cell(_timestamp_cell(node.last_seen, reference=now), seen_style),
         _cell(_DASH if metrics_age is None else humanize_age(metrics_age), fresh),
         _value_cell(

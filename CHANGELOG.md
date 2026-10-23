@@ -294,6 +294,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh status` judges each node against how often it is expected to be
+  heard instead of a fixed 2 h / 24 h: a node is stale after two missed
+  intervals plus a quarter interval, and offline (exit code 7) after five,
+  but never before 2 h / 24 h (`--stale-after`/`--offline-after` are now
+  these floors). The interval is learned from the node's `mesh health`
+  history (the mean gap between the hours it was heard in, last 7 days, at
+  least 3 heard hours), else it is its role's node-info default: 3 h (24 h
+  for `TAK`/`TAK_TRACKER`, 48 h for `CLIENT_HIDDEN`/`REPEATER`, which send
+  none). A default client is now stale after 6 h 45 m instead of 2 h; a node
+  heard every 6 h is stale after 13 h 30 m and offline after 31 h 30 m. The
+  table gains an `Every` column (the interval; gray when it is only the role
+  default) and `--json` adds `expected_interval_seconds`,
+  `expected_interval_source` (`history`, `role`, ...), `stale_after_seconds`
+  and `offline_after_seconds` per node; the top-level `thresholds` are the
+  floors. `mesh status` reads the history files to learn the intervals (no
+  request).
 - `mesh status` no longer asks the lorastats region `PL` by default: it is
   not a region on lorastats.pl, which answers an unknown region with an empty
   list. At most 16 regions can be configured.

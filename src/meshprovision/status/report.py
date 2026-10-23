@@ -28,14 +28,19 @@ None of this is contradicted by :func:`~meshprovision.db.ods
 including this module's own -- that is a side-channel copy elsewhere on
 disk, never a write to ``OdsDatabase``'s in-memory state or the live
 database file this module's own guarantee is about.
+
+Besides the database, :func:`run_status` reads the per-node health
+history files (:mod:`meshprovision.health.store`, never writing them) to
+learn how often each node is heard.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -50,8 +55,11 @@ from meshprovision.datasources.models import NodeObservation
 from meshprovision.datasources.region_memo import REGION_MEMO_FILENAME, RegionMemo
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
+from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import DataSourceError, DbIntegrityError, ExitCode
+from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
+from meshprovision.status.cadence import CadenceHint, learned_interval
 from meshprovision.status.merge import (
     SOURCE_PRIORITY,
     Availability,
@@ -68,6 +76,7 @@ __all__ = [
     "StatusReport",
     "build_report",
     "collect_observations",
+    "learned_intervals",
     "load_records",
     "run_status",
 ]
@@ -144,6 +153,12 @@ class StatusOptions:
             CLI shares one across ``--watch`` polls; ``None`` means a new
             :class:`~meshprovision.datasources.lorastats_regions.RegionList`
             per run (cached list, else lorastats.pl's page).
+        expected_interval: Every reported node's expected interval
+            (``--expected-interval``); ``None`` resolves it per node (see
+            :mod:`meshprovision.status.cadence`).
+        template_interval: The provisioning template's node-info
+            interval, used for template-managed nodes; ``None`` when no
+            template was read.
     """
 
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -152,6 +167,8 @@ class StatusOptions:
     regions: tuple[str, ...] = ()
     node_ids: tuple[NodeId, ...] = ()
     region_list: RegionList | None = None
+    expected_interval: timedelta | None = None
+    template_interval: timedelta | None = None
 
 
 _DEFAULT_STATUS_OPTIONS: Final[StatusOptions] = StatusOptions()
@@ -468,6 +485,62 @@ def collect_observations(
     )
 
 
+def _cadence_hints(
+    records: Mapping[NodeId, NodeRecord],
+    node_ids: Sequence[NodeId],
+    options: StatusOptions,
+    learned: Mapping[NodeId, timedelta],
+) -> dict[NodeId, CadenceHint]:
+    """Collect what is known about each node's interval besides its role.
+
+    Args:
+        records: Every known node's database record.
+        node_ids: The reported nodes.
+        options: The override and the template's interval.
+        learned: The intervals learned from the health histories.
+
+    Returns:
+        One hint per reported node; the template's interval only for a
+        template-managed node.
+    """
+    hints: dict[NodeId, CadenceHint] = {}
+    for node_id in node_ids:
+        record = records.get(node_id)
+        managed = record is not None and record.management is ManagementMode.TEMPLATE
+        hints[node_id] = CadenceHint(
+            override=options.expected_interval,
+            learned=learned.get(node_id),
+            configured=options.template_interval if managed else None,
+        )
+    return hints
+
+
+def learned_intervals(
+    cache_dir: Path, node_ids: Iterable[NodeId], *, now: float
+) -> dict[NodeId, timedelta]:
+    """Learn each node's interval from its health history file. Reads only.
+
+    Args:
+        cache_dir: The cache directory (the histories are in its
+            ``health/``).
+        node_ids: The nodes.
+        now: The current time, epoch seconds.
+
+    Returns:
+        The interval of every node whose history has enough heard hours
+        (see :func:`~meshprovision.status.cadence.learned_interval`); a
+        missing or unreadable file is no history.
+    """
+    store = HistoryStore(cache_dir / HISTORY_DIRNAME)
+    result: dict[NodeId, timedelta] = {}
+    for node_id in node_ids:
+        hours = ((bucket.hour, bucket.receptions) for bucket in store.load(node_id).hours)
+        interval = learned_interval(hours, now=now)
+        if interval is not None:
+            result[node_id] = interval
+    return result
+
+
 def build_report(
     *,
     records: Mapping[NodeId, NodeRecord],
@@ -476,6 +549,7 @@ def build_report(
     failures: Sequence[SourceFailure] = (),
     now: datetime,
     options: StatusOptions = _DEFAULT_STATUS_OPTIONS,
+    learned: Mapping[NodeId, timedelta] | None = None,
 ) -> StatusReport:
     """Assemble a :class:`StatusReport` from already-collected data. Pure.
 
@@ -492,9 +566,13 @@ def build_report(
             output order (this function never re-sorts it).
         failures: Data sources that failed during collection.
         now: The current time. Must be timezone-aware.
-        options: The thresholds to classify availability against
-            (``options.thresholds``); other fields of ``options`` are not
-            read here -- they shape what the caller already collected.
+        options: The floors to classify availability against
+            (``options.thresholds``) and what decides each node's expected
+            interval (``options.expected_interval``,
+            ``options.template_interval``); other fields of ``options`` are
+            not read here -- they shape what the caller already collected.
+        learned: Each node's interval learned from its health history,
+            when there is one.
 
     Returns:
         The assembled, byte-identical-on-identical-input report.
@@ -508,6 +586,7 @@ def build_report(
         records=records,
         now=now,
         thresholds=options.thresholds,
+        cadences=_cadence_hints(records, node_ids, options, learned or {}),
     )
     return StatusReport(
         generated_at=now,
@@ -533,7 +612,9 @@ def run_status(
     function again on an interval performs zero network calls as long as
     the calls land inside the cache TTL -- there is no watch loop here.
     Besides the HTTP cache, the only files this writes are the lorastats
-    region list and region memo next to it.
+    region list and region memo next to it; it also reads (never writes)
+    the reported nodes' health history files, unless
+    ``options.expected_interval`` is set, to learn how often each is heard.
 
     Args:
         settings: Application settings (database path, cache directory,
@@ -580,6 +661,12 @@ def run_status(
             node_id for node_id, record in records.items() if not record.is_archived
         )
         archived_count = sum(1 for record in records.values() if record.is_archived)
+        # The histories only matter without an override; reading them asks nothing.
+        learned = (
+            learned_intervals(settings.cache_dir, ids, now=time.time())
+            if options.expected_interval is None
+            else {}
+        )
 
         sources: list[DataSource] = []
         if SOURCE_LORANET in options.sources:
@@ -610,6 +697,7 @@ def run_status(
             failures=collected.failures,
             now=resolved_now,
             options=options,
+            learned=learned,
         )
         return StatusReport(
             generated_at=report.generated_at,

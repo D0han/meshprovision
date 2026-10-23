@@ -414,20 +414,21 @@ def test_merge_all_tolerates_an_entirely_absent_source_key() -> None:
 def test_merge_all_passes_custom_thresholds_through() -> None:
     """The ``thresholds`` argument must reach ``merge_observations``.
 
-    The node below is ``ONLINE`` under the default thresholds and
-    ``STALE`` under the custom ones, so a dropped passthrough that falls
-    back to the default is visible in the classification.
+    The node below is ``STALE`` under the default floors (its role's
+    interval gives 6 h 45 m) and ``ONLINE`` under higher custom floors, so a
+    dropped passthrough that falls back to the default is visible in the
+    classification.
     """
-    obs = _obs(SOURCE_LORANET, last_seen=NOW - timedelta(minutes=30))
-    thresholds = Thresholds(stale_after=timedelta(minutes=1), offline_after=timedelta(hours=1))
+    obs = _obs(SOURCE_LORANET, last_seen=NOW - timedelta(hours=8))
+    thresholds = Thresholds(stale_after=timedelta(hours=9), offline_after=timedelta(hours=30))
 
     default_merged = merge_all({SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW)
     custom_merged = merge_all(
         {SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW, thresholds=thresholds
     )
 
-    assert default_merged[0].availability is Availability.ONLINE
-    assert custom_merged[0].availability is Availability.STALE
+    assert default_merged[0].availability is Availability.STALE
+    assert custom_merged[0].availability is Availability.ONLINE
 
 
 def test_merge_observations_requires_timezone_aware_now() -> None:
@@ -1143,7 +1144,7 @@ def test_build_table_timestamp_column_bare_when_row_matches_header_zone(local_tz
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
     )
     table = render.build_table(report)
-    timestamp_column = table.columns[6]
+    timestamp_column = table.columns[7]
     assert [str(cell) for cell in timestamp_column.cells] == [OFFSET_TIMESTAMP_WARSAW_NO_ZONE]
 
 
@@ -1153,7 +1154,7 @@ def test_build_table_timestamp_header_names_the_local_zone(local_tz: None) -> No
         records={}, observations_by_source={SOURCE_LORANET: {NID: obs}}, node_ids=[NID], now=NOW
     )
     table = render.build_table(report)
-    assert str(table.columns[6].header) == "Timestamp (CEST)"
+    assert str(table.columns[7].header) == "Timestamp (CEST)"
 
 
 def test_timestamp_cell_disambiguates_the_repeated_dst_fallback_hour(local_tz: None) -> None:
@@ -1234,6 +1235,7 @@ def test_build_table_returns_expected_columns(local_tz: None) -> None:
         "Mgmt",
         "Status",
         "Last seen",
+        "Every",
         "Timestamp (CEST)",
         "Metrics",
         "Batt",
