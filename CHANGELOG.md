@@ -300,6 +300,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh status` (default `--detail`) no longer shows the Node and Mgmt columns
+  (`--detail brief` keeps Node, `--detail full` and `--json` keep both), and
+  a Batt, Volt, ChUtil or AirTx reading that has a local health history is
+  followed by a green `↑`, red `↓` or yellow `~` for how it moved against the
+  previous 48 hours (read from the history files, no request).
 - `mesh status` judges each node against how often it is expected to be
   heard instead of a fixed 2 h / 24 h: a node is stale after two missed
   intervals plus a quarter interval, and offline (exit code 7) after five,

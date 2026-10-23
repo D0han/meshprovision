@@ -431,18 +431,28 @@ mesh status --detail brief
 mesh status --detail full
 ```
 
-The rendered table columns are: Node, Short, Long, Mgmt, Status, Last seen,
-Every, Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime.
+The table columns are: Node, Short, Long, Mgmt, Status, Last seen, Every,
+Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime; the default
+view leaves out Node and Mgmt (they are in `--json` and `--detail full`).
+
+When the node has a local health history (see `mesh health`), a `Batt`,
+`Volt`, `ChUtil` or `AirTx` reading is followed by how it moved: a green `↑`
+(went up), a red `↓` (went down) or a yellow `~` (little change: under 2 %
+battery, 0.05 V, 1 point of channel utilization or 0.5 point of air
+utilization). The newest telemetry value is compared with the median of the
+readings in the 48 hours before it, so the arrow shows direction, not whether
+the move is good (a rising `ChUtil` is a green `↑`). `mesh status` only reads
+the history files here and asks for nothing; no history, no arrow.
 
 **`--detail`** chooses the table's columns; `--json` is the same for `brief`
 and `default`.
 
-- `default`: the columns above, exactly as without `--detail`.
+- `default`: the columns above without Node and Mgmt, exactly as without `--detail`.
 - `brief`: Node, Short, Status, Last seen, Batt, Seen By, Uptime -- the least
   that tells, at a glance, which node it is, whether and when it was last
   heard, whether its battery holds, whether gateways still relay it and
   whether it rebooted recently.
-- `full`: the default columns plus the health of [`mesh health`](#mesh-health)
+- `full`: all the columns above plus the health of [`mesh health`](#mesh-health)
   over 7 days for every reported node: Health (the verdict), Pkt/h, GWs,
   Direct, Hops max/limit, SNR median, Top relay, and a caption line on the
   refresh. It refreshes each node's history exactly as `mesh health` does

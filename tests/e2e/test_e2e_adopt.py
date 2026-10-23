@@ -1027,7 +1027,7 @@ def test_status_surfaces_management_across_a_mixed_fleet(
     assert by_id["cccc0003"]["database"]["management"] == "template"
 
     with mock_sources(nodes={}):
-        table = invoke(runner, ["status"], env)
+        table = invoke(runner, ["status", "--detail", "full"], env)
     assert table.exit_code == 0
     assert "observed" in table.stdout
 

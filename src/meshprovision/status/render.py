@@ -30,6 +30,7 @@ from meshprovision.status import timefmt
 from meshprovision.status.cadence import Cadence, CadenceSource, interval_text
 from meshprovision.status.merge import Availability, MergedNode, Thresholds, humanize_age
 from meshprovision.status.report import StatusReport
+from meshprovision.status.trend import NodeTrends, Trend
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -39,6 +40,7 @@ __all__ = [
     "AGE_STYLES",
     "AVAILABILITY_LABELS",
     "BRIEF_COLUMNS",
+    "DEFAULT_HIDDEN_COLUMNS",
     "ExtraColumns",
     "age_style",
     "build_table",
@@ -98,6 +100,20 @@ BRIEF_COLUMNS: Final[frozenset[str]] = frozenset(
 )
 """The columns ``mesh status --detail brief`` keeps: which node, whether and when it
 was last heard, its battery, whether gateways still relay it, and whether it rebooted."""
+
+
+DEFAULT_HIDDEN_COLUMNS: Final[frozenset[str]] = frozenset({"Node", "Mgmt"})
+"""The columns ``mesh status --detail default`` leaves out: the names identify a node,
+and the management mode is in ``--json`` and ``--detail full``."""
+
+_TREND_ARROWS: Final[Mapping[Trend, tuple[str, str]]] = MappingProxyType(
+    {
+        Trend.UP: ("\u2191", "green"),
+        Trend.DOWN: ("\u2193", "red"),
+        Trend.FLAT: ("~", "yellow"),
+    }
+)
+"""The arrow and its style that follow a reading that went up, down or stayed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,7 +480,12 @@ def _uptime_cell(node: MergedNode, now: datetime) -> Text:
 
 
 def build_table(
-    report: StatusReport, *, brief: bool = False, extra: ExtraColumns | None = None
+    report: StatusReport,
+    *,
+    brief: bool = False,
+    extra: ExtraColumns | None = None,
+    trends: Mapping[NodeId, NodeTrends] | None = None,
+    hidden: frozenset[str] = frozenset(),
 ) -> Table:
     """Build the ``rich`` table rendering of a status report.
 
@@ -507,13 +528,19 @@ def build_table(
     while a long-offline node's row is never silently mislabeled by a
     header that no longer applies to it.
 
-    ``brief`` keeps only :data:`BRIEF_COLUMNS`; ``extra`` appends its
-    columns (a dim hyphen for a node it has no cells for) and its caption.
+    ``brief`` keeps only :data:`BRIEF_COLUMNS`; ``hidden`` drops the named
+    columns (:data:`DEFAULT_HIDDEN_COLUMNS` for ``--detail default``);
+    ``extra`` appends its columns (a dim hyphen for a node it has no cells
+    for) and its caption. A reading that has a known ``trends`` entry is
+    followed by a green up arrow, a red down arrow or a yellow ``~``
+    (little change) -- the direction it moved, not whether that is good.
 
     Args:
         report: The report to render.
         brief: Keep only the essential columns (``--detail brief``).
         extra: More columns to append (``--detail full``).
+        trends: Each node's metric trends, when known.
+        hidden: Headers of the columns to leave out.
 
     Returns:
         The built, not-yet-printed ``rich`` table.
@@ -535,9 +562,16 @@ def build_table(
         (_SEEN_BY_HEADER, "right"),
         ("Uptime", "right"),
     ]
-    rows = [_row(node, report.generated_at) for node in report.nodes]
-    if brief:
-        kept = [index for index, (header, _) in enumerate(columns) if header in BRIEF_COLUMNS]
+    rows = [
+        _row(node, report.generated_at, (trends or {}).get(node.node_id, NodeTrends()))
+        for node in report.nodes
+    ]
+    if brief or hidden:
+        kept = [
+            index
+            for index, (header, _) in enumerate(columns)
+            if (not brief or header in BRIEF_COLUMNS) and header not in hidden
+        ]
         columns = [columns[index] for index in kept]
         rows = [[row[index] for index in kept] for row in rows]
     if extra is not None:
@@ -557,7 +591,16 @@ def build_table(
     return table
 
 
-def _row(node: MergedNode, now: datetime) -> list[RenderableType]:
+def _with_trend(cell: Text, trend: Trend | None) -> Text:
+    """Follow a reading with its trend arrow (nothing for an unknown reading or trend)."""
+    if trend is None or cell.plain == _DASH:
+        return cell
+    arrow, style = _TREND_ARROWS[trend]
+    cell.append(arrow, style=style)
+    return cell
+
+
+def _row(node: MergedNode, now: datetime, trends: NodeTrends) -> list[RenderableType]:
     """Build one node's cells of the default table, in column order."""
     seen_style = age_style(node.age, node.thresholds)
     metrics_age = None if node.last_device_metrics is None else now - node.last_device_metrics
@@ -572,31 +615,45 @@ def _row(node: MergedNode, now: datetime) -> list[RenderableType]:
         every_cell(node.cadence),
         _cell(_timestamp_cell(node.last_seen, reference=now), seen_style),
         _cell(_DASH if metrics_age is None else humanize_age(metrics_age), fresh),
-        _value_cell(
-            _battery_cell(node.battery_level),
-            flag=_battery_flag(node.battery_level),
-            freshness=fresh,
-        ),
-        _value_cell(_voltage_cell(node.voltage), flag=_voltage_flag(node.voltage), freshness=fresh),
-        _value_cell(
-            _percent_cell(node.channel_utilization),
-            flag=_severity(
-                node.channel_utilization,
-                alarm=CHANNEL_UTILIZATION_ALARM_PERCENT,
-                warn=CHANNEL_UTILIZATION_WARN_PERCENT,
-                low_is_bad=False,
+        _with_trend(
+            _value_cell(
+                _battery_cell(node.battery_level),
+                flag=_battery_flag(node.battery_level),
+                freshness=fresh,
             ),
-            freshness=fresh,
+            trends.battery,
         ),
-        _value_cell(
-            _percent_cell(node.air_util_tx),
-            flag=_severity(
-                node.air_util_tx,
-                alarm=AIR_UTIL_TX_ALARM_PERCENT,
-                warn=AIR_UTIL_TX_WARN_PERCENT,
-                low_is_bad=False,
+        _with_trend(
+            _value_cell(
+                _voltage_cell(node.voltage), flag=_voltage_flag(node.voltage), freshness=fresh
             ),
-            freshness=fresh,
+            trends.voltage,
+        ),
+        _with_trend(
+            _value_cell(
+                _percent_cell(node.channel_utilization),
+                flag=_severity(
+                    node.channel_utilization,
+                    alarm=CHANNEL_UTILIZATION_ALARM_PERCENT,
+                    warn=CHANNEL_UTILIZATION_WARN_PERCENT,
+                    low_is_bad=False,
+                ),
+                freshness=fresh,
+            ),
+            trends.channel_utilization,
+        ),
+        _with_trend(
+            _value_cell(
+                _percent_cell(node.air_util_tx),
+                flag=_severity(
+                    node.air_util_tx,
+                    alarm=AIR_UTIL_TX_ALARM_PERCENT,
+                    warn=AIR_UTIL_TX_WARN_PERCENT,
+                    low_is_bad=False,
+                ),
+                freshness=fresh,
+            ),
+            trends.air_util_tx,
         ),
         _seen_by_cell(node.seen_by_counts),
         _uptime_cell(node, now),
@@ -634,6 +691,8 @@ def render_console(
     console: Console | None = None,
     brief: bool = False,
     extra: ExtraColumns | None = None,
+    trends: Mapping[NodeId, NodeTrends] | None = None,
+    hidden: frozenset[str] = frozenset(),
 ) -> None:
     """Print a status report's table and summary caption to a console.
 
@@ -645,9 +704,11 @@ def render_console(
             :class:`~rich.console.Console`.
         brief: See :func:`build_table`.
         extra: See :func:`build_table`.
+        trends: See :func:`build_table`.
+        hidden: See :func:`build_table`.
     """
     active_console = console if console is not None else Console()
-    table = build_table(report, brief=brief, extra=extra)
+    table = build_table(report, brief=brief, extra=extra, trends=trends, hidden=hidden)
     active_console.print(table, markup=False, highlight=False)
 
 

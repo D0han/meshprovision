@@ -73,14 +73,16 @@ def test_brief_keeps_only_the_essential_columns_and_asks_no_packets(
 
 
 @pytest.mark.usefixtures("seeded")
-def test_the_default_table_is_unchanged_and_asks_no_packets(
+def test_the_default_table_hides_node_and_mgmt_and_asks_no_packets(
     runner: CliRunner, env: dict[str, str], mock_sources: Callable[..., respx.MockRouter]
 ) -> None:
     plain, lorastats = _status(runner, env, mock_sources, [])
     explicit, _ = _status(runner, env, mock_sources, ["--detail", "default"])
 
     assert _headers(plain.stdout) == _headers(explicit.stdout)
-    assert "Mgmt" in _headers(plain.stdout)
+    assert "Mgmt" not in _headers(plain.stdout)
+    assert "Node" not in _headers(plain.stdout).split()
+    assert "Short" in _headers(plain.stdout)
     assert "Health" not in plain.stdout
     assert lorastats.reports == lorastats.parsed == []
 
