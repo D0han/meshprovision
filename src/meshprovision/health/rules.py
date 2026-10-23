@@ -2,7 +2,10 @@
 
 Every rule is a named threshold below, documented with its reason in
 ``docs/commands.md`` (``mesh health``), and tested at its boundaries.
-They are heuristics for a mesh operator, not firmware limits:
+They are heuristics for a mesh operator, not firmware limits. The rules
+about silence are relative to how often the node is expected to be heard
+(:class:`NodeContext`, from :mod:`meshprovision.status.cadence`), so a
+node configured to report every few hours is not judged like an hourly one:
 
 - a **verdict** (``ok``/``warn``/``crit``, ``unknown`` without any data)
   with the reasons that set it;
@@ -20,6 +23,7 @@ to that.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -27,6 +31,7 @@ from typing import Final
 
 from meshprovision.health.metrics import NodeMetrics
 from meshprovision.nodeid import NodeId
+from meshprovision.status.cadence import OFFLINE_MISSED, CadenceSource
 
 __all__ = [
     "AIR_UTIL_TX_CRIT_PERCENT",
@@ -44,10 +49,12 @@ __all__ = [
     "IMPORTANCE_MEDIUM_SCORE",
     "MIN_RECEPTIONS",
     "REBOOTS_WARN",
+    "REBOOTS_WINDOW_DAYS",
     "RELAY_CONCENTRATION_SHARE",
     "RELAY_DEPENDENCY_SHARE",
     "ROUTER_MIN_GATEWAYS",
     "ROUTER_ROLES",
+    "SILENCE_RUN_MISSED",
     "SILENCE_WARN_HOURS",
     "SILENT_CRIT_SECONDS",
     "SILENT_WARN_SECONDS",
@@ -62,10 +69,12 @@ __all__ = [
 ]
 
 SILENT_WARN_SECONDS: Final[float] = 2 * 3600.0
-"""Not heard for longer than this (``mesh status``'s stale threshold): warn."""
+"""Not heard for longer than this: warn, unless :class:`NodeContext` gives the node's own
+stale threshold (``mesh status``'s, at least this)."""
 
 SILENT_CRIT_SECONDS: Final[float] = 24 * 3600.0
-"""Not heard for longer than this (``mesh status``'s offline threshold): critical."""
+"""Not heard for longer than this: critical, unless :class:`NodeContext` gives the node's own
+offline threshold (``mesh status``'s, at least this)."""
 
 BATTERY_WARN_PERCENT: Final[int] = 20
 """A current battery reading at or below this: warn (as ``mesh status`` colours it)."""
@@ -74,7 +83,7 @@ BATTERY_CRIT_PERCENT: Final[int] = 10
 """A current battery reading at or below this: critical."""
 
 BATTERY_FRESH_SECONDS: Final[float] = 24 * 3600.0
-"""A battery reading older than this is not judged."""
+"""A battery reading older than this, and than the node's stale threshold, is not judged."""
 
 BATTERY_DRAIN_WARN_PER_DAY: Final[float] = -10.0
 """A battery trend at or below this many percentage points a day: warn."""
@@ -83,7 +92,11 @@ MIN_RECEPTIONS: Final[int] = 20
 """Fewest receptions (or relayed receptions) a gateway or relay rule judges."""
 
 REBOOTS_WARN: Final[int] = 3
-"""This many boots in the window or more: warn."""
+"""This many boots per :data:`REBOOTS_WINDOW_DAYS` of the window or more (at least this
+many in any window): warn."""
+
+REBOOTS_WINDOW_DAYS: Final[int] = 7
+"""The days :data:`REBOOTS_WARN` is counted over."""
 
 CHANNEL_UTILIZATION_WARN_PERCENT: Final[float] = 25.0
 """Mean channel utilization above this: warn (firmware starts delaying sends)."""
@@ -98,7 +111,12 @@ AIR_UTIL_TX_CRIT_PERCENT: Final[float] = 10.0
 """Mean transmit air utilization above this (the common duty-cycle limit): critical."""
 
 SILENCE_WARN_HOURS: Final[int] = 6
-"""This many consecutive covered hours without a reception, or more: warn."""
+"""This many consecutive covered hours without a reception, or more: warn (at least; see
+:data:`SILENCE_RUN_MISSED`)."""
+
+SILENCE_RUN_MISSED: Final[int] = OFFLINE_MISSED
+"""A silent run warns only once it is this many expected intervals long (as long as the
+offline rule's): a past outage, not a few lost packets."""
 
 DEFAULT_HOP_LIMIT: Final[int] = 3
 """Meshtastic's default hop limit; never suggest less."""
@@ -138,6 +156,13 @@ _DEPENDENT_POINTS: Final[int] = 2
 _ROUTER_POINTS: Final[int] = 1
 _HOURS_PER_DAY: Final[int] = 24
 _SECONDS_PER_HOUR: Final[float] = 3600.0
+_SOURCE_TEXTS: Final[Mapping[str, str]] = {
+    CadenceSource.OVERRIDE: "as given",
+    CadenceSource.HISTORY: "learned from its history",
+    CadenceSource.TEMPLATE: "from the template",
+    CadenceSource.ROLE: "its role's default",
+}
+"""How each source of an expected interval is named in a finding."""
 
 
 class Verdict(StrEnum):
@@ -215,12 +240,22 @@ class NodeContext:
         last_seen: When any source last saw it, epoch seconds.
         battery: Its battery level from ``mesh status``'s sources.
         battery_time: When that battery level was reported, epoch seconds.
+        stale_after: Its stale threshold, seconds (``mesh status``'s).
+        offline_after: Its offline threshold, seconds.
+        expected_interval: How often it is expected to be heard, seconds,
+            when known.
+        cadence_source: Where that came from
+            (:class:`~meshprovision.status.cadence.CadenceSource` value).
     """
 
     role: str | None = None
     last_seen: float | None = None
     battery: int | None = None
     battery_time: float | None = None
+    stale_after: float = SILENT_WARN_SECONDS
+    offline_after: float = SILENT_CRIT_SECONDS
+    expected_interval: float | None = None
+    cadence_source: str | None = None
 
 
 def _duration(seconds: float) -> str:
@@ -231,8 +266,22 @@ def _duration(seconds: float) -> str:
     return f"{hours / _HOURS_PER_DAY:.0f} d"
 
 
+def _expectation(context: NodeContext) -> str:
+    """Name the node's expected interval for a finding, or nothing when unknown."""
+    if context.expected_interval is None:
+        return ""
+    hours = round(context.expected_interval / _SECONDS_PER_HOUR, 1)
+    source = _SOURCE_TEXTS.get(context.cadence_source or "", "")
+    return f" (expected every {hours:g} h" + (f", {source})" if source else ")")
+
+
 def _current_battery(metrics: NodeMetrics, context: NodeContext) -> int | None:
-    """Return the newest battery percentage not older than :data:`BATTERY_FRESH_SECONDS`."""
+    """Return the newest battery percentage that is fresh enough to judge.
+
+    Fresh means not older than :data:`BATTERY_FRESH_SECONDS` or, when
+    longer, the node's stale threshold.
+    """
+    fresh_for = max(BATTERY_FRESH_SECONDS, context.stale_after)
     candidates: list[tuple[float, int]] = []
     if metrics.battery is not None:
         candidates.append((metrics.battery.latest_time, metrics.battery.latest))
@@ -241,24 +290,48 @@ def _current_battery(metrics: NodeMetrics, context: NodeContext) -> int | None:
     fresh = [
         (time, level)
         for time, level in candidates
-        if metrics.now - time <= BATTERY_FRESH_SECONDS and 0 < level <= _FULL_BATTERY
+        if metrics.now - time <= fresh_for and 0 < level <= _FULL_BATTERY
     ]
     return max(fresh)[1] if fresh else None
 
 
+def _by_silence(seconds: float, context: NodeContext) -> Verdict | None:
+    """Judge a silence against the node's thresholds: critical, warning or nothing."""
+    if seconds > context.offline_after:
+        return Verdict.CRIT
+    if seconds > context.stale_after:
+        return Verdict.WARN
+    return None
+
+
 def _silence(metrics: NodeMetrics, context: NodeContext) -> Finding | None:
-    """Judge how long ago the node was last heard."""
+    """Judge how long ago the node was last heard, against its own thresholds."""
     heard = [t for t in (metrics.last_heard, context.last_seen) if t is not None]
+    expected = _expectation(context)
     if not heard:
         if metrics.covered_hours:
-            return Finding(Verdict.CRIT, "never_heard", "lorastats never heard it")
+            covered = metrics.covered_hours * _SECONDS_PER_HOUR
+            text = f"lorastats never heard it in {metrics.covered_hours} covered hours{expected}"
+            return Finding(_by_silence(covered, context) or Verdict.UNKNOWN, "never_heard", text)
         return Finding(Verdict.UNKNOWN, "no_data", "no lorastats data and no last-seen time")
     age = metrics.now - max(heard)
-    if age > SILENT_CRIT_SECONDS:
-        return Finding(Verdict.CRIT, "silent", f"not heard for {_duration(age)}")
-    if age > SILENT_WARN_SECONDS:
-        return Finding(Verdict.WARN, "silent", f"not heard for {_duration(age)}")
-    return None
+    severity = _by_silence(age, context)
+    if severity is None:
+        return None
+    return Finding(severity, "silent", f"not heard for {_duration(age)}{expected}")
+
+
+def _silence_run_hours(context: NodeContext) -> int:
+    """Return the run of silent hours that warns: :data:`SILENCE_RUN_MISSED` intervals."""
+    if context.expected_interval is None:
+        return SILENCE_WARN_HOURS
+    run = math.ceil(SILENCE_RUN_MISSED * context.expected_interval / _SECONDS_PER_HOUR)
+    return max(SILENCE_WARN_HOURS, run)
+
+
+def _reboots_warn(days: int) -> int:
+    """Return the boots in a window of ``days`` that warn."""
+    return max(REBOOTS_WARN, math.ceil(REBOOTS_WARN * days / REBOOTS_WINDOW_DAYS))
 
 
 def _battery_findings(metrics: NodeMetrics, context: NodeContext) -> list[Finding]:
@@ -319,7 +392,7 @@ def assess(metrics: NodeMetrics, context: NodeContext) -> tuple[Verdict, tuple[F
                 f"uplinked by one gateway only ({metrics.receptions} receptions)",
             )
         )
-    if len(metrics.boots) >= REBOOTS_WARN:
+    if len(metrics.boots) >= _reboots_warn(metrics.days):
         findings.append(
             Finding(Verdict.WARN, "reboots", f"{len(metrics.boots)} boots in {metrics.days} d")
         )
@@ -341,12 +414,13 @@ def assess(metrics: NodeMetrics, context: NodeContext) -> tuple[Verdict, tuple[F
             "transmit air utilization",
         )
     )
-    if metrics.longest_silence_hours >= SILENCE_WARN_HOURS:
+    if metrics.longest_silence_hours >= _silence_run_hours(context):
         findings.append(
             Finding(
                 Verdict.WARN,
                 "silent_hours",
-                f"{metrics.longest_silence_hours} hours in a row without a reception",
+                f"{metrics.longest_silence_hours} hours in a row without a reception"
+                f"{_expectation(context)}",
             )
         )
     order = {Verdict.CRIT: 0, Verdict.WARN: 1, Verdict.UNKNOWN: 2}

@@ -26,7 +26,6 @@ per-node health history files in the cache directory.
 from __future__ import annotations
 
 import dataclasses
-import math
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -36,6 +35,8 @@ import click
 
 from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
+    expected_interval_option,
+    finite_float_callback,
     handle_cli_errors,
     node_ids_callback,
     pass_cli,
@@ -51,7 +52,7 @@ from meshprovision.health.report import assess_status
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
-from meshprovision.status.cadence import MAX_EXPECTED_INTERVAL, template_interval
+from meshprovision.status.cadence import template_interval
 from meshprovision.status.merge import (
     DEFAULT_OFFLINE_AFTER,
     DEFAULT_STALE_AFTER,
@@ -90,9 +91,6 @@ Any longer threshold already means "never" for a mesh node; the bound
 keeps the value convertible to a :class:`~datetime.timedelta`, which
 overflows past about 2.4e10 hours."""
 
-MAX_EXPECTED_INTERVAL_HOURS: Final[float] = MAX_EXPECTED_INTERVAL.total_seconds() / 3600
-"""Upper bound on ``--expected-interval``, in hours (the longest expected interval)."""
-
 _WATCH_MAX_CONSECUTIVE_DB_FAILURES = 3
 """How many consecutive per-poll :class:`~meshprovision.errors.DbError`\\ s
 ``--watch`` tolerates before giving up and exiting.
@@ -103,34 +101,6 @@ file ownership is being fixed) without the long-running monitor itself
 being broken. A run of consecutive failures, though, means the database
 is not coming back, and the monitor should stop rather than poll forever
 in silence."""
-
-
-def _finite_float_callback(
-    ctx: click.Context, param: click.Parameter, value: float | None
-) -> float | None:
-    """Reject a non-finite float option value as a usage error.
-
-    ``click.FloatRange`` lets ``nan`` through (every comparison with it is
-    false), and ``nan`` or ``inf`` would otherwise reach ``timedelta`` or
-    ``time.sleep`` and crash with a traceback.
-
-    Args:
-        ctx: The click context (unused).
-        param: The option being parsed.
-        value: The already range-checked value, or ``None`` when the
-            option was not given.
-
-    Returns:
-        ``value`` unchanged.
-
-    Raises:
-        click.BadParameter: If ``value`` is ``nan`` or infinite (exit code
-            2, with click's ``Usage:`` line).
-    """
-    del ctx
-    if value is not None and not math.isfinite(value):
-        raise click.BadParameter(f"{value} is not a finite number.", param=param)
-    return value
 
 
 def _build_options(
@@ -384,7 +354,7 @@ def _watch_loop(
     "--interval",
     type=click.FloatRange(min=1.0, max=_MAX_WATCH_POLL_SECONDS),
     default=None,
-    callback=_finite_float_callback,
+    callback=finite_float_callback,
     help=(
         "Poll interval, in seconds (--watch only). Defaults to the cache TTL "
         "(at least 5 s, at most one week)."
@@ -425,7 +395,7 @@ def _watch_loop(
     "--stale-after",
     type=click.FloatRange(min=0.0, min_open=True, max=_MAX_THRESHOLD_HOURS),
     default=None,
-    callback=_finite_float_callback,
+    callback=finite_float_callback,
     metavar="HOURS",
     help=(
         "Hours a node is online for at least (default 2); its expected interval can make it longer."
@@ -435,23 +405,18 @@ def _watch_loop(
     "--offline-after",
     type=click.FloatRange(min=0.0, min_open=True, max=_MAX_THRESHOLD_HOURS),
     default=None,
-    callback=_finite_float_callback,
+    callback=finite_float_callback,
     metavar="HOURS",
     help=(
         "Hours before a node can be offline, at least (default 24); its expected "
         "interval can make it longer."
     ),
 )
-@click.option(
-    "--expected-interval",
-    type=click.FloatRange(min=0.0, min_open=True, max=MAX_EXPECTED_INTERVAL_HOURS),
-    default=None,
-    callback=_finite_float_callback,
-    metavar="HOURS",
-    help=(
+@expected_interval_option(
+    help_text=(
         "Expect every reported node every HOURS (at most 48) instead of learning it "
         "from its history, the template or its role; 0.5 gives the fixed thresholds."
-    ),
+    )
 )
 @click.option(
     "--detail",

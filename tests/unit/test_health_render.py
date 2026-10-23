@@ -102,6 +102,7 @@ def test_a_table_row_shows_each_metric() -> None:
         "OK",
         "low",
         "-",
+        "3h",
         "1.0",
         "4",
         "25%",
@@ -118,7 +119,22 @@ def test_an_empty_row_shows_dashes() -> None:
 
     row = _row(_report(_health(node=node, verdict=Verdict.UNKNOWN)))
 
-    assert row == ["!ab446357", "-", "UNKNOWN", "low", "-", "-", "-", "-", "-", "-", "-", "-", "-"]
+    assert row == [
+        "!ab446357",
+        "-",
+        "UNKNOWN",
+        "low",
+        "-",
+        "3h",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+        "-",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -129,7 +145,7 @@ def test_an_empty_row_shows_dashes() -> None:
     ],
 )
 def test_a_hops_cell_marks_the_unknown_half(fields: dict[str, object], cell: str) -> None:
-    assert _row(_report(_health(metrics=_metrics(**fields))))[8] == cell
+    assert _row(_report(_health(metrics=_metrics(**fields))))[9] == cell
 
 
 @pytest.mark.parametrize(
@@ -146,7 +162,7 @@ def test_the_battery_cell_prefers_the_history(
 ) -> None:
     node = MergedNode(node_id=_A, battery_level=level)
 
-    assert _row(_report(_health(node=node, metrics=_metrics(battery=battery))))[11] == cell
+    assert _row(_report(_health(node=node, metrics=_metrics(battery=battery))))[12] == cell
 
 
 def test_last_heard_is_the_newest_of_history_and_sources() -> None:
@@ -162,7 +178,7 @@ def test_last_heard_is_the_newest_of_history_and_sources() -> None:
 def test_reasons_show_two_findings_and_count_the_rest() -> None:
     findings = tuple(Finding(Verdict.WARN, f"c{i}", f"reason {i}\x1b[2J") for i in range(3))
 
-    cell = _row(_report(_health(verdict=Verdict.WARN, findings=findings)))[12]
+    cell = _row(_report(_health(verdict=Verdict.WARN, findings=findings)))[13]
 
     assert cell.startswith("reason 0")
     assert "reason 1" in cell
@@ -174,7 +190,7 @@ def test_reasons_show_two_findings_and_count_the_rest() -> None:
 def test_two_findings_have_no_remainder() -> None:
     findings = tuple(Finding(Verdict.WARN, f"c{i}", f"reason {i}") for i in range(2))
 
-    assert _row(_report(_health(findings=findings)))[12] == "reason 0; reason 1"
+    assert _row(_report(_health(findings=findings)))[13] == "reason 0; reason 1"
 
 
 def test_the_caption_counts_verdicts_and_names_the_window() -> None:

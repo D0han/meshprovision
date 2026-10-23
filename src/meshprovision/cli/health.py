@@ -13,12 +13,14 @@ directory.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import click
 
 from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
+    expected_interval_option,
     handle_cli_errors,
     node_ids_callback,
     pass_cli,
@@ -28,6 +30,7 @@ from meshprovision.datasources.lorastats_regions import RegionList
 from meshprovision.errors import SettingsError
 from meshprovision.health import render
 from meshprovision.health.report import DEFAULT_DAYS, MAX_DAYS, HealthOptions, run_health
+from meshprovision.status.cadence import template_interval
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
@@ -61,6 +64,12 @@ __all__ = ["health"]
         "(still at most once a minute per node)."
     ),
 )
+@expected_interval_option(
+    help_text=(
+        "Expect every reported node every HOURS (at most 48) instead of learning it "
+        "from its history, the template or its role (as mesh status does)."
+    )
+)
 @click.option(
     "--json", "json_output", is_flag=True, default=False, help="Emit JSON instead of text."
 )
@@ -73,6 +82,7 @@ def health(
     days: int,
     no_fetch: bool,
     refresh: bool,
+    expected_interval: float | None,
     json_output: bool,
 ) -> None:
     """Judge each node's health and importance from lorastats packet reports.
@@ -88,6 +98,8 @@ def health(
         days: The window, from ``--days``.
         no_fetch: Ask nothing, from ``--no-fetch``.
         refresh: Refresh within the 10-minute interval, from ``--refresh``.
+        expected_interval: Every node's expected interval, in hours, from
+            ``--expected-interval``.
         json_output: Emit JSON, from ``--json``.
 
     Raises:
@@ -98,6 +110,7 @@ def health(
     if refresh and no_fetch:
         raise SettingsError("--refresh has no effect with --no-fetch.", hint="Drop one of the two.")
     regions = ctx.settings.lorastats_regions or ()
+    template = None if expected_interval is not None else ctx.read_template_quietly()
     options = HealthOptions(
         days=days,
         fetch=not no_fetch,
@@ -107,6 +120,12 @@ def health(
         regions=regions,
         region_list=None if regions else RegionList(),
         force_refresh=ctx.force_refresh,
+        expected_interval=None if expected_interval is None else timedelta(hours=expected_interval),
+        template_interval=(
+            None
+            if template is None
+            else template_interval(template.device.node_info_broadcast_secs, template.device.role)
+        ),
     )
     with ctx.http_client(require_contact=not no_fetch) as client:
         report = run_health(ctx.settings, options, client=client)

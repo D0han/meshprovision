@@ -563,6 +563,7 @@ mesh health --refresh           # refresh even if refreshed in the last 10 minut
 | `--days N` | Window of the history to judge, 1 to 30 days (default 7) |
 | `--no-fetch` | Ask nothing: use the local history and the database only (no `MESHPROVISION_CONTACT` needed) |
 | `--refresh` | Refresh the history even if it was refreshed in the last 10 minutes (still at most once a minute per node); refused with `--no-fetch` |
+| `--expected-interval HOURS` | Every reported node's expected interval (above 0, at most 48), as for `mesh status`; without it each node's is learned from its history, else taken from the template or its role |
 | `--json` | Emit one JSON document instead of text |
 
 The regions are those of `mesh status` (`MESHPROVISION_LORASTATS_REGIONS`, else
@@ -622,31 +623,37 @@ loses the history.
 
 **The table** (no `NODE`): Node, Short, Verdict, Importance, Last heard (the
 newer of the last reception in the history and `mesh status`'s last seen),
-Pkt/h, GWs (distinct gateways in the window), Direct (share of direct
+Every (the node's expected interval, see [`mesh status`](#mesh-status)), Pkt/h, GWs (distinct gateways in the window), Direct (share of direct
 receptions), Hops max/limit (most hops seen / the node's `HopStart`; `?` when
 unknown), SNR median, Top relay (busiest relay byte and its share), Batt, and
-the first two reasons. **The detailed report** (`NODE`) shows every metric with
-its sample size, the gateways, hop counts, relays (with the node of ours each
+the first two reasons. **The detailed report** (`NODE`) shows the expected interval, where it came
+from and the stale and offline thresholds it gives, every metric with its
+sample size, the gateways, hop counts, relays (with the node of ours each
 byte likely is), decoded packets per port, battery trend, local stats, boots,
 neighbours, the gateway check, every finding and suggestion, and the limits
-below. `--json` carries all of it per node (`verdict`, `findings`,
-`importance`, `suggestions`, `metrics`), plus `failures` (per source or node)
+below. `--json` carries all of it per node (`expected_interval_seconds`,
+`expected_interval_source`, `stale_after_seconds`, `offline_after_seconds`,
+`verdict`, `findings`, `importance`, `suggestions`, `metrics`), plus `failures` (per source or node)
 and `refresh` (`refreshed`, `no_region`, `skipped_rows`).
 
 **Verdict.** `crit` if any rule below says so, else `warn` if any does, else
-`ok`; `unknown` when there is no history and no last-seen time at all. These
-are heuristics, not firmware limits:
+`ok`; `unknown` when there is no history and no last-seen time at all. Each
+node is judged against its own expected interval `E` and the stale and offline
+thresholds it gives, exactly as in [`mesh status`](#mesh-status); a history
+refreshed by this run already counts (it replaces a template or role default,
+never `--expected-interval`). These are heuristics, not firmware limits:
 
 | Rule | Warn | Crit | Why |
 |---|---|---|---|
-| not heard (history or `mesh status`) | over 2 h | over 24 h, or never heard in covered hours | the floors of `mesh status`'s stale and offline thresholds |
-| battery (newest reading within 24 h; 0% and external power ignored) | at or below 20% | at or below 10% | as `mesh status` colours it |
+| not heard (history or `mesh status`) | over its stale threshold (at least 2 h) | over its offline threshold (at least 24 h) | `mesh status`'s own thresholds for the node |
+| never heard in the covered hours | covered hours over its stale threshold | over its offline threshold (fewer: `unknown`, not heard yet) | a node expected every 6 h may be unheard for a few hours of history |
+| battery (newest reading within 24 h, or within its stale threshold when longer; 0% and external power ignored) | at or below 20% | at or below 10% | as `mesh status` colours it |
 | battery trend (6+ readings over 12+ h) | falling 10 points a day or faster | | a node that will be flat within days |
 | one gateway only (20+ receptions) | yes | | one gateway failing loses the node |
-| boots in the window | 3 or more | | crashes or brown-outs |
+| boots in the window | 3 or more per 7 days (3 for any window up to a week, 13 for 30 days) | | crashes or brown-outs |
 | mean channel utilization | over 25% | over 40% | firmware delays sends above 25% |
 | mean transmit air utilization | over 5% | over 10% | 10% is the common duty-cycle limit |
-| longest run of silent covered hours | 6 or more | | outages hidden by a fresh last-seen |
+| longest run of silent covered hours | 5 `E` or more, at least 6 | | outages hidden by a fresh last-seen (as long as the offline rule, so a few lost packets of a slow node do not count) |
 
 **Importance** (`high` from 5 points, `medium` from 2, else `low`) counts what
 our other nodes (the active database nodes and any `NODE` asked for) would lose

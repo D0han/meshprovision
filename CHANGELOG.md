@@ -319,6 +319,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The freshness colors of `Last seen`, `Timestamp`, `Metrics` and the
   readings stretch to the node's own thresholds (green at least until it is
   stale, yellow and orange at least until it is offline).
+- `mesh health` (and `mesh status --detail full`) judges each node against its
+  expected interval like `mesh status`: not heard warns past its stale and is
+  critical past its offline threshold (instead of 2 h / 24 h), "never heard"
+  depends on how many covered hours that is (critical only past the offline
+  threshold, `unknown` while fewer hours than the stale one are covered), a
+  battery reading counts while it is younger than the stale threshold (at
+  least 24 h), a run of silent hours warns from five expected intervals (at
+  least 6 h), and boots warn from 3 per 7 days of the window (3 in any window
+  up to a week). A history refreshed by the run already sets the interval.
+  The table gains `Every`, the detailed report names the interval and the
+  thresholds, `--json` adds the same four keys per node as `mesh status`, and
+  `mesh health --expected-interval HOURS` overrides it.
 - `mesh status` no longer asks the lorastats region `PL` by default: it is
   not a region on lorastats.pl, which answers an unknown region with an empty
   list. At most 16 regions can be configured.

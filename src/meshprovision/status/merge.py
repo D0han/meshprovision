@@ -21,7 +21,7 @@ to be heard (:mod:`meshprovision.status.cadence`).
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Final, TypeVar
@@ -33,6 +33,7 @@ from meshprovision.nodeid import NodeId
 from meshprovision.status.cadence import (
     Cadence,
     CadenceHint,
+    CadenceSource,
     availability_thresholds,
     resolve_cadence,
 )
@@ -51,6 +52,7 @@ __all__ = [
     "merge_all",
     "merge_observations",
     "node_thresholds",
+    "with_learned_cadence",
 ]
 
 _T = TypeVar("_T")
@@ -432,6 +434,36 @@ def classify_age(
     if age <= thresholds.offline_after:
         return Availability.STALE
     return Availability.OFFLINE
+
+
+def with_learned_cadence(
+    node: MergedNode, learned: timedelta | None, floor: Thresholds
+) -> MergedNode:
+    """Re-judge a node with an interval learned after it was merged.
+
+    ``mesh health`` refreshes a node's history after ``mesh status``'s
+    collection; the refreshed history's interval replaces a template or
+    role default (and an older learned one), never an override.
+
+    Args:
+        node: The merged node.
+        learned: The interval its refreshed history gives, if any.
+        floor: The shortest thresholds it was merged with.
+
+    Returns:
+        ``node`` unchanged without ``learned`` or with an override, else a
+        copy with the learned cadence, its thresholds and its availability.
+    """
+    if learned is None or node.cadence.source is CadenceSource.OVERRIDE:
+        return node
+    cadence = resolve_cadence(CadenceHint(learned=learned), node.role)
+    thresholds = node_thresholds(floor, cadence)
+    return replace(
+        node,
+        cadence=cadence,
+        thresholds=thresholds,
+        availability=classify_age(node.age, thresholds),
+    )
 
 
 def _priority_index(source: str) -> int:

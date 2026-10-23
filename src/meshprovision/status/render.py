@@ -42,6 +42,8 @@ __all__ = [
     "ExtraColumns",
     "age_style",
     "build_table",
+    "every_cell",
+    "interval_text",
     "render_console",
     "render_json",
     "report_to_json_dict",
@@ -399,11 +401,11 @@ def _duration_text(duration: timedelta) -> str:
     return f"{minutes}m" if minutes else "<1m"
 
 
-def _interval_text(interval: timedelta) -> str:
+def interval_text(interval: timedelta) -> str:
     """Render an expected interval: ``"3h"``, ``"3h 30m"`` or ``"45m"``.
 
     Args:
-        interval: The interval (at most two days, so hours suffice).
+        interval: The interval (a few days at most, so hours suffice).
 
     Returns:
         Whole hours and the remaining whole minutes, each left out when 0
@@ -415,7 +417,7 @@ def _interval_text(interval: timedelta) -> str:
     return f"{hours}h {minutes}m" if minutes else f"{hours}h"
 
 
-def _every_cell(cadence: Cadence) -> Text:
+def every_cell(cadence: Cadence) -> Text:
     """Render the ``Every`` cell: the node's expected interval.
 
     Args:
@@ -425,7 +427,7 @@ def _every_cell(cadence: Cadence) -> Text:
         The interval, gray when it is only the role's default.
     """
     style = _UNKNOWN_STYLE if cadence.source is CadenceSource.ROLE else None
-    return _cell(_interval_text(cadence.interval), style)
+    return _cell(interval_text(cadence.interval), style)
 
 
 def _last_boot_contradicted(node: MergedNode) -> bool:
@@ -584,7 +586,7 @@ def _row(node: MergedNode, now: datetime) -> list[RenderableType]:
         _text_cell(node.management),
         _cell(AVAILABILITY_LABELS[node.availability], _AVAILABILITY_STYLES[node.availability]),
         _cell(node.age_text, seen_style),
-        _every_cell(node.cadence),
+        every_cell(node.cadence),
         _cell(_timestamp_cell(node.last_seen, reference=now), seen_style),
         _cell(_DASH if metrics_age is None else humanize_age(metrics_age), fresh),
         _value_cell(

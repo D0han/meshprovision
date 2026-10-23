@@ -31,8 +31,9 @@ from meshprovision.health.refresh import RefreshOutcome
 from meshprovision.health.report import HealthReport, NodeHealth, StatusHealth
 from meshprovision.health.rules import Verdict
 from meshprovision.status import timefmt
+from meshprovision.status.cadence import CadenceSource
 from meshprovision.status.merge import humanize_age
-from meshprovision.status.render import ExtraColumns, report_to_json_dict
+from meshprovision.status.render import ExtraColumns, every_cell, interval_text, report_to_json_dict
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -73,6 +74,13 @@ _PORT_NAMES: Final[dict[int, str]] = {
     PORT_NODEINFO: "nodeinfo",
     PORT_NEIGHBORINFO: "neighbours",
 }
+_CADENCE_SOURCES: Final[dict[CadenceSource, str]] = {
+    CadenceSource.OVERRIDE: "--expected-interval",
+    CadenceSource.HISTORY: "learned from its history",
+    CadenceSource.TEMPLATE: "the template's node-info interval",
+    CadenceSource.ROLE: "its role's node-info default",
+}
+"""How the detailed report names where an expected interval came from."""
 _LIMITS: Final[str] = (
     "Limits: receptions are lorastats PacketReports rows (one per packet per MQTT gateway; "
     "MQTT and radio receptions cannot be told apart); hops come only from the packets lorastats "
@@ -154,6 +162,7 @@ def build_table(report: HealthReport) -> Table:
         ("Verdict", "left"),
         ("Importance", "left"),
         ("Last heard", "left"),
+        ("Every", "right"),
         *_METRIC_COLUMNS,
         ("Batt", "right"),
         ("Reasons", "left"),
@@ -171,6 +180,7 @@ def build_table(report: HealthReport) -> Table:
             Text(health.verdict.value.upper(), style=VERDICT_STYLES[health.verdict]),
             Text(health.importance.level, style=_IMPORTANCE_STYLES[health.importance.level]),
             _ago(_last_heard(health), now),
+            every_cell(health.node.cadence),
             *_metric_cells(health.metrics),
             _battery(health),
             terminal_safe(reasons) if reasons else _DASH,
@@ -338,6 +348,12 @@ def _lines(health: NodeHealth, now: datetime) -> Iterable[str]:
         f"row); history refreshed {_ago(health.history_fetched_at, now)}"
     )
     yield f"Last heard: {_ago(_last_heard(health), now)}"
+    yield (
+        f"Expected every {interval_text(node.cadence.interval)} "
+        f"({_CADENCE_SOURCES[node.cadence.source]}): stale after "
+        f"{interval_text(node.thresholds.stale_after)}, offline after "
+        f"{interval_text(node.thresholds.offline_after)}"
+    )
     yield (
         f"Traffic: {metrics.packets} packets ({_number(metrics.packets_per_hour)}/h), "
         f"{metrics.receptions} receptions, {_percent(metrics.direct_share)} direct"
@@ -563,7 +579,8 @@ def health_to_json_dict(report: HealthReport) -> dict[str, object]:
 
     Returns:
         ``generated_at``, ``days``, ``fetched``, ``network_requests``,
-        ``failures``, ``refresh`` and ``nodes`` (each node's identity plus
+        ``failures``, ``refresh`` and ``nodes`` (each node's identity, its
+        expected interval and thresholds, plus
         :func:`node_health_to_json_dict`), with insertion-ordered keys.
     """
     refresh = report.refresh
@@ -588,6 +605,10 @@ def health_to_json_dict(report: HealthReport) -> dict[str, object]:
                 "short_name": health.node.short_name,
                 "long_name": health.node.long_name,
                 "lorastats_region": health.node.lorastats_region,
+                "expected_interval_seconds": int(health.node.cadence.interval.total_seconds()),
+                "expected_interval_source": health.node.cadence.source.value,
+                "stale_after_seconds": int(health.node.thresholds.stale_after.total_seconds()),
+                "offline_after_seconds": int(health.node.thresholds.offline_after.total_seconds()),
                 **node_health_to_json_dict(health),
             }
             for health in report.nodes

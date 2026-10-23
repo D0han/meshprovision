@@ -91,7 +91,7 @@ def test_a_node_without_any_data_is_unknown() -> None:
 
 
 def test_a_node_lorastats_was_asked_about_but_never_heard_is_critical() -> None:
-    verdict, findings = assess(_m(last_heard=None), NodeContext())
+    verdict, findings = assess(_m(last_heard=None, covered_hours=25), NodeContext())
 
     assert verdict is Verdict.CRIT
     assert findings[0].code == "never_heard"

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 import sys
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Final, ParamSpec, TypeVar
@@ -54,6 +55,7 @@ from meshprovision.errors import (
     exit_code_for,
 )
 from meshprovision.nodeid import NodeId
+from meshprovision.status.cadence import MAX_EXPECTED_INTERVAL
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -245,6 +247,34 @@ def node_ids_callback(
     return tuple(_parse_node_id_param(item, param) for item in value)
 
 
+def finite_float_callback(
+    ctx: click.Context, param: click.Parameter, value: float | None
+) -> float | None:
+    """Reject a non-finite float option value as a usage error.
+
+    ``click.FloatRange`` lets ``nan`` through (every comparison with it is
+    false), and ``nan`` or ``inf`` would otherwise reach ``timedelta`` or
+    ``time.sleep`` and crash with a traceback.
+
+    Args:
+        ctx: The click context (unused).
+        param: The option being parsed.
+        value: The already range-checked value, or ``None`` when the
+            option was not given.
+
+    Returns:
+        ``value`` unchanged.
+
+    Raises:
+        click.BadParameter: If ``value`` is ``nan`` or infinite (exit code
+            2, with click's ``Usage:`` line).
+    """
+    del ctx
+    if value is not None and not math.isfinite(value):
+        raise click.BadParameter(f"{value} is not a finite number.", param=param)
+    return value
+
+
 def _emit_error(text: str) -> None:
     """Print one error line to stderr, redacted, unstyled by markup.
 
@@ -260,6 +290,30 @@ def _emit_error(text: str) -> None:
 
 P = ParamSpec("P")
 R = TypeVar("R")
+
+
+EXPECTED_INTERVAL_MAX_HOURS: Final[float] = MAX_EXPECTED_INTERVAL.total_seconds() / 3600
+"""Upper bound on ``--expected-interval``, in hours (the longest expected interval)."""
+
+
+def expected_interval_option(*, help_text: str) -> Callable[[Callable[P, R]], Callable[P, R]]:
+    """Build the ``--expected-interval HOURS`` option of ``mesh status`` and ``mesh health``.
+
+    Args:
+        help_text: The option's help text.
+
+    Returns:
+        The ``click`` option decorator: above 0, at most
+        :data:`EXPECTED_INTERVAL_MAX_HOURS`, finite, default ``None``.
+    """
+    return click.option(
+        "--expected-interval",
+        type=click.FloatRange(min=0.0, min_open=True, max=EXPECTED_INTERVAL_MAX_HOURS),
+        default=None,
+        callback=finite_float_callback,
+        metavar="HOURS",
+        help=help_text,
+    )
 
 
 def handle_cli_errors(func: Callable[P, R]) -> Callable[P, R | None]:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.datasources.lorastats_packets import LorastatsPackets
@@ -34,7 +34,8 @@ from meshprovision.health.rules import (
 )
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
-from meshprovision.status.merge import MergedNode
+from meshprovision.status.cadence import learned_interval
+from meshprovision.status.merge import MergedNode, Thresholds, with_learned_cadence
 from meshprovision.status.report import (
     SourceFailure,
     StatusOptions,
@@ -82,6 +83,10 @@ class HealthOptions:
         regions: The lorastats regions (as for ``mesh status``).
         region_list: Where the regions come from when none are given.
         force_refresh: Bypass the HTTP cache for ``mesh status``'s requests.
+        expected_interval: Every reported node's expected interval
+            (``--expected-interval``), as for ``mesh status``.
+        template_interval: The template's node-info interval, for the
+            template-managed nodes.
     """
 
     days: int = DEFAULT_DAYS
@@ -92,6 +97,8 @@ class HealthOptions:
     regions: tuple[str, ...] = ()
     region_list: RegionList | None = None
     force_refresh: bool = False
+    expected_interval: timedelta | None = None
+    template_interval: timedelta | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,7 +106,8 @@ class NodeHealth:
     """One node's health.
 
     Attributes:
-        node: Its ``mesh status`` view (names, role, last seen, battery).
+        node: Its ``mesh status`` view (names, role, last seen, battery),
+            re-judged with the interval its history gives.
         metrics: Its metrics over the window.
         verdict: Its verdict.
         findings: The reasons for it.
@@ -178,6 +186,20 @@ def _role(node: MergedNode, history: NodeHistory) -> str | None:
     return node.record.role if node.record is not None and node.record.role else None
 
 
+def _context(node: MergedNode, role: str | None) -> NodeContext:
+    """Gather what the rules know about a node beyond its history."""
+    return NodeContext(
+        role=role,
+        last_seen=_epoch(node.last_seen),
+        battery=node.battery_level,
+        battery_time=_epoch(node.last_device_metrics),
+        stale_after=node.thresholds.stale_after.total_seconds(),
+        offline_after=node.thresholds.offline_after.total_seconds(),
+        expected_interval=node.cadence.interval.total_seconds(),
+        cadence_source=node.cadence.source.value,
+    )
+
+
 def assess_nodes(
     nodes: Sequence[MergedNode],
     histories: Mapping[NodeId, NodeHistory],
@@ -185,8 +207,13 @@ def assess_nodes(
     fleet: Sequence[NodeId],
     now: float,
     days: int,
+    floor: Thresholds | None = None,
 ) -> tuple[NodeHealth, ...]:
     """Judge each reported node's health from its history. Pure.
+
+    Each node is first re-judged with the interval its history gives
+    (:func:`~meshprovision.status.merge.with_learned_cadence`), so a
+    history refreshed after ``mesh status``'s collection already counts.
 
     Args:
         nodes: The reported nodes' ``mesh status`` views, in output order.
@@ -195,10 +222,13 @@ def assess_nodes(
             relay bytes can be attributed.
         now: The window's end, epoch seconds.
         days: The window, in days.
+        floor: The shortest thresholds the nodes were merged with
+            (``None``: the defaults).
 
     Returns:
         One :class:`NodeHealth` per reported node, in ``nodes`` order.
     """
+    floors = floor if floor is not None else Thresholds()
     everyone = tuple(dict.fromkeys((*fleet, *(node.node_id for node in nodes))))
 
     def history_of(node_id: NodeId) -> NodeHistory:
@@ -211,14 +241,11 @@ def assess_nodes(
     roles = {node.node_id: _role(node, history_of(node.node_id)) for node in nodes}
     importance = rank_importance(metrics, roles)
     result = []
-    for node in nodes:
+    for merged in nodes:
+        hours = ((b.hour, b.receptions) for b in history_of(merged.node_id).hours)
+        node = with_learned_cadence(merged, learned_interval(hours, now=now), floors)
         role = roles[node.node_id]
-        context = NodeContext(
-            role=role,
-            last_seen=_epoch(node.last_seen),
-            battery=node.battery_level,
-            battery_time=_epoch(node.last_device_metrics),
-        )
+        context = _context(node, role)
         verdict, findings = assess(metrics[node.node_id], context)
         result.append(
             NodeHealth(
@@ -296,6 +323,7 @@ def assess_status(
         fleet=fleet,
         now=datetime.now(tz=UTC).timestamp(),
         days=days,
+        floor=report.thresholds,
     )
     return StatusHealth(
         days=days,
@@ -342,17 +370,16 @@ def run_health(
     before = client.stats.network_requests
     status: StatusReport | None = None
     outcome: RefreshOutcome | None = None
+    status_options = StatusOptions(
+        force_refresh=options.force_refresh,
+        regions=options.regions,
+        node_ids=ids,
+        region_list=options.region_list,
+        expected_interval=options.expected_interval,
+        template_interval=options.template_interval,
+    )
     if options.fetch:
-        status = run_status(
-            settings,
-            StatusOptions(
-                force_refresh=options.force_refresh,
-                regions=options.regions,
-                node_ids=ids,
-                region_list=options.region_list,
-            ),
-            client=client,
-        )
+        status = run_status(settings, status_options, client=client)
         nodes = status.nodes
         active_refresher = refresher or HealthRefresher(
             store, LorastatsPackets(client), force=options.refresh
@@ -365,6 +392,7 @@ def run_health(
             observations_by_source={},
             node_ids=ids,
             now=datetime.now(tz=UTC),
+            options=status_options,
         ).nodes
         refreshed = {}
     fleet = tuple(dict.fromkeys((*active, *ids)))
@@ -378,7 +406,11 @@ def run_health(
         days=options.days,
         fetched=options.fetch,
         nodes=assess_nodes(
-            nodes, histories, fleet=fleet, now=generated_at.timestamp(), days=options.days
+            nodes,
+            histories,
+            fleet=fleet,
+            now=generated_at.timestamp(),
+            days=options.days,
         ),
         status=status,
         refresh=outcome,
