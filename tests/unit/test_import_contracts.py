@@ -143,6 +143,7 @@ STDLIB_ONLY: Final[tuple[str, ...]] = (
     "firmware.py",
     "provisioning/plan_warnings.py",
     "termsafe.py",
+    "status/cadence.py",
     "status/timefmt.py",
 )
 """Modules documented as importing nothing but the standard library."""
