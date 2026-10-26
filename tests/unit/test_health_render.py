@@ -449,7 +449,10 @@ def test_json_names_each_node_and_carries_its_health() -> None:
         importance=Importance("medium", 3, ("MQTT gateway",), (_B,), (), ()),
     )
     refresh = RefreshOutcome(
-        histories={}, refreshed=(_A,), failures=(RefreshFailure(_B, "429", "wait"),)
+        histories={},
+        refreshed=(_A,),
+        failures=(RefreshFailure(_B, "429", "wait"),),
+        skipped_rows=3,
     )
     status = StatusReport(
         generated_at=_NOW,
@@ -468,7 +471,7 @@ def test_json_names_each_node_and_carries_its_health() -> None:
         {"source": "loranet", "node": None, "message": "down", "hint": None},
         {"source": "lorastats", "node": "00000561", "message": "429", "hint": "wait"},
     ]
-    assert document["refresh"] == {"refreshed": [_A.hex], "no_region": [], "skipped_rows": 0}
+    assert document["refresh"] == {"refreshed": [_A.hex], "no_region": [], "skipped_rows": 3}
     (node,) = document["nodes"]
     assert list(node)[:5] == ["node_id", "display", "short_name", "long_name", "lorastats_region"]
     assert node["verdict"] == "warn"
@@ -491,6 +494,119 @@ def test_json_names_each_node_and_carries_its_health() -> None:
         "slope_per_day": -1.25,
     }
     assert metrics["gateway_check"] is None
+
+
+def test_json_metrics_carry_every_field_from_its_own_source() -> None:
+    metrics = _metrics(
+        covered_hours=10,
+        silent_hours=4,
+        longest_silence_hours=2,
+        last_heard=_T - 30,
+        receptions=40,
+        packets=12,
+        packets_per_hour=1.2,
+        direct=10,
+        gateways=(("32aca541", 30),),
+        gateway_count=1,
+        hops=MappingProxyType({1: 20}),
+        hop_samples=25,
+        hop_start=7,
+        hop_start_samples=9,
+        snr_median=5,
+        snr_low=-7,
+        snr_samples=33,
+        rssi_mean=171.0,
+        relayed=30,
+        ports=MappingProxyType({67: 6}),
+        decoded_packets=11,
+        telemetry_per_hour=1.5,
+        positions_per_hour=0.25,
+        channel_utilization=12.0,
+        air_util_tx=3.5,
+        boots=(_T - 7200,),
+        neighbors=(("979ed146", _T - 3600),),
+        gateway_check=GatewayCheck(_T - 60, 3600.0, 7, 3),
+    )
+
+    document = render.node_health_to_json_dict(_health(metrics=metrics))
+
+    assert isinstance(document["metrics"], dict)
+    assert list(document["metrics"].items()) == [
+        ("days", 7),
+        ("window_start", "2026-10-13T20:00:00Z"),
+        ("covered_hours", 10),
+        ("silent_hours", 4),
+        ("longest_silence_hours", 2),
+        ("last_heard", "2026-10-20T19:59:30Z"),
+        ("receptions", 40),
+        ("packets", 12),
+        ("packets_per_hour", 1.2),
+        ("direct", 10),
+        ("direct_share", 0.25),
+        ("gateway_count", 1),
+        ("gateways", [{"gateway": "32aca541", "receptions": 30}]),
+        ("uplinks_itself", False),
+        ("hops", {"1": 20}),
+        ("hop_samples", 25),
+        ("decoded_share", 0.625),
+        ("hops_max", 1),
+        ("hop_start", 7),
+        ("hop_start_samples", 9),
+        ("snr_median", 5),
+        ("snr_low", -7),
+        ("snr_samples", 33),
+        ("rssi_mean_raw", 171.0),
+        ("relayed", 30),
+        ("relays", []),
+        ("ports", {"67": 6}),
+        ("decoded_packets", 11),
+        ("telemetry_per_hour", 1.5),
+        ("positions_per_hour", 0.25),
+        ("battery", None),
+        ("channel_utilization", 12.0),
+        ("air_util_tx", 3.5),
+        ("boots", ["2026-10-20T18:00:00Z"]),
+        ("neighbors", [{"node": "979ed146", "last_reported": "2026-10-20T19:00:00Z"}]),
+        (
+            "gateway_check",
+            {"time": "2026-10-20T19:59:00Z", "window_seconds": 3600.0, "receptions": 7, "nodes": 3},
+        ),
+    ]
+
+
+def test_json_importance_lists_each_relation() -> None:
+    sole, dependent = NodeId.from_hex("0000c0de"), NodeId.from_hex("0000d0d0")
+    importance = Importance(
+        "high",
+        8,
+        ("MQTT gateway",),
+        uplinked=(_B,),
+        sole_gateway_for=(sole,),
+        dependents=(dependent,),
+    )
+
+    document = render.node_health_to_json_dict(_health(importance=importance))
+
+    assert document["importance"] == {
+        "level": "high",
+        "score": 8,
+        "reasons": ["MQTT gateway"],
+        "uplinked": [_B.hex],
+        "sole_gateway_for": ["0000c0de"],
+        "dependents": ["0000d0d0"],
+    }
+
+
+def test_the_detailed_report_names_a_relay_only_when_its_byte_is_unambiguous() -> None:
+    other = NodeId.from_hex("00001161")
+    metrics = _metrics(
+        relayed=30,
+        relays=(RelayShare(0x61, 20, 0.6, (_B, other)), RelayShare(0x19, 10, 0.4, (_B,))),
+    )
+
+    text = _detail(_health(metrics=metrics))
+
+    assert "0x61 60%, 0x19 40% (likely !00000561)" in text
 
 
 def test_json_without_fetching_has_no_refresh() -> None:
