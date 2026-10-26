@@ -92,12 +92,17 @@ def test_brief_keeps_only_the_essential_columns(
 
 @pytest.mark.usefixtures("seeded")
 def test_the_default_table_hides_node_and_mgmt(
-    runner: CliRunner, env: dict[str, str], mock_sources: Callable[..., respx.MockRouter]
+    runner: CliRunner,
+    env: dict[str, str],
+    mock_sources: Callable[..., respx.MockRouter],
+    tmp_path: Path,
 ) -> None:
     plain, lorastats = _status(runner, env, mock_sources, [])
-    explicit, _ = _status(runner, env, mock_sources, ["--detail", "default"])
+    # A fresh cache: the first run's refreshed histories would change the cells.
+    fresh = {**env, "MESHPROVISION_CACHE_DIR": str(tmp_path / "fresh-cache")}
+    explicit, _ = _status(runner, fresh, mock_sources, ["--detail", "default"])
 
-    assert _headers(plain.stdout) == _headers(explicit.stdout)
+    assert _headers(plain.stdout).split() == _headers(explicit.stdout).split()
     assert "Mgmt" not in _headers(plain.stdout)
     assert "Node" not in _headers(plain.stdout).split()
     assert "Short" in _headers(plain.stdout)

@@ -20,9 +20,9 @@ from meshprovision.datasources.lorastats import LORASTATS_BASE_URL, LORASTATS_NO
 from meshprovision.datasources.lorastats_packets import (
     LORASTATS_PACKET_REPORTS_PATH,
     LORASTATS_PACKETS_PARSED_PATH,
-    since_param,
 )
 from meshprovision.db.nodes import NodeRecord
+from meshprovision.health.packets import parse_receptions
 from meshprovision.nodeid import NodeId
 from tests.e2e.conftest import db_fingerprint, invoke
 
@@ -45,6 +45,11 @@ def _seed(seed_db: Callable[..., Path]) -> None:
     )
 
 
+def _stamp(epoch: float) -> str:
+    """An offset-aware row time: unlike naive Warsaw time, it means one instant on a DST change."""
+    return datetime.fromtimestamp(epoch, tz=UTC).isoformat()
+
+
 def _reports(
     node: str, now: float, *, battery: int = 80
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -52,7 +57,7 @@ def _reports(
     reports: list[dict[str, Any]] = []
     parsed: list[dict[str, Any]] = []
     for index in range(12):
-        when = since_param(now - 600 - index * 1800)
+        when = _stamp(now - 600 - index * 1800)
         packet = f"{index + 1:08x}"
         for hop_limit, gateway in enumerate(_GATEWAYS, start=4):
             reports.append(
@@ -143,6 +148,17 @@ def _run(
     with router:
         result = invoke(runner, ["health", *args], env)
     return result, lorastats
+
+
+def test_the_fixture_rows_mean_their_own_times_on_a_fall_back_day() -> None:
+    # 04:30 UTC on 2026-10-25: the rows span 01:00-02:00 UTC, the hour Warsaw repeats.
+    now = datetime(2026, 10, 25, 4, 30, tzinfo=UTC).timestamp()
+    reports, _ = _reports(_A, now)
+
+    receptions, skipped = parse_receptions(reports, NodeId.from_hex(_A), now=now)
+
+    assert skipped == 0
+    assert sorted({r.time for r in receptions}) == [now - 600 - i * 1800 for i in range(11, -1, -1)]
 
 
 @pytest.fixture
@@ -467,8 +483,8 @@ def test_lorastats_last_boot_is_recorded_in_the_history(
     nodes_url = LORASTATS_BASE_URL + LORASTATS_NODES_PATH.format(region="PL")
     record = {
         "NodeId": _A,
-        "LastSeen": since_param(time.time() - 60),
-        "LastBoot": since_param(boot),
+        "LastSeen": _stamp(time.time() - 60),
+        "LastBoot": _stamp(boot),
     }
     router.get(url__startswith=nodes_url).mock(return_value=httpx.Response(200, json=[record]))
     _Lorastats(router, rows)
