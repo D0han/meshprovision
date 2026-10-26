@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
+from datetime import timedelta
 
 import pytest
 
@@ -36,6 +37,7 @@ from meshprovision.health.history import (
 )
 from meshprovision.health.packets import DecodedPacket, Reception
 from meshprovision.nodeid import NodeId
+from meshprovision.status.cadence import learned_interval
 
 pytestmark = pytest.mark.unit
 
@@ -217,18 +219,60 @@ def test_with_since_silent_hours_start_at_since_even_before_the_first_row() -> N
     ]
 
 
-def test_without_since_silent_hours_start_inside_the_assumed_lorastats_retention() -> None:
+def test_without_since_silent_hours_start_at_the_oldest_reception_even_days_back() -> None:
+    """A row this old proves every later hour: lorastats deletes its oldest reports first."""
     fetched_at = _NOW
-    oldest_silent = floor_hour(fetched_at - ASSUMED_LORASTATS_RETENTION_SECONDS) + HOUR_SECONDS
-    old_row = _rx(oldest_silent - 5 * HOUR_SECONDS, packet="old")
+    assumed = floor_hour(fetched_at - ASSUMED_LORASTATS_RETENTION_SECONDS) + HOUR_SECONDS
+    old_row = _rx(assumed - 5 * HOUR_SECONDS, packet="old")
 
     history = _summary([old_row], since=None, fetched_at=fetched_at)
 
     hours = [bucket.hour for bucket in history.hours]
-    assert hours[0] == floor_hour(old_row.time)
-    assert hours[1] == oldest_silent
-    assert hours[-1] == floor_hour(fetched_at)
-    assert len(hours) == 1 + (floor_hour(fetched_at) - oldest_silent) // HOUR_SECONDS + 1
+    assert hours == list(range(floor_hour(old_row.time), floor_hour(fetched_at) + 1, HOUR_SECONDS))
+    assert [bucket.receptions for bucket in history.hours][:2] == [1, 0]
+
+
+def test_a_node_heard_every_6_hours_with_48_hours_held_learns_6_hours() -> None:
+    """Silent hours only inside the last day made a 6 h node learn 3h51 on its first refresh."""
+    now = _NOW
+    receptions = [_rx(now - age * HOUR_SECONDS - 600, packet=f"{age:x}") for age in range(0, 48, 6)]
+
+    history = merge(NodeHistory(node=_NODE), _summary(receptions, since=None, fetched_at=now))
+
+    hours = [(bucket.hour, bucket.receptions) for bucket in history.hours]
+    assert sum(1 for _, received in hours if received) == 8
+    assert learned_interval(hours, now=now) == timedelta(hours=6)
+
+
+def test_with_an_old_since_silent_hours_start_at_the_oldest_reception_returned() -> None:
+    """A refresh more than a day after the previous one: rows back to since prove those hours."""
+    since = floor_hour(_NOW - 2 * ASSUMED_LORASTATS_RETENTION_SECONDS)
+    oldest = since + 3 * HOUR_SECONDS
+
+    history = _summary([_rx(oldest + 5, packet="old")], since=since, fetched_at=_NOW)
+
+    assert history.hours[0].hour == oldest
+    assert len(history.hours) == (floor_hour(_NOW) - oldest) // HOUR_SECONDS + 1
+
+
+def test_silent_hours_never_start_before_since_whatever_lorastats_returned() -> None:
+    since = floor_hour(_NOW - 2 * ASSUMED_LORASTATS_RETENTION_SECONDS)
+
+    history = _summary(
+        [_rx(since - 3 * HOUR_SECONDS, packet="older")], since=since, fetched_at=_NOW
+    )
+
+    assert history.hours[0].hour == since
+    assert history.hours[0].receptions == 0
+
+
+def test_a_reception_inside_the_assumed_retention_does_not_shorten_it() -> None:
+    since = floor_hour(_NOW - 2 * ASSUMED_LORASTATS_RETENTION_SECONDS)
+    assumed = floor_hour(_NOW - ASSUMED_LORASTATS_RETENTION_SECONDS) + HOUR_SECONDS
+
+    history = _summary([_rx(_NOW - 60, packet="recent")], since=since, fetched_at=_NOW)
+
+    assert history.hours[0].hour == assumed
 
 
 def test_a_first_refresh_has_silent_hours_only_from_its_oldest_reception() -> None:

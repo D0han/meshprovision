@@ -102,7 +102,9 @@ HISTORY_RETENTION_SECONDS: Final[float] = 30 * 24 * 3600
 ASSUMED_LORASTATS_RETENTION_SECONDS: Final[float] = 24 * 3600
 """How far back lorastats is assumed to still hold every report (it keeps
 about a day or two). An hour this recent with no report is recorded as
-silent; an older one without a report stays unknown."""
+silent; so is an older one when lorastats returned an even older report
+of the node (it deletes its oldest reports first); otherwise an older hour
+without a report stays unknown."""
 
 FUTURE_SKEW_SECONDS: Final[float] = 300.0
 """How far ahead of the clock a stored time may be; anything later is dropped."""
@@ -392,12 +394,15 @@ def summarize(
 
     Rows before ``since`` are left out: they belong to hours the history
     already has complete. Every hour from ``since`` up to the hour of
-    ``fetched_at`` that starts after ``fetched_at -``
-    :data:`ASSUMED_LORASTATS_RETENTION_SECONDS` gets a bucket, an empty
-    one when nothing was heard; older hours only when something was.
-    Without ``since`` (a node's first refresh) empty buckets start only at
-    the hour of its oldest reception, and there are none without any: how
-    far back lorastats really keeps its reports is not known.
+    ``fetched_at`` that lorastats still holds gets a bucket, an empty one
+    when nothing was heard. lorastats deletes its oldest reports first, so
+    it holds every hour from that of the oldest reception it returned, and
+    is assumed to hold every hour that starts after ``fetched_at -``
+    :data:`ASSUMED_LORASTATS_RETENTION_SECONDS`; an older hour without a
+    reception stays unknown. Without ``since`` (a node's first refresh)
+    empty buckets start only at the hour of its oldest reception, and there
+    are none without any: how far back lorastats keeps the reports of a
+    node it has none of is not known.
 
     Args:
         node: The node.
@@ -412,7 +417,8 @@ def summarize(
         from the rows.
     """
     start = float("-inf") if since is None else since
-    kept = [r for r in receptions if r.time >= start]
+    returned = list(receptions)
+    kept = [r for r in returned if r.time >= start]
     packets = {p.packet_id: p for p in decoded if p.time >= start}
     first_heard: dict[str, int] = {}
     for reception in sorted(kept, key=lambda r: r.time):
@@ -422,13 +428,12 @@ def summarize(
         by_hour.setdefault(floor_hour(reception.time), []).append(reception)
     for packet in packets.values():
         by_hour.setdefault(floor_hour(packet.time), [])
-    first_silent = floor_hour(fetched_at - ASSUMED_LORASTATS_RETENTION_SECONDS) + HOUR_SECONDS
-    if since is not None:
-        first_silent = max(first_silent, since)
-    elif kept:
-        first_silent = max(first_silent, floor_hour(min(r.time for r in kept)))
+    oldest = floor_hour(min(r.time for r in returned)) if returned else None
+    if since is None:
+        first_silent = floor_hour(fetched_at) + HOUR_SECONDS if oldest is None else oldest
     else:
-        first_silent = floor_hour(fetched_at) + HOUR_SECONDS
+        held = floor_hour(fetched_at - ASSUMED_LORASTATS_RETENTION_SECONDS) + HOUR_SECONDS
+        first_silent = max(since, held if oldest is None else min(held, oldest))
     for hour in range(first_silent, floor_hour(fetched_at) + 1, HOUR_SECONDS):
         by_hour.setdefault(hour, [])
     own_byte = node.num & _BYTE_MASK

@@ -640,10 +640,12 @@ status` saw it) and gateway checks. A refresh asks from one hour before the
 start of the hour of the previous one (the extra hour absorbs a Warsaw-time
 `since` misread around a DST change) and *replaces* those hours rather than
 adding to them, so running it twice, or two `mesh` processes running it at
-once, never counts a packet twice. An hour that lorastats was asked about and
-heard nothing in is recorded as silent; an hour nobody asked about stays
-unknown (a node's first refresh records silent hours only from its oldest
-reception on). Everything older than 30 days is dropped on every write, a file
+once, never counts a packet twice. An hour that lorastats was asked about,
+still holds and heard nothing in is recorded as silent; an hour nobody asked
+about stays unknown. lorastats deletes its oldest reports first, so it is
+taken to hold every hour from that of the oldest reception it returned, and
+the last 24 hours (a node's first refresh records silent hours only from its
+oldest reception on, however far back that is). Everything older than 30 days is dropped on every write, a file
 is at most 2 MiB (the oldest days go first), at most 128 node files are kept
 (the least recently written go first), and a file not written for 30 days is
 deleted: at most 256 MiB in all; a month of a node heard by 10-30 gateways an

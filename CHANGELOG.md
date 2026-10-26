@@ -498,6 +498,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A node's expected interval is no longer learned too short when lorastats
+  still holds more than a day of its reports (a first refresh, or one more
+  than a day after the previous): only the last 24 h got silent hours, so a
+  node heard every 6 h learned 3 h 51 m and was stale after 8 h 41 m instead
+  of 13 h 30 m; its packets, telemetry and positions per hour were too high
+  and its silent hours too few. Every hour from the node's oldest reception
+  lorastats returned is now recorded (lorastats deletes its oldest reports
+  first). Hours stored before this fix keep the bias until they leave the
+  7-day window.
 - `mesh --cache-ttl 0 status --watch` no longer downloads loranet.pl's ~13 MB
   node dump on every 5 s poll (about 2.6 MB/s): like lorastats responses, the
   dump is now reused for at least 60 s whatever `--cache-ttl` says
