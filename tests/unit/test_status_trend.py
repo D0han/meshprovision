@@ -17,8 +17,13 @@ from meshprovision.status import render
 from meshprovision.status.cadence import Cadence, CadenceSource
 from meshprovision.status.merge import MergedNode
 from meshprovision.status.trend import (
+    AIR_UTIL_TX_EPSILON,
     BASELINE_WINDOW_SECONDS,
+    BATTERY_EPSILON,
+    MISSED_READING_FACTOR,
     SAME_READING_SECONDS,
+    UTILIZATION_EPSILON,
+    VOLTAGE_EPSILON,
     Change,
     NodeTrends,
     Trend,
@@ -172,6 +177,43 @@ def test_a_history_point_just_outside_the_same_reading_limit_counts() -> None:
     points = [TelemetryPoint(time=_T - SAME_READING_SECONDS - 1, battery=60)]
 
     assert node_trends(_shown(battery_level=70), points).battery == Trend(Change.UP, good=True)
+
+
+def test_the_constants_are_the_documented_ones() -> None:
+    assert (
+        BASELINE_WINDOW_SECONDS,
+        MISSED_READING_FACTOR,
+        BATTERY_EPSILON,
+        VOLTAGE_EPSILON,
+        UTILIZATION_EPSILON,
+        AIR_UTIL_TX_EPSILON,
+        SAME_READING_SECONDS,
+    ) == (21600.0, 1.5, 2.0, 0.05, 1.0, 0.5, 120.0)
+
+
+@pytest.mark.parametrize(
+    ("reading", "base", "under", "at", "change"),
+    [
+        ("battery", 50, 51, 52, Trend(Change.UP, good=True)),
+        ("voltage", 3.5, 3.54, 3.56, Trend(Change.UP, good=True)),
+        ("channel_utilization", 5.0, 5.9, 6.0, Trend(Change.UP, good=False)),
+        ("air_util_tx", 1.0, 1.4, 1.5, Trend(Change.UP, good=False)),
+    ],
+)
+def test_each_reading_uses_its_own_epsilon(
+    reading: str, base: float, under: float, at: float, change: Trend
+) -> None:
+    points = [
+        TelemetryPoint(time=_T - 2 * _HOUR, **{reading: base}),
+        TelemetryPoint(time=_T - _HOUR, **{reading: base}),
+    ]
+    field = "battery_level" if reading == "battery" else reading
+
+    flat = node_trends(_shown(**{field: under}), points)
+    moved = node_trends(_shown(**{field: at}), points)
+
+    assert getattr(flat, reading) == Trend(Change.FLAT)
+    assert getattr(moved, reading) == change
 
 
 def test_without_a_metrics_time_there_are_no_trends() -> None:
