@@ -182,13 +182,15 @@ class HealthRefresher:
         Returns:
             What was done, with every node's history.
         """
+        pairs = list(nodes)
+        keep = frozenset(node for node, _ in pairs)
         histories: dict[NodeId, NodeHistory] = {}
         refreshed: list[NodeId] = []
         no_region: list[NodeId] = []
         failures: list[RefreshFailure] = []
         down: DataSourceError | None = None
         skipped = 0
-        for node, region in nodes:
+        for node, region in pairs:
             history = self._store.load(node)
             boot = (boots or {}).get(node)
             update: Callable[[NodeHistory], NodeHistory] | None = None
@@ -215,7 +217,7 @@ class HealthRefresher:
                 else:
                     update = _then(update, _with_check(check))
             if update is not None:
-                history = self._store.update(node, update)
+                history = self._store.update(node, update, keep=keep)
             histories[node] = history
         return RefreshOutcome(
             histories=histories,

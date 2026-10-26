@@ -499,6 +499,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- With more than 128 active nodes, the `mesh health` histories no longer wipe
+  each other: every write deleted the least recently written file beyond 128,
+  which was always that of the node refreshed next, so no history ever
+  covered more than one refresh and every node cost a full refetch on every
+  run. The files of the nodes being refreshed are now never deleted; others
+  go first, beyond 128 files (or the refreshed nodes plus 32) or 256 MiB in
+  all.
 - When lorastats.pl is down, the health history refresh (`mesh health`,
   `mesh status --detail full`, and the plain `mesh status` table's refresh of
   stale histories) stops at the first request that fails with a 5xx, a

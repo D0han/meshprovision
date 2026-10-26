@@ -18,12 +18,18 @@ repeated by a later run.
 **Bounds.** Everything older than 30 days is dropped on every write, as is
 every file not written for 30 days. A file is at most
 :data:`HISTORY_MAX_FILE_BYTES` (the oldest days are dropped until it fits,
-and a larger file is not read) and at most :data:`HISTORY_MAX_NODES` files
-are kept (the least recently written go first), so the directory never
-holds more than ``HISTORY_MAX_NODES * HISTORY_MAX_FILE_BYTES`` (256 MiB).
-A month of a node heard by 10-30 gateways an hour takes 0.5-1 MB; even
-64 gateways and 64 relays every hour with every series full stays just
-under 2 MiB.
+and a larger file is not read). The files of the nodes being refreshed
+together (the ``keep`` of :meth:`HistoryStore.update`: a ``mesh status`` or
+``mesh health`` run's nodes) are never deleted by a write; of the others
+the least recently written go first while there are more than
+:data:`HISTORY_MAX_NODES` files, or than the nodes being refreshed plus
+:data:`HISTORY_SPARE_NODES`, or while they take more than
+:data:`HISTORY_MAX_TOTAL_BYTES` (256 MiB) in all. So a fleet larger than
+the cap keeps every history instead of each write evicting the node
+refreshed next, and the directory holds at most 256 MiB unless the nodes of
+one run need more. A month of a node heard by 10-30 gateways an hour takes
+0.5-1 MB; even 64 gateways and 64 relays every hour with every series full
+stays just under 2 MiB.
 """
 
 from __future__ import annotations
@@ -34,7 +40,7 @@ import logging
 import math
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping, Set
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -65,6 +71,8 @@ __all__ = [
     "HISTORY_DIRNAME",
     "HISTORY_MAX_FILE_BYTES",
     "HISTORY_MAX_NODES",
+    "HISTORY_MAX_TOTAL_BYTES",
+    "HISTORY_SPARE_NODES",
     "HISTORY_VERSION",
     "HistoryStore",
     "history_from_json",
@@ -83,7 +91,13 @@ HISTORY_MAX_FILE_BYTES: Final[int] = 2 * 1024 * 1024
 """The largest history file written or read."""
 
 HISTORY_MAX_NODES: Final[int] = 128
-"""The most history files kept."""
+"""The most history files kept, unless the nodes refreshed together need more."""
+
+HISTORY_SPARE_NODES: Final[int] = 32
+"""Files kept beyond the nodes refreshed together, when that is above :data:`HISTORY_MAX_NODES`."""
+
+HISTORY_MAX_TOTAL_BYTES: Final[int] = 256 * 1024 * 1024
+"""The most bytes the history files take, unless the nodes refreshed together need more."""
 
 _INT_KEY_RE: Final[re.Pattern[str]] = re.compile(r"^(?:-?[1-9][0-9]{0,9}|0)\Z")
 _HEX_ID_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{8}\Z")
@@ -150,12 +164,20 @@ class HistoryStore:
             return NodeHistory(node=node)
         return prune(history, now=self._clock())
 
-    def update(self, node: NodeId, change: Callable[[NodeHistory], NodeHistory]) -> NodeHistory:
+    def update(
+        self,
+        node: NodeId,
+        change: Callable[[NodeHistory], NodeHistory],
+        *,
+        keep: Collection[NodeId] = (),
+    ) -> NodeHistory:
         """Re-read ``node``'s history, apply ``change``, bound it and write it back.
 
         Args:
             node: The node.
             change: Builds the new history from the stored one.
+            keep: The nodes refreshed together with ``node``, whose files
+                the sweep after the write never deletes.
 
         Returns:
             The history as written (also when the write failed).
@@ -167,31 +189,45 @@ class HistoryStore:
             history = _drop_oldest_day(history)
             document = history_to_json(history)
         write_json(self.path_for(node), document, what=_WHAT)
-        self._sweep(keep=self.path_for(node), now=now)
+        self._sweep(keep={self.path_for(other) for other in (node, *keep)}, now=now)
         return history
 
-    def _sweep(self, *, keep: Path, now: float) -> None:
-        """Delete files not written for the retention, then the oldest beyond the cap.
+    def _sweep(self, *, keep: Set[Path], now: float) -> None:
+        """Delete files not written for the retention, then the oldest beyond the bounds.
 
         Args:
-            keep: The file just written, never deleted.
+            keep: The files never deleted: the one just written and those
+                of the nodes refreshed with it.
             now: The current time, epoch seconds.
         """
         try:
             files = [
-                (entry.stat().st_mtime, entry)
+                (entry, entry.stat())
                 for entry in self._directory.iterdir()
-                if _FILE_RE.match(entry.name) and entry != keep
+                if _FILE_RE.match(entry.name)
             ]
         except OSError as exc:
             _logger.debug("could not list the %s directory %s: %s", _WHAT, self._directory, exc)
             return
-        files.sort(reverse=True)
+        count = len(files)
+        total = sum(status.st_size for _, status in files)
+        cap = max(HISTORY_MAX_NODES, len(keep) + HISTORY_SPARE_NODES)
         oldest = now - HISTORY_RETENTION_SECONDS
-        for index, (mtime, entry) in enumerate(files):
-            if mtime < oldest or index >= HISTORY_MAX_NODES - 1:
-                with contextlib.suppress(OSError):
-                    entry.unlink()
+        others = sorted(
+            (
+                (status.st_mtime, status.st_size, entry)
+                for entry, status in files
+                if entry not in keep
+            ),
+            key=lambda file: file[0],
+        )
+        for mtime, size, entry in others:
+            if mtime >= oldest and count <= cap and total <= HISTORY_MAX_TOTAL_BYTES:
+                break
+            with contextlib.suppress(OSError):
+                entry.unlink()
+            count -= 1
+            total -= size
 
 
 def _encoded(document: object) -> bytes:

@@ -416,9 +416,9 @@ def test_a_boot_time_is_recorded_once_without_a_request(
     writes: list[NodeId] = []
     update = store.update
 
-    def counting_update(node: NodeId, change: Any) -> NodeHistory:
+    def counting_update(node: NodeId, change: Any, **kwargs: Any) -> NodeHistory:
         writes.append(node)
-        return update(node, change)
+        return update(node, change, **kwargs)
 
     monkeypatch.setattr(store, "update", counting_update)
 
@@ -558,3 +558,18 @@ def test_the_gateway_check_interval_holds_within_a_process_when_nothing_is_store
     refresher.refresh([(_NODE, "PL")], gateway_check=True)
 
     assert [call[0] for call in packets.calls].count("uplinked") == 1
+
+
+def test_a_fleet_larger_than_the_file_cap_keeps_every_history(tmp_path: Path) -> None:
+    """With 140 nodes each write evicted the oldest file: every run refetched everything."""
+    refresher, packets, store, now = _setup(tmp_path, interval=STATUS_REFRESH_INTERVAL_SECONDS)
+    nodes = [(NodeId.from_int(0x20000000 + index), "PL") for index in range(140)]
+    refresher.refresh(nodes)
+    packets.calls.clear()
+    now[0] = _NOW + STATUS_REFRESH_INTERVAL_SECONDS
+
+    refresher.refresh(nodes)
+
+    assert len(list(store.directory.iterdir())) == 140
+    assert len(packets.calls) == 2 * 140
+    assert all(since is not None for _, _, _, since in packets.calls)

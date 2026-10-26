@@ -471,6 +471,7 @@ def test_only_the_most_recently_written_files_are_kept(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(store_module, "HISTORY_MAX_NODES", 3)
+    monkeypatch.setattr(store_module, "HISTORY_SPARE_NODES", 0)
     store = _store(tmp_path, [_NOW])
     store.directory.mkdir(parents=True)
     files = [_touch(store, f"0000000{i}.json", _NOW - 100 + i) for i in range(4)]
@@ -492,3 +493,99 @@ def test_a_failed_sweep_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr(Path, "iterdir", refuse)
 
     assert store.update(_NODE, lambda _old: _rich()) == _rich()
+
+
+def _keep_ids(count: int) -> list[NodeId]:
+    return [NodeId.from_int(0x100 + index) for index in range(count)]
+
+
+def test_the_files_of_the_nodes_refreshed_together_are_never_swept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Refreshing more nodes than the cap evicted each node's file before it came round again."""
+    monkeypatch.setattr(store_module, "HISTORY_MAX_NODES", 3)
+    monkeypatch.setattr(store_module, "HISTORY_SPARE_NODES", 0)
+    store = _store(tmp_path, [_NOW])
+    store.directory.mkdir(parents=True)
+    fleet = _keep_ids(4)
+    kept = [_touch(store, f"{node.hex}.json", _NOW - 1000 + i) for i, node in enumerate(fleet)]
+    others = [_touch(store, f"0000000{i}.json", _NOW - 100 + i) for i in range(2)]
+
+    store.update(_NODE, lambda _old: _rich(), keep=fleet)
+
+    assert all(path.exists() for path in kept)
+    assert not any(path.exists() for path in others)
+    assert store.path_for(_NODE).exists()
+
+
+def test_the_cap_grows_with_the_nodes_refreshed_together(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(store_module, "HISTORY_MAX_NODES", 3)
+    monkeypatch.setattr(store_module, "HISTORY_SPARE_NODES", 2)
+    store = _store(tmp_path, [_NOW])
+    store.directory.mkdir(parents=True)
+    fleet = _keep_ids(4)
+    for node in fleet:
+        _touch(store, f"{node.hex}.json", _NOW - 1000)
+    others = [_touch(store, f"0000000{i}.json", _NOW - 100 + i) for i in range(4)]
+
+    store.update(_NODE, lambda _old: _rich(), keep=fleet)
+
+    # 9 files, cap = 4 refreshed together (+ the one written) + 2 spare = 7
+    assert [path.exists() for path in others] == [False, False, True, True]
+
+
+def test_the_oldest_other_files_go_until_all_fit_the_byte_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path, [_NOW])
+    store.update(_NODE, lambda _old: _rich())
+    written = store.path_for(_NODE).stat().st_size
+    monkeypatch.setattr(store_module, "HISTORY_MAX_TOTAL_BYTES", written + 250)
+    others = []
+    for i in range(4):
+        path = store.directory / f"0000000{i}.json"
+        path.write_text("x" * 100)
+        os.utime(path, (_NOW - 100 + i, _NOW - 100 + i))
+        others.append(path)
+
+    store.update(_NODE, lambda _old: _rich())
+
+    assert [path.exists() for path in others] == [False, False, True, True]
+
+
+def test_a_file_exactly_at_the_byte_bound_is_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = _store(tmp_path, [_NOW])
+    store.update(_NODE, lambda _old: _rich())
+    written = store.path_for(_NODE).stat().st_size
+    monkeypatch.setattr(store_module, "HISTORY_MAX_TOTAL_BYTES", written + 100)
+    other = store.directory / "0000000a.json"
+    other.write_text("x" * 100)
+
+    store.update(_NODE, lambda _old: _rich())
+
+    assert other.exists()
+
+
+def test_the_files_refreshed_together_are_kept_even_beyond_the_byte_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(store_module, "HISTORY_MAX_TOTAL_BYTES", 1)
+    store = _store(tmp_path, [_NOW])
+    store.directory.mkdir(parents=True)
+    fleet = _keep_ids(2)
+    kept = [_touch(store, f"{node.hex}.json", _NOW - 1000) for node in fleet]
+
+    store.update(_NODE, lambda _old: _rich(), keep=fleet)
+
+    assert all(path.exists() for path in kept)
+    assert store.path_for(_NODE).exists()
+
+
+def test_the_bounds_are_128_files_32_spare_and_256_mib() -> None:
+    assert store_module.HISTORY_MAX_NODES == 128
+    assert store_module.HISTORY_SPARE_NODES == 32
+    assert store_module.HISTORY_MAX_TOTAL_BYTES == 256 * 1024 * 1024

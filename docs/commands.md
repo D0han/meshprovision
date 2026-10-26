@@ -658,10 +658,12 @@ about stays unknown. lorastats deletes its oldest reports first, so it is
 taken to hold every hour from that of the oldest reception it returned, and
 the last 24 hours (a node's first refresh records silent hours only from its
 oldest reception on, however far back that is). Everything older than 30 days is dropped on every write, a file
-is at most 2 MiB (the oldest days go first), at most 128 node files are kept
-(the least recently written go first), and a file not written for 30 days is
-deleted: at most 256 MiB in all; a month of a node heard by 10-30 gateways an
-hour takes 0.5-1 MB. Files are written atomically and owner-only; a missing,
+is at most 2 MiB (the oldest days go first), and a file not written for 30
+days is deleted. The files of the nodes a run refreshes are never deleted by
+it; of the other files the least recently written go first while there are
+more than 128 files (or than the run's nodes plus 32) or they take more than
+256 MiB in all, so a fleet of more than 128 nodes keeps every node's history;
+a month of a node heard by 10-30 gateways an hour takes 0.5-1 MB. Files are written atomically and owner-only; a missing,
 corrupt or foreign file reads as an empty history. Deleting the directory only
 loses the history.
 
