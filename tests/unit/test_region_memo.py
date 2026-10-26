@@ -258,6 +258,33 @@ def test_an_expired_entry_is_dropped_on_the_next_write(tmp_path: Path) -> None:
     assert set(json.loads(memo.path.read_text(encoding="utf-8"))["nodes"]) == {"deadbe02"}
 
 
+@pytest.mark.parametrize(("padding", "region"), [(0, "PL"), (1, None)])
+def test_a_file_over_one_mebibyte_is_not_read(
+    tmp_path: Path, padding: int, region: str | None
+) -> None:
+    memo = _memo(tmp_path)
+    text = json.dumps(_nodes(deadbe01={"region": "PL", "stored_at": _NOW}))
+    memo.path.parent.mkdir(parents=True)
+    memo.path.write_text(text + " " * (1024 * 1024 - len(text) + padding), encoding="utf-8")
+
+    assert memo.region_for(_A) == region
+
+
+def test_a_write_keeps_at_most_2048_entries(tmp_path: Path) -> None:
+    entries = {
+        f"{index:08x}": {"region": "PL", "stored_at": _NOW - index} for index in range(1, 2049)
+    }
+    memo = _memo(tmp_path)
+    _write_raw(memo, _nodes(**entries))
+
+    memo.remember(_A, "Zachód")
+
+    kept = json.loads(memo.path.read_text(encoding="utf-8"))["nodes"]
+    assert len(kept) == 2048
+    assert "deadbe01" in kept
+    assert f"{2048:08x}" not in kept
+
+
 def test_a_write_keeps_only_the_newest_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

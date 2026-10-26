@@ -208,6 +208,21 @@ def test_a_fresh_cached_list_is_used_without_a_request(tmp_path: Path) -> None:
 
 
 @respx.mock
+@pytest.mark.parametrize(("padding", "requests"), [(0, 0), (1, 1)])
+def test_a_cached_list_file_over_64_kib_is_not_read(
+    tmp_path: Path, padding: int, requests: int
+) -> None:
+    route = _page_route()
+    path = _write_cache(tmp_path, _cached(["Zachód"], _NOW - 60))
+    text = path.read_text(encoding="utf-8")
+    path.write_text(text + " " * (64 * 1024 - len(text.encode()) + padding), encoding="utf-8")
+
+    RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW]))
+
+    assert route.call_count == requests
+
+
+@respx.mock
 def test_a_cached_list_older_than_a_week_is_fetched_again(tmp_path: Path) -> None:
     route = _page_route()
     _write_cache(tmp_path, _cached(["Zachód"], _NOW - 7 * 24 * 3600 - 1))

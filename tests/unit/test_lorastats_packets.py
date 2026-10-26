@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -138,6 +139,28 @@ def test_an_answer_over_the_size_cap_is_refused(
 
     with pytest.raises(HttpError, match="10"):
         LorastatsPackets(_client(tmp_path)).reports(_NODE, "Zachód", since=None)
+
+
+@respx.mock
+@pytest.mark.parametrize(("padding", "refused"), [(0, False), (1, True)])
+def test_an_answer_over_eight_mebibytes_is_refused(
+    tmp_path: Path, padding: int, refused: bool
+) -> None:
+    body = json.dumps(_ROWS)
+    respx.get(_url(LORASTATS_PACKET_REPORTS_PATH)).mock(
+        return_value=httpx.Response(
+            200,
+            content=body + " " * (8 * 1024 * 1024 - len(body) + padding),
+            headers={"content-type": "application/json"},
+        )
+    )
+    packets = LorastatsPackets(_client(tmp_path))
+
+    if refused:
+        with pytest.raises(HttpError):
+            packets.reports(_NODE, "Zachód", since=None)
+    else:
+        assert packets.reports(_NODE, "Zachód", since=None) == _ROWS
 
 
 @respx.mock

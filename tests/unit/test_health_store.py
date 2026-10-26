@@ -25,7 +25,6 @@ from meshprovision.health.history import (
 )
 from meshprovision.health.store import (
     HISTORY_DIRNAME,
-    HISTORY_MAX_FILE_BYTES,
     HISTORY_VERSION,
     HistoryStore,
     history_from_json,
@@ -310,11 +309,11 @@ def test_an_unusable_file_loads_empty(tmp_path: Path, content: bytes) -> None:
     assert store.load(_NODE) == NodeHistory(node=_NODE)
 
 
-def test_an_oversized_file_is_not_read(tmp_path: Path) -> None:
+def test_a_file_over_two_mebibytes_is_not_read(tmp_path: Path) -> None:
     store = _store(tmp_path, [_NOW])
     store.directory.mkdir(parents=True)
     text = json.dumps(history_to_json(_rich()))
-    store.path_for(_NODE).write_text(text + " " * (HISTORY_MAX_FILE_BYTES - len(text) + 1))
+    store.path_for(_NODE).write_text(text + " " * (2 * 1024 * 1024 - len(text) + 1))
 
     assert store.load(_NODE) == NodeHistory(node=_NODE)
 
@@ -323,7 +322,7 @@ def test_a_file_at_the_size_limit_is_read(tmp_path: Path) -> None:
     store = _store(tmp_path, [_NOW])
     store.directory.mkdir(parents=True)
     text = json.dumps(history_to_json(_rich()))
-    store.path_for(_NODE).write_text(text + " " * (HISTORY_MAX_FILE_BYTES - len(text)))
+    store.path_for(_NODE).write_text(text + " " * (2 * 1024 * 1024 - len(text)))
 
     assert store.load(_NODE) == _rich()
 
