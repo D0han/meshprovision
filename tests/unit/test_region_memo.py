@@ -21,6 +21,7 @@ pytestmark = pytest.mark.unit
 _NOW = 1_760_000_000.0
 _A = NodeId.from_hex("deadbe01")
 _B = NodeId.from_hex("deadbe02")
+_C = NodeId.from_hex("deadbe03")
 
 
 def _memo(tmp_path: Path, now: list[float] | None = None) -> RegionMemo:
@@ -83,6 +84,27 @@ def test_forget_drops_the_entry_on_disk(tmp_path: Path) -> None:
     assert memo.region_for(_A) is None
     later = _memo(tmp_path)
     assert (later.region_for(_A), later.region_for(_B)) == (None, "Zachód")
+
+
+def test_forgetting_keeps_another_processes_entries(tmp_path: Path) -> None:
+    first, second = _memo(tmp_path), _memo(tmp_path)
+    assert first.region_for(_A) is None
+    second.remember(_B, "Zachód")
+    first.remember(_A, "PL")
+    second.remember(_C, "Warszawa")
+
+    first.forget(_A)
+
+    later = _memo(tmp_path)
+    assert [later.region_for(node) for node in (_A, _B, _C)] == [None, "Zachód", "Warszawa"]
+
+
+def test_forgetting_before_any_lookup_still_drops_the_entry(tmp_path: Path) -> None:
+    _memo(tmp_path).remember(_A, "PL")
+
+    _memo(tmp_path).forget(_A)
+
+    assert _memo(tmp_path).region_for(_A) is None
 
 
 def test_forgetting_an_unknown_node_writes_nothing(tmp_path: Path) -> None:

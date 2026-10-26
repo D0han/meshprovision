@@ -226,6 +226,22 @@ def test_a_refresh_time_in_the_future_does_not_block_refreshing(tmp_path: Path) 
     assert packets.calls[0][3] == floor_hour(_NOW) - SINCE_MARGIN_SECONDS
 
 
+@pytest.mark.parametrize(("back", "asked"), [(86400.0, True), (301.0, True), (300.0, False)])
+def test_a_gateway_check_from_the_future_does_not_block_checking(
+    tmp_path: Path, back: float, asked: bool
+) -> None:
+    # The clock stepped back after a check: that check now lies in the future.
+    refresher, packets, _, now = _setup(tmp_path)
+    now[0] = _NOW + back
+    refresher.refresh([(_NODE, "PL")], gateway_check=True)
+    now[0] = _NOW
+
+    refresher.refresh([(_NODE, "PL")], gateway_check=True)
+
+    uplinked = [call for call in packets.calls if call[0] == "uplinked"]
+    assert len(uplinked) == (2 if asked else 1)
+
+
 def test_a_node_without_a_region_is_never_asked_about(tmp_path: Path) -> None:
     refresher, packets, _, _ = _setup(tmp_path)
 
