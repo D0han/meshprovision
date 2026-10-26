@@ -561,7 +561,9 @@ run fetches it again instead of failing until the TTL expires. `--no-cache` /
 `--force-refresh` bypasses reads but still writes the response back.
 Otherwise, lorastats responses are reused for at least 60 s (status-endpoint
 answers for at least an hour), even with `--cache-ttl 0`, so a short `--watch
---interval` cannot query lorastats about every node on every poll. The
+--interval` cannot query lorastats about every node on every poll; the
+loranet.pl dump (~13 MB) is likewise reused for at least 60 s, so
+`--cache-ttl 0` with `--watch` does not download it every 5 s. The
 remembered regions are used with `--no-cache` too. A host that answers HTTP 429 (rate limited) is not
 asked again by the same `mesh` process for the `Retry-After` time it gave (10
 minutes when it gave none, at most a day); meanwhile each `--watch` poll lists

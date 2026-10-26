@@ -498,6 +498,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh --cache-ttl 0 status --watch` no longer downloads loranet.pl's ~13 MB
+  node dump on every 5 s poll (about 2.6 MB/s): like lorastats responses, the
+  dump is now reused for at least 60 s whatever `--cache-ttl` says
+  (`--no-cache` still fetches it afresh).
 - `mesh --no-cache status --watch` bypasses the cache on the first poll only.
   It used to bypass it on every poll, so a short `--interval` re-queried
   lorastats.pl once per node per poll (10 nodes at `--interval 1`: 10

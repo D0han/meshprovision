@@ -835,6 +835,53 @@ def test_loranet_raw_index_memoizes(tmp_path: Path) -> None:
     assert route.call_count == 1
 
 
+def _loranet_client_at(tmp_path: Path, now: list[float], *, ttl: float) -> CachedHTTPClient:
+    return CachedHTTPClient(
+        cache_dir=tmp_path / "cache",
+        user_agent="mp/1 (+t@example.invalid)",
+        ttl=ttl,
+        clock=lambda: now[0],
+    )
+
+
+@respx.mock
+def test_loranet_reuses_the_dump_for_a_minute_even_with_a_zero_client_ttl(
+    tmp_path: Path,
+) -> None:
+    """`--cache-ttl 0 status --watch` downloaded the ~13 MB dump on every 5 s poll."""
+    route = respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
+    now = [1_700_000_000.0]
+    client = _loranet_client_at(tmp_path, now, ttl=0.0)
+
+    LoranetSource(client).raw_index()  # each --watch poll builds a new source
+    now[0] += 60  # the documented floor
+    LoranetSource(client).raw_index()
+    assert route.call_count == 1
+
+    now[0] += 1
+    LoranetSource(client).raw_index()
+    assert route.call_count == 2
+
+    LoranetSource(client).raw_index(force_refresh=True)
+    assert route.call_count == 3
+
+
+@respx.mock
+def test_loranet_keeps_a_client_ttl_longer_than_its_floor(tmp_path: Path) -> None:
+    route = respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
+    now = [1_700_000_000.0]
+    client = _loranet_client_at(tmp_path, now, ttl=300.0)
+
+    LoranetSource(client).raw_index()
+    now[0] += 300
+    LoranetSource(client).raw_index()
+    assert route.call_count == 1
+
+    now[0] += 1
+    LoranetSource(client).raw_index()
+    assert route.call_count == 2
+
+
 @respx.mock
 def test_loranet_raw_index_memo_short_circuits_before_get_json(tmp_path: Path, monkeypatch) -> None:
     """Regression test: the in-memory memo must be observed in isolation.

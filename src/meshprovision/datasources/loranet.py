@@ -38,12 +38,19 @@ from meshprovision.nodeid import NodeId
 if TYPE_CHECKING:
     from meshprovision.cache.http import CachedHTTPClient
 
-__all__ = ["LORANET_NODES_URL", "LoranetSource", "parse_node"]
+__all__ = ["LORANET_MIN_TTL_SECONDS", "LORANET_NODES_URL", "LoranetSource", "parse_node"]
 
 _logger = logging.getLogger(__name__)
 
 LORANET_NODES_URL: Final[str] = "https://loranet.pl/nodes.json"
 """The loranet.pl node dump endpoint."""
+
+LORANET_MIN_TTL_SECONDS: Final[float] = 60.0
+"""Shortest time the loranet.pl dump is reused, whatever the client's TTL.
+
+The dump is ~13 MB; with this floor, ``--cache-ttl 0`` and a short
+``--watch`` poll still download it at most once a minute (``--no-cache``
+still forces a fresh fetch)."""
 
 _LATITUDE_LIMIT: Final[float] = 90.0
 _LONGITUDE_LIMIT: Final[float] = 180.0
@@ -90,6 +97,8 @@ class LoranetSource(BaseHTTPDataSource):
             force_refresh: When true, bypasses both the in-memory memo
                 and the on-disk HTTP cache read (the fetched response is
                 still written back to the on-disk cache either way).
+                Otherwise a cached dump is reused for the client's TTL,
+                but at least :data:`LORANET_MIN_TTL_SECONDS`.
 
         Returns:
             The decoded dump: an object keyed by decimal node id string.
@@ -112,7 +121,10 @@ class LoranetSource(BaseHTTPDataSource):
             self._last_fetch_data_as_of = self._index_fetched_at
             return self._index
         payload = self.get_json(
-            self._url, force_refresh=force_refresh, validate=self._validate_dump
+            self._url,
+            ttl=max(self._client.ttl, LORANET_MIN_TTL_SECONDS),
+            force_refresh=force_refresh,
+            validate=self._validate_dump,
         )
         index = require_json_object(payload, url=self._url, source=self.name)
         self._index = index
