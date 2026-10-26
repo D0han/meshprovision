@@ -106,6 +106,17 @@ def _setup(
     return refresher, fake, store, now
 
 
+def test_the_constants_are_the_documented_ones() -> None:
+    assert (
+        REFRESH_INTERVAL_SECONDS,
+        FORCED_REFRESH_INTERVAL_SECONDS,
+        STATUS_REFRESH_INTERVAL_SECONDS,
+        GATEWAY_CHECK_INTERVAL_SECONDS,
+        GATEWAY_CHECK_WINDOW_SECONDS,
+        SINCE_MARGIN_SECONDS,
+    ) == (600.0, 60.0, 3600.0, 3600.0, 3600.0, 3600)
+
+
 def test_a_first_refresh_asks_for_everything_and_stores_the_history(tmp_path: Path) -> None:
     refresher, packets, store, _ = _setup(tmp_path)
 
@@ -457,10 +468,8 @@ def test_a_gateway_check_counts_rows_and_senders_at_most_once_an_hour(tmp_path: 
     refresher.refresh([(_NODE, "PL")], gateway_check=True)
 
     uplinked = [call for call in packets.calls if call[0] == "uplinked"]
-    assert uplinked == [("uplinked", _NODE.hex, "PL", _NOW - GATEWAY_CHECK_WINDOW_SECONDS)]
-    assert store.load(_NODE).gateway_checks == (
-        GatewayCheck(_NOW, GATEWAY_CHECK_WINDOW_SECONDS, 6, 2),
-    )
+    assert uplinked == [("uplinked", _NODE.hex, "PL", _NOW - 3600)]
+    assert store.load(_NODE).gateway_checks == (GatewayCheck(_NOW, 3600.0, 6, 2),)
     now[0] = _NOW + GATEWAY_CHECK_INTERVAL_SECONDS
     refresher.refresh([(_NODE, "PL")], gateway_check=True)
     assert len([call for call in packets.calls if call[0] == "uplinked"]) == 2

@@ -25,9 +25,11 @@ from meshprovision.health.rules import (
     HOP_ADVICE_MIN_SAMPLES,
     MIN_RECEPTIONS,
     REBOOTS_WARN,
+    REBOOTS_WINDOW_DAYS,
     RELAY_CONCENTRATION_SHARE,
     RELAY_DEPENDENCY_SHARE,
     ROUTER_MIN_GATEWAYS,
+    SILENCE_RUN_MISSED,
     SILENCE_WARN_HOURS,
     SILENT_CRIT_SECONDS,
     SILENT_WARN_SECONDS,
@@ -79,6 +81,30 @@ def test_the_thresholds_match_the_status_table_colours() -> None:
     assert CHANNEL_UTILIZATION_CRIT_PERCENT == render.CHANNEL_UTILIZATION_ALARM_PERCENT
     assert AIR_UTIL_TX_WARN_PERCENT == render.AIR_UTIL_TX_WARN_PERCENT
     assert AIR_UTIL_TX_CRIT_PERCENT == render.AIR_UTIL_TX_ALARM_PERCENT
+
+
+def test_the_constants_are_the_documented_ones() -> None:
+    assert (
+        SILENT_WARN_SECONDS,
+        SILENT_CRIT_SECONDS,
+        BATTERY_WARN_PERCENT,
+        BATTERY_CRIT_PERCENT,
+        BATTERY_FRESH_SECONDS,
+        BATTERY_DRAIN_WARN_PER_DAY,
+        MIN_RECEPTIONS,
+        REBOOTS_WARN,
+        REBOOTS_WINDOW_DAYS,
+        SILENCE_WARN_HOURS,
+        SILENCE_RUN_MISSED,
+        DEFAULT_HOP_LIMIT,
+        HOP_ADVICE_MIN_SAMPLES,
+    ) == (7200.0, 86400.0, 20, 10, 86400.0, -10.0, 20, 3, 7, 6, 5, 3, 20)
+    assert (
+        CHANNEL_UTILIZATION_WARN_PERCENT,
+        CHANNEL_UTILIZATION_CRIT_PERCENT,
+        AIR_UTIL_TX_WARN_PERCENT,
+        AIR_UTIL_TX_CRIT_PERCENT,
+    ) == (25.0, 40.0, 5.0, 10.0)
 
 
 def test_a_healthy_node_is_ok_without_findings() -> None:
@@ -313,9 +339,7 @@ def test_utilization_thresholds(field: str, code: str, warn: float, crit: float)
     assert _codes(_m(**{field: crit + 0.1}))[code] is Verdict.CRIT
 
 
-@pytest.mark.parametrize(
-    ("hours", "expected"), [(SILENCE_WARN_HOURS, Verdict.WARN), (SILENCE_WARN_HOURS - 1, None)]
-)
+@pytest.mark.parametrize(("hours", "expected"), [(6, Verdict.WARN), (5, None)])
 def test_long_silence_rule(hours: int, expected: Verdict | None) -> None:
     assert _codes(_m(longest_silence_hours=hours)).get("silent_hours") == expected
 

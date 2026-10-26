@@ -11,7 +11,6 @@ import pytest
 
 from meshprovision.datasources import region_memo as memo_module
 from meshprovision.datasources.region_memo import (
-    REGION_MEMO_MAX_AGE_SECONDS,
     REGION_MEMO_VERSION,
     RegionMemo,
 )
@@ -222,7 +221,7 @@ def test_an_entry_expires_after_its_maximum_age(tmp_path: Path) -> None:
     now = [_NOW]
     _memo(tmp_path, now).remember(_A, "PL")
 
-    now[0] = _NOW + REGION_MEMO_MAX_AGE_SECONDS
+    now[0] = _NOW + 30 * 24 * 3600
     assert _memo(tmp_path, now).region_for(_A) == "PL"
     now[0] += 1
     assert _memo(tmp_path, now).region_for(_A) is None
@@ -233,7 +232,7 @@ def test_an_entry_expires_in_a_long_running_process_too(tmp_path: Path) -> None:
     memo = _memo(tmp_path, now)
     memo.remember(_A, "PL")
 
-    now[0] = _NOW + REGION_MEMO_MAX_AGE_SECONDS + 1
+    now[0] = _NOW + 30 * 24 * 3600 + 1
     assert memo.region_for(_A) is None
 
 
@@ -252,7 +251,7 @@ def test_an_entry_stored_in_the_future_is_used_only_within_a_small_skew(tmp_path
 def test_an_expired_entry_is_dropped_on_the_next_write(tmp_path: Path) -> None:
     now = [_NOW]
     _memo(tmp_path, now).remember(_A, "PL")
-    now[0] = _NOW + REGION_MEMO_MAX_AGE_SECONDS + 1
+    now[0] = _NOW + 30 * 24 * 3600 + 1
     memo = _memo(tmp_path, now)
     memo.remember(_B, "Zachód")
 

@@ -17,7 +17,6 @@ from meshprovision.datasources.lorastats_regions import (
     REGION_LIST_FILENAME,
     REGION_LIST_MAX_PAGE_BYTES,
     REGION_LIST_RETRY_SECONDS,
-    REGION_LIST_TTL_SECONDS,
     REGION_LIST_VERSION,
     RegionList,
     parse_region_list,
@@ -200,7 +199,7 @@ def test_the_page_itself_is_not_kept_in_the_http_cache(tmp_path: Path) -> None:
 @respx.mock
 def test_a_fresh_cached_list_is_used_without_a_request(tmp_path: Path) -> None:
     route = _page_route()
-    _write_cache(tmp_path, _cached(["Zachód", "Gdańsk"], _NOW - REGION_LIST_TTL_SECONDS))
+    _write_cache(tmp_path, _cached(["Zachód", "Gdańsk"], _NOW - 7 * 24 * 3600))
 
     regions = RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW]))
 
@@ -211,7 +210,7 @@ def test_a_fresh_cached_list_is_used_without_a_request(tmp_path: Path) -> None:
 @respx.mock
 def test_a_cached_list_older_than_a_week_is_fetched_again(tmp_path: Path) -> None:
     route = _page_route()
-    _write_cache(tmp_path, _cached(["Zachód"], _NOW - REGION_LIST_TTL_SECONDS - 1))
+    _write_cache(tmp_path, _cached(["Zachód"], _NOW - 7 * 24 * 3600 - 1))
 
     regions = RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW]))
 

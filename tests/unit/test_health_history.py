@@ -82,6 +82,21 @@ def _hours(history: NodeHistory) -> dict[int, HourBucket]:
     return {bucket.hour: bucket for bucket in history.hours}
 
 
+def test_the_constants_are_the_documented_ones() -> None:
+    assert (
+        HISTORY_RETENTION_SECONDS,
+        MAX_SERIES_POINTS,
+        MAX_POSITIONS,
+        MAX_NEIGHBORS,
+        MAX_BOOTS,
+        MAX_GATEWAY_CHECKS,
+        MAX_GATEWAYS_PER_HOUR,
+        MAX_RELAYS_PER_HOUR,
+        SNR_BIN_MIN,
+        SNR_BIN_MAX,
+    ) == (30 * 86400, 4320, 720, 64, 64, 720, 64, 64, -30, 20)
+
+
 def test_floor_hour_is_the_start_of_the_utc_hour() -> None:
     assert floor_hour(_H) == _H
     assert floor_hour(_H + 3599.9) == _H
