@@ -500,6 +500,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- lorastats answers that are used once (packet reports, decoded packets,
+  gateway checks and the `/Nodes` region page) are no longer written to the
+  HTTP cache and deleted right after, which cost up to about 11 MiB of disk
+  writes per request (two or three per refreshed node) and could leave an
+  entry behind for good when the process was killed in between.
 - The lorastats region list stops reading the `/Nodes` page's links after
   the 17th region (one more than it uses). It read and deduplicated every
   link first, in quadratic time, so a hostile 2 MiB page of distinct region

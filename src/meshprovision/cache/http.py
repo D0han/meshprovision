@@ -985,6 +985,7 @@ class CachedHTTPClient:
         accept_statuses: Collection[int] = (),
         max_bytes: int = MAX_RESPONSE_BYTES,
         max_retries: int | None = None,
+        store: bool = True,
     ) -> CachedResponse:
         """Perform a cached ``GET`` request.
 
@@ -999,7 +1000,7 @@ class CachedHTTPClient:
             force_refresh: Whether to bypass the cache read for this
                 call. Defaults to the client's configured default. The
                 fetched response is still written to the cache either
-                way.
+                way (unless ``store`` is ``False``).
             source: A short label (``"loranet"``, ``"lorastats"``) used
                 in error messages to identify the calling datasource.
             accept_statuses: Non-2xx statuses that are an answer for this
@@ -1007,6 +1008,8 @@ class CachedHTTPClient:
             max_bytes: The largest response body accepted for this call;
                 see :meth:`request`.
             max_retries: Retries for this call; see :meth:`request`.
+            store: Whether to write the fetched response to the disk
+                cache; see :meth:`request`.
 
         Returns:
             The cached or freshly fetched response. If the fetched
@@ -1034,6 +1037,7 @@ class CachedHTTPClient:
             accept_statuses=accept_statuses,
             max_bytes=max_bytes,
             max_retries=max_retries,
+            store=store,
         )
 
     def request(
@@ -1049,6 +1053,7 @@ class CachedHTTPClient:
         accept_statuses: Collection[int] = (),
         max_bytes: int = MAX_RESPONSE_BYTES,
         max_retries: int | None = None,
+        store: bool = True,
     ) -> CachedResponse:
         """Perform a cached HTTP request of any method.
 
@@ -1067,7 +1072,8 @@ class CachedHTTPClient:
             force_refresh: Whether to bypass the cache read for this
                 call. Defaults to the client's configured default. The
                 fetched response is still written to the cache either
-                way, refreshing the entry for the next call.
+                way (unless ``store`` is ``False``), refreshing the entry
+                for the next call.
             source: A short label (``"loranet"``, ``"lorastats"``) used
                 in error messages to identify the calling datasource.
             accept_statuses: Non-2xx statuses that are an answer for this
@@ -1082,6 +1088,10 @@ class CachedHTTPClient:
                 :data:`MAX_RESPONSE_BYTES`, which a call can only lower.
             max_retries: Retries of a 5xx or transport failure for this
                 call; defaults to the client's constructor ``max_retries``.
+            store: Write the fetched response to the disk cache (the
+                default). ``False`` for an answer the caller uses once and
+                drops: it is never written, so nothing is left behind if
+                the process dies, and it costs no disk write.
 
         Returns:
             The cached or freshly fetched response. If the fetched
@@ -1134,6 +1144,10 @@ class CachedHTTPClient:
             max_bytes=min(max_bytes, MAX_RESPONSE_BYTES),
             max_retries=self._max_retries if max_retries is None else max_retries,
         )
+        if not store:
+            # The root's 0o700 holds whatever the first call of a process was.
+            self._chmod_cache_root()
+            return replace(response, from_cache=False)
         try:
             self._write_entry(path, response)
         except CacheError as exc:

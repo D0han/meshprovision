@@ -14,9 +14,9 @@ found it in; this module never looks for a region):
 All take ``since``, a *naive Europe/Warsaw* time (``2026-10-20T08:48:30``;
 lorastats ignores an offset and returns everything for an epoch number),
 so a refresh only asks for what is new. Every answer is fetched fresh,
-capped at :data:`PACKETS_MAX_BYTES`, and dropped from the HTTP cache once
-read: each ``since`` is a new URL, so keeping them would only fill the
-cache; what is kept is the history built from them (see
+capped at :data:`PACKETS_MAX_BYTES`, and never written to the HTTP cache
+(``store=False``): each ``since`` is a new URL, so keeping them would only
+fill the cache; what is kept is the history built from them (see
 :mod:`meshprovision.health.history`). Every request still goes through
 the shared client, with its contact ``User-Agent``, retries, redirect
 rules and per-host 429 cool-down.
@@ -136,7 +136,11 @@ class LorastatsPackets:
     def _rows(
         self, path: str, region: str, params: dict[str, str], since: float | None
     ) -> list[Any]:
-        """Request one endpoint fresh, read it as a JSON array and drop it from the cache."""
+        """Request one endpoint fresh, uncached, and read it as a JSON array.
+
+        The answer is never stored; the eviction afterwards is a no-op
+        kept so that no entry for it can outlive this call.
+        """
         (valid,) = validate_regions((region,))
         url = f"{self._base_url}{path.format(region=quote(valid, safe=''))}"
         query = dict(params) if since is None else {**params, "since": since_param(since)}
@@ -146,6 +150,7 @@ class LorastatsPackets:
             force_refresh=True,
             source=SOURCE_LORASTATS,
             max_bytes=PACKETS_MAX_BYTES,
+            store=False,
         )
         try:
             return require_json_list(response.json(), url=url, source=SOURCE_LORASTATS)

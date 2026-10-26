@@ -716,3 +716,13 @@ def test_a_page_of_many_distinct_region_links_is_parsed() -> None:
     page = "".join(f'<a href="/Nodes/R{index}">x</a>' for index in range(87_000))
 
     assert len(parse_region_list(page)) == LORASTATS_MAX_REGIONS
+
+
+@respx.mock
+def test_the_page_is_never_written_to_the_http_cache(tmp_path: Path) -> None:
+    _page_route()
+    client = _client(tmp_path, [_NOW])
+
+    RegionList(clock=lambda: _NOW).regions(client)
+
+    assert client.stats.writes == 0

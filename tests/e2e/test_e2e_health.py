@@ -549,3 +549,31 @@ def test_a_429_stops_the_next_mesh_health_run_from_asking_lorastats(
     assert all(
         "rate-limited" in f["message"] and "retrying after" in f["message"] for f in failures
     )
+
+
+def test_mesh_health_writes_no_packet_answer_to_the_http_cache(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    rows: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from meshprovision.cache.http import CachedHTTPClient
+
+    _seed(seed_db)
+    written: list[str] = []
+    real_write = CachedHTTPClient._write_entry
+
+    def spy(self: CachedHTTPClient, path: Path, response: Any) -> None:
+        written.append(response.url)
+        real_write(self, path, response)
+
+    monkeypatch.setattr(CachedHTTPClient, "_write_entry", spy)
+
+    result, lorastats = _run(runner, env, mock_sources, [_A], rows)
+
+    assert result.exit_code == 0, result.output
+    assert len(lorastats.reports) == len(lorastats.parsed) == len(lorastats.uplinked) == 1
+    assert written  # the loranet dump is still cached
+    assert not [url for url in written if "/PacketReports/" in url or "/PacketsParsed/" in url]

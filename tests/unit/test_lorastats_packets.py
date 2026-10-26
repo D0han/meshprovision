@@ -212,3 +212,19 @@ def test_the_region_is_percent_encoded_like_lorastats_source_does(tmp_path: Path
     LorastatsPackets(_client(tmp_path)).reports(_NODE, "A&B", since=None)
 
     assert route.calls[0].request.url.raw_path.startswith(b"/API/A%26B/PacketReports/JSON")
+
+
+@respx.mock
+def test_no_answer_is_ever_written_to_the_http_cache(tmp_path: Path) -> None:
+    """Up to 8 MiB per answer (about 11 MiB of JSON) was written, then deleted right away."""
+    for path in (LORASTATS_PACKET_REPORTS_PATH, LORASTATS_PACKETS_PARSED_PATH):
+        respx.get(url__startswith=_url(path)).mock(return_value=httpx.Response(200, json=_ROWS))
+    client = _client(tmp_path)
+    packets = LorastatsPackets(client)
+
+    packets.reports(_NODE, "Zachód", since=_SINCE)
+    packets.decoded(_NODE, "Zachód", since=None)
+    packets.uplinked(_NODE, "Zachód", since=_SINCE)
+
+    assert client.stats.writes == 0
+    assert _cached_entries(tmp_path) == []

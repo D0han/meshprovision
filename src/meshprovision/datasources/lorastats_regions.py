@@ -303,8 +303,9 @@ class RegionList:
     def _fetch(self, client: CachedHTTPClient) -> tuple[str, ...]:
         """Request the page once, without retries, and parse it.
 
-        The response is dropped from the HTTP cache right away: only the
-        parsed list is kept.
+        The response is never written to the HTTP cache: only the parsed
+        list is kept. The eviction still removes a page an earlier version
+        of mesh cached.
 
         Args:
             client: The client to fetch through.
@@ -323,6 +324,7 @@ class RegionList:
             source=SOURCE_LORASTATS,
             max_bytes=REGION_LIST_MAX_PAGE_BYTES,
             max_retries=0,
+            store=False,
         )
         client.evict(response.cache_key)
         regions = parse_region_list(response.content.decode("utf-8", errors="replace"))

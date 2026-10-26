@@ -1691,3 +1691,50 @@ def test_a_5xx_is_never_stored_as_a_cool_down(tmp_path: Path) -> None:
         _make_client(tmp_path, now=[1000.0], max_retries=0).get(URL)
 
     assert not _rate_limit_file(tmp_path).exists()
+
+
+# ---------------------------------------------------------------------------
+# store=False: answers used once are never written.
+# ---------------------------------------------------------------------------
+
+
+@respx.mock
+def test_a_response_fetched_without_store_is_never_written(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    client = _make_client(tmp_path, now=[1000.0])
+
+    response = client.get(URL, store=False)
+
+    assert response.json() == {"a": 1}
+    assert response.from_cache is False
+    assert client.stats.writes == 0
+    assert not client.path_for_key(response.cache_key).exists()
+    assert [p for p in (tmp_path / "cache").rglob("*") if p.is_file()] == []
+    assert client.get(URL).from_cache is False
+    assert route.call_count == 2
+    assert client.stats.writes == 1
+
+
+@respx.mock
+def test_a_request_without_store_is_never_written(tmp_path: Path) -> None:
+    respx.post(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    client = _make_client(tmp_path, now=[1000.0])
+
+    response = client.request("POST", URL, store=False)
+
+    assert response.json() == {"a": 1}
+    assert client.stats.writes == 0
+    assert not client.path_for_key(response.cache_key).exists()
+    client.request("POST", URL)
+    assert client.stats.writes == 1
+    assert client.path_for_key(response.cache_key).exists()
+
+
+@respx.mock
+def test_a_response_without_store_still_makes_the_cache_root_owner_only(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    (tmp_path / "cache").mkdir(mode=0o755)
+
+    _make_client(tmp_path, now=[1000.0]).get(URL, store=False)
+
+    assert stat.S_IMODE((tmp_path / "cache").stat().st_mode) == 0o700
