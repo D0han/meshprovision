@@ -40,9 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   site navigation. lorastats.pl has no API for them and asks API clients not
   to scrape its HTML, so the one page (`/Nodes`) is requested only when no
   region is configured, at most once a week (cached in
-  `lorastats_region_list.json`; `mesh status --refresh-regions` asks again),
-  and only its links are read. If it cannot be read, the cached list is used;
-  without one lorastats fails as a source, asking you to set the regions.
+  `lorastats_region_list.json`; `mesh status --refresh-regions` asks again;
+  after a failed request, which is not retried, once a day), and only its
+  links are read. If it cannot be read, the cached list is used; without one
+  lorastats fails as a source, asking you to set the regions.
 - `mesh status` learns which lorastats region each node lives in: the region
   that answered is remembered for 30 days in `lorastats_regions.json` in the
   cache directory and asked first, and lorastats.pl's region-free status
@@ -498,6 +499,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- lorastats.pl's `/Nodes` page (the region list) is no longer requested by
+  every `mesh status` run once the cached list is more than a week old and the
+  page fails or names no region (a cron'd `mesh status` asked it every run,
+  four times on a 5xx, the scraping lorastats.pl bans IP addresses for). A
+  failed request is now made once, without retries, and recorded in
+  `lorastats_region_list.json`; the page is not asked again for a day, by any
+  process, while the stale list is used (`--refresh-regions` still asks).
 - A node's expected interval is no longer learned too short when lorastats
   still holds more than a day of its reports (a first refresh, or one more
   than a day after the previous): only the last 24 h got silent hours, so a

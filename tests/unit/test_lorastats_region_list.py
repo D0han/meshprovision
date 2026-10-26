@@ -10,12 +10,13 @@ import httpx
 import pytest
 import respx
 
-from meshprovision.cache.http import DEFAULT_MAX_RETRIES, CachedHTTPClient
+from meshprovision.cache.http import CachedHTTPClient
 from meshprovision.datasources import lorastats_regions as list_module
 from meshprovision.datasources.lorastats import LORASTATS_MAX_REGIONS, LorastatsSource
 from meshprovision.datasources.lorastats_regions import (
     REGION_LIST_FILENAME,
     REGION_LIST_MAX_PAGE_BYTES,
+    REGION_LIST_RETRY_SECONDS,
     REGION_LIST_TTL_SECONDS,
     REGION_LIST_VERSION,
     RegionList,
@@ -308,16 +309,28 @@ def test_without_a_cached_list_a_failed_fetch_names_the_setting(
     assert exc_info.value.message.startswith("No lorastats region list: ")
     assert "MESHPROVISION_LORASTATS_REGIONS" in (exc_info.value.hint or "")
     assert route.call_count == 1
-    assert not (tmp_path / "cache" / REGION_LIST_FILENAME).exists()
+    path = tmp_path / "cache" / REGION_LIST_FILENAME
+    assert json.loads(path.read_text()) == {"version": REGION_LIST_VERSION, "tried_at": _NOW}
 
 
+@pytest.mark.parametrize(
+    "response",
+    [
+        pytest.param(httpx.ConnectError("refused"), id="unreachable"),
+        pytest.param(httpx.Response(503), id="503"),
+    ],
+)
 @respx.mock
-def test_an_unreachable_page_is_retried_like_any_request_then_fails(tmp_path: Path) -> None:
-    route = _page_route(httpx.ConnectError("refused"))
+def test_a_failing_page_is_asked_once_without_the_client_retries(
+    tmp_path: Path, response: httpx.Response | Exception
+) -> None:
+    route = _page_route(response)
+    client = _client(tmp_path, [_NOW])
 
     with pytest.raises(DataSourceError):
-        RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW]))
-    assert route.call_count == DEFAULT_MAX_RETRIES + 1
+        RegionList(clock=lambda: _NOW).regions(client)
+    assert route.call_count == 1
+    assert client.stats.retries == 0
 
 
 @respx.mock
@@ -356,7 +369,121 @@ def test_a_failed_refresh_falls_back_to_the_stale_list(
 
     assert regions == ("Zachód", "Gdańsk")
     assert "using the cached one" in caplog.text
-    assert path.read_bytes() == before
+    assert json.loads(path.read_text()) == {**json.loads(before), "tried_at": _NOW}
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        pytest.param(httpx.Response(200, html="<p>nothing</p>"), id="no-region"),
+        pytest.param(httpx.Response(503), id="503"),
+    ],
+)
+@respx.mock
+def test_a_failed_refresh_is_not_repeated_by_the_next_processes_for_a_day(
+    tmp_path: Path, response: httpx.Response
+) -> None:
+    """Every process asked the page again while the cached list was stale and the page broken."""
+    route = _page_route(response)
+    _write_cache(tmp_path, _cached(["Zachód", "Gdańsk"], _NOW - 8 * 24 * 3600))
+    now = [_NOW]
+
+    for _ in range(3):  # a cron'd mesh status: one RegionList per process
+        assert RegionList(clock=lambda: now[0]).regions(_client(tmp_path, now)) == (
+            "Zachód",
+            "Gdańsk",
+        )
+        now[0] += 3600
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_a_day_after_a_failed_fetch_the_page_is_asked_again(tmp_path: Path) -> None:
+    route = _page_route(httpx.Response(503))
+    _write_cache(tmp_path, _cached(["Zachód"], _NOW - 8 * 24 * 3600))
+    now = [_NOW]
+    RegionList(clock=lambda: now[0]).regions(_client(tmp_path, now))
+
+    now[0] = _NOW + REGION_LIST_RETRY_SECONDS
+    RegionList(clock=lambda: now[0]).regions(_client(tmp_path, now))
+    assert route.call_count == 1
+
+    route.mock(return_value=httpx.Response(200, html=LORASTATS_NODES_PAGE))
+    now[0] += 1
+    assert RegionList(clock=lambda: now[0]).regions(_client(tmp_path, now)) == (
+        LORASTATS_NODES_PAGE_REGIONS
+    )
+    assert route.call_count == 2
+    path = tmp_path / "cache" / REGION_LIST_FILENAME
+    assert json.loads(path.read_text()) == _cached(list(LORASTATS_NODES_PAGE_REGIONS), now[0])
+
+
+@respx.mock
+def test_without_a_cached_list_a_recent_failure_fails_without_a_request(tmp_path: Path) -> None:
+    route = _page_route(httpx.Response(404))
+    with pytest.raises(DataSourceError):
+        RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW]))
+
+    with pytest.raises(DataSourceError) as exc_info:
+        RegionList(clock=lambda: _NOW + 3600).regions(_client(tmp_path, [_NOW + 3600]))
+
+    assert route.call_count == 1
+    assert exc_info.value.message.startswith("No lorastats region list: ")
+    assert "--refresh-regions" in exc_info.value.message
+    assert "MESHPROVISION_LORASTATS_REGIONS" in (exc_info.value.hint or "")
+
+
+@respx.mock
+def test_refresh_asks_the_page_despite_a_recent_failure(tmp_path: Path) -> None:
+    route = _page_route()
+    _write_cache(tmp_path, {**_cached(["Zachód"], _NOW - 8 * 24 * 3600), "tried_at": _NOW - 60})
+
+    regions = RegionList(refresh=True, clock=lambda: _NOW).regions(_client(tmp_path, [_NOW]))
+
+    assert regions == LORASTATS_NODES_PAGE_REGIONS
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_a_recent_failure_does_not_hide_a_fresh_list(tmp_path: Path) -> None:
+    route = _page_route()
+    _write_cache(tmp_path, {**_cached(["Zachód"], _NOW - 60), "tried_at": _NOW - 30})
+
+    assert RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW])) == ("Zachód",)
+    assert route.call_count == 0
+
+
+@pytest.mark.parametrize(
+    "tried_at",
+    [
+        pytest.param(_NOW + 301, id="future"),
+        pytest.param(True, id="bool"),
+        pytest.param("now", id="str"),
+        pytest.param(None, id="null"),
+    ],
+)
+@respx.mock
+def test_a_failure_time_from_the_future_or_malformed_is_ignored(
+    tmp_path: Path, tried_at: object
+) -> None:
+    route = _page_route()
+    _write_cache(tmp_path, {**_cached(["Zachód"], _NOW - 8 * 24 * 3600), "tried_at": tried_at})
+
+    assert RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW])) == (
+        LORASTATS_NODES_PAGE_REGIONS
+    )
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_a_failure_time_of_another_version_is_ignored(tmp_path: Path) -> None:
+    route = _page_route()
+    _write_cache(tmp_path, {"version": REGION_LIST_VERSION + 1, "tried_at": _NOW - 60})
+
+    assert RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW])) == (
+        LORASTATS_NODES_PAGE_REGIONS
+    )
+    assert route.call_count == 1
 
 
 @pytest.mark.parametrize(
@@ -494,3 +621,7 @@ def test_configured_regions_never_load_the_region_list(tmp_path: Path) -> None:
 
 def test_the_page_cap_is_two_mebibytes() -> None:
     assert list_module.REGION_LIST_MAX_PAGE_BYTES == 2 * 1024 * 1024
+
+
+def test_a_failed_fetch_is_retried_after_a_day() -> None:
+    assert list_module.REGION_LIST_RETRY_SECONDS == 24 * 60 * 60

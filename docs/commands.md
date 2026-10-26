@@ -383,13 +383,18 @@ one request a week:
   7 days; `--no-cache`, `--force-refresh` and `--watch` polls never request
   it again, only `mesh status --refresh-regions` does (refused when regions
   are configured), and at most once per `mesh` process;
+- a request that fails (an error, or a page that names no region) is asked
+  only once, without the usual retries, and is recorded in the same file: no
+  `mesh` process requests the page again for a day (`--refresh-regions`
+  still does);
 - only the link targets are read: no script runs, no link is followed,
   nothing of the page is logged, and every name must pass the same check as
   `--region`.
 
 If the page cannot be read (or names no region) the cached list is used, with
 a warning, however old; without one, lorastats is reported as a failed source
-whose hint asks you to set `MESHPROVISION_LORASTATS_REGIONS`. There is no
+whose hint asks you to set `MESHPROVISION_LORASTATS_REGIONS`. Both also hold,
+without a request, for the day after a failed one. There is no
 built-in list. To never request the page, configure the regions, for example
 `MESHPROVISION_LORASTATS_REGIONS=Zachód,Warszawa`.
 

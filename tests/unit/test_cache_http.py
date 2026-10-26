@@ -266,6 +266,34 @@ def test_500_then_200_succeeds_with_one_retry(tmp_path: Path) -> None:
     assert route.call_count == 2
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        pytest.param(httpx.Response(500), id="500"),
+        pytest.param(httpx.ConnectError("refused"), id="transport"),
+    ],
+)
+@respx.mock
+def test_a_call_can_ask_for_fewer_retries_than_the_client(
+    tmp_path: Path, failure: httpx.Response | Exception
+) -> None:
+    route = respx.get(URL)
+    if isinstance(failure, Exception):
+        route.mock(side_effect=failure)
+    else:
+        route.mock(return_value=failure)
+    client = _make_client(tmp_path, now=[0.0])
+
+    with pytest.raises(HttpError, match=r"after 1 attempt\(s\)"):
+        client.get(URL, max_retries=0)
+    assert route.call_count == 1
+    assert client.stats.retries == 0
+
+    with pytest.raises(HttpError):
+        client.get(URL, max_retries=1)
+    assert route.call_count == 3
+
+
 @respx.mock
 def test_404_no_retry(tmp_path: Path) -> None:
     route = respx.get(URL).mock(return_value=httpx.Response(404))

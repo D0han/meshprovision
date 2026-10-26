@@ -920,6 +920,7 @@ class CachedHTTPClient:
         source: str | None = None,
         accept_statuses: Collection[int] = (),
         max_bytes: int = MAX_RESPONSE_BYTES,
+        max_retries: int | None = None,
     ) -> CachedResponse:
         """Perform a cached ``GET`` request.
 
@@ -941,6 +942,7 @@ class CachedHTTPClient:
                 call rather than a failure; see :meth:`request`.
             max_bytes: The largest response body accepted for this call;
                 see :meth:`request`.
+            max_retries: Retries for this call; see :meth:`request`.
 
         Returns:
             The cached or freshly fetched response. If the fetched
@@ -965,6 +967,7 @@ class CachedHTTPClient:
             source=source,
             accept_statuses=accept_statuses,
             max_bytes=max_bytes,
+            max_retries=max_retries,
         )
 
     def request(
@@ -979,6 +982,7 @@ class CachedHTTPClient:
         source: str | None = None,
         accept_statuses: Collection[int] = (),
         max_bytes: int = MAX_RESPONSE_BYTES,
+        max_retries: int | None = None,
     ) -> CachedResponse:
         """Perform a cached HTTP request of any method.
 
@@ -1010,6 +1014,8 @@ class CachedHTTPClient:
             max_bytes: The largest response body accepted for this call,
                 counted after decoding; a larger one fails like one past
                 :data:`MAX_RESPONSE_BYTES`, which a call can only lower.
+            max_retries: Retries of a 5xx or transport failure for this
+                call; defaults to the client's constructor ``max_retries``.
 
         Returns:
             The cached or freshly fetched response. If the fetched
@@ -1058,6 +1064,7 @@ class CachedHTTPClient:
             cache_key_value=key,
             accept_statuses=accept_statuses,
             max_bytes=min(max_bytes, MAX_RESPONSE_BYTES),
+            max_retries=self._max_retries if max_retries is None else max_retries,
         )
         try:
             self._write_entry(path, response)
@@ -1243,6 +1250,7 @@ class CachedHTTPClient:
         cache_key_value: str,
         accept_statuses: Collection[int],
         max_bytes: int,
+        max_retries: int,
     ) -> CachedResponse:
         """Perform the network fetch, retrying on 5xx and transport errors.
 
@@ -1257,6 +1265,7 @@ class CachedHTTPClient:
             accept_statuses: Statuses returned as they are, never retried
                 or raised (see :meth:`request`).
             max_bytes: The largest response body accepted.
+            max_retries: Retries after the first attempt.
 
         Returns:
             The freshly fetched response, with ``from_cache=False``.
@@ -1276,7 +1285,7 @@ class CachedHTTPClient:
         self._refuse_while_rate_limited(url, source=source)
         last_exc: Exception | None = None
         display_url = _display_url(url, params)
-        for attempt in range(self._max_retries + 1):
+        for attempt in range(max_retries + 1):
             self._stats = replace(self._stats, network_requests=self._stats.network_requests + 1)
             _logger.info("fetching %s %s (attempt %d)", method, display_url, attempt + 1)
             try:
@@ -1302,7 +1311,7 @@ class CachedHTTPClient:
                 ) from exc
             except httpx.TransportError as exc:
                 last_exc = exc
-                if attempt == self._max_retries:
+                if attempt == max_retries:
                     raise HttpError(
                         f"Request to {url} failed after {attempt + 1} attempt(s): {exc}",
                         url=url,
@@ -1328,7 +1337,7 @@ class CachedHTTPClient:
             accepted = status in accept_statuses
 
             if status >= RETRY_STATUS_MIN and not accepted:
-                if attempt == self._max_retries:
+                if attempt == max_retries:
                     raise HttpError(
                         f"{url} returned HTTP {status} after {attempt + 1} attempt(s)",
                         url=str(response.url),

@@ -16,11 +16,15 @@ reads that page, and it does so as little as possible:
   kept in :data:`REGION_LIST_FILENAME` in the cache directory, and neither
   ``--no-cache`` nor a ``--watch`` poll refreshes it -- only
   ``mesh status --refresh-regions`` does before the week is up;
+- after a failed request, not again for :data:`REGION_LIST_RETRY_SECONDS`
+  (a day) by any process: the attempt is recorded in the same file
+  (``tried_at``), the stale list, if any, kept and used meanwhile
+  (``--refresh-regions`` still asks);
 - at most once per :class:`RegionList`, which ``mesh status`` creates once
   per process, ``--watch`` included;
 - through the shared :class:`~meshprovision.cache.http.CachedHTTPClient`
   (contact ``User-Agent``, 429 cool-down, redirect rules) with a body cap
-  of :data:`REGION_LIST_MAX_PAGE_BYTES`.
+  of :data:`REGION_LIST_MAX_PAGE_BYTES`, and without the client's retries.
 
 The page is untrusted input: it is only tokenized by the standard
 library's :class:`html.parser.HTMLParser` for the ``href`` of ``<a>`` tags
@@ -51,12 +55,15 @@ from meshprovision.datasources.lorastats import (
 from meshprovision.errors import DataSourceError, SettingsError
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from meshprovision.cache.http import CachedHTTPClient
 
 __all__ = [
     "REGION_LIST_FILENAME",
     "REGION_LIST_MAX_PAGE_BYTES",
     "REGION_LIST_PAGE_PATH",
+    "REGION_LIST_RETRY_SECONDS",
     "REGION_LIST_TTL_SECONDS",
     "REGION_LIST_VERSION",
     "ROLE_PAGE_NAMES",
@@ -77,6 +84,9 @@ REGION_LIST_VERSION: Final[int] = 1
 
 REGION_LIST_TTL_SECONDS: Final[float] = 7 * 24 * 60 * 60
 """How long a fetched list is used before the page is requested again (a week)."""
+
+REGION_LIST_RETRY_SECONDS: Final[float] = 24 * 60 * 60
+"""How long after a failed request the page is not requested again (a day)."""
 
 REGION_LIST_MAX_PAGE_BYTES: Final[int] = 2 * 1024 * 1024
 """The largest page accepted; the real one is far smaller."""
@@ -239,6 +249,10 @@ class RegionList:
     def _load(self, client: CachedHTTPClient) -> tuple[str, ...]:
         """Use the cached list while fresh, else fetch the page; fall back to a stale list.
 
+        The page is not fetched (unless refreshing) while a failed fetch is
+        less than :data:`REGION_LIST_RETRY_SECONDS` old; a failed fetch is
+        recorded for that.
+
         Args:
             client: The client to fetch through.
 
@@ -247,18 +261,22 @@ class RegionList:
 
         Raises:
             meshprovision.errors.DataSourceError: If no list is cached and
-                the fetch fails.
+                the fetch fails or failed recently.
         """
         path = client.cache_dir / REGION_LIST_FILENAME
-        cached = _read_cached(read_json(path, max_bytes=_MAX_FILE_BYTES, what=_WHAT))
+        document = read_json(path, max_bytes=_MAX_FILE_BYTES, what=_WHAT)
+        cached = _read_cached(document)
         now = self._clock()
-        if cached is not None and not self._refresh:
-            regions, fetched_at = cached
-            if now - REGION_LIST_TTL_SECONDS <= fetched_at <= now + _FUTURE_SKEW_SECONDS:
-                return regions
+        if not self._refresh:
+            if cached is not None and _recent(cached[1], REGION_LIST_TTL_SECONDS, now):
+                return cached[0]
+            tried_at = _read_tried_at(document)
+            if tried_at is not None and _recent(tried_at, REGION_LIST_RETRY_SECONDS, now):
+                return _after_recent_failure(cached, self._url)
         try:
             regions = self._fetch(client)
         except DataSourceError as exc:
+            _record_failure(path, cached, now)
             if cached is None:
                 raise DataSourceError(
                     f"No lorastats region list: {exc.message}", hint=_HINT
@@ -276,7 +294,7 @@ class RegionList:
         return regions
 
     def _fetch(self, client: CachedHTTPClient) -> tuple[str, ...]:
-        """Request the page once and parse it.
+        """Request the page once, without retries, and parse it.
 
         The response is dropped from the HTTP cache right away: only the
         parsed list is kept.
@@ -297,6 +315,7 @@ class RegionList:
             force_refresh=True,
             source=SOURCE_LORASTATS,
             max_bytes=REGION_LIST_MAX_PAGE_BYTES,
+            max_retries=0,
         )
         client.evict(response.cache_key)
         regions = parse_region_list(response.content.decode("utf-8", errors="replace"))
@@ -334,3 +353,77 @@ def _read_cached(document: object) -> tuple[tuple[str, ...], float] | None:
     if list(valid) != regions:
         return None
     return valid, float(fetched_at)
+
+
+def _read_tried_at(document: object) -> float | None:
+    """Return when a request for the page last failed, from the cached list file's content.
+
+    Args:
+        document: The decoded file, or ``None``.
+
+    Returns:
+        A version :data:`REGION_LIST_VERSION` document's numeric
+        ``tried_at`` (a boolean reads as the epoch's first second, never
+        recent), else ``None``.
+    """
+    if not isinstance(document, dict) or document.get("version") != REGION_LIST_VERSION:
+        return None
+    tried_at = document.get("tried_at")
+    if not isinstance(tried_at, int | float):
+        return None
+    return float(tried_at)
+
+
+def _recent(at: float, window: float, now: float) -> bool:
+    """Tell whether ``at`` lies within ``window`` seconds before ``now``.
+
+    Args:
+        at: The time, epoch seconds.
+        window: The window, seconds.
+        now: The current time, epoch seconds.
+
+    Returns:
+        ``True`` when ``at`` is at most ``window`` old and at most a small
+        clock skew in the future (a non-finite ``at`` never is).
+    """
+    return now - window <= at <= now + _FUTURE_SKEW_SECONDS
+
+
+def _after_recent_failure(
+    cached: tuple[tuple[str, ...], float] | None, url: str
+) -> tuple[str, ...]:
+    """Answer without a request while the last one failed recently.
+
+    Args:
+        cached: The stale cached list and when it was fetched, if any.
+        url: The page's URL, for the error.
+
+    Returns:
+        The stale cached list.
+
+    Raises:
+        meshprovision.errors.DataSourceError: If no list is cached.
+    """
+    if cached is None:
+        raise DataSourceError(
+            f"No lorastats region list: reading {url} failed in the last day "
+            "(mesh status --refresh-regions asks again now)",
+            hint=_HINT,
+        )
+    _logger.info("Reading the lorastats region list failed in the last day; using the cached one.")
+    return cached[0]
+
+
+def _record_failure(path: Path, cached: tuple[tuple[str, ...], float] | None, now: float) -> None:
+    """Record a failed request for the page, keeping the cached list.
+
+    Args:
+        path: The cached list file.
+        cached: The cached list and when it was fetched, if any.
+        now: When the request failed, epoch seconds.
+    """
+    document: dict[str, object] = {"version": REGION_LIST_VERSION, "tried_at": now}
+    if cached is not None:
+        document["regions"] = list(cached[0])
+        document["fetched_at"] = cached[1]
+    write_json(path, document, what=_WHAT)
