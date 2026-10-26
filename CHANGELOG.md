@@ -500,6 +500,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The lorastats region list stops reading the `/Nodes` page's links after
+  the 17th region (one more than it uses). It read and deduplicated every
+  link first, in quadratic time, so a hostile 2 MiB page of distinct region
+  links cost about 53 s of CPU in one `mesh status`; now well under a second.
 - A host that answered HTTP 429 is not asked again by any `mesh` process
   using the same cache directory until its `Retry-After` ends (at most a
   day): the cool-down is kept in `rate_limits.json` there. It used to live in

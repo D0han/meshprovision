@@ -142,7 +142,7 @@ def test_at_most_the_region_limit_is_kept(caplog: pytest.LogCaptureFixture) -> N
 
     with caplog.at_level(logging.WARNING):
         assert parse_region_list(page) == tuple(names[:LORASTATS_MAX_REGIONS])
-    assert f"names {LORASTATS_MAX_REGIONS + 1} regions" in caplog.text
+    assert f"names more than {LORASTATS_MAX_REGIONS} regions" in caplog.text
 
 
 def test_exactly_the_region_limit_is_kept_without_a_warning(
@@ -679,3 +679,40 @@ def test_without_a_cached_list_a_429_cool_down_fails_without_recording_anything(
         RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW]))
     assert route.call_count == 0
     assert not (tmp_path / "cache" / REGION_LIST_FILENAME).exists()
+
+
+def test_the_links_are_read_only_up_to_the_first_region_past_the_limit(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A 2 MiB page of distinct links took 53 s: every link was read and deduplicated in a list."""
+    calls: list[str] = []
+    real = list_module._region_from_href
+
+    def counting(href: str) -> str | None:
+        calls.append(href)
+        return real(href)
+
+    monkeypatch.setattr(list_module, "_region_from_href", counting)
+    page = "".join(f'<a href="/Nodes/R{index}">x</a>' for index in range(1000))
+
+    with caplog.at_level(logging.WARNING):
+        regions = parse_region_list(page)
+
+    assert regions == tuple(f"R{index}" for index in range(LORASTATS_MAX_REGIONS))
+    assert len(calls) == LORASTATS_MAX_REGIONS + 1
+    assert caplog.text.count(f"more than {LORASTATS_MAX_REGIONS}") == 1
+
+
+def test_repeated_and_other_links_do_not_count_toward_the_limit() -> None:
+    page = "".join(
+        f'<a href="{href}">x</a>'
+        for href in ("/Nodes/A", "/Nodes/A", "/Nodes/a/b/c", "/Nodes/A/Router", "/Nodes/B")
+    )
+
+    assert parse_region_list(page) == ("A", "B")
+
+
+def test_a_page_of_many_distinct_region_links_is_parsed() -> None:
+    page = "".join(f'<a href="/Nodes/R{index}">x</a>' for index in range(87_000))
+
+    assert len(parse_region_list(page)) == LORASTATS_MAX_REGIONS

@@ -175,24 +175,27 @@ def parse_region_list(html: str) -> tuple[str, ...]:
     Returns:
         Every region named by a link (see :func:`_region_from_href`), once,
         in first-seen order, at most :data:`~meshprovision.datasources
-        .lorastats.LORASTATS_MAX_REGIONS` of them (the rest are dropped
-        with a WARNING). Empty when the page names none.
+        .lorastats.LORASTATS_MAX_REGIONS` of them: the links are read only
+        up to the first region past the limit, which is logged as a
+        WARNING. Empty when the page names none.
     """
     parser = _AnchorHrefs()
     parser.feed(html)
     parser.close()
-    regions: list[str] = []
+    regions: dict[str, None] = {}  # insertion-ordered, O(1) membership
     for href in parser.hrefs:
         region = _region_from_href(href)
-        if region is not None and region not in regions:
-            regions.append(region)
-    if len(regions) > LORASTATS_MAX_REGIONS:
-        _logger.warning(
-            "lorastats.pl names %d regions; asking only the first %d",
-            len(regions),
-            LORASTATS_MAX_REGIONS,
-        )
-    return tuple(regions[:LORASTATS_MAX_REGIONS])
+        if region is None:
+            continue
+        regions.setdefault(region, None)
+        if len(regions) > LORASTATS_MAX_REGIONS:
+            _logger.warning(
+                "lorastats.pl names more than %d regions; asking only the first %d",
+                LORASTATS_MAX_REGIONS,
+                LORASTATS_MAX_REGIONS,
+            )
+            break
+    return tuple(regions)[:LORASTATS_MAX_REGIONS]
 
 
 class RegionList:
