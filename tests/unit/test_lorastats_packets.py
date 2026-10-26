@@ -122,10 +122,11 @@ def test_a_failed_request_and_a_rate_limit_propagate(tmp_path: Path) -> None:
     respx.get(_url(LORASTATS_PACKETS_PARSED_PATH)).mock(return_value=httpx.Response(429))
     packets = LorastatsPackets(_client(tmp_path))
 
-    with pytest.raises(HttpError):
+    with pytest.raises(HttpError) as failed:
         packets.reports(_NODE, "Zachód", since=None)
-    with pytest.raises(RateLimitError):
+    with pytest.raises(RateLimitError) as limited:
         packets.decoded(_NODE, "Zachód", since=None)
+    assert (failed.value.source, limited.value.source) == ("lorastats", "lorastats")
 
 
 @respx.mock

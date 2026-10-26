@@ -153,6 +153,8 @@ def test_the_newest_of_history_and_status_last_seen_counts() -> None:
     assert findings[0].text == "not heard for 5 h"
     _, findings = assess(_m(last_heard=_NOW - 47 * 3600), NodeContext())
     assert findings[0].text == "not heard for 47 h"
+    _, findings = assess(_m(last_heard=_NOW - 48 * 3600), NodeContext())
+    assert findings[0].text == "not heard for 2 d"
 
 
 def _trend(latest: int, *, age: float = 60.0, slope: float | None = None) -> BatteryTrend:

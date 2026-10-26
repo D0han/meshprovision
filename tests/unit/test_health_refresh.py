@@ -491,6 +491,18 @@ def test_a_gateway_check_counts_rows_and_senders_at_most_once_an_hour(tmp_path: 
     assert len([call for call in packets.calls if call[0] == "uplinked"]) == 2
 
 
+def test_a_failed_gateway_check_is_reported_with_its_hint(tmp_path: Path) -> None:
+    refresher, packets, _, _ = _setup(tmp_path)
+    packets.fail_for[("uplinked", _NODE.hex)] = HttpError(
+        "gone", url="u", status_code=404, hint="check the region"
+    )
+
+    outcome = refresher.refresh([(_NODE, "PL")], gateway_check=True)
+
+    assert outcome.refreshed == (_NODE,)
+    assert outcome.failures == (RefreshFailure(_NODE, "gone", "check the region"),)
+
+
 def test_a_stored_gateway_check_counts_for_a_new_process(tmp_path: Path) -> None:
     refresher, packets, _, _ = _setup(tmp_path)
     refresher.refresh([(_NODE, "PL")], gateway_check=True)

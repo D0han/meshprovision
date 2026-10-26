@@ -197,6 +197,7 @@ def test_a_repeated_hour_keeps_the_last_bucket() -> None:
         ("positions", [_NOW, 1.0, None]),
         ("gateway_checks", [_NOW, 3600, -1, 1]),
         ("gateway_checks", [_NOW, None, 1, 1]),
+        ("telemetry", [_NOW, 90, 4.1, 5.9, 0.1, 1]),
     ],
 )
 def test_a_malformed_point_is_dropped_alone(field: str, item: object) -> None:
