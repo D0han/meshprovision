@@ -7,8 +7,8 @@ import dataclasses
 import pytest
 
 from meshprovision.health import rules
-from meshprovision.health.history import GatewayCheck
-from meshprovision.health.metrics import BatteryTrend, NodeMetrics, RelayShare
+from meshprovision.health.history import GatewayCheck, NodeHistory
+from meshprovision.health.metrics import BatteryTrend, NodeMetrics, RelayShare, compute_metrics
 from meshprovision.health.rules import (
     AIR_UTIL_TX_CRIT_PERCENT,
     AIR_UTIL_TX_WARN_PERCENT,
@@ -392,6 +392,15 @@ def test_importance_scores_a_gateway_its_sole_gateway_nodes_dependents_and_role(
     )
     assert ranked[_THIRD] == Importance("low", 0)
     assert ranked[_OTHER] == Importance("low", 0)
+
+
+def test_a_newer_idle_gateway_check_ends_the_gateway_points() -> None:
+    checks = (GatewayCheck(_NOW - 7200, 3600, 9, 4), GatewayCheck(_NOW - 3600, 3600, 0, 0))
+    history = NodeHistory(node=_NODE, gateway_checks=checks)
+
+    metrics = compute_metrics(history, now=_NOW, days=7)
+
+    assert "MQTT gateway" not in rank_importance({_NODE: metrics}, {})[_NODE].reasons
 
 
 @pytest.mark.parametrize(

@@ -277,6 +277,38 @@ def test_series_and_lists_are_cut_to_the_window() -> None:
     assert metrics.gateway_check == GatewayCheck(_NOW - 60, 600, 3, 2)
 
 
+def test_the_newest_position_local_stats_and_gateway_check_in_the_window_are_kept() -> None:
+    history = _history(
+        positions=(PositionPoint(_NOW - 7200, 52.0, 21.0), PositionPoint(_NOW - 3600, 52.5, 21.5)),
+        local_stats=(LocalStatsPoint(_NOW - 7200, rx=1), LocalStatsPoint(_NOW - 3600, rx=2)),
+        gateway_checks=(
+            GatewayCheck(_NOW - 7200, 3600, 9, 4),
+            GatewayCheck(_NOW - 3600, 3600, 0, 0),
+        ),
+    )
+
+    metrics = _metrics(history)
+
+    assert metrics.position == PositionPoint(_NOW - 3600, 52.5, 21.5)
+    assert metrics.latest_local_stats == LocalStatsPoint(_NOW - 3600, rx=2)
+    assert metrics.gateway_check == GatewayCheck(_NOW - 3600, 3600, 0, 0)
+
+
+def test_tied_gateways_and_relays_are_ordered_by_id_and_byte() -> None:
+    history = _history(
+        HourBucket(
+            _H,
+            gateways=MappingProxyType({"000000bb": 2, "000000aa": 2}),
+            relays=MappingProxyType({0x20: 3, 0x10: 3}),
+        )
+    )
+
+    metrics = _metrics(history)
+
+    assert metrics.gateways == (("000000aa", 2), ("000000bb", 2))
+    assert [relay.byte for relay in metrics.relays] == [0x10, 0x20]
+
+
 def test_a_longer_window_covers_older_hours() -> None:
     history = _history(HourBucket(_H - 6 * _DAY, receptions=4), HourBucket(_H, receptions=1))
 
