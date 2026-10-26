@@ -8,6 +8,7 @@ import gzip
 import json
 import os
 import ssl
+import stat
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -21,6 +22,8 @@ from meshprovision.cache.http import (
     DEFAULT_BACKOFF_BASE,
     DEFAULT_BACKOFF_MAX,
     DEFAULT_MAX_RETRIES,
+    RATE_LIMIT_FILENAME,
+    RATE_LIMIT_VERSION,
     CachedHTTPClient,
     CachedResponse,
     cache_key,
@@ -30,6 +33,7 @@ from meshprovision.errors import (
     HttpError,
     InvalidResponseError,
     MissingContactError,
+    RateLimitCoolingDownError,
     RateLimitError,
     SettingsError,
 )
@@ -1446,3 +1450,244 @@ def test_a_call_cannot_raise_the_size_cap(tmp_path: Path, monkeypatch: pytest.Mo
 
     with pytest.raises(HttpError, match="larger than 4096 bytes"):
         client.get(URL, max_bytes=10**9)
+
+
+# ---------------------------------------------------------------------------
+# 429 cool-downs shared through the cache directory.
+# ---------------------------------------------------------------------------
+
+
+def _rate_limit_file(tmp_path: Path) -> Path:
+    return tmp_path / "cache" / RATE_LIMIT_FILENAME
+
+
+def _write_cooldowns(tmp_path: Path, document: object) -> None:
+    path = _rate_limit_file(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(document if isinstance(document, str) else json.dumps(document))
+
+
+def _stored_hosts(tmp_path: Path) -> dict[str, float]:
+    document = json.loads(_rate_limit_file(tmp_path).read_text())
+    assert document["version"] == RATE_LIMIT_VERSION
+    hosts: dict[str, float] = document["hosts"]
+    return hosts
+
+
+@respx.mock
+def test_a_429_stops_every_client_sharing_the_cache_directory(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(
+        side_effect=[
+            httpx.Response(429, headers={"Retry-After": "3600"}),
+            httpx.Response(200, json={"a": 1}),
+        ]
+    )
+    with pytest.raises(RateLimitError):
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+    now = [1100.0]
+    other_process = _make_client(tmp_path, now=now, force_refresh=True, ttl=0.0)
+
+    with pytest.raises(RateLimitCoolingDownError) as exc_info:
+        other_process.get(URL)
+
+    assert route.call_count == 1
+    assert other_process.stats.network_requests == 0
+    assert exc_info.value.retry_after == pytest.approx(3500.0)
+    assert _stored_hosts(tmp_path) == {"example.invalid": 4600.0}
+    now[0] = 4600.0
+    assert other_process.get(URL).json() == {"a": 1}
+    assert route.call_count == 2
+
+
+@respx.mock
+def test_a_client_made_before_another_ones_429_is_refused_too(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "60"}))
+    watching = _make_client(tmp_path, now=[1000.0])
+    with pytest.raises(RateLimitError):
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+
+    with pytest.raises(RateLimitCoolingDownError):
+        watching.get(URL)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_the_cool_down_file_is_owner_only_and_replaced_whole(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(429))
+    (tmp_path / "cache").mkdir(mode=0o755)
+    with pytest.raises(RateLimitError):
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+
+    path = _rate_limit_file(tmp_path)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert list(path.parent.glob("*.tmp-*")) == []
+    assert _stored_hosts(tmp_path) == {"example.invalid": 1600.0}
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        "{not json",
+        {"version": 1, "hosts": {"example.invalid": 5000.0}, "pad": "x" * 9000},
+        {"version": 2, "hosts": {"example.invalid": 5000.0}},
+        {"hosts": {"example.invalid": 5000.0}},
+        {"version": 1, "hosts": [["example.invalid", 5000.0]]},
+        {"version": 1, "hosts": {"example.invalid": True}},
+        {"version": 1, "hosts": {"example.invalid": "5000"}},
+        {"version": 1, "hosts": {"example.invalid": None}},
+        '{"version": 1, "hosts": {"example.invalid": NaN}}',
+        '{"version": 1, "hosts": {"example.invalid": 1e400}}',
+        '{"version": 1, "hosts": {"example.invalid": 1' + "0" * 400 + "}}",
+        {"version": 1, "hosts": {"example.invalid": 1000.0}},
+        {"version": 1, "hosts": {"example.invalid": 1000.0 + 86_400 + 300.5}},
+        [1, 2],
+    ],
+    ids=[
+        "corrupt",
+        "too-large",
+        "version-2",
+        "no-version",
+        "hosts-not-a-dict",
+        "bool",
+        "str",
+        "null",
+        "nan",
+        "inf",
+        "huge-int",
+        "ended",
+        "past-a-day",
+        "not-an-object",
+    ],
+)
+@respx.mock
+def test_an_unusable_cool_down_file_never_stops_a_request(tmp_path: Path, document: object) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    _write_cooldowns(tmp_path, document)
+
+    assert _make_client(tmp_path, now=[1000.0]).get(URL).json() == {"a": 1}
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_a_stored_cool_down_up_to_a_day_and_the_skew_ahead_is_honoured(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    _write_cooldowns(tmp_path, {"version": 1, "hosts": {"example.invalid": 1000.0 + 86_700}})
+
+    with pytest.raises(RateLimitCoolingDownError):
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+    assert route.call_count == 0
+
+
+def test_only_host_names_of_dns_length_are_read() -> None:
+    hosts = {"a" * 253: 2000.0, "b" * 254: 2000.0, "": 2000.0}
+
+    assert http_module._valid_cooldowns({"version": 1, "hosts": hosts}, 1000.0) == {
+        "a" * 253: 2000.0
+    }
+
+
+@respx.mock
+def test_a_cool_down_of_one_host_does_not_stop_another(tmp_path: Path) -> None:
+    other = respx.get(_OTHER_HOST_URL).mock(return_value=httpx.Response(200, json={"b": 2}))
+    _write_cooldowns(tmp_path, {"version": 1, "hosts": {"example.invalid": 5000.0}})
+
+    assert _make_client(tmp_path, now=[1000.0]).get(_OTHER_HOST_URL).json() == {"b": 2}
+    assert other.call_count == 1
+
+
+@respx.mock
+def test_a_429_keeps_the_other_hosts_drops_ended_ones_and_keeps_the_sixteen_last(
+    tmp_path: Path,
+) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "60"}))
+    hosts = {f"h{index}.invalid": 2000.0 + index for index in range(20)}
+    _write_cooldowns(tmp_path, {"version": 1, "hosts": {**hosts, "ended.invalid": 999.0}})
+
+    with pytest.raises(RateLimitError):
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+
+    stored = _stored_hosts(tmp_path)
+    assert len(stored) == 16
+    assert "example.invalid" not in stored  # it ends before the others
+    assert stored == {f"h{index}.invalid": 2000.0 + index for index in range(4, 20)}
+
+
+@respx.mock
+def test_a_429_is_stored_next_to_the_other_hosts_and_drops_the_ended_ones(
+    tmp_path: Path,
+) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "60"}))
+    hosts = {"kept.invalid": 5000.0, "ended.invalid": 999.0}
+    _write_cooldowns(tmp_path, {"version": 1, "hosts": hosts})
+
+    with pytest.raises(RateLimitError):
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+
+    assert _stored_hosts(tmp_path) == {"kept.invalid": 5000.0, "example.invalid": 1060.0}
+
+
+@respx.mock
+def test_a_429_keeps_the_later_end_another_process_stored_meanwhile(tmp_path: Path) -> None:
+    def answer(request: httpx.Request) -> httpx.Response:
+        _write_cooldowns(tmp_path, {"version": 1, "hosts": {"example.invalid": 8000.0}})
+        return httpx.Response(429, headers={"Retry-After": "60"})
+
+    respx.get(URL).mock(side_effect=answer)
+    with pytest.raises(RateLimitError):
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+
+    assert _stored_hosts(tmp_path) == {"example.invalid": 8000.0}
+
+
+@respx.mock
+def test_the_cool_down_ending_last_wins_between_memory_and_file(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(429, headers={"Retry-After": "60"}))
+    now = [1000.0]
+    client = _make_client(tmp_path, now=now)
+    with pytest.raises(RateLimitError):
+        client.get(URL)
+    _write_cooldowns(tmp_path, {"version": 1, "hosts": {"example.invalid": 5000.0}})
+    now[0] = 1100.0
+
+    with pytest.raises(RateLimitCoolingDownError) as from_file:
+        client.get(URL)
+    _rate_limit_file(tmp_path).unlink()
+    now[0] = 1050.0
+    with pytest.raises(RateLimitCoolingDownError) as from_memory:
+        client.get(URL)
+
+    _write_cooldowns(tmp_path, {"version": 1, "hosts": {"example.invalid": 1055.0}})
+    with pytest.raises(RateLimitCoolingDownError) as memory_over_file:
+        client.get(URL)
+
+    assert route.call_count == 1
+    assert from_file.value.retry_after == pytest.approx(3900.0)
+    assert from_memory.value.retry_after == pytest.approx(10.0)
+    assert memory_over_file.value.retry_after == pytest.approx(10.0)
+
+
+@respx.mock
+def test_a_cool_down_that_cannot_be_stored_still_applies_to_its_client(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(429))
+    (tmp_path / "blocker").write_text("a file, not a directory")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "blocker" / "cache",
+        user_agent="meshprovision/test (+t@example.invalid)",
+        clock=lambda: 1000.0,
+    )
+    with pytest.raises(RateLimitError):
+        client.get(URL)
+
+    with pytest.raises(RateLimitCoolingDownError):
+        client.get(URL)
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_a_5xx_is_never_stored_as_a_cool_down(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(503))
+    with pytest.raises(HttpError):
+        _make_client(tmp_path, now=[1000.0], max_retries=0).get(URL)
+
+    assert not _rate_limit_file(tmp_path).exists()

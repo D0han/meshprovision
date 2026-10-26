@@ -71,6 +71,7 @@ __all__ = [
     "NonInteractiveError",
     "PlanConflictError",
     "ProvisioningError",
+    "RateLimitCoolingDownError",
     "RateLimitError",
     "SchemaError",
     "SettingsError",
@@ -430,6 +431,15 @@ class RateLimitError(HttpError):
         """
         super().__init__(message, url=url, status_code=status_code, source=source, hint=hint)
         self.retry_after = retry_after
+
+
+class RateLimitCoolingDownError(RateLimitError):
+    """A request was not sent: its host is still cooling down from an HTTP 429.
+
+    The 429 may have been answered to another process sharing the cache
+    directory. Nothing reached the host, so a caller that records failed
+    requests (to back off from them) should not record this one.
+    """
 
 
 class InvalidResponseError(HttpError):

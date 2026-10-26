@@ -1332,3 +1332,32 @@ def test_a_node_seen_during_the_fetch_is_never_in_the_future(
     assert node.age is not None
     assert node.age >= timedelta(0)
     assert node.age_text == "just now"
+
+
+def test_a_429_stops_the_next_mesh_status_run_from_asking_lorastats(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """A cron'd or repeated `mesh status` asked again at once a host that said wait."""
+    from meshprovision.db.nodes import NodeRecord
+
+    node_hex = _seed_one_node(seed_db, NodeRecord)
+    nodes = {node_hex: {"shortName": "x", "seenBy": {"gw1": int(time.time()) - 60}}}
+    first = mock_sources(nodes=nodes, lorastats_body="", lorastats_status=429)
+    with first:
+        assert invoke(runner, ["status", "--json"], env).exit_code == 7
+
+    second = mock_sources(nodes=nodes)
+    with second:
+        result = invoke(runner, ["--no-cache", "status", "--json"], env)
+        lorastats_route = next(r for r in second.routes if "lorastats.pl" in str(r.pattern))
+        loranet_route = next(r for r in second.routes if "loranet.pl" in str(r.pattern))
+        assert lorastats_route.call_count == 0
+        assert loranet_route.call_count == 1
+
+    assert result.exit_code == 7
+    (failure,) = json.loads(result.stdout)["failures"]
+    assert failure["source"] == "lorastats"
+    assert "not requested: lorastats.pl rate-limited this client" in failure["message"]

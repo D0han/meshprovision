@@ -10,7 +10,7 @@ import httpx
 import pytest
 import respx
 
-from meshprovision.cache.http import CachedHTTPClient
+from meshprovision.cache.http import RATE_LIMIT_FILENAME, CachedHTTPClient
 from meshprovision.datasources import lorastats_regions as list_module
 from meshprovision.datasources.lorastats import LORASTATS_MAX_REGIONS, LorastatsSource
 from meshprovision.datasources.lorastats_regions import (
@@ -639,3 +639,43 @@ def test_the_page_cap_is_two_mebibytes() -> None:
 
 def test_a_failed_fetch_is_retried_after_a_day() -> None:
     assert list_module.REGION_LIST_RETRY_SECONDS == 24 * 60 * 60
+
+
+def _cool_down_lorastats(tmp_path: Path, until: float) -> None:
+    path = tmp_path / "cache" / RATE_LIMIT_FILENAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"version": 1, "hosts": {"lorastats.pl": until}}))
+
+
+@respx.mock
+def test_a_request_refused_during_a_429_cool_down_is_not_recorded_as_a_failure(
+    tmp_path: Path,
+) -> None:
+    """Another process's 429 would otherwise lock the page out for a day without a request."""
+    route = _page_route()
+    path = _write_cache(tmp_path, _cached(["Zachód"], _NOW - 8 * 24 * 3600))
+    before = path.read_bytes()
+    _cool_down_lorastats(tmp_path, _NOW + 600)
+    now = [_NOW]
+
+    assert RegionList(clock=lambda: now[0]).regions(_client(tmp_path, now)) == ("Zachód",)
+    assert route.call_count == 0
+    assert path.read_bytes() == before
+
+    now[0] = _NOW + 600
+    regions = RegionList(clock=lambda: now[0]).regions(_client(tmp_path, now))
+    assert regions == LORASTATS_NODES_PAGE_REGIONS
+    assert route.call_count == 1
+
+
+@respx.mock
+def test_without_a_cached_list_a_429_cool_down_fails_without_recording_anything(
+    tmp_path: Path,
+) -> None:
+    route = _page_route()
+    _cool_down_lorastats(tmp_path, _NOW + 600)
+
+    with pytest.raises(DataSourceError, match="No lorastats region list"):
+        RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW]))
+    assert route.call_count == 0
+    assert not (tmp_path / "cache" / REGION_LIST_FILENAME).exists()

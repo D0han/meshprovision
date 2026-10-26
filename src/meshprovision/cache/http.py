@@ -79,11 +79,13 @@ from urllib.parse import urlencode
 
 import httpx
 
+from meshprovision.datasources.json_store import read_json, write_json
 from meshprovision.errors import (
     CacheError,
     HttpError,
     InvalidResponseError,
     MissingContactError,
+    RateLimitCoolingDownError,
     RateLimitError,
     SettingsError,
 )
@@ -100,6 +102,8 @@ __all__ = [
     "DEFAULT_TTL_SECONDS",
     "MAX_RESPONSE_BYTES",
     "PERSISTED_HEADERS",
+    "RATE_LIMIT_FILENAME",
+    "RATE_LIMIT_VERSION",
     "RETRY_STATUS_MIN",
     "CacheStats",
     "CachedHTTPClient",
@@ -173,6 +177,29 @@ _RATE_LIMIT_DEFAULT_COOLDOWN_SECONDS: Final[float] = 600.0
 
 _RATE_LIMIT_MAX_COOLDOWN_SECONDS: Final[float] = 86_400.0
 """Upper bound on a 429 cool-down, whatever ``Retry-After`` asks for (one day)."""
+
+RATE_LIMIT_FILENAME: Final[str] = "rate_limits.json"
+"""The file, directly in the cache directory, that keeps every process's 429 cool-downs.
+
+``{"version": 1, "hosts": {"<host>": <until, epoch seconds>}}``. Deleting
+it lets mesh ask a rate-limited host again at once."""
+
+RATE_LIMIT_VERSION: Final[int] = 1
+"""On-disk schema version of :data:`RATE_LIMIT_FILENAME`. Any other version reads as empty."""
+
+_RATE_LIMIT_MAX_FILE_BYTES: Final[int] = 8 * 1024
+"""The largest cool-down file read; :data:`_RATE_LIMIT_MAX_HOSTS` long host names fit."""
+
+_RATE_LIMIT_MAX_HOSTS: Final[int] = 16
+"""Cool-downs kept in the file; the ones ending last win."""
+
+_RATE_LIMIT_MAX_HOST_CHARS: Final[int] = 253
+"""The longest host name (DNS) a cool-down is read for."""
+
+_RATE_LIMIT_FUTURE_SKEW_SECONDS: Final[float] = 300.0
+"""Clock skew allowed past the longest cool-down before a stored one is ignored."""
+
+_RATE_LIMIT_WHAT: Final[str] = "HTTP 429 cool-downs"
 
 _RATE_LIMIT_HINT: Final[str] = (
     "lorastats.pl bans IP addresses for misuse; wait before retrying "
@@ -640,6 +667,40 @@ def _rate_limit_key(url: str) -> str:
         return url
 
 
+def _valid_cooldowns(document: object, now: float) -> dict[str, float]:
+    """Validate the content of :data:`RATE_LIMIT_FILENAME`.
+
+    Anything unexpected is ignored rather than trusted, so a corrupt or
+    planted file can never stop requests for longer than a real 429 would.
+
+    Args:
+        document: The decoded file, or ``None``.
+        now: The current time, epoch seconds.
+
+    Returns:
+        Host to until (epoch seconds) for every entry of a version
+        :data:`RATE_LIMIT_VERSION` document whose host is a string of 1 to
+        :data:`_RATE_LIMIT_MAX_HOST_CHARS` characters and whose until is a
+        number after ``now`` and at most the longest cool-down (plus
+        :data:`_RATE_LIMIT_FUTURE_SKEW_SECONDS`) ahead. A JSON boolean
+        reads as 0 or 1, long past, so it is ignored like any old entry.
+    """
+    if not isinstance(document, dict) or document.get("version") != RATE_LIMIT_VERSION:
+        return {}
+    hosts = document.get("hosts")
+    if not isinstance(hosts, dict):
+        return {}
+    latest = now + _RATE_LIMIT_MAX_COOLDOWN_SECONDS + _RATE_LIMIT_FUTURE_SKEW_SECONDS
+    return {
+        host: float(until)
+        for host, until in hosts.items()
+        if isinstance(host, str)
+        and 1 <= len(host) <= _RATE_LIMIT_MAX_HOST_CHARS
+        and isinstance(until, int | float)
+        and now < until <= latest
+    }
+
+
 def _request_error_hint(exc: httpx.RequestError) -> str | None:
     """Explain a non-retried request failure, when there is more to say.
 
@@ -757,12 +818,15 @@ class CachedHTTPClient:
       errors only -- never on 4xx, which is never retried, nor on a status
       the call accepts (``accept_statuses``), which is returned like a 2xx.
     - **A per-host cool-down after HTTP 429.** A host that answered 429 is
-      not asked again by this instance for its ``Retry-After`` delay
+      not asked again for its ``Retry-After`` delay
       (:data:`_RATE_LIMIT_DEFAULT_COOLDOWN_SECONDS` without a usable one,
-      at most :data:`_RATE_LIMIT_MAX_COOLDOWN_SECONDS`); a request to it
-      meanwhile raises :class:`RateLimitError` without being sent, so a
-      ``--watch`` loop sharing one client cannot keep asking. Fresh cache
-      entries are still served.
+      at most :data:`_RATE_LIMIT_MAX_COOLDOWN_SECONDS`) by this instance
+      nor by any other using the same cache directory: the cool-down is
+      kept in :data:`RATE_LIMIT_FILENAME`, read before every request. A
+      request to it meanwhile raises :class:`RateLimitCoolingDownError`
+      without being sent, so neither a ``--watch`` loop nor a cron'd run
+      can keep asking. ``force_refresh`` and a zero TTL do not bypass it;
+      fresh cache entries are still served.
 
     Attributes are exposed as read-only properties; the client itself is
     otherwise stateful (it owns cache-hit/miss counters, the 429
@@ -955,7 +1019,9 @@ class CachedHTTPClient:
             HttpError: If the request fails and cannot be served from a
                 fresh cache entry.
             RateLimitError: If the server responds with HTTP 429, or the
-                host is still cooling down from one (nothing is sent).
+                host is still cooling down from one, also received by
+                another process (a :class:`RateLimitCoolingDownError`;
+                nothing is sent).
         """
         return self.request(
             "GET",
@@ -1028,7 +1094,9 @@ class CachedHTTPClient:
             HttpError: If the request fails and cannot be served from a
                 fresh cache entry.
             RateLimitError: If the server responds with HTTP 429, or the
-                host is still cooling down from one (nothing is sent).
+                host is still cooling down from one, also received by
+                another process (a :class:`RateLimitCoolingDownError`;
+                nothing is sent).
         """
         effective_ttl = self._ttl if ttl is None else ttl
         if effective_ttl < 0:
@@ -1279,8 +1347,8 @@ class CachedHTTPClient:
                 after exhausting retries on a retryable transport error.
             RateLimitError: If the server responds with HTTP 429 (never
                 retried automatically; starts the host's cool-down), or
-                ``url``'s host is still cooling down from one (nothing is
-                sent).
+                ``url``'s host is still cooling down from one (a
+                :class:`RateLimitCoolingDownError`; nothing is sent).
         """
         self._refuse_while_rate_limited(url, source=source)
         last_exc: Exception | None = None
@@ -1384,22 +1452,30 @@ class CachedHTTPClient:
     def _refuse_while_rate_limited(self, url: str, *, source: str | None) -> None:
         """Refuse a request to a host still cooling down after an HTTP 429.
 
+        The cool-down file is read on every call (it is tiny), so a long
+        running ``--watch`` also honours a 429 another process received.
+
         Args:
             url: The request URL.
             source: A short label identifying the calling datasource.
 
         Raises:
-            RateLimitError: If ``url``'s host answered 429 to this instance
-                and its cool-down has not ended. Nothing is sent.
+            RateLimitCoolingDownError: If ``url``'s host answered 429 to
+                this instance or to another process using the same cache
+                directory, and its cool-down has not ended. Nothing is sent.
         """
         host = _rate_limit_key(url)
-        until = self._cooldown_until.get(host)
-        if until is None:
+        untils = [
+            until
+            for until in (self._cooldown_until.get(host), self._persisted_cooldowns().get(host))
+            if until is not None
+        ]
+        if not untils:
             return
-        remaining = until - self._clock()
+        remaining = max(untils) - self._clock()
         if remaining <= 0:
             return
-        raise RateLimitError(
+        raise RateLimitCoolingDownError(
             f"{url} not requested: {host} rate-limited this client; "
             f"retrying after {remaining:.0f}s",
             url=url,
@@ -1417,10 +1493,55 @@ class CachedHTTPClient:
                 ``None``.
         """
         delay = _RATE_LIMIT_DEFAULT_COOLDOWN_SECONDS if retry_after is None else retry_after
-        self._cooldown_until = {
-            **self._cooldown_until,
-            _rate_limit_key(url): self._clock() + min(delay, _RATE_LIMIT_MAX_COOLDOWN_SECONDS),
-        }
+        host = _rate_limit_key(url)
+        now = self._clock()
+        until = now + min(delay, _RATE_LIMIT_MAX_COOLDOWN_SECONDS)
+        self._cooldown_until = {**self._cooldown_until, host: until}
+        self._persist_cooldown(host, until, now)
+
+    def _persisted_cooldowns(self, now: float | None = None) -> dict[str, float]:
+        """Read the cool-downs of every process from :data:`RATE_LIMIT_FILENAME`.
+
+        Args:
+            now: The current time, epoch seconds; read from the clock only
+                when the file exists, when not given.
+
+        Returns:
+            The running cool-downs, host to until (see
+            :func:`_valid_cooldowns`); empty when the file is missing,
+            unreadable or not a cool-down file.
+        """
+        document = read_json(
+            self._cache_dir / RATE_LIMIT_FILENAME,
+            max_bytes=_RATE_LIMIT_MAX_FILE_BYTES,
+            what=_RATE_LIMIT_WHAT,
+        )
+        if document is None:
+            return {}
+        return _valid_cooldowns(document, self._clock() if now is None else now)
+
+    def _persist_cooldown(self, host: str, until: float, now: float) -> None:
+        """Add ``host``'s cool-down to :data:`RATE_LIMIT_FILENAME` for every process.
+
+        The file is re-read first, so another process's cool-downs are
+        kept; ended ones are dropped and only the
+        :data:`_RATE_LIMIT_MAX_HOSTS` ending last stay. A failed write is
+        only logged at DEBUG: this instance's own cool-down still applies.
+
+        Args:
+            host: The host that answered 429.
+            until: When its cool-down ends, epoch seconds.
+            now: The current time, epoch seconds.
+        """
+        hosts = self._persisted_cooldowns(now)
+        hosts[host] = max(until, hosts.get(host, until))
+        latest = sorted(hosts.items(), key=lambda item: item[1], reverse=True)
+        self._chmod_cache_root()
+        write_json(
+            self._cache_dir / RATE_LIMIT_FILENAME,
+            {"version": RATE_LIMIT_VERSION, "hosts": dict(latest[:_RATE_LIMIT_MAX_HOSTS])},
+            what=_RATE_LIMIT_WHAT,
+        )
 
     def _send_following_redirects(self, request: httpx.Request) -> httpx.Response:
         """Send ``request`` streamed, following redirects without reading their bodies.

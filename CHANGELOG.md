@@ -500,6 +500,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A host that answered HTTP 429 is not asked again by any `mesh` process
+  using the same cache directory until its `Retry-After` ends (at most a
+  day): the cool-down is kept in `rate_limits.json` there. It used to live in
+  memory only, so the next `mesh health`, or a cron'd or `watch`ed plain
+  `mesh status` refreshing stale histories, asked lorastats.pl again at once
+  after it had said to wait an hour. A request refused this way is not
+  recorded as a failed read of the region list page.
 - An unrecognised role, hardware model or region from loranet.pl is shown
   escaped (and dropped past 64 characters), so it can no longer add lines to
   `mesh health`'s detailed report: a role holding a newline printed forged

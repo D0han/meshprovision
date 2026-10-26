@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -12,7 +13,7 @@ import httpx
 import pytest
 import respx
 
-from meshprovision.cache.http import DEFAULT_MAX_RETRIES, CachedHTTPClient
+from meshprovision.cache.http import DEFAULT_MAX_RETRIES, RATE_LIMIT_FILENAME, CachedHTTPClient
 from meshprovision.datasources.lorastats import LORASTATS_BASE_URL
 from meshprovision.datasources.lorastats_packets import LorastatsPackets
 from meshprovision.errors import DataSourceError, HttpError, InvalidResponseError, RateLimitError
@@ -610,3 +611,34 @@ def test_a_fleet_larger_than_the_file_cap_keeps_every_history(tmp_path: Path) ->
     assert len(list(store.directory.iterdir())) == 140
     assert len(packets.calls) == 2 * 140
     assert all(since is not None for _, _, _, since in packets.calls)
+
+
+@respx.mock
+def test_a_cool_down_stored_by_another_process_stops_the_refresh_without_a_request(
+    tmp_path: Path,
+) -> None:
+    route = respx.get(url__startswith=f"{LORASTATS_BASE_URL}/API/").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    (cache_dir / RATE_LIMIT_FILENAME).write_text(
+        json.dumps({"version": 1, "hosts": {"lorastats.pl": _NOW + 3600}})
+    )
+    client = CachedHTTPClient(
+        cache_dir=cache_dir, user_agent="mp/1 (+t@example.invalid)", clock=lambda: _NOW
+    )
+    refresher = HealthRefresher(
+        HistoryStore(cache_dir / HISTORY_DIRNAME, clock=lambda: _NOW),
+        LorastatsPackets(client),
+        clock=lambda: _NOW,
+    )
+    nodes = [(NodeId.from_int(index + 1), "Zachód") for index in range(3)]
+
+    outcome = refresher.refresh(nodes, gateway_check=True)
+
+    assert route.call_count == 0
+    assert outcome.refreshed == ()
+    assert len(outcome.failures) == 2 * len(nodes)  # each node's refresh and gateway check
+    assert {failure.node for failure in outcome.failures} == {node for node, _ in nodes}
+    assert "retrying after 3600s" in outcome.failures[0].message

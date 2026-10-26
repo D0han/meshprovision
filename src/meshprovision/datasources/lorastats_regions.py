@@ -52,7 +52,7 @@ from meshprovision.datasources.lorastats import (
     LORASTATS_MAX_REGIONS,
     validate_regions,
 )
-from meshprovision.errors import DataSourceError, SettingsError
+from meshprovision.errors import DataSourceError, RateLimitCoolingDownError, SettingsError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -251,7 +251,8 @@ class RegionList:
 
         The page is not fetched (unless refreshing) while a failed fetch is
         less than :data:`REGION_LIST_RETRY_SECONDS` old; a failed fetch is
-        recorded for that.
+        recorded for that (not one the client refused unsent during a 429
+        cool-down).
 
         Args:
             client: The client to fetch through.
@@ -276,7 +277,10 @@ class RegionList:
         try:
             regions = self._fetch(client)
         except DataSourceError as exc:
-            _record_failure(path, cached, now)
+            # A request refused for another process's 429 never reached
+            # lorastats: it must not lock the page out for a day.
+            if not isinstance(exc, RateLimitCoolingDownError):
+                _record_failure(path, cached, now)
             if cached is None:
                 raise DataSourceError(
                     f"No lorastats region list: {exc.message}", hint=_HINT

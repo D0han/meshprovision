@@ -518,3 +518,34 @@ def test_a_hostile_loranet_role_cannot_add_lines_to_the_detailed_report(
     assert "\nVerdict: OK\n  - info: FORGED LINE" not in result.stdout
     assert "role ROUTER\\x0aVerdict: OK\\x0a  - info: FORGED LINE" in result.stdout
     assert result.stdout.count("\nVerdict: ") == 1
+
+
+def test_a_429_stops_the_next_mesh_health_run_from_asking_lorastats(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """The cool-down was kept in memory only: the next process asked again at once."""
+    _seed(seed_db)
+    sent: list[int] = []
+    results = []
+    for run in range(2):
+        router = mock_sources(nodes=_nodes(time.time()))
+        reports_path = LORASTATS_PACKET_REPORTS_PATH.format(region="PL")
+        router.get(url__startswith=LORASTATS_BASE_URL + reports_path).mock(
+            side_effect=lambda _request, run=run: (
+                sent.append(run),
+                httpx.Response(429, headers={"Retry-After": "3600"}),
+            )[1]
+        )
+        with router:
+            results.append(invoke(runner, ["health", "--json"], env))
+
+    assert sent == [0]
+    assert results[1].exit_code == 7
+    failures = json.loads(results[1].stdout)["failures"]
+    assert [f["node"] for f in failures] == [_A, _B]
+    assert all(
+        "rate-limited" in f["message"] and "retrying after" in f["message"] for f in failures
+    )

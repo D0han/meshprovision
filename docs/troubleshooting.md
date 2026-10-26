@@ -71,6 +71,13 @@ Part of the meshprovision docs — see the [README](../README.md).
   lorastats.pl, and will fail at startup with a clear message if
   `MESHPROVISION_CONTACT` is unset. Do not work around a lorastats block
   by retrying — that site bans IP addresses.
+- `lorastats ... not requested: lorastats.pl rate-limited this client;
+  retrying after Ns`: lorastats.pl answered HTTP 429 to an earlier run (or
+  another `mesh` process), and every run using the same cache directory
+  waits out its `Retry-After` (at most a day). The cool-down is kept in
+  `rate_limits.json` in the cache directory (`MESHPROVISION_CACHE_DIR`);
+  deleting that file, while no `mesh` command is running, lets the next run
+  ask again at once. Only do that once you know why the site limited you.
 
 ## General
 

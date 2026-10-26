@@ -576,9 +576,14 @@ answers for at least an hour), even with `--cache-ttl 0`, so a short `--watch
 loranet.pl dump (~13 MB) is likewise reused for at least 60 s, so
 `--cache-ttl 0` with `--watch` does not download it every 5 s. The
 remembered regions are used with `--no-cache` too. A host that answers HTTP 429 (rate limited) is not
-asked again by the same `mesh` process for the `Retry-After` time it gave (10
-minutes when it gave none, at most a day); meanwhile each `--watch` poll lists
-that source as failed and says when it will retry.
+asked again by any `mesh` process using the same cache directory for the
+`Retry-After` time it gave (10 minutes when it gave none, at most a day): the
+cool-down is kept in `rate_limits.json` in the cache directory, so a cron'd or
+repeated `mesh status` or `mesh health` waits too, and `--no-cache`,
+`--force-refresh` and `--cache-ttl 0` do not skip it. Meanwhile each run (and
+`--watch` poll) lists that source as failed and says when it will retry. A
+request refused this way does not count as a failed read of the lorastats
+region list page.
 
 **Archived nodes** (see `mesh db forget` below) are excluded from the
 default report — an explicit `--node` request for one still wins.
@@ -643,7 +648,8 @@ node's. A failure of one node's own answer (a 404, an unusable or over-large
 body) does not stop the others, and boot times are recorded either way. The
 answers are fetched fresh, at most 8 MiB each, and not kept in the HTTP cache
 (each `since` is a different URL); after a 429 answer no further lorastats
-request is sent for the cool-down `mesh status` documents.
+request is sent, by this or any other `mesh` process, for the cool-down
+`mesh status` documents.
 
 **The history.** lorastats keeps its reports for only a day or two, so each
 node's history is kept in `health/<node id>.json` in the cache directory, for
