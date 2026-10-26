@@ -185,6 +185,18 @@ def test_ports_and_hop_starts_count_decoded_packets_by_their_own_hour() -> None:
     assert dict(hours[_H + HOUR_SECONDS].ports) == {3: 1}
 
 
+def test_tied_gateways_and_relays_are_kept_by_the_smaller_id() -> None:
+    receptions = [
+        _rx(_H + 1, gateway=f"{index:08x}", packet=f"{index:x}", relay=index)
+        for index in reversed(range(MAX_GATEWAYS_PER_HOUR + 1))
+    ]
+
+    bucket = _hours(_summary(receptions))[_H]
+
+    assert sorted(bucket.gateways) == [f"{index:08x}" for index in range(MAX_GATEWAYS_PER_HOUR)]
+    assert sorted(bucket.relays) == list(range(MAX_RELAYS_PER_HOUR))
+
+
 def test_the_busiest_gateways_and_relays_are_kept_per_hour() -> None:
     receptions = [
         _rx(_H + 1, gateway=f"{index:08x}", packet=f"{index:x}", relay=index % 256)
@@ -333,6 +345,20 @@ def test_series_come_from_decoded_payloads() -> None:
     assert history.positions == (PositionPoint(_H + 4, 52.379648, 16.950886),)
     assert history.nodeinfo == NodeInfoSeen(_H + 7, "D0h5", "D0h5 long", "CLIENT_MUTE")
     assert dict(history.neighbors) == {"979ed146": _H + 10}
+
+
+def test_series_do_not_depend_on_the_row_order() -> None:
+    decoded = [
+        _pkt(_H + 1, packet="1", port=67, payload="10% ChUtil, 80% Bat"),
+        _pkt(_H + 2, packet="2", port=4, payload="Old, Old name, Client"),
+        _pkt(_H + 3, packet="3", port=67, payload="12% ChUtil, 79% Bat"),
+        _pkt(_H + 4, packet="4", port=4, payload="New, New name, Router"),
+    ]
+
+    history = _summary((), decoded[::-1])
+
+    assert [point.time for point in history.telemetry] == [_H + 1, _H + 3]
+    assert history.nodeinfo == NodeInfoSeen(_H + 4, "New", "New name", "ROUTER")
 
 
 def test_replace_from_is_the_hour_of_the_previous_refresh() -> None:

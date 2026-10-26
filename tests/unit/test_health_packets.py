@@ -7,7 +7,6 @@ from datetime import UTC, datetime
 import pytest
 
 from meshprovision.health.packets import (
-    FUTURE_SKEW_SECONDS,
     DecodedPacket,
     NodeInfo,
     Reception,
@@ -119,7 +118,7 @@ def test_an_unusable_report_row_is_skipped_and_counted(row: object) -> None:
 
 
 def test_a_row_too_far_in_the_future_is_skipped_but_one_within_the_skew_is_kept() -> None:
-    at_limit = _NOW + FUTURE_SKEW_SECONDS
+    at_limit = _NOW + 300
     beyond = datetime.fromtimestamp(at_limit + 1, tz=UTC).isoformat()
     edge = datetime.fromtimestamp(at_limit, tz=UTC).isoformat()
 
@@ -137,6 +136,7 @@ def test_ids_are_normalized_and_a_repeated_reception_is_kept_once() -> None:
         _report(PacketId="d883d91d", Gateway="bbad0594", SNR=1.0),
         _report(PacketId="d883d91d", Gateway="ae6170a8"),
         _report(PacketId="5", Gateway="5"),
+        _report(PacketId=" 77C1EDC1 ", Gateway="bbad0594"),
     ]
 
     receptions, skipped = parse_receptions(rows, _NODE, now=_NOW)
@@ -145,6 +145,7 @@ def test_ids_are_normalized_and_a_repeated_reception_is_kept_once() -> None:
         ("d883d91d", "bbad0594", 11.5),
         ("d883d91d", "ae6170a8", 11.5),
         ("5", "00000005", 11.5),
+        ("77c1edc1", "bbad0594", 11.5),
     ]
     assert skipped == 0
 
@@ -256,6 +257,8 @@ def test_a_repeated_decoded_packet_is_kept_once_and_odd_values_degrade() -> None
         pytest.param("", None, id="empty"),
         pytest.param("22.5°C, 1013 hPa", None, id="unknown-readings"),
         pytest.param("-3% Bat", None, id="negative"),
+        pytest.param("4294967295 rx, 5 tx", Telemetry(rx=4294967295, tx=5), id="counter-at-limit"),
+        pytest.param("4294967296 rx, 5 tx", Telemetry(tx=5), id="counter-over-limit"),
     ],
 )
 def test_telemetry_payloads_are_parsed_defensively(text: str, expected: Telemetry | None) -> None:
@@ -305,6 +308,12 @@ def test_nodeinfo_roles_are_canonical_names(role_text: str, role: str) -> None:
 def test_an_unknown_nodeinfo_role_is_none_but_the_names_are_kept() -> None:
     assert parse_nodeinfo("S, Long, Wizard") == NodeInfo("S", "Long", None)
     assert parse_nodeinfo("S, Long, ") == NodeInfo("S", "Long", None)
+
+
+def test_nodeinfo_parts_are_stripped() -> None:
+    info = parse_nodeinfo("Ab , Alpha ,  Beta , Router ")
+
+    assert info == NodeInfo("Ab", "Alpha, Beta", "ROUTER")
 
 
 @pytest.mark.parametrize("text", ["S, Client", " , Long, Client", "S, , Client", ""])
