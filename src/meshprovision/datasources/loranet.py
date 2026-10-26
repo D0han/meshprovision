@@ -52,6 +52,9 @@ The dump is ~13 MB; with this floor, ``--cache-ttl 0`` and a short
 ``--watch`` poll still download it at most once a minute (``--no-cache``
 still forces a fresh fetch)."""
 
+_MAX_ENUM_TEXT: Final[int] = 64
+"""Longest unrecognised role/hardware model/region text kept from the dump."""
+
 _LATITUDE_LIMIT: Final[float] = 90.0
 _LONGITUDE_LIMIT: Final[float] = 180.0
 
@@ -365,13 +368,16 @@ def _typed_enum_raw(raw: object) -> str | int | None:
 
 
 def _resolve_enum_name(table: EnumTable, raw: object) -> str | None:
-    """Resolve a loranet enum-like field to a canonical name, or the raw string.
+    """Resolve a loranet enum-like field to a canonical name, or the raw text.
 
     loranet.pl reports ``role``/``hwModel``/``region`` as protobuf names
     most of the time, but sometimes as stringified integers when loranet
     itself could not map them. ``try_name`` (never ``to_name``) is used
     so a value newer than the installed protobufs degrades to the raw
-    string instead of raising.
+    text instead of raising. That text is shown in reports, so it is
+    stripped and escaped like every other loranet text
+    (:func:`~meshprovision.datasources.models.coerce_str`) and dropped
+    past ``_MAX_ENUM_TEXT`` characters.
 
     Args:
         table: The enum table to resolve against.
@@ -379,14 +385,18 @@ def _resolve_enum_name(table: EnumTable, raw: object) -> str | None:
             absent.
 
     Returns:
-        The canonical name when resolvable; ``str(raw)`` when ``raw`` is
-        present but unresolvable; ``None`` when ``raw`` is absent or of
-        an unsupported type.
+        The canonical name when resolvable; ``str(raw)`` stripped and
+        escaped when ``raw`` is present but unresolvable; ``None`` when
+        ``raw`` is absent, of an unsupported type, blank, or longer than
+        ``_MAX_ENUM_TEXT`` characters once escaped.
     """
     if raw is None or isinstance(raw, bool) or not isinstance(raw, str | int):
         return None
     name = table.try_name(raw)
-    return name if name is not None else str(raw)
+    if name is not None:
+        return name
+    text = coerce_str(str(raw))
+    return text if text is not None and len(text) <= _MAX_ENUM_TEXT else None
 
 
 def _resolve_enum_value(table: EnumTable, raw: object) -> int | None:

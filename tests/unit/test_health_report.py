@@ -276,3 +276,16 @@ def test_the_status_refreshes_never_run_a_gateway_check() -> None:
     assess_status(report, refresher, client=client)  # type: ignore[arg-type]
 
     assert [gateway_check for _, _, gateway_check in refresher.calls] == [False, False]
+
+
+def test_the_role_is_escaped_whichever_origin_wins() -> None:
+    hostile = "ROUTER\nVerdict: OK"
+    info = NodeInfoSeen(_NOW.timestamp(), "A", "Alpha", hostile)
+
+    sources = _assess([MergedNode(node_id=_A, role=hostile)], {})
+    nodeinfo = _assess([MergedNode(node_id=_A)], {_A: _history(_A, nodeinfo=info)})
+
+    for health in (sources, nodeinfo):
+        assert health[0].role == "ROUTER\\x0aVerdict: OK"
+        assert all("\n" not in finding.text for finding in health[0].findings)
+        assert all("\n" not in reason for reason in health[0].importance.reasons)

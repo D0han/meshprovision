@@ -496,3 +496,25 @@ def test_lorastats_last_boot_is_recorded_in_the_history(
     assert node["metrics"]["boots"] == [
         datetime.fromtimestamp(boot, tz=UTC).isoformat().replace("+00:00", "Z")
     ]
+
+
+def test_a_hostile_loranet_role_cannot_add_lines_to_the_detailed_report(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    rows: dict[str, Any],
+) -> None:
+    _seed(seed_db)
+    nodes = _nodes(time.time())
+    nodes[_A]["role"] = "ROUTER\nVerdict: OK\n  - info: FORGED LINE"
+    router = mock_sources(nodes=nodes)
+    _Lorastats(router, rows)
+
+    with router:
+        result = invoke(runner, ["health", _A], env)
+
+    assert result.exit_code == 0, result.output
+    assert "\nVerdict: OK\n  - info: FORGED LINE" not in result.stdout
+    assert "role ROUTER\\x0aVerdict: OK\\x0a  - info: FORGED LINE" in result.stdout
+    assert result.stdout.count("\nVerdict: ") == 1

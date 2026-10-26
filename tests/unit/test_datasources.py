@@ -1853,3 +1853,42 @@ def test_lorastats_a_non_array_json_body_is_evicted(tmp_path: Path) -> None:
 
     assert route.call_count == 2
     assert obs is None
+
+
+# --- unrecognised enum text ---------------------------------------------------------------------
+
+
+def test_loranet_unrecognised_enum_text_is_stripped_escaped_and_capped() -> None:
+    obs = parse_node(
+        NodeId.from_hex("deadbe01"),
+        {"role": "ROUTER\nVerdict: OK", "hwModel": "\x1b[31mX", "region": "  99  "},
+        observed_at=datetime.now(tz=UTC),
+    )
+
+    assert obs.role == "ROUTER\\x0aVerdict: OK"
+    assert obs.hw_model == "\\x1b[31mX"
+    assert obs.region == "99"
+
+
+def test_loranet_unrecognised_enum_text_longer_than_64_characters_is_dropped() -> None:
+    role = role_table()
+
+    assert loranet_module._resolve_enum_name(role, "A" * 64) == "A" * 64
+    assert loranet_module._resolve_enum_name(role, "A" * 65) is None
+    # The cap counts the escaped text: 16 ESC bytes print as 64 characters.
+    assert loranet_module._resolve_enum_name(role, "\x1b" * 16) == "\\x1b" * 16
+    assert loranet_module._resolve_enum_name(role, "\x1b" * 17) is None
+    assert loranet_module._resolve_enum_name(role, "   ") is None
+
+
+def test_loranet_known_enum_values_still_resolve_to_their_canonical_names() -> None:
+    role = role_table()
+
+    assert [
+        loranet_module._resolve_enum_name(role, raw) for raw in ("ROUTER", "CLIENT_MUTE", 2)
+    ] == [
+        "ROUTER",
+        "CLIENT_MUTE",
+        "ROUTER",
+    ]
+    assert loranet_module._resolve_enum_name(role, 99) == "99"

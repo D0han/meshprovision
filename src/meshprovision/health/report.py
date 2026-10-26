@@ -46,6 +46,7 @@ from meshprovision.status.report import (
     load_records,
     run_status,
 )
+from meshprovision.termsafe import terminal_safe
 
 if TYPE_CHECKING:
     from meshprovision.cache.http import CachedHTTPClient
@@ -186,12 +187,20 @@ def _epoch(value: datetime | None) -> float | None:
 
 
 def _role(node: MergedNode, history: NodeHistory) -> str | None:
-    """Pick a node's role: the sources', else its node info's, else the database's."""
+    """Pick a node's role: the sources', else its node info's, else the database's.
+
+    The role is printed in the detail report and in finding texts, so it
+    is escaped here whichever origin wins (a newline would add lines).
+    """
     if node.role:
-        return node.role
-    if history.nodeinfo is not None and history.nodeinfo.role:
-        return history.nodeinfo.role
-    return node.record.role if node.record is not None and node.record.role else None
+        role = node.role
+    elif history.nodeinfo is not None and history.nodeinfo.role:
+        role = history.nodeinfo.role
+    elif node.record is not None and node.record.role:
+        role = node.record.role
+    else:
+        return None
+    return terminal_safe(role)
 
 
 def _context(node: MergedNode, role: str | None) -> NodeContext:

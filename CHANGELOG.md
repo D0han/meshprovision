@@ -500,6 +500,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An unrecognised role, hardware model or region from loranet.pl is shown
+  escaped (and dropped past 64 characters), so it can no longer add lines to
+  `mesh health`'s detailed report: a role holding a newline printed forged
+  `Verdict:` and finding lines under the node.
 - A history that `mesh status` refreshes now re-judges the same run: the
   plain table's Every, Status and exit code, and with `--detail full` also its
   JSON, use the interval the refreshed history gives. They used to keep the
