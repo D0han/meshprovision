@@ -14,6 +14,15 @@ most ``2 N`` requests (``3 N`` with gateway checks), plus the client's
 retries of a failed request; a 429 answer makes the client refuse every
 further request to lorastats.pl for its cool-down.
 
+**One failure stops a refresh.** Once a request of a :meth:`HealthRefresher.refresh`
+call fails because lorastats.pl is down or refusing (a 5xx, a transport
+error, a 429), no other node is asked about in that call: each remaining due
+node and gateway check is reported as a failure without a request (boot
+times are still recorded), instead of every node costing its requests, the
+client's retries and their back-off. A failure of one node's own answer (a
+404, an unusable or over-large body) does not stop the others. The next call
+asks again.
+
 **Incremental, idempotent.** Each refresh asks from one hour before the
 start of the hour of the previous refresh (the extra hour absorbs a
 misread Warsaw time around a DST change) and replaces that hour onwards
@@ -29,8 +38,16 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
+import httpx
+
 from meshprovision.datasources.lorastats import LORASTATS_MIN_TTL_SECONDS
-from meshprovision.errors import DataSourceError, NodeIdError
+from meshprovision.errors import (
+    DataSourceError,
+    HttpError,
+    InvalidResponseError,
+    NodeIdError,
+    RateLimitError,
+)
 from meshprovision.health.history import (
     HOUR_SECONDS,
     GatewayCheck,
@@ -79,6 +96,8 @@ GATEWAY_CHECK_WINDOW_SECONDS: Final[float] = 3600.0
 
 SINCE_MARGIN_SECONDS: Final[float] = HOUR_SECONDS
 """How much earlier than needed a refresh asks from (one hour, for DST)."""
+
+_SERVER_ERROR_MIN: Final[int] = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,6 +186,7 @@ class HealthRefresher:
         refreshed: list[NodeId] = []
         no_region: list[NodeId] = []
         failures: list[RefreshFailure] = []
+        down: DataSourceError | None = None
         skipped = 0
         for node, region in nodes:
             history = self._store.load(node)
@@ -178,19 +198,20 @@ class HealthRefresher:
                 no_region.append(node)
             elif self._due(node, history):
                 try:
-                    fetched, rows_skipped = self._fetch(node, region, history)
+                    fetched, rows_skipped = self._fetch(node, region, history, down)
                 except DataSourceError as exc:
                     failures.append(RefreshFailure(node, exc.message, exc.hint))
-                    _logger.warning("lorastats packets for %s failed: %s", node.hex, exc.message)
+                    down = down or _tripped(exc, node)
                 else:
                     refreshed.append(node)
                     skipped += rows_skipped
                     update = _then(update, fetched)
             if region is not None and gateway_check and self._check_due(node, history):
                 try:
-                    check = self._gateway_check(node, region)
+                    check = self._gateway_check(node, region, down)
                 except DataSourceError as exc:
                     failures.append(RefreshFailure(node, exc.message, exc.hint))
+                    down = down or _tripped(exc, node)
                 else:
                     update = _then(update, _with_check(check))
             if update is not None:
@@ -224,17 +245,26 @@ class HealthRefresher:
         return not times or now - max(times) >= GATEWAY_CHECK_INTERVAL_SECONDS
 
     def _fetch(
-        self, node: NodeId, region: str, history: NodeHistory
+        self, node: NodeId, region: str, history: NodeHistory, down: DataSourceError | None
     ) -> tuple[Callable[[NodeHistory], NodeHistory], int]:
         """Fetch the rows of ``node`` since its previous refresh.
+
+        Args:
+            node: The node.
+            region: Its lorastats region.
+            history: Its stored history.
+            down: Why lorastats is not asked again in this refresh, if so.
 
         Returns:
             The change to apply to its stored history, and how many rows
             could not be used.
 
         Raises:
-            meshprovision.errors.DataSourceError: If a request fails.
+            meshprovision.errors.DataSourceError: If a request fails, or
+                ``down`` is set (nothing is asked).
         """
+        if down is not None:
+            raise down
         now = self._clock()
         self._refreshed_at[node] = now
         since = replace_from(history, now=now)
@@ -252,17 +282,48 @@ class HealthRefresher:
         )
         return (lambda old: merge(old, new)), skipped_reports + skipped_decoded
 
-    def _gateway_check(self, node: NodeId, region: str) -> GatewayCheck:
+    def _gateway_check(
+        self, node: NodeId, region: str, down: DataSourceError | None
+    ) -> GatewayCheck:
         """Count what ``node`` uplinked as a gateway in the last check window.
 
         Raises:
-            meshprovision.errors.DataSourceError: If the request fails.
+            meshprovision.errors.DataSourceError: If the request fails, or
+                ``down`` (why lorastats is not asked again) is set.
         """
+        if down is not None:
+            raise down
         now = self._clock()
         self._checked_at[node] = now
         rows = self._packets.uplinked(node, region, since=now - GATEWAY_CHECK_WINDOW_SECONDS)
         senders = {sender for sender in map(_sender, rows) if sender is not None}
         return GatewayCheck(now, GATEWAY_CHECK_WINDOW_SECONDS, len(rows), len(senders))
+
+
+def _tripped(exc: DataSourceError, node: NodeId) -> DataSourceError | None:
+    """Tell whether a failed request means lorastats.pl should not be asked again now.
+
+    Args:
+        exc: The request's error.
+        node: The node it was for.
+
+    Returns:
+        The error to report for every later node (no request made) when
+        ``exc`` is a 429, a 5xx or a transport error, else ``None``.
+    """
+    if isinstance(exc, RateLimitError):
+        down = True
+    elif not isinstance(exc, HttpError) or isinstance(exc, InvalidResponseError):
+        down = False
+    elif exc.status_code is not None:
+        down = exc.status_code >= _SERVER_ERROR_MIN
+    else:
+        down = isinstance(exc.__cause__, httpx.TransportError)
+    _logger.warning("lorastats packets for %s failed: %s", node.hex, exc.message)
+    if not down:
+        return None
+    _logger.warning("lorastats is failing; not asking it about any other node in this refresh")
+    return DataSourceError(f"not asked: lorastats failed for {node.hex} ({exc.message})")
 
 
 def _sender(row: Any) -> str | None:

@@ -485,7 +485,9 @@ trend arrows have something recent to compare with and the expected interval
 learns from fresh data: two lorastats requests per such node (packet reports
 and decoded packets, only what is new since the last refresh), at most once an
 hour per node, also across `--watch` polls, never a gateway check. A failed
-refresh is logged and does not change the table or the exit code.
+refresh is logged and does not change the table or the exit code; once
+lorastats fails with a 5xx, a transport error or a 429, no other node is asked
+about in that run (see `mesh health`).
 `--no-history-refresh` skips it (the stored histories are still read), and
 `--json` and `--source loranet` never make it.
 
@@ -629,10 +631,15 @@ attempt even if it failed or could not be stored. So, beyond `mesh status`:
 | worst case, `N` due nodes | `2 N`, `3 N` with `NODE` arguments |
 
 plus the HTTP client's usual retries of a request that failed with a 5xx or
-transport error. The answers are fetched fresh, at most 8 MiB each, and not
-kept in the HTTP cache (each `since` is a different URL); after a 429 answer
-no further lorastats request is sent for the cool-down `mesh status`
-documents, and each remaining node is reported as failed.
+transport error. One such failure (after its retries), or a 429, stops the
+refresh: no other node, and no gateway check, is asked about in that run (or
+`--watch` poll), and each is reported as failed ("not asked: lorastats failed
+for ..."), so lorastats being down costs one node's retries instead of every
+node's. A failure of one node's own answer (a 404, an unusable or over-large
+body) does not stop the others, and boot times are recorded either way. The
+answers are fetched fresh, at most 8 MiB each, and not kept in the HTTP cache
+(each `since` is a different URL); after a 429 answer no further lorastats
+request is sent for the cool-down `mesh status` documents.
 
 **The history.** lorastats keeps its reports for only a day or two, so each
 node's history is kept in `health/<node id>.json` in the cache directory, for

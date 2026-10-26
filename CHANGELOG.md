@@ -499,6 +499,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- When lorastats.pl is down, the health history refresh (`mesh health`,
+  `mesh status --detail full`, and the plain `mesh status` table's refresh of
+  stale histories) stops at the first request that fails with a 5xx, a
+  transport error or a 429: every other node (and gateway check) is reported
+  as failed without a request. 20 due nodes against a 503 used to cost 80
+  requests and 70 s of retry back-off (with timeouts, minutes) before the
+  table was shown; now one node's 4 attempts. A 404 or unusable answer for one
+  node still lets the others be asked.
 - lorastats.pl's `/Nodes` page (the region list) is no longer requested by
   every `mesh status` run once the cached list is more than a week old and the
   page fails or names no region (a cron'd `mesh status` asked it every run,
