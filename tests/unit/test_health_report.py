@@ -23,12 +23,14 @@ from meshprovision.health.report import (
     HealthReport,
     NodeHealth,
     assess_nodes,
+    rejudged_nodes,
     run_health,
 )
 from meshprovision.health.rules import Verdict
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
-from meshprovision.status.merge import MergedNode, Thresholds
+from meshprovision.status.cadence import Cadence, CadenceSource
+from meshprovision.status.merge import Availability, MergedNode, Thresholds
 from meshprovision.status.report import SourceFailure, StatusReport
 
 pytestmark = pytest.mark.unit
@@ -197,3 +199,49 @@ def test_without_fetching_the_whole_fleet_counts_and_nothing_is_asked(
         None,
         None,
     )
+
+
+def _hourly(node: NodeId, hours: int) -> NodeHistory:
+    return _history(node, hours=tuple(HourBucket(_H - i * HOUR_SECONDS, 1) for i in range(hours)))
+
+
+def test_rejudged_nodes_take_the_interval_of_the_refreshed_histories() -> None:
+    stale = MergedNode(node_id=_A, age=timedelta(hours=4), role="CLIENT")
+    untouched = MergedNode(node_id=_B, age=timedelta(hours=4), role="CLIENT")
+
+    a, b = rejudged_nodes(
+        [stale, untouched], {_A: _hourly(_A, 6)}, now=_NOW.timestamp(), floor=Thresholds()
+    )
+
+    assert a.cadence == Cadence(timedelta(hours=1), CadenceSource.HISTORY)
+    assert a.availability is Availability.STALE
+    assert a.thresholds.stale_after == timedelta(hours=2, minutes=15)
+    assert b is untouched
+
+
+def test_rejudged_nodes_keep_an_override_and_a_history_that_teaches_nothing() -> None:
+    override = MergedNode(
+        node_id=_A,
+        age=timedelta(hours=4),
+        cadence=Cadence(timedelta(hours=3), CadenceSource.OVERRIDE),
+    )
+    plain = MergedNode(node_id=_B, age=timedelta(hours=4))
+
+    nodes = rejudged_nodes(
+        [override, plain],
+        {_A: _hourly(_A, 6), _B: _hourly(_B, 2)},
+        now=_NOW.timestamp(),
+        floor=Thresholds(),
+    )
+
+    assert nodes == (override, plain)
+
+
+def test_rejudged_nodes_keep_the_floors() -> None:
+    node = MergedNode(node_id=_A, age=timedelta(hours=4), role="CLIENT")
+    floor = Thresholds(stale_after=timedelta(hours=5), offline_after=timedelta(hours=30))
+
+    (rejudged,) = rejudged_nodes([node], {_A: _hourly(_A, 6)}, now=_NOW.timestamp(), floor=floor)
+
+    assert rejudged.thresholds == floor
+    assert rejudged.availability is Availability.ONLINE

@@ -475,17 +475,21 @@ and `default`.
   costs up to `2 N` requests more than `default`, and none within 10 minutes
   of the previous refresh. `--json` keeps every key and adds `health` per
   node (as in `mesh health --json`) and a top-level `health` (`days`,
-  `network_requests`, `refresh`, `failures`). The exit code is decided as
-  without `--detail`: health verdicts and refresh failures do not change it
-  (use `mesh health` for that).
+  `network_requests`, `refresh`, `failures`); each node's `availability`,
+  `expected_interval_*`, `stale_after_seconds` and `offline_after_seconds`
+  come from its refreshed history, as do Status and Every. The exit code is
+  decided as without `--detail`, from those statuses: health verdicts and
+  refresh failures do not change it (use `mesh health` for that).
 
 The table (`default` and `brief`, not `--json`) refreshes the health history of
 a node with a known lorastats region when it is over an hour old, so that the
 trend arrows have something recent to compare with and the expected interval
 learns from fresh data: two lorastats requests per such node (packet reports
 and decoded packets, only what is new since the last refresh), at most once an
-hour per node, also across `--watch` polls, never a gateway check. A failed
-refresh is logged and does not change the table or the exit code; once
+hour per node, also across `--watch` polls, never a gateway check. The
+refreshed histories already count for that run: Every, Status and the exit
+code use the interval they give (an `--expected-interval` override stays). A
+failed refresh is logged and does not change the table or the exit code; once
 lorastats fails with a 5xx, a transport error or a 429, no other node is asked
 about in that run (see `mesh health`).
 `--no-history-refresh` skips it (the stored histories are still read), and

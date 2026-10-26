@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   over 7 days (verdict, packets per hour, gateways, direct share, hops,
   SNR, top relay), refreshing its `mesh health` history at most once every 10
   minutes (two lorastats requests per node). `default` is the table as before,
-  and `--json` is unchanged except that `full` adds `health` keys.
+  and `--json` is unchanged except that `full` adds `health` keys and judges
+  each node by its refreshed history.
 - `mesh health [NODE]...`: per-node health from lorastats.pl's packet reports
   -- a verdict (`ok`/`warn`/`crit`/`unknown`) with its reasons, an importance
   (`high`/`medium`/`low`: MQTT gateway, only gateway or busiest relay of our
@@ -499,6 +500,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A history that `mesh status` refreshes now re-judges the same run: the
+  plain table's Every, Status and exit code, and with `--detail full` also its
+  JSON, use the interval the refreshed history gives. They used to keep the
+  role default until the next run, so `--detail full` could show `online`,
+  `Every 3h` next to "WARN not heard for 4 h (expected every 1h)", and a
+  node learned to be offline did not fail the run.
 - `mesh health`'s `Batt` column and battery line show the reading the battery
   rule judges (the newest fresh level from the history or `mesh status`, in
   gray when every reading is too old), so a 5-day-old 60 % from the history no

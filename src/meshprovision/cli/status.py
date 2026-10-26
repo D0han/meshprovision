@@ -51,7 +51,7 @@ from meshprovision.datasources.lorastats_regions import RegionList
 from meshprovision.errors import DbError, ExitCode, SettingsError, exit_code_for
 from meshprovision.health import render as health_render
 from meshprovision.health.refresh import STATUS_REFRESH_INTERVAL_SECONDS, HealthRefresher
-from meshprovision.health.report import assess_status, refresh_status_histories
+from meshprovision.health.report import assess_status, refresh_status_histories, rejudged_nodes
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
@@ -228,8 +228,12 @@ def _emit(
     *,
     json_output: bool,
     detail: _Detail = _DEFAULT_DETAIL,
-) -> None:
+) -> StatusReport:
     """Emit one status report to the appropriate stream.
+
+    A history refresh (``--detail full``, or the plain table's refresh of
+    stale histories) re-judges the report's nodes with the intervals the
+    refreshed histories give before anything is shown.
 
     Args:
         ctx: The shared CLI context.
@@ -238,14 +242,25 @@ def _emit(
             STDOUT; otherwise render the ``rich`` table on STDOUT via
             ``ctx.out``.
         detail: The ``--detail`` level; ``full`` refreshes and adds health.
+
+    Returns:
+        The report as emitted (re-judged after a refresh), whose exit
+        code counts.
     """
     health = (
         assess_status(report, detail.refresher, client=detail.client)
         if detail.refresher is not None and detail.client is not None
         else None
     )
-    if health is None and not json_output and detail.stale_refresher is not None:
-        refresh_status_histories(report, detail.stale_refresher)
+    if health is not None:
+        nodes = tuple(health.nodes[node.node_id].node for node in report.nodes)
+        report = dataclasses.replace(report, nodes=nodes)
+    elif not json_output and detail.stale_refresher is not None:
+        outcome = refresh_status_histories(report, detail.stale_refresher)
+        nodes = rejudged_nodes(
+            report.nodes, outcome.histories, now=time.time(), floor=report.thresholds
+        )
+        report = dataclasses.replace(report, nodes=nodes)
     if json_output:
         click.echo(
             health_render.status_json(report, health)
@@ -261,6 +276,7 @@ def _emit(
             trends=load_trends(ctx.settings.cache_dir, report.nodes),
             hidden=render.DEFAULT_HIDDEN_COLUMNS if detail.level == DETAIL_DEFAULT else frozenset(),
         )
+    return report
 
 
 def _run_once(ctx: CliContext, options: StatusOptions, client: CachedHTTPClient) -> StatusReport:
@@ -333,7 +349,7 @@ def _watch_loop(
                 # every poll would re-query lorastats once per node each
                 # --interval, the request pattern lorastats bans IPs for.
                 options = dataclasses.replace(options, force_refresh=False)
-            _emit(ctx, last_report, json_output=json_output, detail=detail)
+            last_report = _emit(ctx, last_report, json_output=json_output, detail=detail)
             ctx.info(
                 f"cache: {last_report.cache_hits} hit(s), {last_report.cache_misses} "
                 f"miss(es), {last_report.network_requests} request(s)"
@@ -542,8 +558,9 @@ def status(
             )
             shown = _Detail(level=detail, client=client, stale_refresher=stale)
         if not watch:
-            report = _run_once(ctx, options, client)
-            _emit(ctx, report, json_output=json_output, detail=shown)
+            report = _emit(
+                ctx, _run_once(ctx, options, client), json_output=json_output, detail=shown
+            )
             code = report.exit_code(fail_on_offline=fail_on_offline)
             if code:
                 raise SystemExit(code)

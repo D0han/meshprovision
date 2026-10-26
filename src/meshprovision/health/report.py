@@ -63,6 +63,7 @@ __all__ = [
     "assess_status",
     "current_battery",
     "refresh_status_histories",
+    "rejudged_nodes",
     "run_health",
 ]
 
@@ -264,8 +265,7 @@ def assess_nodes(
     importance = rank_importance(metrics, roles)
     result = []
     for merged in nodes:
-        hours = ((b.hour, b.receptions) for b in history_of(merged.node_id).hours)
-        node = with_learned_cadence(merged, learned_interval(hours, now=now), floors)
+        node = _rejudged(merged, history_of(merged.node_id), now=now, floor=floors)
         role = roles[node.node_id]
         context = _context(node, role)
         verdict, findings = assess(metrics[node.node_id], context)
@@ -282,6 +282,45 @@ def assess_nodes(
             )
         )
     return tuple(result)
+
+
+def _rejudged(
+    node: MergedNode, history: NodeHistory, *, now: float, floor: Thresholds
+) -> MergedNode:
+    """Re-judge ``node`` with the interval ``history`` gives (see ``with_learned_cadence``)."""
+    hours = ((bucket.hour, bucket.receptions) for bucket in history.hours)
+    return with_learned_cadence(node, learned_interval(hours, now=now), floor)
+
+
+def rejudged_nodes(
+    nodes: Sequence[MergedNode],
+    histories: Mapping[NodeId, NodeHistory],
+    *,
+    now: float,
+    floor: Thresholds,
+) -> tuple[MergedNode, ...]:
+    """Re-judge a ``mesh status`` report's nodes with the histories a refresh gave.
+
+    ``mesh status`` learns each node's interval before its refresh; this
+    makes the refreshed histories count for the same run (its table, JSON
+    and exit code), as :func:`assess_nodes` does for the health columns.
+
+    Args:
+        nodes: The report's nodes.
+        histories: Their histories after the refresh (a missing one leaves
+            its node as it is).
+        now: The current time, epoch seconds.
+        floor: The report's thresholds (the floors).
+
+    Returns:
+        The nodes, in order, each re-judged (an override stays).
+    """
+    return tuple(
+        _rejudged(node, histories[node.node_id], now=now, floor=floor)
+        if node.node_id in histories
+        else node
+        for node in nodes
+    )
 
 
 def _refresh(
