@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from meshprovision.db.nodes import NodeRecord
+from meshprovision.health.history import NodeHistory, TelemetryPoint
+from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
+from meshprovision.nodeid import NodeId
 from tests.e2e.conftest import invoke
 from tests.e2e.test_e2e_health import _A, _B, _age_histories, _Lorastats, _nodes, _reports, _seed
 
@@ -108,6 +111,36 @@ def test_the_default_table_hides_node_and_mgmt(
     assert "Short" in _headers(plain.stdout)
     assert "Health" not in plain.stdout
     assert len(lorastats.reports) == len(lorastats.parsed) == 2
+    assert lorastats.uplinked == []
+
+
+@pytest.mark.usefixtures("seeded")
+def test_the_default_table_shows_trend_arrows_from_the_history(
+    runner: CliRunner, env: dict[str, str], mock_sources: Callable[..., respx.MockRouter]
+) -> None:
+    now = time.time()
+    store = HistoryStore(Path(env["MESHPROVISION_CACHE_DIR"]) / HISTORY_DIRNAME)
+    points = (
+        TelemetryPoint(now - 3 * 3600, battery=90),
+        TelemetryPoint(now - 2 * 3600, battery=90),
+    )
+    store.update(NodeId.from_hex(_A), lambda old: NodeHistory(node=old.node, telemetry=points))
+    nodes = _nodes(now)
+    nodes[_A] = {**nodes[_A], "batteryLevel": 60, "lastDeviceMetrics": int(now) - 60}
+    nodes[_B] = {**nodes[_B], "batteryLevel": 60, "lastDeviceMetrics": int(now) - 60}
+    router = mock_sources(nodes=nodes)
+    lorastats = _Lorastats(router, {})
+
+    with router:
+        result = invoke(runner, ["status", "--no-history-refresh"], env)
+
+    assert result.exit_code == 0, result.output
+    (alpha,) = [line for line in result.stdout.splitlines() if "D0h5" in line]
+    (bravo,) = [line for line in result.stdout.splitlines() if "Bravo" in line]
+    assert "60%\N{DOWNWARDS ARROW}" in alpha
+    assert "60%" in bravo
+    assert "\N{DOWNWARDS ARROW}" not in bravo
+    assert lorastats.reports == []
 
 
 @pytest.mark.usefixtures("seeded")
@@ -240,6 +273,7 @@ def test_the_table_refreshes_a_stale_history_once_an_hour(
     assert len(lorastats.reports) == len(lorastats.parsed) == 2
     assert soon_requests.reports == soon_requests.parsed == []
     assert len(later_requests.reports) == len(later_requests.parsed) == 2
+    assert lorastats.uplinked == soon_requests.uplinked == later_requests.uplinked == []
 
 
 @pytest.mark.usefixtures("seeded")

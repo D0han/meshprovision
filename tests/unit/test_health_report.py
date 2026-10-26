@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
 import httpx
 import pytest
@@ -23,6 +23,8 @@ from meshprovision.health.report import (
     HealthReport,
     NodeHealth,
     assess_nodes,
+    assess_status,
+    refresh_status_histories,
     rejudged_nodes,
     run_health,
 )
@@ -245,3 +247,32 @@ def test_rejudged_nodes_keep_the_floors() -> None:
 
     assert rejudged.thresholds == floor
     assert rejudged.availability is Availability.ONLINE
+
+
+class _SpyRefresher:
+    """A stand-in for ``HealthRefresher`` that records how it was asked."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, object, bool]] = []
+
+    def refresh(
+        self, nodes: object, *, boots: object = None, gateway_check: bool = False
+    ) -> RefreshOutcome:
+        self.calls.append((nodes, boots, gateway_check))
+        return RefreshOutcome(histories={})
+
+
+def test_the_status_refreshes_never_run_a_gateway_check() -> None:
+    report = StatusReport(
+        generated_at=_NOW,
+        nodes=(MergedNode(node_id=_A, lorastats_region="PL"),),
+        thresholds=Thresholds(),
+        failures=(),
+    )
+    refresher = _SpyRefresher()
+    client = SimpleNamespace(stats=SimpleNamespace(network_requests=0))
+
+    refresh_status_histories(report, refresher)  # type: ignore[arg-type]
+    assess_status(report, refresher, client=client)  # type: ignore[arg-type]
+
+    assert [gateway_check for _, _, gateway_check in refresher.calls] == [False, False]
