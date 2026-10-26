@@ -41,6 +41,8 @@ __all__ = [
     "BATTERY_CRIT_PERCENT",
     "BATTERY_DRAIN_WARN_PER_DAY",
     "BATTERY_FRESH_SECONDS",
+    "BATTERY_FROM_HISTORY",
+    "BATTERY_FROM_STATUS",
     "BATTERY_WARN_PERCENT",
     "CHANNEL_UTILIZATION_CRIT_PERCENT",
     "CHANNEL_UTILIZATION_WARN_PERCENT",
@@ -67,12 +69,14 @@ __all__ = [
     "SILENT_CRIT_SECONDS",
     "SILENT_WARN_SECONDS",
     "Advice",
+    "BatteryReading",
     "Finding",
     "Importance",
     "NodeContext",
     "Verdict",
     "advise",
     "assess",
+    "battery_reading",
     "chatty_limit",
     "rank_importance",
 ]
@@ -325,24 +329,71 @@ def _expectation(context: NodeContext) -> str:
     return f" (expected every {every}" + (f", {source})" if source else ")")
 
 
-def _current_battery(metrics: NodeMetrics, context: NodeContext) -> int | None:
-    """Return the newest battery percentage that is fresh enough to judge.
+@dataclass(frozen=True, slots=True)
+class BatteryReading:
+    """A node's newest battery reading.
 
-    Fresh means not older than :data:`BATTERY_FRESH_SECONDS` or, when
-    longer, the node's stale threshold.
+    Attributes:
+        level: The percentage; above 100 means external power.
+        time: When it was reported, epoch seconds; ``None`` when the
+            source gave no time.
+        source: :data:`BATTERY_FROM_HISTORY` or :data:`BATTERY_FROM_STATUS`.
+        fresh: Whether it is recent enough to judge.
     """
+
+    level: int
+    time: float | None
+    source: str
+    fresh: bool
+
+
+BATTERY_FROM_HISTORY: Final[str] = "history"
+"""A :class:`BatteryReading` from the node's history (its telemetry)."""
+
+BATTERY_FROM_STATUS: Final[str] = "mesh status"
+"""A :class:`BatteryReading` from ``mesh status``'s sources."""
+
+
+def battery_reading(metrics: NodeMetrics, context: NodeContext) -> BatteryReading | None:
+    """Return the battery reading to show and judge, from the node's history or ``mesh status``.
+
+    A level of 0 or less is no reading (a node without a battery sensor
+    reports 0). The newest fresh battery level wins (the one the battery
+    rule judges); without one, the newest fresh external-power reading;
+    without one, the newest reading, not fresh. A ``mesh status`` level
+    without a time counts only when there is no dated reading, and never
+    as fresh. Fresh means not older than :data:`BATTERY_FRESH_SECONDS` or,
+    when longer, the node's stale threshold.
+
+    Args:
+        metrics: The node's metrics.
+        context: What else is known about it.
+
+    Returns:
+        The reading, or ``None`` when there is none.
+    """
+    readings: list[tuple[float, int, str]] = []
+    if metrics.battery is not None and metrics.battery.latest > 0:
+        readings.append((metrics.battery.latest_time, metrics.battery.latest, BATTERY_FROM_HISTORY))
+    status_level = context.battery if context.battery is not None and context.battery > 0 else None
+    if status_level is not None and context.battery_time is not None:
+        readings.append((context.battery_time, status_level, BATTERY_FROM_STATUS))
     fresh_for = max(BATTERY_FRESH_SECONDS, context.stale_after)
-    candidates: list[tuple[float, int]] = []
-    if metrics.battery is not None:
-        candidates.append((metrics.battery.latest_time, metrics.battery.latest))
-    if context.battery is not None and context.battery_time is not None:
-        candidates.append((context.battery_time, context.battery))
-    fresh = [
-        (time, level)
-        for time, level in candidates
-        if metrics.now - time <= fresh_for and 0 < level <= _FULL_BATTERY
-    ]
-    return max(fresh)[1] if fresh else None
+    fresh = [reading for reading in readings if metrics.now - reading[0] <= fresh_for]
+    levels = [reading for reading in fresh if reading[1] <= _FULL_BATTERY]
+    for candidates, is_fresh in ((levels, True), (fresh, True), (readings, False)):
+        if candidates:
+            time, level, source = max(candidates)
+            return BatteryReading(level, time, source, is_fresh)
+    if status_level is not None:
+        return BatteryReading(status_level, None, BATTERY_FROM_STATUS, fresh=False)
+    return None
+
+
+def _current_battery(metrics: NodeMetrics, context: NodeContext) -> int | None:
+    """Return the battery level to judge: the reading's when fresh (external power is never low)."""
+    reading = battery_reading(metrics, context)
+    return reading.level if reading is not None and reading.fresh else None
 
 
 def _by_silence(seconds: float, context: NodeContext) -> Verdict | None:

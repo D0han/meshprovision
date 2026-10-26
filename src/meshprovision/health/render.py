@@ -28,8 +28,14 @@ from meshprovision.health.packets import (
     PORT_TELEMETRY,
 )
 from meshprovision.health.refresh import RefreshOutcome
-from meshprovision.health.report import HealthReport, NodeHealth, StatusHealth
-from meshprovision.health.rules import CHATTY_REFERENCE_PRESET, Verdict, chatty_limit
+from meshprovision.health.report import HealthReport, NodeHealth, StatusHealth, current_battery
+from meshprovision.health.rules import (
+    BATTERY_FROM_HISTORY,
+    CHATTY_REFERENCE_PRESET,
+    BatteryReading,
+    Verdict,
+    chatty_limit,
+)
 from meshprovision.status import timefmt
 from meshprovision.status.cadence import CadenceSource, interval_text
 from meshprovision.status.merge import humanize_age
@@ -64,6 +70,9 @@ _IMPORTANCE_STYLES: Final[dict[str, str]] = {"high": "bold", "medium": "", "low"
 _DASH: Final[str] = "-"
 _POWERED: Final[int] = 100
 """A battery level above this means external power."""
+
+_STALE_STYLE: Final[str] = "grey50"
+"""A battery reading too old to judge (``mesh status``'s gray for unknown values)."""
 _MAX_REASONS: Final[int] = 2
 """Findings shown per table row; the detailed report and ``--json`` show all."""
 _MAX_GATEWAYS: Final[int] = 10
@@ -132,13 +141,17 @@ def _relay_cell(relay: RelayShare | None) -> str:
     return _DASH if relay is None else f"0x{relay.byte:02x} {relay.share:.0%}"
 
 
-def _battery(health: NodeHealth) -> str:
-    """Render the newest battery reading of the history, else of the sources."""
-    trend = health.metrics.battery
-    level = trend.latest if trend is not None else health.node.battery_level
-    if level is None or level <= 0:
-        return _DASH
-    return "powered" if level > _POWERED else f"{level}%"
+def _battery_text(reading: BatteryReading) -> str:
+    """Render a battery level: ``powered`` above 100 %."""
+    return "powered" if reading.level > _POWERED else f"{reading.level}%"
+
+
+def _battery(health: NodeHealth) -> Text:
+    """Render the battery reading the battery rule judges, gray when too old to judge."""
+    reading = current_battery(health)
+    if reading is None:
+        return Text(_DASH)
+    return Text(_battery_text(reading), style="" if reading.fresh else _STALE_STYLE)
 
 
 def _name(health: NodeHealth) -> str:
@@ -430,19 +443,21 @@ def _relay_text(relay: RelayShare) -> str:
 def _battery_line(health: NodeHealth, now: datetime) -> str:
     """Render the battery and utilization readings."""
     metrics = health.metrics
-    trend = metrics.battery
-    if trend is None:
-        battery = f"{_battery(health)} (from mesh status)"
+    reading = current_battery(health)
+    if reading is None:
+        battery = _DASH
     else:
+        source = "history" if reading.source == BATTERY_FROM_HISTORY else "mesh status"
+        when = "" if reading.time is None else f"{_ago(reading.time, now)}, "
+        battery = f"{_battery_text(reading)} ({when}from {source})"
+    trend = metrics.battery
+    if trend is not None:
         slope = (
             "no trend yet"
             if trend.slope_per_day is None
             else f"{trend.slope_per_day:+.1f} points a day"
         )
-        battery = (
-            f"{trend.latest}% ({_ago(trend.latest_time, now)}), {slope} over "
-            f"{trend.points} readings"
-        )
+        battery += f", {slope} over {trend.points} readings"
     return (
         f"Battery: {battery}; channel utilization {_number(metrics.channel_utilization)}%, "
         f"transmit air utilization {_number(metrics.air_util_tx, 2)}%"

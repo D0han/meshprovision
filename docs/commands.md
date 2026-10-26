@@ -671,8 +671,11 @@ loses the history.
 newer of the last reception in the history and `mesh status`'s last seen),
 Every (the node's expected interval, see [`mesh status`](#mesh-status)), Pkt/h, GWs (distinct gateways in the window), Direct (share of direct
 receptions), Hops max/limit (most hops seen / the node's `HopStart`; `?` when
-unknown), SNR median, Top relay (busiest relay byte and its share), Batt, and
-the first two reasons. **The detailed report** (`NODE`) shows the expected interval, where it came
+unknown), SNR median, Top relay (busiest relay byte and its share), Batt (the
+reading the battery rule judges: the newest battery level from the history or
+`mesh status` within 24 h, or within the node's stale threshold when longer,
+`powered` for external power; when every reading is older, the newest in
+gray), and the first two reasons. **The detailed report** (`NODE`) shows the expected interval, where it came
 from and the stale and offline thresholds it gives, every metric with its
 sample size, the gateways, hop counts, relays (with the node of ours each
 byte likely is), decoded packets per port, battery trend, local stats, boots,

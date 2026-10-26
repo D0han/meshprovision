@@ -24,12 +24,14 @@ from meshprovision.health.metrics import NodeMetrics, compute_metrics
 from meshprovision.health.refresh import HealthRefresher, RefreshFailure, RefreshOutcome
 from meshprovision.health.rules import (
     Advice,
+    BatteryReading,
     Finding,
     Importance,
     NodeContext,
     Verdict,
     advise,
     assess,
+    battery_reading,
     rank_importance,
 )
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
@@ -59,6 +61,7 @@ __all__ = [
     "StatusHealth",
     "assess_nodes",
     "assess_status",
+    "current_battery",
     "refresh_status_histories",
     "run_health",
 ]
@@ -204,6 +207,19 @@ def _context(node: MergedNode, role: str | None) -> NodeContext:
         preset=node.modem_preset,
         online_local_nodes=node.online_local_nodes,
     )
+
+
+def current_battery(health: NodeHealth) -> BatteryReading | None:
+    """Return the battery reading ``health``'s battery rule judged (see :func:`battery_reading`).
+
+    Args:
+        health: The node's health.
+
+    Returns:
+        Its newest battery reading from its history or ``mesh status``, or
+        ``None``.
+    """
+    return battery_reading(health.metrics, _context(health.node, health.role))
 
 
 def assess_nodes(

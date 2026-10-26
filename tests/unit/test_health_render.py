@@ -9,12 +9,13 @@ from types import MappingProxyType
 
 import pytest
 from rich.console import Console
+from rich.text import Text
 
 from meshprovision.health import render
-from meshprovision.health.history import GatewayCheck, LocalStatsPoint
+from meshprovision.health.history import GatewayCheck, LocalStatsPoint, NodeHistory, TelemetryPoint
 from meshprovision.health.metrics import BatteryTrend, NodeMetrics, RelayShare
 from meshprovision.health.refresh import RefreshFailure, RefreshOutcome
-from meshprovision.health.report import HealthReport, NodeHealth
+from meshprovision.health.report import HealthReport, NodeHealth, assess_nodes
 from meshprovision.health.rules import Advice, Finding, Importance, Verdict
 from meshprovision.nodeid import NodeId
 from meshprovision.status.merge import MergedNode, Thresholds
@@ -165,6 +166,77 @@ def test_the_battery_cell_prefers_the_history(
     assert _row(_report(_health(node=node, metrics=_metrics(battery=battery))))[12] == cell
 
 
+def _battery_node(level: int, age: timedelta) -> MergedNode:
+    return MergedNode(node_id=_A, battery_level=level, last_device_metrics=_NOW - age)
+
+
+def test_the_battery_cell_shows_the_reading_the_battery_rule_judges() -> None:
+    """A 5-day-old 60 % in the history was shown while the verdict said 'battery at 9%'."""
+    node = _battery_node(9, timedelta(hours=1))
+    old = tuple(TelemetryPoint(_T - 5 * 86400 - hour * 3600, 60) for hour in range(3))
+
+    (health,) = assess_nodes(
+        [node], {_A: NodeHistory(node=_A, telemetry=old)}, fleet=[_A], now=_T, days=7
+    )
+
+    assert "battery at 9%" in [finding.text for finding in health.findings]
+    assert _row(_report(health))[12] == "9%"
+    assert "Battery: 9% (1 hour ago, from mesh status), " in _detail(health)
+
+
+@pytest.mark.parametrize(
+    ("node", "battery", "cell"),
+    [
+        pytest.param(
+            _battery_node(90, timedelta(days=3)),
+            BatteryTrend(42, _T - 60, 1, 0.0, None),
+            "42%",
+            id="history-fresh",
+        ),
+        pytest.param(_battery_node(35, timedelta(minutes=5)), None, "35%", id="status-fresh"),
+        pytest.param(_battery_node(101, timedelta(minutes=5)), None, "powered", id="powered"),
+        pytest.param(
+            _battery_node(101, timedelta(minutes=5)),
+            BatteryTrend(42, _T - 600, 1, 0.0, None),
+            "42%",
+            id="level-over-newer-powered",
+        ),
+        pytest.param(_battery_node(0, timedelta(minutes=5)), None, "-", id="zero"),
+    ],
+)
+def test_the_battery_cell_picks_the_newest_fresh_reading(
+    node: MergedNode, battery: BatteryTrend | None, cell: str
+) -> None:
+    row = _row(_report(_health(node=node, metrics=_metrics(battery=battery))))
+
+    assert row[12] == cell
+
+
+def test_a_battery_reading_too_old_to_judge_is_gray() -> None:
+    node = _battery_node(30, timedelta(days=3))
+
+    cell = render.build_table(_report(_health(node=node))).columns[12]._cells[0]
+
+    assert isinstance(cell, Text)
+    assert (cell.plain, str(cell.style)) == ("30%", "grey50")
+    assert "Battery: 30% (3 days ago, from mesh status)" in _detail(_health(node=node))
+
+
+def test_a_fresh_battery_reading_is_not_gray() -> None:
+    cell = (
+        render.build_table(_report(_health(node=_battery_node(30, timedelta(minutes=5)))))
+        .columns[12]
+        ._cells[0]
+    )
+
+    assert isinstance(cell, Text)
+    assert str(cell.style) == ""
+
+
+def test_without_any_battery_reading_the_detail_line_says_so() -> None:
+    assert "Battery: -; channel utilization" in _detail(_health())
+
+
 def test_last_heard_is_the_newest_of_history_and_sources() -> None:
     node = MergedNode(node_id=_A, last_seen=_NOW - timedelta(hours=3))
 
@@ -301,7 +373,8 @@ def test_the_detailed_report_has_every_section() -> None:
         "Relays (30 relayed receptions): 0x61 70% (likely !00000561), 0x19 30%",
         "Decoded packets (10): position 2, telemetry 7, port 99 1; at least 0.7 telemetry and "
         "0.2 position packets an hour",
-        "Battery: 80% (10 minutes ago), -1.2 points a day over 8 readings; channel utilization "
+        "Battery: 80% (10 minutes ago, from history), -1.2 points a day over 8 readings; "
+        "channel utilization "
         "3.5%, transmit air utilization 0.02%",
         "Local stats (1 minute ago): 100 rx, 20 tx, 5 relayed since boot",
         "Boots in the window: ",
@@ -333,7 +406,9 @@ def test_the_detailed_report_leaves_out_what_is_unknown() -> None:
 def test_a_battery_trend_without_a_slope_says_so() -> None:
     metrics = _metrics(battery=BatteryTrend(80, _T - 60, 2, 1.0, None))
 
-    assert "80% (1 minute ago), no trend yet over 2 readings" in _detail(_health(metrics=metrics))
+    text = _detail(_health(metrics=metrics))
+
+    assert "80% (1 minute ago, from history), no trend yet over 2 readings" in text
 
 
 def test_the_detailed_report_is_terminal_safe() -> None:

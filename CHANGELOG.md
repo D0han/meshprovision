@@ -499,6 +499,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh health`'s `Batt` column and battery line show the reading the battery
+  rule judges (the newest fresh level from the history or `mesh status`, in
+  gray when every reading is too old), so a 5-day-old 60 % from the history no
+  longer stands next to "battery at 9%" from a reading an hour old; the
+  detailed report says where the reading came from.
 - With more than 128 active nodes, the `mesh health` histories no longer wipe
   each other: every write deleted the least recently written file beyond 128,
   which was always that of the node refreshed next, so no history ever

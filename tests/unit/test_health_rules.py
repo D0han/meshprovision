@@ -15,6 +15,8 @@ from meshprovision.health.rules import (
     BATTERY_CRIT_PERCENT,
     BATTERY_DRAIN_WARN_PER_DAY,
     BATTERY_FRESH_SECONDS,
+    BATTERY_FROM_HISTORY,
+    BATTERY_FROM_STATUS,
     BATTERY_WARN_PERCENT,
     CHANNEL_UTILIZATION_CRIT_PERCENT,
     CHANNEL_UTILIZATION_WARN_PERCENT,
@@ -30,12 +32,14 @@ from meshprovision.health.rules import (
     SILENT_CRIT_SECONDS,
     SILENT_WARN_SECONDS,
     Advice,
+    BatteryReading,
     Finding,
     Importance,
     NodeContext,
     Verdict,
     advise,
     assess,
+    battery_reading,
     rank_importance,
 )
 from meshprovision.nodeid import NodeId
@@ -154,6 +158,86 @@ def test_a_newer_reading_that_is_no_battery_level_does_not_hide_an_older_one() -
     powered_now = NodeContext(battery=101, battery_time=_NOW - 10)
 
     assert _codes(_m(battery=_trend(5, age=100)), powered_now)["battery_low"] is Verdict.CRIT
+
+
+def test_the_battery_reading_is_the_newest_fresh_level_of_history_and_status() -> None:
+    newer_status = NodeContext(battery=9, battery_time=_NOW - 3600)
+
+    assert battery_reading(_m(battery=_trend(60, age=5 * 86400)), newer_status) == (
+        BatteryReading(9, _NOW - 3600, BATTERY_FROM_STATUS, fresh=True)
+    )
+    assert battery_reading(_m(battery=_trend(60, age=60)), newer_status) == (
+        BatteryReading(60, _NOW - 60, BATTERY_FROM_HISTORY, fresh=True)
+    )
+    assert battery_reading(_m(), newer_status) == (
+        BatteryReading(9, _NOW - 3600, BATTERY_FROM_STATUS, fresh=True)
+    )
+
+
+def test_a_fresh_battery_level_wins_over_a_newer_external_power_reading() -> None:
+    powered_now = NodeContext(battery=101, battery_time=_NOW - 10)
+
+    assert battery_reading(_m(battery=_trend(5, age=100)), powered_now) == (
+        BatteryReading(5, _NOW - 100, BATTERY_FROM_HISTORY, fresh=True)
+    )
+    assert battery_reading(_m(), powered_now) == (
+        BatteryReading(101, _NOW - 10, BATTERY_FROM_STATUS, fresh=True)
+    )
+
+
+def test_a_full_battery_is_a_level_not_external_power() -> None:
+    powered_now = NodeContext(battery=101, battery_time=_NOW - 10)
+
+    assert battery_reading(_m(battery=_trend(100, age=100)), powered_now) == (
+        BatteryReading(100, _NOW - 100, BATTERY_FROM_HISTORY, fresh=True)
+    )
+
+
+def test_a_fresh_external_power_reading_wins_over_a_stale_level() -> None:
+    powered_now = NodeContext(battery=101, battery_time=_NOW - 10)
+    stale = _trend(5, age=BATTERY_FRESH_SECONDS + 1)
+
+    assert battery_reading(_m(battery=stale), powered_now) == (
+        BatteryReading(101, _NOW - 10, BATTERY_FROM_STATUS, fresh=True)
+    )
+    assert "battery_low" not in _codes(_m(battery=stale), powered_now)
+
+
+def test_only_stale_readings_give_the_newest_one_not_fresh() -> None:
+    old_status = NodeContext(battery=40, battery_time=_NOW - BATTERY_FRESH_SECONDS - 5)
+    stale = _trend(5, age=BATTERY_FRESH_SECONDS + 1)
+
+    assert battery_reading(_m(battery=stale), old_status) == (
+        BatteryReading(5, _NOW - BATTERY_FRESH_SECONDS - 1, BATTERY_FROM_HISTORY, fresh=False)
+    )
+
+
+def test_a_status_level_without_a_time_counts_only_without_a_dated_reading() -> None:
+    undated = NodeContext(battery=55)
+
+    assert battery_reading(_m(), undated) == BatteryReading(55, None, BATTERY_FROM_STATUS, False)
+    assert battery_reading(_m(battery=_trend(80, age=BATTERY_FRESH_SECONDS + 1)), undated) == (
+        BatteryReading(80, _NOW - BATTERY_FRESH_SECONDS - 1, BATTERY_FROM_HISTORY, fresh=False)
+    )
+    assert "battery_low" not in _codes(_m(), NodeContext(battery=5))
+
+
+@pytest.mark.parametrize("level", [0, -5])
+def test_a_zero_or_negative_level_is_no_battery_reading(level: int) -> None:
+    assert battery_reading(_m(), NodeContext(battery=level, battery_time=_NOW)) is None
+    assert battery_reading(_m(), NodeContext(battery=level)) is None
+    assert battery_reading(_m(battery=_trend(level)), NodeContext()) is None
+
+
+def test_a_battery_reading_stays_fresh_for_the_stale_threshold_when_longer() -> None:
+    stale_after = BATTERY_FRESH_SECONDS * 2
+    context = NodeContext(battery=50, battery_time=_NOW - stale_after, stale_after=stale_after)
+
+    reading = battery_reading(_m(), context)
+
+    assert reading is not None
+    assert reading.fresh
+    assert _codes(_m(), dataclasses.replace(context, battery=5))["battery_low"] is Verdict.CRIT
 
 
 def test_a_stale_battery_reading_is_not_judged_and_the_newest_one_wins() -> None:
