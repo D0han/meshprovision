@@ -416,6 +416,15 @@ def _resolve_enum_value(table: EnumTable, raw: object) -> int | None:
     return table.try_value(raw)
 
 
+def _is_map_topic(topic: str) -> bool:
+    """Tell whether a ``seenBy`` topic is the map-report one, not a gateway's.
+
+    loranet lists ``msh/<region>/2/map/`` (when the node last sent a map
+    report) next to the gateways' ``msh/<region>/2/e/<channel>/!<id>`` topics.
+    """
+    return topic.rstrip("/").rsplit("/", 1)[-1] == "map"
+
+
 def _parse_seen_by(
     raw: object, tracker: CoercionTracker
 ) -> tuple[int | None, tuple[str, ...], tuple[datetime, ...], datetime | None]:
@@ -433,7 +442,9 @@ def _parse_seen_by(
     Returns:
         A ``(neighbor_count, seen_by, seen_by_times, last_seen)`` tuple.
         All four stay ``(None, (), (), None)`` when ``raw`` is absent or
-        not a ``dict``. ``seen_by_times`` holds the parsed relay time of
+        not a ``dict``. The map-report topic (``.../map/``) is not a gateway
+        and is left out of all of them (the map report time is read from
+        ``lastMapReport``). ``seen_by_times`` holds the parsed relay time of
         every topic (unparsable values left out), uncapped, so the status
         report can count the topics seen within a day, a week and a month.
     """
@@ -442,9 +453,10 @@ def _parse_seen_by(
     if not isinstance(raw, dict):
         tracker.record_failure()
         return None, (), (), None
-    neighbor_count = len(raw)
-    seen_by = tuple(sorted(str(topic) for topic in raw))[:MAX_SEEN_BY_TOPICS]
-    parsed = [parse_epoch(v) for v in raw.values()]
+    gateways = {topic: value for topic, value in raw.items() if not _is_map_topic(str(topic))}
+    neighbor_count = len(gateways)
+    seen_by = tuple(sorted(str(topic) for topic in gateways))[:MAX_SEEN_BY_TOPICS]
+    parsed = [parse_epoch(v) for v in gateways.values()]
     if any(p is None for p in parsed):
         tracker.record_failure()
     times = tuple(p for p in parsed if p is not None)

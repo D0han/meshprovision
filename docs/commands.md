@@ -504,8 +504,10 @@ about in that run (see `mesh health`).
   less is shown as `-`: it is no reading (a node without a battery sensor
   reports 0).
 - **Seen By** is `1d/7d/30d`: how many distinct MQTT gateway topics relayed the
-  node within the last day, week and month (loranet's `seenBy`). It is not a
-  radio-neighbour count. `--json` keeps `neighbor_count` (all time) and adds
+  node within the last day, week and month (loranet's `seenBy`; its map-report
+  topic `.../map/` is not a gateway and is not counted, a node uplinking its own
+  packets counts as one). It is not a
+  radio-neighbour count. `--json` keeps `neighbor_count` (all time, gateways only) and adds
   `seen_by_counts` (`day`/`week`/`month`), `last_device_metrics` and
   `last_boot`.
 - **Uptime** is the time since the last boot: `now - LastBoot` from lorastats

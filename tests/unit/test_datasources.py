@@ -1146,6 +1146,48 @@ def test_loranet_seen_by_derives_neighbor_count_and_last_seen(tmp_path: Path) ->
     )
 
 
+@pytest.mark.parametrize(
+    "map_topic", ["msh/PL/2/map/", "msh/EU_868/DE/S-H/2/map/", "msh/PL/2/map", "msh/2/map/"]
+)
+@respx.mock
+def test_loranet_seen_by_does_not_count_the_map_report_topic_as_a_gateway(
+    tmp_path: Path, map_topic: str
+) -> None:
+    nid = NodeId.from_hex("250643bc")
+    own = "msh/PL/2/e/ShortSlow/!250643bc"
+    payload = {nid.decimal: {"seenBy": {own: 1_700_000_000, map_topic: 1_700_000_500}}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+
+    obs = LoranetSource(client).fetch_all()[nid]
+
+    assert obs.neighbor_count == 1
+    assert obs.seen_by == (own,)
+    assert obs.seen_by_times == (datetime.fromtimestamp(1_700_000_000, tz=UTC),)
+
+
+@respx.mock
+def test_loranet_seen_by_with_only_the_map_topic_is_present_but_empty(tmp_path: Path) -> None:
+    nid = NodeId.from_hex("250643bc")
+    payload = {nid.decimal: {"seenBy": {"msh/PL/2/map/": 1_700_000_500}}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+
+    obs = LoranetSource(client).fetch_all()[nid]
+
+    assert (obs.neighbor_count, obs.seen_by, obs.seen_by_times) == (0, (), ())
+
+
+@respx.mock
+def test_loranet_a_topic_that_merely_ends_in_map_text_is_still_a_gateway(tmp_path: Path) -> None:
+    nid = NodeId.from_hex("250643bc")
+    payload = {nid.decimal: {"seenBy": {"msh/PL/2/e/Long/!bigmap": 1_700_000_000}}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+
+    assert LoranetSource(client).fetch_all()[nid].neighbor_count == 1
+
+
 @respx.mock
 def test_loranet_seen_by_times_leave_out_an_unparsable_relay_time(tmp_path: Path) -> None:
     nid = NodeId.from_hex("deadbe01")
