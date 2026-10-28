@@ -501,8 +501,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `mesh status`'s Seen By (and `neighbor_count`) no longer count loranet's
-  map-report topic (`msh/<region>/2/map/`) as a gateway, which made a node that
-  only uplinks itself show 2 instead of 1.
+  map-report topic (`msh/<region>/2/map/`) or the node's own gateway topic as
+  a gateway: a node that only uplinks itself is seen by 0 (its packets still
+  count for Last seen) instead of 2.
 
 - lorastats answers that are used once (packet reports, decoded packets,
   gateway checks and the `/Nodes` region page) are no longer written to the

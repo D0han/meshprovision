@@ -1154,16 +1154,63 @@ def test_loranet_seen_by_does_not_count_the_map_report_topic_as_a_gateway(
     tmp_path: Path, map_topic: str
 ) -> None:
     nid = NodeId.from_hex("250643bc")
-    own = "msh/PL/2/e/ShortSlow/!250643bc"
-    payload = {nid.decimal: {"seenBy": {own: 1_700_000_000, map_topic: 1_700_000_500}}}
+    gateway = "msh/PL/2/e/ShortSlow/!0f145928"
+    payload = {nid.decimal: {"seenBy": {gateway: 1_700_000_000, map_topic: 1_700_000_500}}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
 
     obs = LoranetSource(client).fetch_all()[nid]
 
     assert obs.neighbor_count == 1
-    assert obs.seen_by == (own,)
+    assert obs.seen_by == (gateway,)
     assert obs.seen_by_times == (datetime.fromtimestamp(1_700_000_000, tz=UTC),)
+
+
+@pytest.mark.parametrize(
+    "own_topic",
+    ["msh/PL/2/e/ShortSlow/!250643bc", "msh/EU_868/2/e/LongFast/!250643bc/"],
+)
+@respx.mock
+def test_loranet_seen_by_does_not_count_the_node_uplinking_itself(
+    tmp_path: Path, own_topic: str
+) -> None:
+    nid = NodeId.from_hex("250643bc")
+    gateway = "msh/PL/2/e/ShortSlow/!0f145928"
+    payload = {nid.decimal: {"seenBy": {own_topic: 1_700_000_900, gateway: 1_700_000_000}}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+
+    obs = LoranetSource(client).fetch_all()[nid]
+
+    assert obs.neighbor_count == 1
+    assert obs.seen_by == (gateway,)
+    assert obs.seen_by_times == (datetime.fromtimestamp(1_700_000_000, tz=UTC),)
+    # The node did send that packet, so it still proves the node alive.
+    assert obs.last_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
+
+
+@respx.mock
+def test_loranet_a_node_seen_only_by_itself_has_no_gateways(tmp_path: Path) -> None:
+    nid = NodeId.from_hex("250643bc")
+    own = "msh/PL/2/e/ShortSlow/!250643bc"
+    payload = {nid.decimal: {"seenBy": {own: 1_700_000_900, "msh/PL/2/map/": 1_700_001_000}}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+
+    obs = LoranetSource(client).fetch_all()[nid]
+
+    assert (obs.neighbor_count, obs.seen_by, obs.seen_by_times) == (0, (), ())
+    assert obs.last_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
+
+
+@respx.mock
+def test_loranet_another_nodes_topic_is_still_a_gateway(tmp_path: Path) -> None:
+    nid = NodeId.from_hex("250643bc")
+    payload = {nid.decimal: {"seenBy": {"msh/PL/2/e/ShortSlow/!250643bd": 1_700_000_000}}}
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+
+    assert LoranetSource(client).fetch_all()[nid].neighbor_count == 1
 
 
 @respx.mock

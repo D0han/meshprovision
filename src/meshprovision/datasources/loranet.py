@@ -425,8 +425,13 @@ def _is_map_topic(topic: str) -> bool:
     return topic.rstrip("/").rsplit("/", 1)[-1] == "map"
 
 
+def _is_own_topic(topic: str, node_id: NodeId) -> bool:
+    """Tell whether a ``seenBy`` topic is the node uplinking its own packets."""
+    return topic.rstrip("/").rsplit("/", 1)[-1] == f"!{node_id.hex}"
+
+
 def _parse_seen_by(
-    raw: object, tracker: CoercionTracker
+    raw: object, tracker: CoercionTracker, node_id: NodeId
 ) -> tuple[int | None, tuple[str, ...], tuple[datetime, ...], datetime | None]:
     """Derive ``neighbor_count``, ``seen_by``, its times and ``last_seen`` from ``seenBy``.
 
@@ -438,13 +443,18 @@ def _parse_seen_by(
             or when any of its values fails to parse via
             :func:`parse_epoch`. An absent (``None``) ``seenBy`` is not
             drift and is never counted.
+        node_id: The node itself, whose own gateway topic is not another
+            node hearing it.
 
     Returns:
         A ``(neighbor_count, seen_by, seen_by_times, last_seen)`` tuple.
         All four stay ``(None, (), (), None)`` when ``raw`` is absent or
         not a ``dict``. The map-report topic (``.../map/``) is not a gateway
         and is left out of all of them (the map report time is read from
-        ``lastMapReport``). ``seen_by_times`` holds the parsed relay time of
+        ``lastMapReport``). The node's own topic (it uplinks its own packets)
+        is no other node hearing it, so ``neighbor_count``, ``seen_by`` and
+        ``seen_by_times`` leave it out, but its time still counts for
+        ``last_seen`` (the node did send a packet). ``seen_by_times`` holds the parsed relay time of
         every topic (unparsable values left out), uncapped, so the status
         report can count the topics seen within a day, a week and a month.
     """
@@ -453,14 +463,18 @@ def _parse_seen_by(
     if not isinstance(raw, dict):
         tracker.record_failure()
         return None, (), (), None
-    gateways = {topic: value for topic, value in raw.items() if not _is_map_topic(str(topic))}
+    heard = {topic: value for topic, value in raw.items() if not _is_map_topic(str(topic))}
+    gateways = {
+        topic: value for topic, value in heard.items() if not _is_own_topic(str(topic), node_id)
+    }
     neighbor_count = len(gateways)
     seen_by = tuple(sorted(str(topic) for topic in gateways))[:MAX_SEEN_BY_TOPICS]
-    parsed = [parse_epoch(v) for v in gateways.values()]
-    if any(p is None for p in parsed):
+    parsed = {topic: parse_epoch(value) for topic, value in heard.items()}
+    if any(time is None for time in parsed.values()):
         tracker.record_failure()
-    times = tuple(p for p in parsed if p is not None)
-    return neighbor_count, seen_by, times, max(times, default=None)
+    times = tuple(t for topic in gateways if (t := parsed[topic]) is not None)
+    last_seen = max((time for time in parsed.values() if time is not None), default=None)
+    return neighbor_count, seen_by, times, last_seen
 
 
 def parse_node(
@@ -507,7 +521,7 @@ def parse_node(
         longitude = None
 
     neighbor_count, seen_by, seen_by_times, seen_by_last_seen = _parse_seen_by(
-        payload.get("seenBy"), tracker
+        payload.get("seenBy"), tracker, node_id
     )
     last_device_metrics = tracker.coerce(payload.get("lastDeviceMetrics"), parse_epoch)
     last_map_report = tracker.coerce(payload.get("lastMapReport"), parse_epoch)
