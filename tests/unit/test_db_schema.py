@@ -143,6 +143,25 @@ def test_an_overlong_integer_cell_is_a_validation_error(digits: int) -> None:
     assert "out of range" in exc_info.value.message
 
 
+@pytest.mark.parametrize(
+    ("validator", "column", "value"),
+    [
+        (cell_validation._validate_int, "gps_alt", "12\n"),
+        (cell_validation._validate_key_ref, "key_ref", "admin1\n"),
+    ],
+    ids=["int", "key-ref"],
+)
+def test_cell_patterns_match_the_whole_value(validator, column: str, value: str) -> None:
+    """A trailing newline is not part of the shape (``fullmatch``, not ``^...$`` + ``match``).
+
+    validate_cell strips before these run; this pins the validators themselves.
+    """
+    sheet = schema.KEYS_SHEET_SPEC if column == "key_ref" else schema.NODES_SHEET_SPEC
+    spec = sheet.column(column)
+    with pytest.raises(DbValidationError):
+        validator("Nodes", 2, spec, value)
+
+
 @pytest.mark.parametrize("value", ["-2147483648", "2147483647"])
 def test_gps_alt_accepts_the_int32_range(value: str) -> None:
     spec = schema.NODES_SHEET_SPEC.column("gps_alt")

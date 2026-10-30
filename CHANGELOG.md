@@ -527,6 +527,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `--host` refuses a mistyped IPv4 address (`1.2.3.256`, `192.168.1`, `123`,
+  `192.168.1.50.` with a trailing dot) instead of taking it for a hostname to
+  look up, and a hostname with a line break inside it (`host\n.example`);
+  every label must match in full.
 - `mesh adopt`'s "already used by node" warning follows name allocation: a
   name an archived (`mesh db forget`) node had is free and no longer warns,
   and names differing only in case (`mt01` against `MT01`), which `mesh

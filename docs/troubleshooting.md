@@ -61,7 +61,9 @@ Part of the meshprovision docs — see the [README](../README.md).
 
 - Meshtastic's TCP API listens on port 4403. Test reachability first:
   `nc -vz 192.168.1.50 4403` or `ping 192.168.1.50`.
-- `--host` accepts `HOST` or `HOST:PORT`.
+- `--host` accepts `HOST` or `HOST:PORT`, `HOST` being an IP address or a
+  hostname. A name whose last label is all digits (`1.2.3.256`, `192.168.1`)
+  is refused as a mistyped IPv4 address rather than looked up in DNS.
 - Mint's firewall (`ufw`) is inactive by default. If you enabled it,
   allow outbound: `sudo ufw allow out 4403/tcp`. Check with
   `sudo ufw status verbose`.

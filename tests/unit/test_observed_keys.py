@@ -45,7 +45,7 @@ def test_observed_owner_matches_ref_pattern(keypair: KeyPair) -> None:
     owner = observed_keys.observed_owner(keypair.public)
 
     # Assert
-    assert schema.REF_PATTERN.match(owner)
+    assert schema.REF_PATTERN.fullmatch(owner)
 
 
 def test_observed_owner_never_ends_in_a_key_suffix(keypair: KeyPair) -> None:
@@ -130,6 +130,7 @@ def test_is_observed_ref_true_without_a_known_suffix(keypair: KeyPair) -> None:
         ("x_priv", observed_keys.RefProblem.RESERVED_SUFFIX),
         ("x_psk", observed_keys.RefProblem.RESERVED_SUFFIX),
         ("-bad", observed_keys.RefProblem.BAD_SHAPE),
+        ("ADMIN1\n", observed_keys.RefProblem.BAD_SHAPE),
         ("observed-ab12cd34", observed_keys.RefProblem.OBSERVED_PREFIX),
     ],
 )

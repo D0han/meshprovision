@@ -111,6 +111,49 @@ def test_is_valid_hostname_trailing_dot() -> None:
     assert is_valid_hostname("example.com.") is True
 
 
+@pytest.mark.parametrize(
+    "value",
+    [
+        "a\n.b",
+        "host\n.example",
+        "ab\n",
+        "1.2.3.256",
+        "123",
+        "1.2.3",
+        "127.1",
+        "1.2.3.4.",
+        "host.42",
+    ],
+    ids=[
+        "newline-in-first-label",
+        "newline-before-dot",
+        "trailing-newline",
+        "ipv4-octet-out-of-range",
+        "all-digits",
+        "three-octets",
+        "ipv4-shorthand",
+        "ipv4-trailing-dot",
+        "numeric-tld",
+    ],
+)
+def test_is_valid_hostname_rejects_newlines_and_numeric_names(value: str) -> None:
+    """Each label must match in full, and the last label (the TLD) cannot be all digits."""
+    assert is_valid_hostname(value) is False
+
+
+@pytest.mark.parametrize(
+    "value", ["a.b", "host-1.example.", "localhost", "1host.example", "10.example", "node.1a"]
+)
+def test_is_valid_hostname_accepts_digits_outside_the_last_label(value: str) -> None:
+    assert is_valid_hostname(value) is True
+
+
+@pytest.mark.parametrize("value", ["1.2.3.256", "1.2.3.256:4403", "123", "[1.2.3.256]"])
+def test_parse_tcp_target_rejects_a_mistyped_ipv4_address(value: str) -> None:
+    with pytest.raises(ConnectionBackendError, match="not a valid hostname or IP address"):
+        parse_tcp_target(value)
+
+
 def test_validate_tcp_host_bracketed_ipv6() -> None:
     assert validate_tcp_host("[::1]") == "::1"
 

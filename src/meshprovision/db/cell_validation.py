@@ -37,7 +37,7 @@ __all__ = [
     "validate_row",
 ]
 
-_INT_PATTERN: Final[re.Pattern[str]] = re.compile(r"^-?[0-9]+$")
+_INT_PATTERN: Final[re.Pattern[str]] = re.compile(r"-?[0-9]+")
 
 
 def _validate_node_id(sheet: str, row: int, spec: schema.ColumnSpec, stripped: str) -> str:
@@ -127,7 +127,7 @@ def _validate_int(sheet: str, row: int, spec: schema.ColumnSpec, stripped: str) 
         DbValidationError: If ``stripped`` is not an integer, is too long
             to convert, or is out of ``[spec.min_value, spec.max_value]``.
     """
-    if not _INT_PATTERN.match(stripped):
+    if not _INT_PATTERN.fullmatch(stripped):
         raise DbValidationError(
             f"{spec.name!r} must be an integer, got {stripped!r}",
             sheet=sheet,
@@ -342,7 +342,7 @@ def _validate_key_ref(sheet: str, row: int, spec: schema.ColumnSpec, stripped: s
         DbValidationError: If ``stripped`` does not match
             :data:`meshprovision.db.schema.REF_PATTERN`.
     """
-    if not schema.REF_PATTERN.match(stripped):
+    if not schema.REF_PATTERN.fullmatch(stripped):
         raise DbValidationError(
             f"{spec.name!r} does not look like a key reference: {stripped!r}",
             sheet=sheet,
@@ -372,7 +372,7 @@ def _validate_key_ref_list(sheet: str, row: int, spec: schema.ColumnSpec, stripp
     """
     refs = schema.normalize_ref_list(stripped)
     for ref in refs:
-        if not schema.REF_PATTERN.match(ref):
+        if not schema.REF_PATTERN.fullmatch(ref):
             raise DbValidationError(
                 f"{spec.name!r} contains an invalid reference: {ref!r}",
                 sheet=sheet,

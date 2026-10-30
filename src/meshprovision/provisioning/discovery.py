@@ -102,7 +102,7 @@ devices): SEGGER (``0x1366``), Nordic (``0x1915``), ST-Link (``0x0483``),
 Cypress (``0x04b4``), and Lakeview (``0x0925``) -- the same blacklist
 ``meshtastic.util`` uses internally."""
 
-_HOSTNAME_LABEL_RE: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$")
+_HOSTNAME_LABEL_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?")
 _MAX_HOSTNAME_LENGTH: Final[int] = 253
 _MAX_HOSTNAME_LABEL_LENGTH: Final[int] = 63
 
@@ -408,16 +408,20 @@ def is_valid_hostname(value: str) -> bool:
 
     Returns:
         ``True`` if ``value`` (after stripping one trailing dot) is
-        non-empty, at most 253 characters, and every dot-separated label
-        is 1-63 ASCII characters matching
-        ``^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$``.
+        non-empty, at most 253 characters, every dot-separated label is
+        1-63 ASCII characters matching (in full)
+        ``[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?``, and the last label is
+        not all digits (no top-level domain is, so ``"1.2.3.256"`` or
+        ``"123"`` is a mistyped IPv4 address, not a hostname).
     """
     candidate = value[:-1] if value.endswith(".") else value
     if not candidate or len(candidate) > _MAX_HOSTNAME_LENGTH:
         return False
     labels = candidate.split(".")
+    if labels[-1].isdigit():
+        return False
     return all(
-        1 <= len(label) <= _MAX_HOSTNAME_LABEL_LENGTH and _HOSTNAME_LABEL_RE.match(label)
+        1 <= len(label) <= _MAX_HOSTNAME_LABEL_LENGTH and _HOSTNAME_LABEL_RE.fullmatch(label)
         for label in labels
     )
 

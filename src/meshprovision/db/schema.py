@@ -102,8 +102,8 @@ LIST_SEPARATOR: Final[str] = ";"
 BLE_PIN_LENGTH: Final[int] = 6
 """Exact digit count of a BLE pairing PIN (``bluetooth.fixed_pin``)."""
 
-REF_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
-"""The one shape every ``owner_node_id``/``key_ref`` value must have.
+REF_PATTERN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+"""The one shape every ``owner_node_id``/``key_ref`` value must have (use ``fullmatch``).
 
 Matches both a bare ``node_id`` hex value and a template ``admin_nodes``
 reference name -- both are valid ``owner_node_id``/``key_ref`` values.

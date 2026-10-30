@@ -173,7 +173,7 @@ def owner_ref_problem(ref: str) -> RefProblem | None:
         reserved :data:`OBSERVED_PREFIX`. ``None`` if ``ref`` has none of
         these problems.
     """
-    if not schema.REF_PATTERN.match(ref):
+    if not schema.REF_PATTERN.fullmatch(ref):
         return RefProblem.BAD_SHAPE
     if ref.endswith(tuple(schema.KEY_REF_SUFFIXES.values())):
         return RefProblem.RESERVED_SUFFIX
