@@ -211,11 +211,10 @@ class NameChange:
             value, or leave it ``None`` to keep the device's current
             value, the same "``None`` means don't touch" convention
             used throughout this codebase's optional template fields.
-        current_is_licensed: The live ``User.is_licensed``.
-        desired_is_licensed: Always equal to :attr:`current_is_licensed`
-            -- **preserve-only**: meshprovision has no control surface
-            over this field (no template field, no CLI flag). These two
-            fields exist purely so the owner-phase write can echo back
+        desired_is_licensed: Always the live ``User.is_licensed`` --
+            **preserve-only**: meshprovision has no control surface
+            over this field (no template field, no CLI flag). It
+            exists purely so the owner-phase write can echo back
             whatever the device already reports instead of accidentally
             resetting it (``Node.setOwner`` defaults ``is_licensed`` to
             ``False`` whenever ``long_name`` is set, which this
@@ -228,7 +227,6 @@ class NameChange:
     desired_long_name: str
     current_is_unmessagable: bool | None
     desired_is_unmessagable: bool | None
-    current_is_licensed: bool
     desired_is_licensed: bool
 
     @property

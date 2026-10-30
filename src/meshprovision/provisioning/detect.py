@@ -526,6 +526,5 @@ def classify(live: LiveConfig, *, db_entry: NodeRecord | None) -> Detection:
         state=state,
         node_id=live.node_id,
         in_database=in_database,
-        admin_keys_present=admin_present,
         reasons=tuple(reasons),
     )

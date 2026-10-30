@@ -240,7 +240,7 @@ def test_a_factory_device_with_only_empty_admin_slots_is_factory() -> None:
     detection = detect.classify(live, db_entry=None)
 
     assert detection.state is detect.NodeState.FACTORY
-    assert not detection.admin_keys_present
+    assert "admin_keys_present" not in detection.reasons
 
 
 def test_message_fields_skips_bytes_and_repeated_fields() -> None:

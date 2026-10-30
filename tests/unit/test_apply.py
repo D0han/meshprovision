@@ -430,7 +430,6 @@ def _name_only_plan(make_live: Callable[..., detect.LiveConfig], **names: str) -
         **fields,
         current_is_unmessagable=None,
         desired_is_unmessagable=None,
-        current_is_licensed=True,
         desired_is_licensed=True,
     )
     return dataclasses.replace(plan, name_change=name_change)

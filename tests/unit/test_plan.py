@@ -234,7 +234,6 @@ def test_is_licensed_always_echoed_from_live_with_no_template_control(make_live,
     inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
     plan = build_plan(inputs)
 
-    assert plan.name_change.current_is_licensed is True
     assert plan.name_change.desired_is_licensed is True
 
 

@@ -182,7 +182,6 @@ def _plan_name_change(inputs: PlanInputs) -> NameChange:
         desired_long_name=desired_long,
         current_is_unmessagable=live.is_unmessagable,
         desired_is_unmessagable=desired_is_unmessagable,
-        current_is_licensed=live.is_licensed,
         desired_is_licensed=live.is_licensed,
     )
 

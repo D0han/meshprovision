@@ -434,8 +434,6 @@ class Detection:
         state: The decided :class:`NodeState`.
         node_id: The classified node's id.
         in_database: Whether this node id was found in the ODS.
-        admin_keys_present: Whether the device reports any
-            ``security.admin_key`` entries.
         reasons: Machine-readable codes explaining the decision, in a
             fixed order. See :func:`classify` for the exact codes used
             per state.
@@ -444,7 +442,6 @@ class Detection:
     state: NodeState
     node_id: NodeId
     in_database: bool
-    admin_keys_present: bool
     reasons: tuple[str, ...] = ()
 
     def summary(self) -> str:
