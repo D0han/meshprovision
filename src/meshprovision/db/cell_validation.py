@@ -196,7 +196,8 @@ def _validate_float(sheet: str, row: int, spec: schema.ColumnSpec, stripped: str
 
     Returns:
         The canonical text: fixed to 7 decimal places, then trailing zeros
-        and a trailing decimal point trimmed.
+        and a trailing decimal point trimmed; a value that rounds to zero
+        is ``"0"``, never ``"-0"``.
 
     Raises:
         DbValidationError: If ``stripped`` is not a finite number, or is
@@ -221,7 +222,8 @@ def _validate_float(sheet: str, row: int, spec: schema.ColumnSpec, stripped: str
             value=stripped,
         )
     _check_range(sheet=sheet, row=row, spec=spec, parsed=parsed)
-    return f"{parsed:.7f}".rstrip("0").rstrip(".")
+    canonical = f"{parsed:.7f}".rstrip("0").rstrip(".")
+    return "0" if canonical == "-0" else canonical
 
 
 def _check_range(*, sheet: str, row: int, spec: schema.ColumnSpec, parsed: float) -> None:

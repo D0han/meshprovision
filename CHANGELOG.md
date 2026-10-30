@@ -527,6 +527,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A database number cell that rounds to zero at 7 decimals from below
+  (`gps_lat` `-0.00000004`, or `-0`) is stored as `0`, not `-0`.
 - A carriage return in a text cell (a node name set with one from an app,
   which `mesh adopt` and `mesh provision` record as read; or `notes`) no
   longer makes the database unloadable: odfpy wrote it as an invalid

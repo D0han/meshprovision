@@ -197,6 +197,28 @@ def test_text_cell_is_sanitized_on_load() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("-0.00000004", "0"),
+        ("-0", "0"),
+        ("-0.0", "0"),
+        ("0.00000004", "0"),
+        ("-0.00000006", "-0.0000001"),
+    ],
+    ids=[
+        "rounds-to-negative-zero",
+        "negative-zero",
+        "negative-zero-point",
+        "rounds-to-zero",
+        "rounds-away",
+    ],
+)
+def test_float_cell_never_canonicalizes_to_negative_zero(value: str, expected: str) -> None:
+    spec = schema.NODES_SHEET_SPEC.column("gps_lat")
+    assert cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value=value) == expected
+
+
 @pytest.mark.parametrize("value", ["-2147483648", "2147483647"])
 def test_gps_alt_accepts_the_int32_range(value: str) -> None:
     spec = schema.NODES_SHEET_SPEC.column("gps_alt")
