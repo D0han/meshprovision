@@ -224,18 +224,6 @@ def _text_cell(value: str | None) -> str:
     return terminal_safe(value) if value else _DASH
 
 
-def _int_cell(value: int | None) -> str:
-    """Render an optional integer cell.
-
-    Args:
-        value: The cell's value, or ``None``.
-
-    Returns:
-        ``str(value)``, or :data:`_DASH` when ``value`` is ``None``.
-    """
-    return _DASH if value is None else str(value)
-
-
 def _battery_cell(value: int | None) -> str:
     """Render an optional battery-percentage cell.
 
