@@ -961,7 +961,7 @@ class CliContext:
                     ),
                 )
             else:
-                ods_write.create_empty(path, backup=False)
+                ods_write.create_empty(path)
                 db.load(force=True)
         except DbError as exc:
             if not isinstance(exc, (DbReadError, AtomicWriteError)):

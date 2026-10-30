@@ -23,9 +23,9 @@ Two things happen here that MUST happen before anything else:
 The autouse ``_isolated_cwd_and_env`` fixture additionally chdirs every
 test into a fresh ``tmp_path`` and strips every ``MESHPROVISION_*``
 environment variable, which is what keeps
-``meshprovision.db.ods.OdsDatabase.save()``'s ``backup=True`` default
-(which resolves a ``backups/`` directory next to the database file --
-see ``meshprovision.db.backups.backup_dir_for``) and
+``meshprovision.db.ods.OdsDatabase.save()``'s backup (which resolves a
+``backups/`` directory next to the database file -- see
+``meshprovision.db.backups.backup_dir_for``) and
 ``meshprovision.config.settings.load_settings()``'s upward ``.env``
 search from ever touching this repository's real files, and what keeps a
 developer's shell environment from leaking into a test run. It also
@@ -324,7 +324,7 @@ def empty_ods(tmp_path: Path) -> Path:
         Path to the created ``nodes_db.ods`` file.
     """
     path = tmp_path / "nodes_db.ods"
-    ods_write.create_empty(path, backup=False)
+    ods_write.create_empty(path)
     return path
 
 

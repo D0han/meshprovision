@@ -411,14 +411,13 @@ def write_database(
     return WrittenFile(data=data, stat=tmp_stat)
 
 
-def create_empty(path: Path, *, backup: bool = False) -> None:
-    """Write a brand-new, empty (header-only) ODS database.
+def create_empty(path: Path) -> None:
+    """Write a brand-new, empty (header-only) ODS database, without a backup.
 
     Args:
         path: Path to write the ``.ods`` file to.
-        backup: Whether to back up any existing file at ``path`` first.
 
     Raises:
-        AtomicWriteError: If the write or backup fails.
+        AtomicWriteError: If the write fails.
     """
-    write_database(path, nodes=(), keys=(), backup=backup)
+    write_database(path, nodes=(), keys=(), backup=False)

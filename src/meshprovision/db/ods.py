@@ -814,8 +814,10 @@ class OdsDatabase:
         if hashlib.sha256(current_bytes).hexdigest() != self._disk_sha256:
             self._raise_concurrent_modification()
 
-    def save(self, *, backup: bool = True) -> None:
-        """Write both sheets to disk atomically. A no-op when not dirty.
+    def save(self) -> None:
+        """Back up the current file, then write both sheets to disk atomically.
+
+        A no-op when not dirty.
 
         Does **not** acquire the write lock itself -- a caller that may
         run concurrently with another ``mesh`` process must hold it
@@ -839,10 +841,6 @@ class OdsDatabase:
         the same session (after this session's own first save updated
         its recorded identity below) is never refused by its own prior
         write.
-
-        Args:
-            backup: Whether to back up the current file before replacing
-                it.
 
         Raises:
             DbConcurrentModificationError: If the file changed on disk
@@ -875,7 +873,7 @@ class OdsDatabase:
             self._path,
             nodes=self._rows.get(schema.NODES_SHEET, ()),
             keys=self._rows.get(schema.KEYS_SHEET, ()),
-            backup=backup,
+            backup=True,
             backup_dir=self._backup_dir,
             retention=self._retention,
             check=self._check_loads,
@@ -889,10 +887,9 @@ class OdsDatabase:
         )
         self._disk_sha256 = hashlib.sha256(written.data).hexdigest()
         _logger.debug(
-            "Saved %s in %.2fs (backup=%s): %d node(s), %d key(s).",
+            "Saved %s in %.2fs: %d node(s), %d key(s).",
             self._path,
             time.monotonic() - started,
-            backup,
             len(self._rows.get(schema.NODES_SHEET, ())),
             len(self._rows.get(schema.KEYS_SHEET, ())),
         )
@@ -955,7 +952,7 @@ class OdsDatabase:
         """
         if path.exists() and not overwrite:
             raise SchemaError(f"{path} already exists; pass overwrite=True to replace it")
-        ods_write.create_empty(path, backup=False)
+        ods_write.create_empty(path)
         instance = cls(path, backup_dir=backup_dir)
         instance.load(force=True)
         return instance

@@ -1027,7 +1027,7 @@ def test_ods_database_load_loaded_rows(tmp_path: Path, keypair) -> None:
 
 
 def test_ods_database_rows_bogus_sheet_raises(tmp_path: Path) -> None:
-    ods_write.create_empty(tmp_path / "db.ods", backup=False)
+    ods_write.create_empty(tmp_path / "db.ods")
     db = ods.OdsDatabase(tmp_path / "db.ods")
     with pytest.raises(SchemaError):
         db.rows("Bogus")
@@ -1048,7 +1048,7 @@ def test_ods_database_save_no_op_when_not_dirty(tmp_path: Path) -> None:
     assert path.stat().st_mtime_ns == mtime_before
 
 
-def test_ods_database_save_backup_true_creates_one_timestamped_backup(
+def test_ods_database_save_creates_one_timestamped_backup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A save also refreshes the known-good copy, so *.ods now yields two files.
@@ -1062,7 +1062,7 @@ def test_ods_database_save_backup_true_creates_one_timestamped_backup(
     db = ods.OdsDatabase.create(path)
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
     assert db.dirty() is True
-    db.save(backup=True)
+    db.save()
     assert db.dirty() is False
 
     backups_dir = backups.backup_dir_for(path)
@@ -1100,7 +1100,7 @@ def test_ods_database_context_manager_unlocks_on_exit(tmp_path: Path) -> None:
     completely untested.
     """
     path = tmp_path / "db.ods"
-    ods_write.create_empty(path, backup=False)
+    ods_write.create_empty(path)
     db = ods.OdsDatabase(path)
     db.lock()
 
@@ -1114,7 +1114,7 @@ def test_ods_database_context_manager_unlocks_on_exit(tmp_path: Path) -> None:
 def test_ods_database_lock_is_idempotent(tmp_path: Path) -> None:
     """Calling `lock()` twice on the same instance must not raise or double-acquire."""
     path = tmp_path / "db.ods"
-    ods_write.create_empty(path, backup=False)
+    ods_write.create_empty(path)
     db = ods.OdsDatabase(path)
     db.lock()
     db.lock()
