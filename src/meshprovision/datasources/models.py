@@ -169,6 +169,8 @@ class NodeObservation(BaseModel):
             this node (loranet; one timestamp per topic, uncapped, in
             ``seenBy`` order; topics whose value is not a valid epoch are
             left out). ``status`` counts them against the current time.
+        self_uplink_seen: When the node last uplinked its own packets over
+            MQTT (its own gateway topic in ``seenBy``), when known.
         last_seen: Timezone-aware UTC timestamp of the node's most recent
             activity, when known.
         last_boot: Timezone-aware UTC timestamp of the node's most recent
@@ -213,6 +215,7 @@ class NodeObservation(BaseModel):
     neighbor_count: int | None = None
     seen_by: tuple[str, ...] = ()
     seen_by_times: tuple[datetime, ...] = ()
+    self_uplink_seen: datetime | None = None
     last_seen: datetime | None = None
     last_boot: datetime | None = None
     last_device_metrics: datetime | None = None

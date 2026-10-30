@@ -507,7 +507,9 @@ about in that run (see `mesh health`).
   node within the last day, week and month (loranet's `seenBy`; its map-report
   topic `.../map/` is not a gateway and is not counted, nor is the node's own
   topic: a node that only uplinks itself is seen by 0, but its packets still
-  count for Last seen). It is not a
+  count for Last seen). A node that uplinks its own packets over MQTT gets a
+  trailing `@` after the counts: green when it did within the last day, dim up
+  to 30 days, none when older or never (`self_uplink_seen` in `--json`). It is not a
   radio-neighbour count. `--json` keeps `neighbor_count` (all time, gateways only) and adds
   `seen_by_counts` (`day`/`week`/`month`), `last_device_metrics` and
   `last_boot`.

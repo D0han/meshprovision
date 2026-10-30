@@ -432,8 +432,8 @@ def _is_own_topic(topic: str, node_id: NodeId) -> bool:
 
 def _parse_seen_by(
     raw: object, tracker: CoercionTracker, node_id: NodeId
-) -> tuple[int | None, tuple[str, ...], tuple[datetime, ...], datetime | None]:
-    """Derive ``neighbor_count``, ``seen_by``, its times and ``last_seen`` from ``seenBy``.
+) -> tuple[int | None, tuple[str, ...], tuple[datetime, ...], datetime | None, datetime | None]:
+    """Derive ``neighbor_count``, ``seen_by``, its times, ``last_seen`` and the self uplink.
 
     Args:
         raw: The raw ``seenBy`` field; expected to be a JSON object
@@ -447,8 +447,9 @@ def _parse_seen_by(
             node hearing it.
 
     Returns:
-        A ``(neighbor_count, seen_by, seen_by_times, last_seen)`` tuple.
-        All four stay ``(None, (), (), None)`` when ``raw`` is absent or
+        A ``(neighbor_count, seen_by, seen_by_times, last_seen, self_uplink)``
+        tuple, ``self_uplink`` being when the node's own topic last relayed it.
+        All five stay ``(None, (), (), None, None)`` when ``raw`` is absent or
         not a ``dict``. The map-report topic (``.../map/``) is not a gateway
         and is left out of all of them (the map report time is read from
         ``lastMapReport``). The node's own topic (it uplinks its own packets)
@@ -459,10 +460,10 @@ def _parse_seen_by(
         report can count the topics seen within a day, a week and a month.
     """
     if raw is None:
-        return None, (), (), None
+        return None, (), (), None, None
     if not isinstance(raw, dict):
         tracker.record_failure()
-        return None, (), (), None
+        return None, (), (), None, None
     heard = {topic: value for topic, value in raw.items() if not _is_map_topic(str(topic))}
     gateways = {
         topic: value for topic, value in heard.items() if not _is_own_topic(str(topic), node_id)
@@ -474,7 +475,8 @@ def _parse_seen_by(
         tracker.record_failure()
     times = tuple(t for topic in gateways if (t := parsed[topic]) is not None)
     last_seen = max((time for time in parsed.values() if time is not None), default=None)
-    return neighbor_count, seen_by, times, last_seen
+    own = [t for topic in heard if _is_own_topic(str(topic), node_id) and (t := parsed[topic])]
+    return neighbor_count, seen_by, times, last_seen, max(own, default=None)
 
 
 def parse_node(
@@ -520,7 +522,7 @@ def parse_node(
         latitude = None
         longitude = None
 
-    neighbor_count, seen_by, seen_by_times, seen_by_last_seen = _parse_seen_by(
+    neighbor_count, seen_by, seen_by_times, seen_by_last_seen, self_uplink_seen = _parse_seen_by(
         payload.get("seenBy"), tracker, node_id
     )
     last_device_metrics = tracker.coerce(payload.get("lastDeviceMetrics"), parse_epoch)
@@ -570,6 +572,7 @@ def parse_node(
         neighbor_count=neighbor_count,
         seen_by=seen_by,
         seen_by_times=seen_by_times,
+        self_uplink_seen=self_uplink_seen,
         last_seen=last_seen,
         last_device_metrics=last_device_metrics,
         last_map_report=last_map_report,

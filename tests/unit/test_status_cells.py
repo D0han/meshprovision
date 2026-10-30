@@ -572,6 +572,72 @@ def test_seen_by_cell_shows_day_week_month_counts_and_flags_silence(
     assert (cell.plain, cell.style) == (text, style)
 
 
+def _marked(age: timedelta | None, counts: tuple[int, int, int] | None = (0, 0, 33)) -> Text:
+    seen = None if age is None else NOW - age
+    return _cells(_node(seen_by_counts=counts, self_uplink_seen=seen))[SEEN_BY]
+
+
+def _mark_style(cell: Text) -> str:
+    return str(cell.spans[-1].style)
+
+
+def test_a_recent_self_uplink_is_marked_with_a_green_at_sign() -> None:
+    cell = _marked(timedelta(hours=1))
+
+    assert cell.plain == "0/0/33@"
+    assert _mark_style(cell) == "green"
+    assert cell.plain[cell.spans[-1].start : cell.spans[-1].end] == "@"
+
+
+@pytest.mark.parametrize(
+    ("age", "marked", "style"),
+    [
+        (timedelta(days=1), True, "green"),
+        (timedelta(days=1, seconds=1), True, "grey50"),
+        (timedelta(days=29), True, "grey50"),
+        (timedelta(days=30), True, "grey50"),
+        (timedelta(days=30, seconds=1), False, ""),
+        (None, False, ""),
+    ],
+    ids=["a-day-old", "just-over-a-day", "29d", "30d", "over-30d", "never"],
+)
+def test_the_self_uplink_mark_is_green_within_a_day_dim_to_a_month_then_gone(
+    age: timedelta | None, marked: bool, style: str
+) -> None:
+    cell = _marked(age)
+
+    assert cell.plain == ("0/0/33@" if marked else "0/0/33")
+    if marked:
+        assert _mark_style(cell) == style
+
+
+def test_a_future_self_uplink_counts_as_recent() -> None:
+    assert _mark_style(_marked(timedelta(minutes=-5))) == "green"
+
+
+def test_the_mark_keeps_the_count_style_and_needs_counts() -> None:
+    flagged = _marked(timedelta(hours=1), (0, 0, 0))
+    unknown = _marked(timedelta(hours=1), None)
+
+    assert flagged.style == ALARM
+    assert flagged.plain == "0/0/0@"
+    assert unknown.plain == "-"
+
+
+def test_self_uplink_seen_is_merged_and_in_the_json() -> None:
+    seen = NOW - timedelta(hours=2)
+    obs = _obs(SOURCE_LORANET, self_uplink_seen=seen, **_seen(timedelta(hours=1)))
+
+    merged = merge_observations(NID, [obs], now=NOW)
+
+    assert merged.self_uplink_seen == seen
+    assert merged.to_json_dict()["self_uplink_seen"] == "2026-08-25T10:00:00Z"
+    assert (
+        merge_observations(NID, [_obs(SOURCE_LORANET)], now=NOW).to_json_dict()["self_uplink_seen"]
+        is None
+    )
+
+
 def test_the_table_has_no_sources_column_and_no_row_style() -> None:
     node = _node(sources=(SOURCE_LORANET, SOURCE_LORASTATS), last_seen=NOW, age=timedelta(0))
     report = StatusReport(generated_at=NOW, nodes=(node,), thresholds=Thresholds())

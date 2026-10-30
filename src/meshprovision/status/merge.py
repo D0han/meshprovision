@@ -230,6 +230,9 @@ class MergedNode:
             within the last 1 day, 7 days and 30 days
             (:data:`SEEN_BY_WINDOWS`), counted against ``now``; ``None``
             when no source reported ``seenBy``.
+        self_uplink_seen: When the node last uplinked its own packets over
+            MQTT (its own gateway topic, which :attr:`seen_by_counts` leaves
+            out), when known.
         uptime_seconds: Best-known device uptime, seconds, as of
             :attr:`last_device_metrics`.
         last_boot: The most recent boot time any source reported.
@@ -270,6 +273,7 @@ class MergedNode:
     online_local_nodes: int | None = None
     neighbor_count: int | None = None
     seen_by_counts: tuple[int, int, int] | None = None
+    self_uplink_seen: datetime | None = None
     uptime_seconds: int | None = None
     last_boot: datetime | None = None
     last_device_metrics: datetime | None = None
@@ -361,6 +365,7 @@ class MergedNode:
                 if self.seen_by_counts is None
                 else dict(zip(("day", "week", "month"), self.seen_by_counts, strict=True))
             ),
+            "self_uplink_seen": _isoformat_z(self.self_uplink_seen),
             "uptime_seconds": self.uptime_seconds,
             "last_boot": _isoformat_z(self.last_boot),
             "last_device_metrics": _isoformat_z(self.last_device_metrics),
@@ -731,6 +736,7 @@ def merge_observations(
         (obs.last_boot for obs in by_priority if obs.last_boot is not None), default=None
     )
     seen_by_counts = _seen_by_counts(by_priority, now)
+    self_uplink_seen = _first_non_none(by_recency, lambda obs: obs.self_uplink_seen)
 
     # Rule 4a: an observed but blank/absent name falls back to the
     # database row before giving up and rendering as unknown.
@@ -777,6 +783,7 @@ def merge_observations(
         online_local_nodes=online_local_nodes,
         neighbor_count=neighbor_count,
         seen_by_counts=seen_by_counts,
+        self_uplink_seen=self_uplink_seen,
         uptime_seconds=uptime_seconds,
         last_boot=last_boot,
         last_device_metrics=last_device_metrics,

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh status` marks a node that uplinks its own packets over MQTT with a
+  trailing `@` after its Seen By counts (green within a day, dim up to 30
+  days, none beyond); `--json` gains `self_uplink_seen`.
+
 - `mesh status --expected-interval HOURS` (up to 48) sets every reported
   node's expected interval instead of learning it; `0.5` gives the fixed
   2 h / 24 h thresholds. For a template-managed node, `mesh status` takes the

@@ -379,23 +379,45 @@ def _voltage_flag(value: float | None) -> str | None:
     return _severity(value, alarm=VOLTAGE_ALARM_VOLTS, warn=VOLTAGE_WARN_VOLTS, low_is_bad=True)
 
 
-def _seen_by_cell(counts: tuple[int, int, int] | None) -> Text:
+SELF_UPLINK_MARK: Final[str] = "@"
+"""Follows the ``Seen By`` counts of a node that uplinks its own packets over MQTT."""
+
+SELF_UPLINK_RECENT: Final[timedelta] = timedelta(days=1)
+"""A self uplink this recent is drawn green; an older one dim."""
+
+SELF_UPLINK_SHOWN: Final[timedelta] = timedelta(days=30)
+"""A self uplink older than this is no longer marked."""
+
+
+def _seen_by_cell(
+    counts: tuple[int, int, int] | None, self_uplink_seen: datetime | None, now: datetime
+) -> Text:
     """Render the ``Seen By`` cell as ``day/week/month`` gateway counts.
 
     Args:
         counts: :attr:`~meshprovision.status.merge.MergedNode.seen_by_counts`.
+        self_uplink_seen: :attr:`~meshprovision.status.merge.MergedNode.self_uplink_seen`.
+        now: The report time.
 
     Returns:
         ``"x/y/z"`` -- gateway topics that relayed the node within the last
         1 / 7 / 30 days -- in the alarm style when no gateway relayed it
         in 30 days, in the warning style when none did in 7 days, or a
-        dim hyphen when no source reported ``seenBy``.
+        dim hyphen when no source reported ``seenBy``. A node that uplinks
+        its own packets is followed by :data:`SELF_UPLINK_MARK`: green when
+        it did within :data:`SELF_UPLINK_RECENT`, dim up to
+        :data:`SELF_UPLINK_SHOWN`, none when older or never.
     """
     if counts is None:
         return _cell(_DASH, _UNKNOWN_STYLE)
     day, week, month = counts
     flag = _ALARM_STYLE if month == 0 else _WARN_STYLE if week == 0 else None
-    return _cell(f"{day}/{week}/{month}", flag)
+    cell = _cell(f"{day}/{week}/{month}", flag)
+    if self_uplink_seen is not None:
+        age = now - self_uplink_seen
+        if age <= SELF_UPLINK_SHOWN:
+            cell.append(SELF_UPLINK_MARK, style="green" if age <= SELF_UPLINK_RECENT else "grey50")
+    return cell
 
 
 def _duration_text(duration: timedelta) -> str:
@@ -655,7 +677,7 @@ def _row(node: MergedNode, now: datetime, trends: NodeTrends) -> list[Renderable
             ),
             trends.air_util_tx,
         ),
-        _seen_by_cell(node.seen_by_counts),
+        _seen_by_cell(node.seen_by_counts, node.self_uplink_seen, now),
         _uptime_cell(node, now),
     ]
 

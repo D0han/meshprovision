@@ -1201,6 +1201,7 @@ def test_loranet_a_node_seen_only_by_itself_has_no_gateways(tmp_path: Path) -> N
 
     assert (obs.neighbor_count, obs.seen_by, obs.seen_by_times) == (0, (), ())
     assert obs.last_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
+    assert obs.self_uplink_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
 
 
 @respx.mock
@@ -1631,7 +1632,11 @@ def test_loranet_parse_node_maps_every_field_from_its_own_json_key() -> None:
         "uptime": 98_765,
         "onlineLocalNodes": 12,
         "hasDefaultCh": False,
-        "seenBy": {"gw2": 1_700_000_100, "gw1": 1_700_000_000},
+        "seenBy": {
+            "gw2": 1_700_000_100,
+            "gw1": 1_700_000_000,
+            "msh/PL/2/e/ShortSlow/!deadbe01": 1_700_000_200,
+        },
         "lastDeviceMetrics": 1_700_000_500,
         "lastMapReport": 1_700_000_300,
     }
@@ -1666,8 +1671,9 @@ def test_loranet_parse_node_maps_every_field_from_its_own_json_key() -> None:
     assert obs.online_local_nodes == 12
     assert obs.has_default_channel is False
 
-    assert obs.neighbor_count == 2
+    assert obs.neighbor_count == 2  # the node's own topic is not another node hearing it
     assert obs.seen_by == ("gw1", "gw2")  # sorted, not payload order
+    assert obs.self_uplink_seen == datetime.fromtimestamp(1_700_000_200, tz=UTC)
     assert obs.last_device_metrics == datetime.fromtimestamp(1_700_000_500, tz=UTC)
     assert obs.last_map_report == datetime.fromtimestamp(1_700_000_300, tz=UTC)
     # The newest of seenBy's max (…100), lastDeviceMetrics (…500) and
@@ -1981,3 +1987,24 @@ def test_loranet_known_enum_values_still_resolve_to_their_canonical_names() -> N
         "ROUTER",
     ]
     assert loranet_module._resolve_enum_name(role, 99) == "99"
+
+
+@respx.mock
+def test_loranet_self_uplink_seen_is_the_newest_of_the_nodes_own_topics(tmp_path: Path) -> None:
+    nid = NodeId.from_hex("250643bc")
+    payload = {
+        nid.decimal: {
+            "seenBy": {
+                "msh/PL/2/e/ShortSlow/!250643bc": 1_700_000_100,
+                "msh/PL/2/e/LongFast/!250643bc": 1_700_000_900,
+                "msh/PL/2/e/Other/!250643bc": 1_700_000_500,
+            }
+        }
+    }
+    respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
+    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+
+    obs = LoranetSource(client).fetch_all()[nid]
+
+    assert obs.self_uplink_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
+    assert obs.neighbor_count == 0
