@@ -177,7 +177,11 @@ deliberate configuration and is never "repaired" toward three.
 
 `device` (role: `CLIENT`), `lora`, `position`, `power`, `default_channel`,
 `telemetry`, and `neighbor_info` blocks follow. Fields omitted from any of
-these blocks are left at the device's current value rather than reset.
+these blocks are left at the device's current value rather than reset,
+except these, whose default is always applied: `device.role` (`CLIENT`),
+`lora.region` (`EU_868`), `lora.use_preset` (`true`), `lora.modem_preset`
+(`LONG_FAST`; an explicit `null` leaves it alone), `lora.hop_limit` (`3`),
+`lora.tx_enabled` (`true`) and `lora.override_duty_cycle` (`false`).
 
 ### Region: `EU_868`, not `PL`
 
