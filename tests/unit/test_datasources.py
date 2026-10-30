@@ -460,8 +460,7 @@ def test_lorastats_requests_an_nfd_region_by_its_nfc_spelling(tmp_path: Path) ->
     source = LorastatsSource(client, contact="t@example.invalid", regions=[_ZACHOD_NFD])
 
     assert source.fetch_node("deadbe01") is None
-    assert source.fetch_node("deadbe02", region=_ZACHOD_NFD) is None
-    assert route.call_count == 2
+    assert route.call_count == 1
 
 
 def test_lorastats_blank_contact_raises(tmp_path: Path) -> None:
@@ -570,24 +569,25 @@ def test_lorastats_fetch_nodes_last_fetch_skipped_sums_across_ids_and_resets(
     """Regression test: last_fetch_skipped sums per-id skips and resets between calls."""
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
-    ).mock(return_value=httpx.Response(200, json=[{"ShortName": "no id"}]))
-    respx.get(
-        url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='XX')}"
-    ).mock(return_value=httpx.Response(200, json=[{"NodeId": "deadbe01", "ShortName": "found"}]))
+    ).mock(
+        return_value=httpx.Response(
+            200, json=[{"NodeId": "deadbe03", "ShortName": "found"}, {"ShortName": "no id"}]
+        )
+    )
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
     source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
 
-    # Neither id is found (the only PL record is malformed), but each of
-    # the two lookups still skips exactly one malformed record while
-    # scanning for its match -- 1 + 1 = 2.
+    # Neither id is found (the PL records are deadbe03's and a malformed
+    # one), and each of the two lookups skips exactly the malformed record
+    # while scanning for its match -- 1 + 1 = 2.
     result = source.fetch_nodes([NodeId.from_hex("deadbe01"), NodeId.from_hex("deadbe02")])
     assert result == {}
     assert source.last_fetch_skipped == 2
 
-    # A subsequent clean lookup (region XX, one well-formed matching
-    # record, matched on the first record scanned) must reset the
-    # counter to 0, not accumulate on top of the dirty call above.
-    clean = source.fetch_node("deadbe01", region="XX")
+    # A subsequent clean lookup (deadbe03, matched on the first record
+    # scanned, before the malformed one) must reset the counter to 0,
+    # not accumulate on top of the dirty call above.
+    clean = source.fetch_node("deadbe03")
     assert clean is not None
     assert source.last_fetch_skipped == 0
 

@@ -255,32 +255,26 @@ class LorastatsSource(BaseHTTPDataSource):
         self,
         node_id: NodeIdLike,
         *,
-        region: str | None = None,
         force_refresh: bool | None = None,
     ) -> NodeObservation | None:
         """Fetch one node's observation from the region it lives in.
 
-        With more than one configured region (and no explicit
-        ``region``), the memo's region is asked first; when it does not
-        answer, or there is none, the status endpoint is asked whether
-        lorastats knows the node (no region is asked when it does not),
-        then every other configured region in order. When it answers
-        with a stale record (see :data:`LORASTATS_STALE_RECORD_SECONDS`),
-        every other region is asked too, without the status probe, and
-        the freshest record wins; a failing region then ends the search
-        with the stale record instead of failing the call. A stale match
-        likewise does not stop the other regions without a memo. The memo is updated
-        to the region that answered, or the entry is dropped when its
-        region no longer does. See the module docstring for the request
-        budget.
+        With more than one configured region, the memo's region is asked
+        first; when it does not answer, or there is none, the status endpoint
+        is asked whether lorastats knows the node (no region is asked when it
+        does not), then every other configured region in order. When it
+        answers with a stale record (see
+        :data:`LORASTATS_STALE_RECORD_SECONDS`), every other region is asked
+        too, without the status probe, and the freshest record wins; a failing
+        region then ends the search with the stale record instead of failing
+        the call. A stale match likewise does not stop the other regions
+        without a memo. The memo is updated to the region that answered, or
+        the entry is dropped when its region no longer does. See the module
+        docstring for the request budget.
 
         Args:
             node_id: The node id to look up, in any form
                 :meth:`NodeId.parse` accepts.
-            region: A single region to query instead of the
-                configured regions, without memo or status probe. Does
-                not need to already be validated (this call validates it
-                before use).
             force_refresh: Whether to bypass the HTTP cache read for
                 this call. Otherwise a cached response is reused for the
                 client's TTL, but never less than
@@ -306,8 +300,6 @@ class LorastatsSource(BaseHTTPDataSource):
         Raises:
             meshprovision.errors.NodeIdError: If ``node_id`` cannot be
                 parsed.
-            meshprovision.errors.SettingsError: If ``region`` is given
-                and does not match :data:`REGION_PATTERN`.
             meshprovision.errors.InvalidResponseError: If a response
                 body does not parse as a JSON array.
             meshprovision.errors.HttpError: If a request itself fails,
@@ -321,14 +313,11 @@ class LorastatsSource(BaseHTTPDataSource):
         tracker = CoercionTracker()
         self._last_fetch_skipped = 0
         try:
-            if region is not None:
-                found = self._search(nid, validate_regions((region,)), tracker, force_refresh)
+            regions = self._configured()
+            if len(regions) == 1:
+                found = self._search(nid, regions, tracker, force_refresh)
             else:
-                regions = self._configured()
-                if len(regions) == 1:
-                    found = self._search(nid, regions, tracker, force_refresh)
-                else:
-                    found = self._search_learning(nid, regions, tracker, force_refresh)
+                found = self._search_learning(nid, regions, tracker, force_refresh)
         finally:
             self._last_fetch_field_coercions = tracker.failures
         return found[0] if found is not None else None

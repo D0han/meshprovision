@@ -379,21 +379,6 @@ def test_a_single_region_is_asked_directly_without_probe_or_memo(tmp_path: Path)
     assert _memo(tmp_path, now).region_for(_NODE) == "Zachód"
 
 
-@respx.mock
-def test_an_explicit_region_skips_the_probe_and_the_memo(tmp_path: Path) -> None:
-    now = [_NOW]
-    mocked = _mock(found_in="Rzeszów")
-    memo = _memo(tmp_path, now)
-    memo.remember(_NODE, "Gdańsk")
-    source, _ = _source(tmp_path, now, memo=memo)
-
-    observation = source.fetch_node(_NODE, region="Rzeszów")
-
-    assert observation is not None
-    assert mocked.calls() == {"status": 0, "Zachód": 0, "Gdańsk": 0, "Rzeszów": 1}
-    assert _memo(tmp_path, now).region_for(_NODE) == "Gdańsk"
-
-
 @pytest.mark.parametrize("status", [403, 410, 502])
 @respx.mock
 def test_any_other_status_answer_fails_the_source_without_asking_a_region(
