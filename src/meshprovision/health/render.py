@@ -258,7 +258,7 @@ def _metric_cells(metrics: NodeMetrics) -> list[str]:
     """Render the cells of :data:`_METRIC_COLUMNS`."""
     return [
         _number(metrics.packets_per_hour),
-        str(metrics.gateway_count) if metrics.covered_hours else _DASH,
+        str(metrics.other_gateway_count) if metrics.covered_hours else _DASH,
         _percent(metrics.direct_share),
         _hops_cell(metrics),
         _DASH if metrics.snr_median is None else f"{metrics.snr_median} dB",
@@ -373,7 +373,8 @@ def _lines(health: NodeHealth, now: datetime) -> Iterable[str]:
         f"{metrics.receptions} receptions, {_percent(metrics.direct_share)} direct"
     )
     listed = ", ".join(f"{gw} {count}" for gw, count in metrics.gateways[:_MAX_GATEWAYS])
-    yield f"Gateways ({metrics.gateway_count}): {listed or _DASH}" + (
+    besides = " besides itself" if metrics.uplinks_itself else ""
+    yield f"Gateways ({metrics.other_gateway_count}{besides}): {listed or _DASH}" + (
         "; it uplinks its own packets (an MQTT gateway)" if metrics.uplinks_itself else ""
     )
     hops = " ".join(f"{hops}:{count}" for hops, count in metrics.hops.items())
@@ -543,6 +544,7 @@ def node_health_to_json_dict(health: NodeHealth) -> dict[str, object]:
             "direct": metrics.direct,
             "direct_share": metrics.direct_share,
             "gateway_count": metrics.gateway_count,
+            "other_gateway_count": metrics.other_gateway_count,
             "gateways": [{"gateway": gw, "receptions": count} for gw, count in metrics.gateways],
             "uplinks_itself": metrics.uplinks_itself,
             "hops": {str(hops): count for hops, count in metrics.hops.items()},

@@ -140,7 +140,8 @@ class NodeMetrics:
         packets_per_hour: ``packets / covered_hours``.
         direct: Direct receptions.
         gateways: ``(gateway hex, receptions)`` of every gateway, most first.
-        gateway_count: Distinct gateways.
+        gateway_count: Distinct gateways, the node itself included when it
+            uplinks itself (see :attr:`other_gateway_count`).
         uplinks_itself: Whether the node is among its own gateways (it is
             an MQTT gateway).
         hops: Receptions per hop count (decoded packets only).
@@ -232,6 +233,11 @@ class NodeMetrics:
     def hops_median(self) -> int | None:
         """The median hop count of the sampled receptions."""
         return quantile(self.hops, 0.5)
+
+    @property
+    def other_gateway_count(self) -> int:
+        """Distinct gateways besides the node itself (its own uplinks show nothing of its reach)."""
+        return self.gateway_count - 1 if self.uplinks_itself else self.gateway_count
 
     @property
     def top_relay(self) -> RelayShare | None:

@@ -504,6 +504,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh health` no longer counts a node's own gateway topic as a gateway that
+  heard it, as `mesh status`'s Seen By already does not: a node that only
+  uplinks itself was "uplinked by one gateway only" and is now "heard by no
+  other gateway, only uplinks itself"; one uplinked by itself and one other
+  gateway is now "uplinked by one gateway only" (it had no finding); and a
+  router uplinked by itself and two others is told to check its placement.
+  GWs and the detailed report count the other gateways; `--json` keeps
+  `gateway_count` (itself included) and adds `other_gateway_count`.
 - `mesh health` judges a node's battery by its newest fresh reading even
   when that is external power: a node plugged in after a low reading (8 %
   in the history 10 hours ago, `101` from `mesh status` 2 minutes ago) was

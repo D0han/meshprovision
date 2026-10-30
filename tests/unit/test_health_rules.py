@@ -373,6 +373,43 @@ def test_single_gateway_rule(gateways: int, receptions: int, expected: Verdict |
     assert _codes(metrics).get("single_gateway") == expected
 
 
+def _uplinking_itself(others: int, receptions: int = MIN_RECEPTIONS) -> NodeMetrics:
+    return _m(gateway_count=others + 1, uplinks_itself=True, receptions=receptions)
+
+
+def test_a_node_only_uplinking_itself_is_heard_by_no_other_gateway() -> None:
+    """Its own gateway topic counted as its one gateway: 'uplinked by one gateway only'."""
+    _, findings = assess(_uplinking_itself(0), NodeContext())
+
+    assert [(f.severity, f.code, f.text) for f in findings] == [
+        (
+            Verdict.WARN,
+            "single_gateway",
+            f"heard by no other gateway, only uplinks itself ({MIN_RECEPTIONS} receptions)",
+        )
+    ]
+    assert "single_gateway" not in _codes(_uplinking_itself(0, MIN_RECEPTIONS - 1))
+
+
+def test_a_node_uplinking_itself_and_heard_by_one_other_gateway_has_one_gateway() -> None:
+    """Itself and one other gateway counted 2: no single-gateway warning."""
+    _, findings = assess(_uplinking_itself(1), NodeContext())
+
+    assert [(f.code, f.text) for f in findings] == [
+        ("single_gateway", f"uplinked by one gateway only ({MIN_RECEPTIONS} receptions)")
+    ]
+    assert "single_gateway" not in _codes(_uplinking_itself(2))
+
+
+@pytest.mark.parametrize(("gateways", "uplinks_itself", "others"), [(3, True, 2), (3, False, 3)])
+def test_the_other_gateways_leave_the_node_itself_out(
+    gateways: int, uplinks_itself: bool, others: int
+) -> None:
+    metrics = _m(gateway_count=gateways, uplinks_itself=uplinks_itself)
+
+    assert metrics.other_gateway_count == others
+
+
 @pytest.mark.parametrize(
     ("boots", "expected"), [(REBOOTS_WARN, Verdict.WARN), (REBOOTS_WARN - 1, None)]
 )
@@ -614,6 +651,26 @@ def test_a_router_heard_by_few_gateways_is_flagged(
     metrics = _m(gateway_count=gateways, receptions=receptions)
 
     assert ("router_placement" in _advice(metrics, NodeContext(role=role))) is flagged
+
+
+def test_a_router_uplinking_itself_is_judged_by_the_other_gateways() -> None:
+    """Itself and two others counted 3 = ROUTER_MIN_GATEWAYS: no placement suggestion."""
+    metrics = _uplinking_itself(ROUTER_MIN_GATEWAYS - 1)
+
+    advice = advise(metrics, NodeContext(role="ROUTER"), _LOW)
+
+    assert [(a.code, a.text) for a in advice] == [
+        (
+            "router_placement",
+            f"role ROUTER, but only {ROUTER_MIN_GATEWAYS - 1} gateway(s) besides itself "
+            "uplinked it: consider whether it is placed well enough to be a router",
+        )
+    ]
+    assert "router_placement" not in _advice(
+        _uplinking_itself(ROUTER_MIN_GATEWAYS), NodeContext(role="ROUTER")
+    )
+    plain = advise(_m(gateway_count=1, receptions=MIN_RECEPTIONS), NodeContext(role="ROUTER"), _LOW)
+    assert plain[0].text.startswith("role ROUTER, but only 1 gateway(s) uplinked it: ")
 
 
 def test_relay_concentration_names_a_likely_relay() -> None:

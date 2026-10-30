@@ -184,7 +184,7 @@ RELAY_CONCENTRATION_SHARE: Final[float] = 0.8
 failure for it."""
 
 ROUTER_MIN_GATEWAYS: Final[int] = 3
-"""A router heard by fewer gateways than this may be poorly placed."""
+"""A router heard by fewer gateways than this (besides itself) may be poorly placed."""
 
 ROUTER_ROLES: Final[frozenset[str]] = frozenset(
     {"ROUTER", "ROUTER_LATE", "ROUTER_CLIENT", "REPEATER"}
@@ -476,6 +476,20 @@ def _utilization(
     return [Finding(severity, code, f"{label} averaging {value:.1f}%")]
 
 
+def _single_gateway(metrics: NodeMetrics) -> Finding | None:
+    """Judge a node one gateway uplinks, or none but itself (its own uplinks do not count)."""
+    if metrics.receptions < MIN_RECEPTIONS:
+        return None
+    others = metrics.other_gateway_count
+    if others == 1:
+        text = f"uplinked by one gateway only ({metrics.receptions} receptions)"
+    elif others == 0 and metrics.uplinks_itself:
+        text = f"heard by no other gateway, only uplinks itself ({metrics.receptions} receptions)"
+    else:
+        return None
+    return Finding(Verdict.WARN, "single_gateway", text)
+
+
 def assess(metrics: NodeMetrics, context: NodeContext) -> tuple[Verdict, tuple[Finding, ...]]:
     """Judge a node's health.
 
@@ -491,14 +505,9 @@ def assess(metrics: NodeMetrics, context: NodeContext) -> tuple[Verdict, tuple[F
     if silence is not None:
         findings.append(silence)
     findings.extend(_battery_findings(metrics, context))
-    if metrics.gateway_count == 1 and metrics.receptions >= MIN_RECEPTIONS:
-        findings.append(
-            Finding(
-                Verdict.WARN,
-                "single_gateway",
-                f"uplinked by one gateway only ({metrics.receptions} receptions)",
-            )
-        )
+    single = _single_gateway(metrics)
+    if single is not None:
+        findings.append(single)
     if len(metrics.boots) >= _reboots_warn(metrics.days):
         findings.append(
             Finding(Verdict.WARN, "reboots", f"{len(metrics.boots)} boots in {metrics.days} d")
@@ -718,13 +727,14 @@ def advise(
     if (
         context.role in ROUTER_ROLES
         and metrics.receptions >= MIN_RECEPTIONS
-        and metrics.gateway_count < ROUTER_MIN_GATEWAYS
+        and metrics.other_gateway_count < ROUTER_MIN_GATEWAYS
     ):
+        besides = " besides itself" if metrics.uplinks_itself else ""
         advice.append(
             Advice(
                 "router_placement",
-                f"role {context.role}, but only {metrics.gateway_count} gateway(s) uplinked it: "
-                "consider whether it is placed well enough to be a router",
+                f"role {context.role}, but only {metrics.other_gateway_count} gateway(s){besides} "
+                "uplinked it: consider whether it is placed well enough to be a router",
             )
         )
     top = metrics.top_relay

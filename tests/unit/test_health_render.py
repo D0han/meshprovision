@@ -402,7 +402,8 @@ def test_the_detailed_report_has_every_section() -> None:
         "Window: last 7 d; 10 of 168 hours covered, 2 silent (longest 1 in a row); history "
         "refreshed 2 minutes ago",
         "Traffic: 10 packets (1.0/h), 40 receptions, 25% direct",
-        "Gateways (2): 32aca541 30, db58ae50 10; it uplinks its own packets (an MQTT gateway)",
+        "Gateways (1 besides itself): 32aca541 30, db58ae50 10; it uplinks its own packets "
+        "(an MQTT gateway)",
         "Hops: 1:20 3:5 (25 receptions of decoded packets, 62% of all); hop limit 7 (HopStart "
         "of 9 decoded packets)",
         "SNR: median 6 dB, 10th percentile -2 dB (40 receptions); RSSI (raw lorastats value) "
@@ -533,6 +534,28 @@ def test_json_names_each_node_and_carries_its_health() -> None:
     assert metrics["gateway_check"] is None
 
 
+def test_the_gateways_cell_and_detail_leave_out_the_node_uplinking_itself() -> None:
+    """The node's own gateway topic counted: GWs 3 for a node two others uplink."""
+    metrics = _metrics(
+        covered_hours=10,
+        receptions=40,
+        gateways=(("ab446357", 30), ("32aca541", 6), ("db58ae50", 4)),
+        gateway_count=3,
+        uplinks_itself=True,
+    )
+    health = _health(metrics=metrics)
+
+    document = render.node_health_to_json_dict(health)["metrics"]
+
+    assert _row(_report(health))[7] == "2"
+    assert "Gateways (2 besides itself): ab446357 30, 32aca541 6, db58ae50 4; it uplinks" in (
+        _detail(health)
+    )
+    assert isinstance(document, dict)
+    assert (document["gateway_count"], document["other_gateway_count"]) == (3, 2)
+    assert _row(_report(_health(metrics=_metrics(covered_hours=1, gateway_count=2))))[7] == "2"
+
+
 def test_json_metrics_carry_every_field_from_its_own_source() -> None:
     metrics = _metrics(
         covered_hours=10,
@@ -581,6 +604,7 @@ def test_json_metrics_carry_every_field_from_its_own_source() -> None:
         ("direct", 10),
         ("direct_share", 0.25),
         ("gateway_count", 1),
+        ("other_gateway_count", 1),
         ("gateways", [{"gateway": "32aca541", "receptions": 30}]),
         ("uplinks_itself", False),
         ("hops", {"1": 20}),

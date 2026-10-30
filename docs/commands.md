@@ -684,7 +684,7 @@ loses the history.
 
 **The table** (no `NODE`): Node, Short, Verdict, Importance, Last heard (the
 newer of the last reception in the history and `mesh status`'s last seen),
-Every (the node's expected interval, see [`mesh status`](#mesh-status)), Pkt/h, GWs (distinct gateways in the window), Direct (share of direct
+Every (the node's expected interval, see [`mesh status`](#mesh-status)), Pkt/h, GWs (distinct gateways in the window besides the node itself), Direct (share of direct
 receptions), Hops max/limit (most hops seen / the node's `HopStart`; `?` when
 unknown), SNR median, Top relay (busiest relay byte and its share), Batt (the
 reading the battery rule judges: the newest battery reading from the history or
@@ -714,7 +714,7 @@ never `--expected-interval`). These are heuristics, not firmware limits:
 | never heard in the covered hours | covered hours over its stale threshold | over its offline threshold (fewer: `unknown`, not heard yet) | a node expected every 6 h may be unheard for a few hours of history |
 | battery (newest reading within 24 h, or within its stale threshold when longer, unless it is external power; 0% ignored) | at or below 20% | at or below 10% | as `mesh status` colours it |
 | battery trend (6+ readings over 12+ h; not when the battery reading above is external power) | falling 10 points a day or faster | | a node that will be flat within days |
-| one gateway only (20+ receptions) | yes | | one gateway failing loses the node |
+| one gateway only besides the node itself, or none but itself (20+ receptions) | yes | | one gateway failing loses the node; its own uplinks show nothing of its reach |
 | boots in the window | 3 or more per 7 days (3 for any window up to a week, 13 for 30 days) | | crashes or brown-outs |
 | mean channel utilization | over 25% | over 40% | firmware delays sends above 25% |
 | mean transmit air utilization | over 5% | over 10% | 10% is the common duty-cycle limit |
@@ -738,7 +738,7 @@ relayed receptions (20+); 1 for a router role (`ROUTER`, `ROUTER_LATE`,
 | longer position interval or smart position | more than the preset's limit of position packets an hour |
 | a faster preset for the whole mesh | a `LONG_*` preset and more than 60 nodes online around the node (its own count, from its loranet map report) |
 | check the role | a `CLIENT_MUTE` whose id byte is the busiest relay of one of our nodes (a byte collision, or the role is not what it reports) |
-| check a router's placement | a router role uplinked by fewer than 3 gateways (20+ receptions) |
+| check a router's placement | a router role uplinked by fewer than 3 gateways besides itself (20+ receptions) |
 | another router within its reach | one relay byte carried 80%+ of its relayed receptions (20+) |
 
 **Presets.** The preset is the newest one loranet reports for the node (only
