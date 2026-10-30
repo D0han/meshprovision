@@ -24,7 +24,8 @@ can and cannot tell:
 - **Packets per hour**, telemetry and position counts come from the
   decoded subset or from receptions, so they are lower bounds.
 - **Battery trend** is a least-squares slope over the telemetry battery
-  readings in the window (external power and 0% left out).
+  readings in the window (external power and 0% left out); the newest
+  external-power reading is kept apart (``battery_powered_time``).
 
 This module imports nothing that reads files or the network (no
 ``httpx``, ``pathlib``, :mod:`meshprovision.cache` or
@@ -158,6 +159,8 @@ class NodeMetrics:
             so a lower bound).
         positions_per_hour: Position packets per covered hour (likewise).
         battery: The battery readings and trend, when any.
+        battery_powered_time: When the newest battery reading above 100
+            (external power) in the window was heard, epoch seconds.
         channel_utilization: Mean channel utilization of the readings.
         air_util_tx: Mean transmit air utilization of the readings.
         latest_telemetry: The newest telemetry reading in the window.
@@ -199,6 +202,7 @@ class NodeMetrics:
     telemetry_per_hour: float | None = None
     positions_per_hour: float | None = None
     battery: BatteryTrend | None = None
+    battery_powered_time: float | None = None
     channel_utilization: float | None = None
     air_util_tx: float | None = None
     latest_telemetry: TelemetryPoint | None = None
@@ -312,6 +316,12 @@ def _battery(points: Iterable[TelemetryPoint]) -> BatteryTrend | None:
     return BatteryTrend(latest, latest_time, len(readings), span_hours, slope)
 
 
+def _powered_time(points: Iterable[TelemetryPoint]) -> float | None:
+    """Return when the newest external-power battery reading was heard, if any."""
+    times = [p.time for p in points if p.battery is not None and p.battery > _POWERED]
+    return max(times, default=None)
+
+
 def _mean(values: Iterable[float | None]) -> float | None:
     """Return the mean of the known values, or ``None`` without any."""
     known = [value for value in values if value is not None]
@@ -393,6 +403,7 @@ def compute_metrics(
         telemetry_per_hour=per_hour(ports.get(PORT_TELEMETRY, 0)),
         positions_per_hour=per_hour(ports.get(PORT_POSITION, 0)),
         battery=_battery(telemetry),
+        battery_powered_time=_powered_time(telemetry),
         channel_utilization=_mean(p.channel_utilization for p in telemetry),
         air_util_tx=_mean(p.air_util_tx for p in telemetry),
         latest_telemetry=telemetry[-1] if telemetry else None,

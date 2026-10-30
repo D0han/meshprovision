@@ -687,9 +687,10 @@ newer of the last reception in the history and `mesh status`'s last seen),
 Every (the node's expected interval, see [`mesh status`](#mesh-status)), Pkt/h, GWs (distinct gateways in the window), Direct (share of direct
 receptions), Hops max/limit (most hops seen / the node's `HopStart`; `?` when
 unknown), SNR median, Top relay (busiest relay byte and its share), Batt (the
-reading the battery rule judges: the newest battery level from the history or
+reading the battery rule judges: the newest battery reading from the history or
 `mesh status` within 24 h, or within the node's stale threshold when longer,
-`powered` for external power; when every reading is older, the newest in
+`powered` when that is external power, so a node plugged in since a low
+reading shows `powered`; when every reading is older, the newest in
 gray), and the first two reasons. **The detailed report** (`NODE`) shows the expected interval, where it came
 from and the stale and offline thresholds it gives, every metric with its
 sample size, the gateways, hop counts, relays (with the node of ours each
@@ -711,8 +712,8 @@ never `--expected-interval`). These are heuristics, not firmware limits:
 |---|---|---|---|
 | not heard (history or `mesh status`) | over its stale threshold (at least 2 h) | over its offline threshold (at least 24 h) | `mesh status`'s own thresholds for the node |
 | never heard in the covered hours | covered hours over its stale threshold | over its offline threshold (fewer: `unknown`, not heard yet) | a node expected every 6 h may be unheard for a few hours of history |
-| battery (newest reading within 24 h, or within its stale threshold when longer; 0% and external power ignored) | at or below 20% | at or below 10% | as `mesh status` colours it |
-| battery trend (6+ readings over 12+ h) | falling 10 points a day or faster | | a node that will be flat within days |
+| battery (newest reading within 24 h, or within its stale threshold when longer, unless it is external power; 0% ignored) | at or below 20% | at or below 10% | as `mesh status` colours it |
+| battery trend (6+ readings over 12+ h; not when the battery reading above is external power) | falling 10 points a day or faster | | a node that will be flat within days |
 | one gateway only (20+ receptions) | yes | | one gateway failing loses the node |
 | boots in the window | 3 or more per 7 days (3 for any window up to a week, 13 for 30 days) | | crashes or brown-outs |
 | mean channel utilization | over 25% | over 40% | firmware delays sends above 25% |

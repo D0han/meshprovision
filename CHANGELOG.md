@@ -504,6 +504,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh health` judges a node's battery by its newest fresh reading even
+  when that is external power: a node plugged in after a low reading (8 %
+  in the history 10 hours ago, `101` from `mesh status` 2 minutes ago) was
+  reported "battery at 8%" (critical) for up to a day, with `8%` in `Batt`.
+  It is now `powered`, without a battery finding (neither low nor
+  draining: the trend of the levels before is not judged on external
+  power); the external-power readings of the history count too (the
+  battery trend still leaves them out).
 - `mesh status`'s Seen By (and `neighbor_count`) no longer count loranet's
   map-report topic (`msh/<region>/2/map/`) or the node's own gateway topic as
   a gateway: a node that only uplinks itself is seen by 0 (its packets still
@@ -536,7 +544,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Every 3h` next to "WARN not heard for 4 h (expected every 1h)", and a
   node learned to be offline did not fail the run.
 - `mesh health`'s `Batt` column and battery line show the reading the battery
-  rule judges (the newest fresh level from the history or `mesh status`, in
+  rule judges (the newest fresh reading from the history or `mesh status`, in
   gray when every reading is too old), so a 5-day-old 60 % from the history no
   longer stands next to "battery at 9%" from a reading an hour old; the
   detailed report says where the reading came from.

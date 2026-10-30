@@ -235,11 +235,33 @@ def test_external_power_and_empty_readings_are_not_battery_levels() -> None:
         TelemetryPoint(_NOW - 50, battery=None, channel_utilization=10.0),
     )
 
-    trend = _metrics(_history(telemetry=telemetry)).battery
+    metrics = _metrics(_history(telemetry=telemetry))
+    trend = metrics.battery
 
     assert trend is not None
     assert (trend.latest, trend.points) == (100, 1)
+    assert metrics.battery_powered_time == _NOW - 300
     assert _metrics(_history(telemetry=telemetry[:2])).battery is None
+
+
+def test_the_newest_external_power_reading_is_kept_apart_from_the_trend() -> None:
+    step = BATTERY_TREND_MIN_SPAN_HOURS * HOUR_SECONDS / (BATTERY_TREND_MIN_POINTS - 1)
+    levels = [90 - index for index in range(BATTERY_TREND_MIN_POINTS)]
+    points = _battery_points(levels, step=step)
+    powered = (
+        TelemetryPoint(_NOW - 2 * step - 1, battery=101),
+        TelemetryPoint(_NOW - 1, battery=101),
+    )
+    mixed = tuple(sorted(points + powered, key=lambda point: point.time))
+
+    metrics = _metrics(_history(telemetry=mixed))
+    levels_only = _metrics(_history(telemetry=points))
+
+    assert metrics.battery == levels_only.battery
+    assert metrics.battery_powered_time == _NOW - 1
+    assert levels_only.battery_powered_time is None
+    outside = (TelemetryPoint(_NOW - _DAY - 1, battery=101),)
+    assert _metrics(_history(telemetry=outside)).battery_powered_time is None
 
 
 def test_utilization_means_and_latest_readings_cover_the_window_only() -> None:

@@ -182,10 +182,14 @@ def test_a_battery_level_that_is_no_reading_is_not_judged(level: int) -> None:
     assert "battery_low" not in _codes(_m(), NodeContext(battery=level, battery_time=_NOW))
 
 
-def test_a_newer_reading_that_is_no_battery_level_does_not_hide_an_older_one() -> None:
-    powered_now = NodeContext(battery=101, battery_time=_NOW - 10)
+def test_a_newer_external_power_reading_ends_an_older_low_level() -> None:
+    """A node plugged in 2 minutes ago was judged by its 8% of 10 hours ago."""
+    powered_now = NodeContext(battery=101, battery_time=_NOW - 120)
 
-    assert _codes(_m(battery=_trend(5, age=100)), powered_now)["battery_low"] is Verdict.CRIT
+    assert "battery_low" not in _codes(_m(battery=_trend(8, age=10 * 3600)), powered_now)
+    assert battery_reading(_m(battery=_trend(8, age=10 * 3600)), powered_now) == (
+        BatteryReading(101, _NOW - 120, BATTERY_FROM_STATUS, fresh=True)
+    )
 
 
 def test_the_battery_reading_is_the_newest_fresh_level_of_history_and_status() -> None:
@@ -202,22 +206,60 @@ def test_the_battery_reading_is_the_newest_fresh_level_of_history_and_status() -
     )
 
 
-def test_a_fresh_battery_level_wins_over_a_newer_external_power_reading() -> None:
-    powered_now = NodeContext(battery=101, battery_time=_NOW - 10)
+def test_a_newer_battery_level_wins_over_an_older_external_power_reading() -> None:
+    powered_before = NodeContext(battery=101, battery_time=_NOW - 10 * 3600)
 
-    assert battery_reading(_m(battery=_trend(5, age=100)), powered_now) == (
-        BatteryReading(5, _NOW - 100, BATTERY_FROM_HISTORY, fresh=True)
+    assert battery_reading(_m(battery=_trend(8, age=3600)), powered_before) == (
+        BatteryReading(8, _NOW - 3600, BATTERY_FROM_HISTORY, fresh=True)
     )
-    assert battery_reading(_m(), powered_now) == (
-        BatteryReading(101, _NOW - 10, BATTERY_FROM_STATUS, fresh=True)
+    assert _codes(_m(battery=_trend(8, age=3600)), powered_before)["battery_low"] is Verdict.CRIT
+    assert battery_reading(_m(), powered_before) == (
+        BatteryReading(101, _NOW - 10 * 3600, BATTERY_FROM_STATUS, fresh=True)
+    )
+
+
+def test_the_history_external_power_reading_competes_with_its_level_on_time() -> None:
+    plugged_in = _m(battery=_trend(8, age=10 * 3600), battery_powered_time=_NOW - 3600)
+    unplugged = _m(battery=_trend(8, age=3600), battery_powered_time=_NOW - 10 * 3600)
+
+    assert battery_reading(plugged_in, NodeContext()) == (
+        BatteryReading(101, _NOW - 3600, BATTERY_FROM_HISTORY, fresh=True)
+    )
+    assert "battery_low" not in _codes(plugged_in)
+    assert battery_reading(unplugged, NodeContext()) == (
+        BatteryReading(8, _NOW - 3600, BATTERY_FROM_HISTORY, fresh=True)
+    )
+    assert battery_reading(_m(battery_powered_time=_NOW - 60), NodeContext()) == (
+        BatteryReading(101, _NOW - 60, BATTERY_FROM_HISTORY, fresh=True)
+    )
+
+
+def test_an_external_power_reading_too_old_to_judge_does_not_hide_a_fresh_level() -> None:
+    old_power = _NOW - BATTERY_FRESH_SECONDS - 1
+    metrics = _m(battery=_trend(8, age=BATTERY_FRESH_SECONDS), battery_powered_time=old_power)
+
+    assert _codes(metrics)["battery_low"] is Verdict.CRIT
+    assert battery_reading(_m(battery_powered_time=old_power), NodeContext()) == (
+        BatteryReading(101, old_power, BATTERY_FROM_HISTORY, fresh=False)
+    )
+
+
+def test_at_the_same_time_external_power_wins_over_a_level() -> None:
+    same_time = NodeContext(battery=101, battery_time=_NOW - 100)
+
+    assert battery_reading(_m(battery=_trend(5, age=100)), same_time) == (
+        BatteryReading(101, _NOW - 100, BATTERY_FROM_STATUS, fresh=True)
     )
 
 
 def test_a_full_battery_is_a_level_not_external_power() -> None:
-    powered_now = NodeContext(battery=101, battery_time=_NOW - 10)
+    powered_before = NodeContext(battery=101, battery_time=_NOW - 200)
 
-    assert battery_reading(_m(battery=_trend(100, age=100)), powered_now) == (
+    assert battery_reading(_m(battery=_trend(100, age=100)), powered_before) == (
         BatteryReading(100, _NOW - 100, BATTERY_FROM_HISTORY, fresh=True)
+    )
+    assert battery_reading(_m(), NodeContext(battery=100, battery_time=_NOW - 10)) == (
+        BatteryReading(100, _NOW - 10, BATTERY_FROM_STATUS, fresh=True)
     )
 
 
@@ -296,6 +338,24 @@ def test_battery_drain_threshold(slope: float | None, expected: Verdict | None) 
     if expected is not None:
         _, findings = assess(metrics, NodeContext())
         assert findings[0].text == "battery falling 10 points a day (8 readings over 20 h)"
+
+
+def test_a_draining_battery_now_on_external_power_is_not_draining() -> None:
+    """Batt 'powered' stood next to 'battery falling 12 points a day'."""
+    draining = _trend(40, age=3600, slope=-12.0)
+
+    plugged_in = _m(battery=draining, battery_powered_time=_NOW - 60)
+    unplugged = _m(battery=draining, battery_powered_time=_NOW - 7200)
+
+    assert "battery_draining" not in _codes(plugged_in)
+    assert "battery_draining" not in _codes(
+        _m(battery=draining), NodeContext(battery=101, battery_time=_NOW - 60)
+    )
+    assert _codes(unplugged)["battery_draining"] is Verdict.WARN
+    stale_power = _m(battery=draining, battery_powered_time=_NOW - BATTERY_FRESH_SECONDS - 1)
+    assert _codes(stale_power)["battery_draining"] is Verdict.WARN
+    full = _m(battery=_trend(100, age=60, slope=-12.0))
+    assert _codes(full)["battery_draining"] is Verdict.WARN
 
 
 @pytest.mark.parametrize(

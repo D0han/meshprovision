@@ -197,8 +197,8 @@ IMPORTANCE_HIGH_SCORE: Final[int] = 5
 IMPORTANCE_MEDIUM_SCORE: Final[int] = 2
 """An importance score of this or more is ``medium``; below it ``low``."""
 
-_FULL_BATTERY: Final[int] = 100
-"""A battery level above this means external power, 0 no reading."""
+_EXTERNAL_POWER: Final[int] = 101
+"""The battery level Meshtastic reports on external power."""
 _GATEWAY_POINTS: Final[int] = 3
 _SOLE_GATEWAY_POINTS: Final[int] = 3
 _DEPENDENT_POINTS: Final[int] = 2
@@ -358,9 +358,12 @@ def battery_reading(metrics: NodeMetrics, context: NodeContext) -> BatteryReadin
     """Return the battery reading to show and judge, from the node's history or ``mesh status``.
 
     A level of 0 or less is no reading (a node without a battery sensor
-    reports 0). The newest fresh battery level wins (the one the battery
-    rule judges); without one, the newest fresh external-power reading;
-    without one, the newest reading, not fresh. A ``mesh status`` level
+    reports 0). The history gives its newest battery level and its newest
+    external-power reading (above 100). The newest fresh reading wins,
+    level or external power, so a node plugged in after a low reading is
+    not judged by that reading (and one unplugged since is judged by its
+    level); at the same time a higher level wins. Without a fresh
+    reading the newest one wins, not fresh. A ``mesh status`` level
     without a time counts only when there is no dated reading, and never
     as fresh. Fresh means not older than :data:`BATTERY_FRESH_SECONDS` or,
     when longer, the node's stale threshold.
@@ -375,13 +378,14 @@ def battery_reading(metrics: NodeMetrics, context: NodeContext) -> BatteryReadin
     readings: list[tuple[float, int, str]] = []
     if metrics.battery is not None and metrics.battery.latest > 0:
         readings.append((metrics.battery.latest_time, metrics.battery.latest, BATTERY_FROM_HISTORY))
+    if metrics.battery_powered_time is not None:
+        readings.append((metrics.battery_powered_time, _EXTERNAL_POWER, BATTERY_FROM_HISTORY))
     status_level = context.battery if context.battery is not None and context.battery > 0 else None
     if status_level is not None and context.battery_time is not None:
         readings.append((context.battery_time, status_level, BATTERY_FROM_STATUS))
     fresh_for = max(BATTERY_FRESH_SECONDS, context.stale_after)
     fresh = [reading for reading in readings if metrics.now - reading[0] <= fresh_for]
-    levels = [reading for reading in fresh if reading[1] <= _FULL_BATTERY]
-    for candidates, is_fresh in ((levels, True), (fresh, True), (readings, False)):
+    for candidates, is_fresh in ((fresh, True), (readings, False)):
         if candidates:
             time, level, source = max(candidates)
             return BatteryReading(level, time, source, is_fresh)
@@ -436,16 +440,18 @@ def _reboots_warn(days: int) -> int:
 
 
 def _battery_findings(metrics: NodeMetrics, context: NodeContext) -> list[Finding]:
-    """Judge the current battery level and its trend."""
+    """Judge the current battery level and its trend (no trend on external power)."""
     findings = []
     level = _current_battery(metrics, context)
+    powered = level is not None and level >= _EXTERNAL_POWER
     if level is not None and level <= BATTERY_CRIT_PERCENT:
         findings.append(Finding(Verdict.CRIT, "battery_low", f"battery at {level}%"))
     elif level is not None and level <= BATTERY_WARN_PERCENT:
         findings.append(Finding(Verdict.WARN, "battery_low", f"battery at {level}%"))
     trend = metrics.battery
     if (
-        trend is not None
+        not powered
+        and trend is not None
         and trend.slope_per_day is not None
         and trend.slope_per_day <= BATTERY_DRAIN_WARN_PER_DAY
     ):

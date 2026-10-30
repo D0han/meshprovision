@@ -184,6 +184,37 @@ def test_the_battery_cell_shows_the_reading_the_battery_rule_judges() -> None:
     assert "Battery: 9% (1 hour ago, from mesh status), " in _detail(health)
 
 
+def test_a_node_plugged_in_after_a_low_reading_shows_powered_without_a_finding() -> None:
+    """A history 8% of 10 hours ago won over a 101 of 2 minutes ago: CRIT 'battery at 8%'."""
+    node = _battery_node(101, timedelta(minutes=2))
+    low = (TelemetryPoint(_T - 10 * 3600, 8),)
+
+    (health,) = assess_nodes(
+        [node], {_A: NodeHistory(node=_A, telemetry=low)}, fleet=[_A], now=_T, days=7
+    )
+
+    assert "battery_low" not in [finding.code for finding in health.findings]
+    assert _row(_report(health))[12] == "powered"
+    assert "Battery: powered (2 minutes ago, from mesh status), " in _detail(health)
+    battery = render.node_health_to_json_dict(health)["metrics"]["battery"]  # type: ignore[index]
+    assert battery["latest"] == 8  # type: ignore[index]
+
+
+def test_an_external_power_reading_in_the_history_shows_powered() -> None:
+    node = MergedNode(node_id=_A)
+    telemetry = (TelemetryPoint(_T - 10 * 3600, 8), TelemetryPoint(_T - 3600, 101))
+
+    (health,) = assess_nodes(
+        [node], {_A: NodeHistory(node=_A, telemetry=telemetry)}, fleet=[_A], now=_T, days=7
+    )
+
+    assert "battery_low" not in [finding.code for finding in health.findings]
+    assert _row(_report(health))[12] == "powered"
+    assert "Battery: powered (1 hour ago, from history), no trend yet over 1 readings" in (
+        _detail(health)
+    )
+
+
 @pytest.mark.parametrize(
     ("node", "battery", "cell"),
     [
@@ -198,8 +229,14 @@ def test_the_battery_cell_shows_the_reading_the_battery_rule_judges() -> None:
         pytest.param(
             _battery_node(101, timedelta(minutes=5)),
             BatteryTrend(42, _T - 600, 1, 0.0, None),
+            "powered",
+            id="newer-powered-over-level",
+        ),
+        pytest.param(
+            _battery_node(101, timedelta(minutes=15)),
+            BatteryTrend(42, _T - 600, 1, 0.0, None),
             "42%",
-            id="level-over-newer-powered",
+            id="newer-level-over-powered",
         ),
         pytest.param(_battery_node(0, timedelta(minutes=5)), None, "-", id="zero"),
     ],
