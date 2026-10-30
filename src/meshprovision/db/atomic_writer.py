@@ -111,7 +111,6 @@ def atomic_write(
     fs_primitives.sweep_stale_temps(
         target.parent,
         fs_primitives.temp_glob(glob.escape(target.name)),
-        min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
     )
 
     tmp_path = fs_primitives.temp_sibling(target.parent, target.name)

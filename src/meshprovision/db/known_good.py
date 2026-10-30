@@ -576,7 +576,6 @@ def refresh_known_good(
             fs_primitives.sweep_stale_temps(
                 resolved_dir,
                 fs_primitives.temp_glob(glob.escape(known_good_name(name))),
-                min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
             )
 
         tmp_destination = fs_primitives.temp_sibling(resolved_dir, destination.name)

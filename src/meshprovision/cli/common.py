@@ -96,7 +96,7 @@ CONTEXT_SETTINGS: Final[dict[str, Any]] = {
 """Shared click context settings for the ``mesh`` group and every subcommand."""
 
 DEFAULT_JSON_INDENT: Final[int] = 2
-"""Default indent width for :func:`echo_json`."""
+"""Indent width of :func:`echo_json`."""
 
 _ERR_CONSOLE: Final[Console] = Console(stderr=True)
 """Module-level stderr console used by :func:`_emit_error`."""
@@ -161,7 +161,7 @@ def build_settings(
     return load_settings(env_file=env_file, overrides=overrides)
 
 
-def echo_json(payload: object, *, indent: int = DEFAULT_JSON_INDENT) -> None:
+def echo_json(payload: object) -> None:
     r"""Print a JSON document to STDOUT.
 
     Always ``click.echo`` to STDOUT, never a rich ``Console`` -- so
@@ -172,10 +172,10 @@ def echo_json(payload: object, *, indent: int = DEFAULT_JSON_INDENT) -> None:
     Args:
         payload: The value to serialize. Anything ``json.dumps`` cannot
             natively encode (a ``datetime``, a ``Path``, ...) is rendered
-            via ``str()`` rather than raising.
-        indent: The indentation width to pass to ``json.dumps``.
+            via ``str()`` rather than raising. Indented by
+            :data:`DEFAULT_JSON_INDENT`.
     """
-    click.echo(json_dumps_safe(payload, indent=indent, default=str))
+    click.echo(json_dumps_safe(payload, indent=DEFAULT_JSON_INDENT, default=str))
 
 
 def _parse_node_id_param(value: str, param: click.Parameter) -> NodeId:

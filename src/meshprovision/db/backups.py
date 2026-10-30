@@ -465,7 +465,6 @@ def create_backup(
         fs_primitives.sweep_stale_temps(
             resolved_dir,
             fs_primitives.temp_glob(_backup_glob(name_target)),
-            min_age_seconds=fs_primitives.STALE_TEMP_MIN_AGE_SECONDS,
         )
 
     when = _monotonic_backup_time(target, resolved_dir, _normalize_utc(now), from_clock=now is None)

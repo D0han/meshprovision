@@ -100,9 +100,7 @@ FUSE/SMB/old NFS mounts return the others. Anything else (``EIO``,
 """
 
 
-def sweep_stale_temps(
-    directory: Path, pattern: str, *, min_age_seconds: float = STALE_TEMP_MIN_AGE_SECONDS
-) -> int:
+def sweep_stale_temps(directory: Path, pattern: str) -> int:
     """Best-effort removal of orphaned temp files left by a killed writer.
 
     Never raises: a temp file that vanishes mid-sweep (lost to another
@@ -110,10 +108,11 @@ def sweep_stale_temps(
     skipped, since failing to tidy up must never fail the write this
     sweep is running alongside.
 
-    Age is measured as ``now - max(st_mtime, st_ctime)``, not by mtime
-    alone. ``shutil.copy2`` restores the source database's mtime onto a
-    backup temp, so an in-flight backup of a month-old database carries
-    a month-old mtime the moment it is created; ``st_ctime`` is bumped
+    A match younger than :data:`STALE_TEMP_MIN_AGE_SECONDS` (read at call
+    time) is kept. Age is measured as ``now - max(st_mtime, st_ctime)``,
+    not by mtime alone. ``shutil.copy2`` restores the source database's
+    mtime onto a backup temp, so an in-flight backup of a month-old
+    database carries a month-old mtime the moment it is created; ``st_ctime`` is bumped
     by that same ``copystat`` and cannot be moved backwards from
     userspace, so taking the newer of the two errs towards keeping a
     file that might still be live.
@@ -125,8 +124,6 @@ def sweep_stale_temps(
             names -- unlike the stdlib ``glob`` module,
             :meth:`pathlib.Path.glob` matches dotfiles when the pattern
             does.
-        min_age_seconds: Minimum age, in seconds, before a match is
-            removed.
 
     Returns:
         The number of files actually removed. Every call site ignores
@@ -137,7 +134,7 @@ def sweep_stale_temps(
     for path in directory.glob(pattern):
         try:
             stat_result = path.stat()
-            if now - max(stat_result.st_mtime, stat_result.st_ctime) < min_age_seconds:
+            if now - max(stat_result.st_mtime, stat_result.st_ctime) < STALE_TEMP_MIN_AGE_SECONDS:
                 continue
             path.unlink()
         except OSError as exc:
