@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -143,6 +144,34 @@ def test_the_exit_code_is_degraded_only_for_a_critical_node_or_a_failure() -> No
     failed = RefreshOutcome(histories={}, failures=(RefreshFailure(_A, "429"),))
     assert _report(refresh=failed).exit_code() == degraded
     assert _report(refresh=RefreshOutcome(histories={})).exit_code() == 0
+
+
+@pytest.mark.parametrize(
+    ("record", "verdict", "fetched", "code"),
+    [
+        pytest.param(NodeRecord(node_id=_A.hex), Verdict.UNKNOWN, True, 7, id="unseen"),
+        pytest.param(NodeRecord(node_id=_A.hex), Verdict.UNKNOWN, False, 0, id="not-fetched"),
+        pytest.param(NodeRecord(node_id=_A.hex), Verdict.OK, True, 0, id="seen"),
+        pytest.param(None, Verdict.UNKNOWN, True, 0, id="not-in-database"),
+        pytest.param(
+            NodeRecord(node_id=_A.hex, archived_at=datetime(2026, 1, 1, tzinfo=UTC)),
+            Verdict.UNKNOWN,
+            True,
+            0,
+            id="archived",
+        ),
+    ],
+)
+def test_a_database_node_no_source_has_seen_exits_seven(
+    record: NodeRecord | None, verdict: Verdict, fetched: bool, code: int
+) -> None:
+    """A db node no history or source heard was 'unknown' and exited 0, unlike mesh status."""
+    (health,) = _report(verdict).nodes
+    node = dataclasses.replace(health, node=dataclasses.replace(health.node, record=record))
+
+    report = HealthReport(generated_at=_NOW, days=7, fetched=fetched, nodes=(node,))
+
+    assert report.exit_code() == code
 
 
 def test_without_fetching_there_are_no_failures() -> None:

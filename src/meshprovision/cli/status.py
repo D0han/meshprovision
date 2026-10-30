@@ -317,7 +317,7 @@ def _watch_loop(
         client: The already-open HTTP client shared by every poll.
         poll: Seconds to sleep between polls.
         json_output: Emit JSON instead of the table.
-        fail_on_offline: Count offline nodes toward the exit code.
+        fail_on_offline: Count offline and unseen nodes toward the exit code.
         detail: The ``--detail`` level, shared by every poll.
 
     Raises:
@@ -464,7 +464,10 @@ def _watch_loop(
 @click.option(
     "--fail-on-offline/--no-fail-on-offline",
     default=True,
-    help="Whether an offline node makes the exit code non-zero.",
+    help=(
+        "Whether an offline node, or a database node no source gives a last-seen time for, "
+        "makes the exit code non-zero."
+    ),
 )
 @pass_cli
 @handle_cli_errors
@@ -512,7 +515,7 @@ def status(
         detail: The table's columns, from ``--detail``.
         history_refresh: Whether stale histories are refreshed for the trend
             arrows, from ``--history-refresh``/``--no-history-refresh``.
-        fail_on_offline: Whether an offline node degrades the exit code,
+        fail_on_offline: Whether an offline or unseen node degrades the exit code,
             from ``--fail-on-offline``/``--no-fail-on-offline``.
 
     Raises:

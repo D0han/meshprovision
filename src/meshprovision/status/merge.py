@@ -295,6 +295,15 @@ class MergedNode:
         return self.record is not None
 
     @property
+    def in_active_database(self) -> bool:
+        """Whether this node has a row in the ``Nodes`` sheet that is not archived.
+
+        Returns:
+            ``True`` if :attr:`record` is not ``None`` and not archived.
+        """
+        return self.record is not None and not self.record.is_archived
+
+    @property
     def observed(self) -> bool:
         """Whether any data source observed this node.
 

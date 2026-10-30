@@ -169,14 +169,19 @@ class HealthReport:
         return () if self.refresh is None else self.refresh.failures
 
     def exit_code(self) -> int:
-        """The exit code: :attr:`ExitCode.STATUS_DEGRADED` on a critical node or any failure.
+        """The exit code: :attr:`ExitCode.STATUS_DEGRADED` on a critical or unseen node or failure.
 
         Returns:
-            7 when any node's verdict is critical or any source or refresh
-            failed, else 0.
+            7 when any node's verdict is critical, any source or refresh
+            failed or, when the sources were asked, a database node's (not
+            archived) verdict is unknown (no history heard it and no source
+            gives a last-seen time for it), else 0.
         """
         critical = any(node.verdict is Verdict.CRIT for node in self.nodes)
-        if critical or self.source_failures or self.refresh_failures:
+        unseen = self.fetched and any(
+            node.verdict is Verdict.UNKNOWN and node.node.in_active_database for node in self.nodes
+        )
+        if critical or unseen or self.source_failures or self.refresh_failures:
             return int(ExitCode.STATUS_DEGRADED)
         return int(ExitCode.OK)
 

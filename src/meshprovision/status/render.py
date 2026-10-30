@@ -753,6 +753,7 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
                 "generated_at": "2026-08-25T03:14:10Z",
                 "thresholds": {"stale_after_seconds": 7200, "offline_after_seconds": 86400},
                 "counts": {"online": 3, "stale": 1, "offline": 0, "unknown": 2},
+                "unseen": 1,
                 "cache": {"hits": 2, "misses": 1, "network_requests": 1},
                 "data_as_of": {"loranet": "2026-08-25T02:58:03Z"},
                 "failures": [{"source": "lorastats", "message": "...", "hint": None}],
@@ -775,6 +776,7 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
             "offline_after_seconds": int(report.thresholds.offline_after.total_seconds()),
         },
         "counts": {availability.value: counts[availability] for availability in Availability},
+        "unseen": report.unseen,
         "cache": {
             "hits": report.cache_hits,
             "misses": report.cache_misses,

@@ -266,6 +266,23 @@ class StatusReport:
         return any(node.availability is Availability.OFFLINE for node in self.nodes)
 
     @property
+    def unseen(self) -> int:
+        """How many reported database nodes no source gives a last-seen time for.
+
+        Returns:
+            The nodes classified
+            :attr:`~meshprovision.status.merge.Availability.UNKNOWN` (no
+            source observed them, or none that did says when they were
+            last seen) whose database record is not archived; a ``--node``
+            that is not in the database, or is archived, is not counted.
+        """
+        return sum(
+            1
+            for node in self.nodes
+            if node.availability is Availability.UNKNOWN and node.in_active_database
+        )
+
+    @property
     def degraded(self) -> bool:
         """Whether this report represents a degraded run.
 
@@ -284,9 +301,10 @@ class StatusReport:
         example).
 
         Returns:
-            ``True`` if :attr:`has_offline`, any source failed, any
-            source skipped an entry it could not parse, or any source
-            reported a field it could not coerce.
+            ``True`` if :attr:`has_offline`, a database node is
+            :attr:`unseen`, any source failed, any source skipped an
+            entry it could not parse, or any source reported a field it
+            could not coerce.
         """
         return self._is_degraded(fail_on_offline=True)
 
@@ -299,11 +317,12 @@ class StatusReport:
         a status report built from an incomplete or partially-dropped
         source is not fully trustworthy either way -- see
         :attr:`degraded` for why this has no magnitude threshold. An
-        offline node only does so when ``fail_on_offline`` is true.
+        offline node, or a database node without a last-seen time
+        (:attr:`unseen`), only does so when ``fail_on_offline`` is true.
 
         Args:
-            fail_on_offline: Whether an offline node should count as
-                degraded for this call.
+            fail_on_offline: Whether an offline or unseen node should
+                count as degraded for this call.
 
         Returns:
             :attr:`~meshprovision.errors.ExitCode.STATUS_DEGRADED` when
@@ -317,17 +336,19 @@ class StatusReport:
         """The one degraded-run rule behind :attr:`degraded` and :meth:`exit_code`.
 
         Args:
-            fail_on_offline: Whether an offline node counts as degraded.
+            fail_on_offline: Whether an offline or unseen node counts as
+                degraded.
 
         Returns:
             ``True`` if any source failed, skipped an entry or failed to
-            coerce a field, or (when ``fail_on_offline``) a node is offline.
+            coerce a field, or (when ``fail_on_offline``) a node is offline
+            or a database node is unseen.
         """
         return (
             bool(self.failures)
             or bool(self.skipped_entries)
             or bool(self.field_coercions)
-            or (fail_on_offline and self.has_offline)
+            or (fail_on_offline and (self.has_offline or bool(self.unseen)))
         )
 
     def summary(self) -> str:
@@ -335,15 +356,19 @@ class StatusReport:
 
         Returns:
             For example ``"5 node(s): 3 online, 1 stale, 0 offline, 1
-            unknown; data as of loranet 14:28:03 CEST, lorastats
-            14:32:10 CEST; 1 source failure(s); 12 unparsable entrie(s)
-            from loranet"``. The ``data as of`` clause is omitted
-            entirely when :attr:`data_as_of` is empty (every source
-            failed before issuing a request, or none were queried).
+            unknown; 1 database node(s) without a last-seen time; data as
+            of loranet 14:28:03 CEST, lorastats 14:32:10 CEST; 1 source
+            failure(s); 12 unparsable entrie(s) from loranet"``. The
+            ``without a last-seen time`` clause (:attr:`unseen`) is omitted
+            when there is none, and the ``data as of`` clause entirely when
+            :attr:`data_as_of` is empty (every source failed before issuing
+            a request, or none were queried).
         """
         counts = self.counts
         breakdown = ", ".join(f"{counts[avail]} {avail.value}" for avail in _ALL_AVAILABILITIES)
         text = f"{len(self.nodes)} node(s): {breakdown}"
+        if self.unseen:
+            text += f"; {self.unseen} database node(s) without a last-seen time"
         if self.data_as_of:
             # Each entry states its own zone (never a single trailing
             # abbreviation derived from generated_at): a cached entry's

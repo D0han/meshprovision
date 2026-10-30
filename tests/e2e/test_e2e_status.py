@@ -100,6 +100,27 @@ def test_json_run_reports_an_online_node(
     _scan_document(document)
 
 
+def test_a_database_node_no_source_has_seen_exits_seven(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """A provisioned node neither source reports was 'unknown' with exit 0 (docs promise 7)."""
+    from meshprovision.db.nodes import NodeRecord
+
+    _seed_one_node(seed_db, NodeRecord)
+
+    with mock_sources(nodes={}):
+        strict = invoke(runner, ["status", "--json"], env)
+        lenient = invoke(runner, ["status", "--json", "--no-fail-on-offline"], env)
+
+    assert strict.exit_code == 7
+    document = json.loads(strict.stdout)
+    assert (document["counts"]["unknown"], document["unseen"]) == (1, 1)
+    assert lenient.exit_code == 0
+
+
 def test_json_run_carries_the_metrics_time_and_the_seen_by_windows(
     runner: CliRunner,
     env: dict[str, str],

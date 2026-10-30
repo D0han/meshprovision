@@ -727,6 +727,74 @@ def test_status_report_exit_code_with_and_without_fail_on_offline() -> None:
     assert report.exit_code(fail_on_offline=False) == 0
 
 
+def test_a_database_node_no_source_has_seen_exits_seven() -> None:
+    """A db node never seen was UNKNOWN, not offline: exit 0 despite --fail-on-offline."""
+    report = build_report(
+        records={NID: NodeRecord(node_id="deadbe01")},
+        observations_by_source={},
+        node_ids=[NID],
+        now=NOW,
+    )
+
+    assert (report.unseen, report.has_offline) == (1, False)
+    assert report.degraded is True
+    assert report.exit_code(fail_on_offline=True) == 7
+    assert report.exit_code(fail_on_offline=False) == 0
+    assert report.summary() == (
+        "1 node(s): 0 online, 0 stale, 0 offline, 1 unknown; "
+        "1 database node(s) without a last-seen time"
+    )
+    assert render.report_to_json_dict(report)["unseen"] == 1
+
+
+@pytest.mark.parametrize(
+    "records",
+    [
+        pytest.param({}, id="not-in-database"),
+        pytest.param(
+            {NID: NodeRecord(node_id="deadbe01", archived_at=datetime(2026, 1, 1, tzinfo=UTC))},
+            id="archived",
+        ),
+    ],
+)
+def test_an_unseen_node_without_an_active_record_does_not_degrade(
+    records: dict[NodeId, NodeRecord],
+) -> None:
+    report = build_report(records=records, observations_by_source={}, node_ids=[NID], now=NOW)
+
+    assert report.counts[Availability.UNKNOWN] == 1
+    assert report.unseen == 0
+    assert report.exit_code() == 0
+    assert "last-seen" not in report.summary()
+
+
+def test_a_database_node_a_source_reports_without_a_last_seen_time_is_unseen() -> None:
+    report = build_report(
+        records={NID: NodeRecord(node_id="deadbe01")},
+        observations_by_source={SOURCE_LORANET: {NID: _obs(SOURCE_LORANET, last_seen=None)}},
+        node_ids=[NID],
+        now=NOW,
+    )
+
+    assert report.nodes[0].sources
+    assert report.unseen == 1
+    assert report.exit_code() == 7
+
+
+def test_a_seen_database_node_is_not_unseen() -> None:
+    obs = _obs(SOURCE_LORANET, last_seen=NOW - timedelta(minutes=5))
+    report = build_report(
+        records={NID: NodeRecord(node_id="deadbe01")},
+        observations_by_source={SOURCE_LORANET: {NID: obs}},
+        node_ids=[NID],
+        now=NOW,
+    )
+
+    assert report.unseen == 0
+    assert report.exit_code() == 0
+    assert render.report_to_json_dict(report)["unseen"] == 0
+
+
 def test_status_report_exit_code_with_source_failure() -> None:
     report = StatusReport(
         generated_at=NOW,
@@ -993,6 +1061,7 @@ def test_report_to_json_dict_shape() -> None:
         "generated_at",
         "thresholds",
         "counts",
+        "unseen",
         "cache",
         "data_as_of",
         "failures",

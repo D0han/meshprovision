@@ -318,7 +318,7 @@ def test_a_node_lorastats_does_not_know_is_never_asked_about(
 
     result, lorastats = _run(runner, env, mock_sources, [], rows, known=(_A,))
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code == 7, result.output  # a database node no source reports
     assert [r.url.params["fromNode"] for r in lorastats.reports] == [_A]
     assert "1 node(s) without lorastats data" in result.stdout
 

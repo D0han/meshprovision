@@ -566,8 +566,14 @@ takes 1 s up to one week, `--stale-after`/`--offline-after` up to
 1000000 hours and `--expected-interval` up to 48 hours (all above 0); a value
 outside that range, `nan` or `inf` is a usage error (exit code `2`).
 
-`--fail-on-offline` is **on by default**: an offline node, or any source
-failure, exits `7`. Pass `--no-fail-on-offline` to suppress that.
+`--fail-on-offline` is **on by default**: an offline node, a database node no
+source gives a last-seen time for (`unknown`: no source reports it, or none
+that does says when it was last seen; not an archived one, nor a `--node` that
+is not in the database), or any source failure, exits `7`. So does a node
+provisioned moments ago that no source reports yet. Pass
+`--no-fail-on-offline` to suppress that for offline and unseen nodes (a
+source failure still exits `7`). The summary line counts the unseen nodes
+("without a last-seen time") and `--json` gives their number as `unseen`.
 
 **Cache note:** every outbound request goes through the TTL disk cache; a
 second run inside the TTL performs zero network calls. A response that is
@@ -619,8 +625,10 @@ mesh health --refresh           # refresh even if refreshed in the last 10 minut
 
 The regions are those of `mesh status` (`MESHPROVISION_LORASTATS_REGIONS`, else
 lorastats.pl's region list); global `--no-cache` applies to the `mesh status`
-part. Exit code `7` when any node's verdict is `crit` or any source or refresh
-failed, else `0`.
+part. Exit code `7` when any node's verdict is `crit`, any source or refresh
+failed, or (unless `--no-fetch`) a database node that is not archived is
+`unknown` (no history and no source has heard it, as `mesh status` counts it),
+else `0`.
 
 **What it asks, and how often.** `mesh health` first runs the collection of
 `mesh status` for the reported nodes (same requests, same caching, see above).

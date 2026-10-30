@@ -21,6 +21,7 @@ from click.testing import CliRunner
 
 from meshprovision.cli import status as status_cli
 from meshprovision.cli.main import cli
+from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import DbIntegrityError, ExitCode
 from meshprovision.nodeid import NodeId
 from meshprovision.status.merge import Availability, MergedNode, Thresholds
@@ -188,6 +189,30 @@ def test_watch_ctrl_c_after_a_good_poll_exits_with_that_reports_code(
     )
 
     assert result.exit_code == expected
+
+
+def test_watch_ctrl_c_after_a_poll_with_an_unseen_database_node_exits_seven(
+    monkeypatch: pytest.MonkeyPatch, cli_env: dict[str, str]
+) -> None:
+    node = MergedNode(node_id=NodeId.from_hex("a0000001"), record=NodeRecord(node_id="a0000001"))
+    unseen = StatusReport(
+        generated_at=datetime.now(UTC),
+        nodes=(node,),
+        thresholds=Thresholds(),
+    )
+    monkeypatch.setattr(status_cli, "_run_once", lambda *_args: unseen)
+
+    def fake_sleep(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+
+    def run(*flags: str) -> int:
+        args = ["status", "--watch", "--interval", "1", "--json", *flags]
+        return CliRunner().invoke(cli, args, env=cli_env, catch_exceptions=False).exit_code
+
+    assert run() == int(ExitCode.STATUS_DEGRADED)
+    assert run("--no-fail-on-offline") == 0
 
 
 def test_single_shot_status_stays_strict_on_a_db_error(

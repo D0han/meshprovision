@@ -1028,7 +1028,7 @@ def test_status_surfaces_management_across_a_mixed_fleet(
 
     with mock_sources(nodes={}):
         table = invoke(runner, ["status", "--detail", "full"], env)
-    assert table.exit_code == 0
+    assert table.exit_code == 7  # no source reports these database nodes yet
     assert "observed" in table.stdout
 
     verify_result = invoke(runner, ["db", "verify", "--json"], env)
@@ -1542,7 +1542,7 @@ def test_fleet_adopt_heterogeneous_batch(
     before = db_fingerprint(Path(env["MESHPROVISION_DB_PATH"]))
     with mock_sources(nodes={}):
         status_result = invoke(runner, ["status", "--json"], env)
-    assert status_result.exit_code == 0
+    assert status_result.exit_code == 7  # no source reports these database nodes yet
     assert db_fingerprint(Path(env["MESHPROVISION_DB_PATH"])) == before
     assert len(json.loads(status_result.stdout)["nodes"]) == 12
 

@@ -306,6 +306,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh status` exits `7` when a database node (not archived) is `unknown`:
+  no source gives a last-seen time for it (none reports it, or none that
+  does says when it was last seen). It exited `0`, though
+  `--fail-on-offline` promised `7` for a node that cannot be reached, so a
+  node that dropped out of both sources' data passed a cron'd check. A node
+  provisioned moments ago that no source reports yet now exits `7` too;
+  `--no-fail-on-offline` turns this off as it does for offline nodes. A
+  `--node` that is not in the database, or is archived, does not count. The
+  summary line adds "N database node(s) without a last-seen time" and
+  `--json` an `unseen` count. `mesh health` likewise exits `7` for such a
+  node whose verdict is `unknown` (not with `--no-fetch`).
 - `mesh status` (default `--detail`) no longer shows the Node and Mgmt columns
   (`--detail brief` keeps Node, `--detail full` and `--json` keep both), and
   a Batt, Volt, ChUtil or AirTx reading that has a local health history is
