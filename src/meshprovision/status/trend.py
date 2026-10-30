@@ -111,15 +111,15 @@ def metric_trend(
     epsilon: float,
     higher_is_better: bool,
     expected_gap: float | None = None,
-    window: float = BASELINE_WINDOW_SECONDS,
 ) -> Trend | None:
     """Compare the newest reading of a series with the ones before it.
 
-    The baseline is the median of the earlier readings within ``window`` of
-    the newest one. With none there, it is the previous reading, but only when
-    it is at most :data:`MISSED_READING_FACTOR` typical gaps away -- the median
-    gap between the earlier readings, else ``expected_gap`` -- so that no
-    reading was probably missed in between.
+    The baseline is the median of the earlier readings within
+    :data:`BASELINE_WINDOW_SECONDS` of the newest one. With none there, it is
+    the previous reading, but only when it is at most
+    :data:`MISSED_READING_FACTOR` typical gaps away -- the median gap between
+    the earlier readings, else ``expected_gap`` -- so that no reading was
+    probably missed in between.
 
     Args:
         series: ``(time, value)`` readings, in any order.
@@ -127,7 +127,6 @@ def metric_trend(
         higher_is_better: Whether a rising value is an improvement.
         expected_gap: How often the node is expected to report, seconds, when
             the series itself is too short to tell.
-        window: How far before the newest reading the baseline may reach.
 
     Returns:
         The trend of the newest value against the baseline; ``None`` when
@@ -138,7 +137,11 @@ def metric_trend(
         return None
     newest_time, newest = ordered[-1]
     earlier = ordered[:-1]
-    baseline = [value for time, value in earlier if newest_time - window <= time < newest_time]
+    baseline = [
+        value
+        for time, value in earlier
+        if newest_time - BASELINE_WINDOW_SECONDS <= time < newest_time
+    ]
     if not baseline:
         previous_time, previous = earlier[-1]
         if not _is_adjacent(newest_time - previous_time, [t for t, _ in earlier], expected_gap):

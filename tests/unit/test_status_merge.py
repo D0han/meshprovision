@@ -329,7 +329,7 @@ def test_status_table_caption_has_no_empty_state_line_when_nodes_are_listed() ->
     assert "No active nodes" not in caption
 
 
-def test_render_json_indents_by_two_spaces_by_default() -> None:
+def test_render_json_indents_by_two_spaces() -> None:
     text = render.render_json(StatusReport(generated_at=NOW, nodes=(), thresholds=Thresholds()))
 
     assert text.splitlines()[1].startswith('  "')

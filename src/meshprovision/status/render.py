@@ -787,16 +787,15 @@ def report_to_json_dict(report: StatusReport) -> dict[str, object]:
     }
 
 
-def render_json(report: StatusReport, *, indent: int = 2) -> str:
+def render_json(report: StatusReport) -> str:
     r"""Render a status report as a stable, indented JSON string.
 
     Args:
         report: The report to render.
-        indent: ``json.dumps`` indent level.
 
     Returns:
-        ``json_dumps_safe(report_to_json_dict(report), indent=indent)`` --
+        ``json_dumps_safe(report_to_json_dict(report), indent=2)`` --
         non-ASCII names kept literal, terminal control characters
         ``\uNNNN``-escaped -- with insertion-ordered (never sorted) keys.
     """
-    return json_dumps_safe(report_to_json_dict(report), indent=indent)
+    return json_dumps_safe(report_to_json_dict(report), indent=2)
