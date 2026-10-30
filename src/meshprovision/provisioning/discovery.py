@@ -270,14 +270,12 @@ def _to_serial_port_info(port: ListPortInfo) -> SerialPortInfo:
     )
 
 
-def discover_serial_ports(*, include_all: bool = False) -> tuple[SerialPortInfo, ...]:
+def discover_serial_ports() -> tuple[SerialPortInfo, ...]:
     """Enumerate connected serial ports.
 
-    Args:
-        include_all: When ``False`` (the default), ports whose USB vendor
-            id is a known debug-probe id (:data:`EXCLUDED_VIDS`) are
-            dropped. A port whose vendor id is unknown (``None``) is
-            never dropped, regardless of this flag.
+    Ports whose USB vendor id is a known debug-probe id
+    (:data:`EXCLUDED_VIDS`) are dropped; a port whose vendor id is unknown
+    (``None``) never is.
 
     Returns:
         Serial ports sorted with likely Meshtastic devices
@@ -295,10 +293,9 @@ def discover_serial_ports(*, include_all: bool = False) -> tuple[SerialPortInfo,
         ) from exc
 
     infos = [_to_serial_port_info(port) for port in ports]
-    if not include_all:
-        infos = [info for info in infos if info.vid is None or info.vid not in EXCLUDED_VIDS]
-    result = tuple(sorted(infos, key=lambda info: (not info.is_likely_meshtastic, info.device)))
-    _logger.debug("Serial enumeration found %d port(s) (include_all=%s).", len(result), include_all)
+    kept = [info for info in infos if info.vid is None or info.vid not in EXCLUDED_VIDS]
+    result = tuple(sorted(kept, key=lambda info: (not info.is_likely_meshtastic, info.device)))
+    _logger.debug("Serial enumeration found %d port(s).", len(result))
     return result
 
 
@@ -475,7 +472,7 @@ def _parse_port(raw: str) -> int:
     return port
 
 
-def parse_tcp_target(value: str, *, default_port: int = DEFAULT_TCP_PORT) -> TcpTarget:
+def parse_tcp_target(value: str) -> TcpTarget:
     """Parse a ``--host``-style value into a validated :class:`TcpTarget`.
 
     Accepts a bare hostname or IPv4 literal, ``host:port``, a bracketed
@@ -486,8 +483,8 @@ def parse_tcp_target(value: str, *, default_port: int = DEFAULT_TCP_PORT) -> Tcp
     misinterpreted as ``host:port``.
 
     Args:
-        value: The raw value to parse.
-        default_port: Port to use when ``value`` does not specify one.
+        value: The raw value to parse. Without a port it gets
+            :data:`DEFAULT_TCP_PORT`.
 
     Returns:
         The parsed, validated :class:`TcpTarget`.
@@ -509,7 +506,7 @@ def parse_tcp_target(value: str, *, default_port: int = DEFAULT_TCP_PORT) -> Tcp
         host = validate_tcp_host(token[1:closing])
         remainder = token[closing + 1 :]
         if not remainder:
-            return TcpTarget(host, default_port)
+            return TcpTarget(host, DEFAULT_TCP_PORT)
         if remainder.startswith(":"):
             return TcpTarget(host, _parse_port(remainder[1:]))
         raise ConnectionBackendError(
@@ -521,10 +518,10 @@ def parse_tcp_target(value: str, *, default_port: int = DEFAULT_TCP_PORT) -> Tcp
     except ValueError:
         pass
     else:
-        return TcpTarget(validate_tcp_host(token), default_port)
+        return TcpTarget(validate_tcp_host(token), DEFAULT_TCP_PORT)
 
     if ":" in token:
         host_part, _, port_part = token.rpartition(":")
         return TcpTarget(validate_tcp_host(host_part), _parse_port(port_part))
 
-    return TcpTarget(validate_tcp_host(token), default_port)
+    return TcpTarget(validate_tcp_host(token), DEFAULT_TCP_PORT)

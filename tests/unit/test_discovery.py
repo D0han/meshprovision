@@ -190,17 +190,6 @@ def test_discover_serial_ports_excludes_debug_probes_by_default(
     assert "/dev/ttyUSB0" in devices
 
 
-def test_discover_serial_ports_include_all_keeps_debug_probes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    excluded_vid = next(iter(discovery.EXCLUDED_VIDS))
-    fake_ports = [_FakeListPortInfo(device="/dev/ttyACM0", vid=excluded_vid, pid=1)]
-    monkeypatch.setattr(discovery.list_ports, "comports", lambda: fake_ports)
-
-    result = discover_serial_ports(include_all=True)
-    assert any(info.device == "/dev/ttyACM0" for info in result)
-
-
 def test_discover_serial_ports_none_vid_never_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_ports = [_FakeListPortInfo(device="/dev/ttyS0", vid=None, pid=None)]
     monkeypatch.setattr(discovery.list_ports, "comports", lambda: fake_ports)
