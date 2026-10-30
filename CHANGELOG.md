@@ -527,6 +527,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh adopt`'s "already used by node" warning follows name allocation: a
+  name an archived (`mesh db forget`) node had is free and no longer warns,
+  and names differing only in case (`mt01` against `MT01`), which `mesh
+  provision` treats as one name, now do.
 - `mesh provision` compares whole-number settings exactly: a 1e-6 relative
   tolerance meant for the float32 fields made `node_info_broadcast_secs`
   10000005 equal the device's 10000000 and a `position_flags` mask with its

@@ -79,7 +79,13 @@ _TRANSPORT_FLAG_NAMES = "--port/--ble-address/--ble-scan/--host/--interface"
 def _duplicate_name_warnings(
     db_nodes: NodeRepository, *, live_node_id: str, short_name: str, long_name: str
 ) -> tuple[str, ...]:
-    """Check a device's live names against every *other* node in the database.
+    """Check a device's live names against every *other* active node in the database.
+
+    Uses the same notion of a used name as name allocation: archived
+    nodes are skipped (:meth:`~meshprovision.db.nodes.NodeRepository.used_short_names`
+    frees a retired node's names) and names are compared by
+    ``casefold()`` (:func:`~meshprovision.db.nodes.find_next_free_name`
+    treats ``MT01`` and ``mt01`` as one name).
 
     Belongs in the CLI layer rather than
     :func:`meshprovision.provisioning.adopt.build_adoption_report`, which
@@ -100,11 +106,11 @@ def _duplicate_name_warnings(
     """
     warnings: list[str] = []
     for other in db_nodes.all():
-        if other.node_id == live_node_id:
+        if other.node_id == live_node_id or other.is_archived:
             continue
-        if short_name and other.short_name == short_name:
+        if short_name and other.short_name.casefold() == short_name.casefold():
             warnings.append(f"short_name {short_name!r} is already used by node {other.node_id}.")
-        if long_name and other.long_name == long_name:
+        if long_name and other.long_name.casefold() == long_name.casefold():
             warnings.append(f"long_name {long_name!r} is already used by node {other.node_id}.")
     return tuple(warnings)
 

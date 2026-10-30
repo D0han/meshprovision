@@ -1265,6 +1265,44 @@ def test_adopt_does_not_warn_about_two_nodes_both_reporting_an_empty_name(
     assert not any("already used by node" in w for w in warnings)
 
 
+def test_duplicate_name_check_skips_archived_nodes(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    """A retired node's names are free (``used_short_names``), so reusing them is no collision."""
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="aaaa0001",
+                short_name="MT01",
+                long_name="Mesh 01",
+                archived_at=datetime(2026, 1, 1, tzinfo=UTC),
+            )
+        ]
+    )
+    bus.use(FakeMeshInterface("bbbb0002", short_name="MT01", long_name="Mesh 01"))
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    assert result.exit_code == 0
+    warnings = json.loads(result.stdout)["warnings"]
+    assert not any("already used by node" in w for w in warnings)
+
+
+def test_duplicate_name_check_ignores_case(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
+) -> None:
+    """Names differing only in case are one name to the allocator, so they collide here too."""
+    seed_db(nodes=[NodeRecord(node_id="aaaa0001", short_name="MT01", long_name="Mesh 01")])
+    bus.use(FakeMeshInterface("bbbb0002", short_name="mt01", long_name="MESH 01"))
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes", "--json"], env)
+
+    assert result.exit_code == 0
+    warnings = json.loads(result.stdout)["warnings"]
+    assert any("short_name 'mt01'" in w and "aaaa0001" in w for w in warnings)
+    assert any("long_name 'MESH 01'" in w and "aaaa0001" in w for w in warnings)
+
+
 def test_duplicate_name_check_skips_self_without_skipping_the_nodes_after_it(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, seed_db: Callable[..., Path]
 ) -> None:
