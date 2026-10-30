@@ -64,7 +64,6 @@ def test_an_empty_history_has_no_metrics() -> None:
     assert metrics.direct_share is None
     assert metrics.decoded_share is None
     assert metrics.hops_max is None
-    assert metrics.hops_median is None
     assert metrics.top_relay is None
     assert metrics.battery is None
     assert metrics.snr_median is None
@@ -134,7 +133,7 @@ def test_hops_and_hop_start_come_from_the_decoded_sample() -> None:
     metrics = _metrics(history)
 
     assert dict(metrics.hops) == {0: 1, 1: 3, 3: 1}
-    assert (metrics.hop_samples, metrics.hops_max, metrics.hops_median) == (5, 3, 1)
+    assert (metrics.hop_samples, metrics.hops_max) == (5, 3)
     assert metrics.decoded_share == 0.5
     assert (metrics.hop_start, metrics.hop_start_samples) == (3, 6)
     tie = _history(HourBucket(_H, hop_starts=MappingProxyType({3: 2, 7: 2})))
@@ -264,7 +263,7 @@ def test_the_newest_external_power_reading_is_kept_apart_from_the_trend() -> Non
     assert _metrics(_history(telemetry=outside)).battery_powered_time is None
 
 
-def test_utilization_means_and_latest_readings_cover_the_window_only() -> None:
+def test_utilization_means_cover_the_window_only() -> None:
     telemetry = (
         TelemetryPoint(_NOW - _DAY - 1, channel_utilization=90.0, air_util_tx=90.0),
         TelemetryPoint(_NOW - _DAY, channel_utilization=10.0, air_util_tx=1.0),
@@ -276,7 +275,6 @@ def test_utilization_means_and_latest_readings_cover_the_window_only() -> None:
 
     assert metrics.channel_utilization == 15.0
     assert metrics.air_util_tx == 1.0
-    assert metrics.latest_telemetry == telemetry[2]
 
 
 def test_series_and_lists_are_cut_to_the_window() -> None:

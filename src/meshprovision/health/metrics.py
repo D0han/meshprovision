@@ -164,7 +164,6 @@ class NodeMetrics:
             (external power) in the window was heard, epoch seconds.
         channel_utilization: Mean channel utilization of the readings.
         air_util_tx: Mean transmit air utilization of the readings.
-        latest_telemetry: The newest telemetry reading in the window.
         latest_local_stats: The newest local-stats counters in the window.
         position: The newest position in the window.
         nodeinfo: The newest node info.
@@ -206,7 +205,6 @@ class NodeMetrics:
     battery_powered_time: float | None = None
     channel_utilization: float | None = None
     air_util_tx: float | None = None
-    latest_telemetry: TelemetryPoint | None = None
     latest_local_stats: LocalStatsPoint | None = None
     position: PositionPoint | None = None
     nodeinfo: NodeInfoSeen | None = None
@@ -228,11 +226,6 @@ class NodeMetrics:
     def hops_max(self) -> int | None:
         """The most hops any sampled reception took."""
         return max(self.hops) if self.hops else None
-
-    @property
-    def hops_median(self) -> int | None:
-        """The median hop count of the sampled receptions."""
-        return quantile(self.hops, 0.5)
 
     @property
     def other_gateway_count(self) -> int:
@@ -412,7 +405,6 @@ def compute_metrics(
         battery_powered_time=_powered_time(telemetry),
         channel_utilization=_mean(p.channel_utilization for p in telemetry),
         air_util_tx=_mean(p.air_util_tx for p in telemetry),
-        latest_telemetry=telemetry[-1] if telemetry else None,
         latest_local_stats=local_stats[-1] if local_stats else None,
         position=positions[-1] if positions else None,
         nodeinfo=history.nodeinfo,
