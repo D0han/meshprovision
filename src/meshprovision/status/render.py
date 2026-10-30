@@ -406,17 +406,20 @@ def _seen_by_cell(
         dim hyphen when no source reported ``seenBy``. A node that uplinks
         its own packets is followed by :data:`SELF_UPLINK_MARK`: green when
         it did within :data:`SELF_UPLINK_RECENT`, dim up to
-        :data:`SELF_UPLINK_SHOWN`, none when older or never.
+        :data:`SELF_UPLINK_SHOWN`, none when older or never. A marked node
+        no other gateway relayed in 30 days gets the warning style, not
+        the alarm style: it is still heard (through itself), only alone.
     """
     if counts is None:
         return _cell(_DASH, _UNKNOWN_STYLE)
     day, week, month = counts
-    flag = _ALARM_STYLE if month == 0 else _WARN_STYLE if week == 0 else None
+    age = None if self_uplink_seen is None else now - self_uplink_seen
+    marked = age is not None and age <= SELF_UPLINK_SHOWN
+    alarm = month == 0 and not marked
+    flag = _ALARM_STYLE if alarm else _WARN_STYLE if week == 0 else None
     cell = _cell(f"{day}/{week}/{month}", flag)
-    if self_uplink_seen is not None:
-        age = now - self_uplink_seen
-        if age <= SELF_UPLINK_SHOWN:
-            cell.append(SELF_UPLINK_MARK, style="green" if age <= SELF_UPLINK_RECENT else "grey50")
+    if age is not None and marked:
+        cell.append(SELF_UPLINK_MARK, style="green" if age <= SELF_UPLINK_RECENT else "grey50")
     return cell
 
 

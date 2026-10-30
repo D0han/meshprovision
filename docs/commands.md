@@ -542,7 +542,8 @@ suspicious is drawn bold orange, and an alarming one bold red, whatever its
 age: battery at or below 20% / 10%, voltage at or below 3.5 V / 3.3 V,
 channel utilization above 25% / 40%, transmit air utilization above 5% / 10%.
 `Seen By` is orange when no gateway relayed the node for a week and red when
-none did for a month; `Uptime` is orange under an hour (a recent reboot) and
+none did for a month, unless it uplinks itself (marked `@`): then it stays
+orange, heard but by no other gateway; `Uptime` is orange under an hour (a recent reboot) and
 gray for a node that is not online.
 These thresholds are heuristics, not firmware limits.
 

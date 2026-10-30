@@ -615,13 +615,28 @@ def test_a_future_self_uplink_counts_as_recent() -> None:
     assert _mark_style(_marked(timedelta(minutes=-5))) == "green"
 
 
-def test_the_mark_keeps_the_count_style_and_needs_counts() -> None:
-    flagged = _marked(timedelta(hours=1), (0, 0, 0))
-    unknown = _marked(timedelta(hours=1), None)
+def test_the_mark_needs_counts() -> None:
+    assert _marked(timedelta(hours=1), (0, 0, 0)).plain == "0/0/0@"
+    assert _marked(timedelta(hours=1), None).plain == "-"
 
-    assert flagged.style == ALARM
-    assert flagged.plain == "0/0/0@"
-    assert unknown.plain == "-"
+
+@pytest.mark.parametrize(
+    ("age", "counts", "style"),
+    [
+        (timedelta(hours=1), (0, 0, 0), WARN),
+        (timedelta(days=30), (0, 0, 0), WARN),
+        (timedelta(days=30, seconds=1), (0, 0, 0), ALARM),
+        (None, (0, 0, 0), ALARM),
+        (timedelta(hours=1), (0, 0, 3), WARN),
+        (timedelta(hours=1), (1, 1, 1), ""),
+    ],
+    ids=["recent", "30d", "over-30d", "never", "not-this-week", "healthy"],
+)
+def test_a_node_heard_only_through_itself_is_warned_not_alarmed(
+    age: timedelta | None, counts: tuple[int, int, int], style: str
+) -> None:
+    """A self-uplinking node no other gateway relayed was drawn red, like a dead one."""
+    assert _marked(age, counts).style == style
 
 
 def test_self_uplink_seen_is_merged_and_in_the_json() -> None:

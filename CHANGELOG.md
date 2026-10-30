@@ -306,6 +306,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh status` draws the Seen By counts of a node that uplinks itself
+  (marked `@`) but no other gateway relayed in 30 days bold orange, not the
+  bold red of a node nobody hears: `0/0/0@` is a node heard only through its
+  own MQTT link, not an outage. Without a mark (or one over 30 days old)
+  `0/0/0` stays red.
 - `mesh status` exits `7` when a database node (not archived) is `unknown`:
   no source gives a last-seen time for it (none reports it, or none that
   does says when it was last seen). It exited `0`, though
