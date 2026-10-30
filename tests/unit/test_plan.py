@@ -702,6 +702,69 @@ def test_values_equal_bool_vs_int_and_float_tolerance() -> None:
     assert values_equal("a", "a") is True
 
 
+@pytest.mark.parametrize(
+    ("current", "desired", "expected"),
+    [
+        (10000000, 10000005, False),
+        (3600000, 3600001, False),
+        (1048576, 1048577, False),
+        (1, 1, True),
+        (0.1, 0.1 + 1e-9, True),
+        (3, 3.0, True),
+        (5, 5.000001, True),
+    ],
+    ids=[
+        "large-interval",
+        "hour-in-ms",
+        "flag-bit",
+        "same-int",
+        "float-tolerance",
+        "int-vs-float",
+        "int-vs-float32-readback",
+    ],
+)
+def test_values_equal_compares_two_ints_exactly(
+    current: object, desired: object, *, expected: bool
+) -> None:
+    """Two ints compare exactly; only a float on either side gets the float32 tolerance.
+
+    ``rel_tol=1e-6`` made 10000000 equal 10000005 and a mask with its bit 0
+    set equal one without it (1048577 vs 1048576, 9.5e-7 apart).
+    """
+    from meshprovision.provisioning.plan import values_equal
+
+    assert values_equal(current, desired) is expected
+
+
+def test_large_int_field_one_apart_is_planned(make_live, template) -> None:
+    """A uint32 field differing in its lowest digit is a change to write."""
+    template2 = template.model_copy(
+        update={
+            "position": template.position.model_copy(update={"position_flags": 1048577}),
+            "device": template.device.model_copy(update={"node_info_broadcast_secs": 10000005}),
+        }
+    )
+    live = make_live(
+        template2,
+        section_overrides={
+            "position": {"position_flags": 1048576},
+            "device": {"node_info_broadcast_secs": 10000000},
+        },
+        security=make_security(empty=True),
+    )
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+
+    plan = build_plan(inputs)
+
+    changes = {
+        (s.section, c.field): (c.current, c.desired) for s in plan.sections for c in s.changes
+    }
+    assert changes[("position", "position_flags")] == (1048576, 1048577)
+    assert changes[("device", "node_info_broadcast_secs")] == (10000000, 10000005)
+
+
 def test_values_equal_float_tolerance_boundary() -> None:
     """Pins down the abs_tol=1e-9 boundary.
 

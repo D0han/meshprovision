@@ -195,6 +195,31 @@ def test_verify_plan_int_one_against_desired_true_is_unconfirmed(make_live) -> N
     assert tx_result.status == WriteStatus.UNCONFIRMED
 
 
+def test_verify_plan_large_int_one_off_after_write_is_unconfirmed(make_live) -> None:
+    """A uint32 read back one off the written value is a failed write, not a match."""
+    template = _template()
+    template2 = template.model_copy(
+        update={"device": template.device.model_copy(update={"node_info_broadcast_secs": 10000005})}
+    )
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+    plan = build_plan(inputs)
+
+    live_after = make_live(
+        template2,
+        short_name=plan.name_change.desired_short_name,
+        long_name=plan.name_change.desired_long_name,
+        section_overrides={"device": {"node_info_broadcast_secs": 10000000}},
+        security=make_security(empty=True),
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+    result = next(r for r in results if r.field == "node_info_broadcast_secs")
+    assert result.status == WriteStatus.UNCONFIRMED
+    assert (result.expected, result.actual) == ("10000005", "10000000")
+
+
 def test_verify_plan_default_channel_confirmed_against_live_default_channel(make_live) -> None:
     """default_channel must be read off live_after.default_channel, not the generic value() path.
 

@@ -520,6 +520,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` compares whole-number settings exactly: a 1e-6 relative
+  tolerance meant for the float32 fields made `node_info_broadcast_secs`
+  10000005 equal the device's 10000000 and a `position_flags` mask with its
+  lowest bit set (1048577) equal one without it, so such a change was never
+  planned, and a write that read back one off was confirmed. Only
+  `lora.frequency_offset` and `power.adc_multiplier_override` keep the
+  tolerance.
 - A node that moved to another lorastats region (re-provisioned, say) is
   reported from its new region: the region remembered for it, or the first
   one in the list that knew it, answered with the record it left behind, 20

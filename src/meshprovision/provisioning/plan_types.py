@@ -63,8 +63,10 @@ def values_equal(current: object, desired: object) -> bool:
     Returns:
         ``True`` when the two should be treated as equal. A ``bool`` on
         either side requires the other side to also be a ``bool`` (this
-        guards against ``True == 1``); a ``float`` on either side (with
-        both sides otherwise numeric) uses ``math.isclose`` with
+        guards against ``True == 1``); two ``int`` values compare exactly
+        (a uint32 interval or a bit-flag mask differing in its lowest
+        digits is a real change); a ``float`` on either side (with both
+        sides otherwise numeric) uses ``math.isclose`` with
         ``rel_tol=1e-6``/``abs_tol=1e-9``; everything else uses plain
         ``==``. ``rel_tol`` is set to float32 precision (with a wide
         margin), not float64: every template float field maps to a
@@ -77,6 +79,8 @@ def values_equal(current: object, desired: object) -> bool:
     if current_is_bool or desired_is_bool:
         if current_is_bool != desired_is_bool:
             return False
+        return current == desired
+    if isinstance(current, int) and isinstance(desired, int):
         return current == desired
     if isinstance(current, int | float) and isinstance(desired, int | float):
         return math.isclose(float(current), float(desired), rel_tol=1e-6, abs_tol=1e-9)
