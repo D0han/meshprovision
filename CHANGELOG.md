@@ -527,6 +527,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A carriage return in a text cell (a node name set with one from an app,
+  which `mesh adopt` and `mesh provision` record as read; or `notes`) no
+  longer makes the database unloadable: odfpy wrote it as an invalid
+  character reference, `save` succeeded, and every later command failed on
+  the file (the backup taken before the write was intact). `\r\n` and `\r`
+  are now stored as `\n`, and any other control character or code point a
+  spreadsheet cannot hold (lone surrogates and non-characters included)
+  becomes `�` (U+FFFD) on save and on load, so a value reads back as it was
+  written. `save` now also loads the new content in memory before
+  writing and refuses to replace the database with anything that would not
+  load (no extra cost: it was parsed after writing before).
 - `--host` refuses a mistyped IPv4 address (`1.2.3.256`, `192.168.1`, `123`,
   `192.168.1.50.` with a trailing dot) instead of taking it for a hostname to
   look up, and a hostname with a line break inside it (`host\n.example`);

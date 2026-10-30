@@ -33,11 +33,44 @@ from meshprovision.errors import (
 from meshprovision.nodeid import NodeId
 
 __all__ = [
+    "sanitize_text",
     "validate_cell",
     "validate_row",
 ]
 
 _INT_PATTERN: Final[re.Pattern[str]] = re.compile(r"-?[0-9]+")
+
+_UNWRITABLE_CHARS: Final[re.Pattern[str]] = re.compile(
+    "[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x84\x86-\x9f\ud800-\udfff\ufffe\uffff"
+    + "".join(f"{chr(plane << 16 | 0xFFFE)}-{chr(plane << 16 | 0xFFFF)}" for plane in range(1, 17))
+    + "]"
+)
+"""Characters odfpy 1.4.1 writes as U+FFFD: XML 1.0's illegal characters (C0 controls
+other than tab, line feed and carriage return; lone surrogates; U+FFFE/U+FFFF) and its
+discouraged ones (C1 controls other than U+0085; each plane's last two code points)."""
+
+_REPLACEMENT_CHAR: Final[str] = "\ufffd"
+
+
+def sanitize_text(value: str) -> str:
+    r"""Make cell text safe to write to, and stable when read back from, ``content.xml``.
+
+    ``\r\n`` and a lone ``\r`` become ``\n`` (odfpy 1.4.1 writes ``\r`` as
+    the character reference ``&#12;``, which no XML parser loads, so a single
+    carriage return made the whole database unloadable); every character
+    odfpy itself writes as U+FFFD (:data:`_UNWRITABLE_CHARS`: the other C0
+    controls, most C1 controls, lone surrogates, non-characters) becomes
+    U+FFFD here already, so the value read back equals the value written.
+    Identity for any other text.
+
+    Args:
+        value: The cell text.
+
+    Returns:
+        The sanitized text.
+    """
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    return _UNWRITABLE_CHARS.sub(_REPLACEMENT_CHAR, normalized)
 
 
 def _validate_node_id(sheet: str, row: int, spec: schema.ColumnSpec, stripped: str) -> str:
@@ -447,7 +480,7 @@ def validate_cell(*, sheet: str, row: int, spec: schema.ColumnSpec, value: str) 
             )
         return ""
     if spec.kind is schema.ColumnKind.TEXT:
-        return stripped
+        return sanitize_text(stripped)
     if spec.kind is schema.ColumnKind.NODE_ID:
         return _validate_node_id(sheet, row, spec, stripped)
     if spec.kind is schema.ColumnKind.ENUM:

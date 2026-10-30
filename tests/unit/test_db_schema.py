@@ -162,6 +162,41 @@ def test_cell_patterns_match_the_whole_value(validator, column: str, value: str)
         validator("Nodes", 2, spec, value)
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("a\r\nb\rc", "a\nb\nc"),
+        ("a\x01b\x9fc\udfffd\uffffe", "a\ufffdb\ufffdc\ufffdd\ufffde"),
+        ("Zażółć\tgęślą\njaźń \x85", "Zażółć\tgęślą\njaźń \x85"),
+    ],
+    ids=["line-breaks", "unwritable", "unchanged"],
+)
+def test_sanitize_text(value: str, expected: str) -> None:
+    assert cell_validation.sanitize_text(value) == expected
+
+
+def test_sanitize_text_replaces_exactly_what_odfpy_replaces() -> None:
+    """Every code point but CR: U+FFFD exactly where odfpy's writer puts one.
+
+    Pins the copy of odfpy's (private) filter in ``_UNWRITABLE_CHARS``, so a
+    value read back equals the value written, and an odfpy upgrade that
+    changes its filter fails here rather than in a user's database.
+    """
+    from odf.element import _handle_unrepresentable
+
+    every = "".join(chr(code) for code in range(0x110000) if code != 0x0D)
+
+    assert cell_validation.sanitize_text(every) == _handle_unrepresentable(every)
+
+
+def test_text_cell_is_sanitized_on_load() -> None:
+    spec = schema.NODES_SHEET_SPEC.column("notes")
+    value = " a\rb\x0bc "
+    assert cell_validation.validate_cell(sheet="Nodes", row=2, spec=spec, value=value) == (
+        "a\nb\ufffdc"
+    )
+
+
 @pytest.mark.parametrize("value", ["-2147483648", "2147483647"])
 def test_gps_alt_accepts_the_int32_range(value: str) -> None:
     spec = schema.NODES_SHEET_SPEC.column("gps_alt")

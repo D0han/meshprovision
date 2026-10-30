@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import io
 import os
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -55,7 +55,7 @@ from odf import table as odf_table
 from odf import text as odf_text
 from odf.opendocument import OpenDocumentSpreadsheet
 
-from meshprovision.db import schema, sorting
+from meshprovision.db import cell_validation, schema, sorting
 from meshprovision.db.atomic_writer import atomic_write
 from meshprovision.db.backups import DEFAULT_RETENTION
 
@@ -210,7 +210,9 @@ def _build_data_cell(
     Args:
         sheet_spec: The sheet the cell belongs to.
         col: The cell's column.
-        value: The cell's value (already validated/normalized).
+        value: The cell's value (already validated/normalized). Written
+            through :func:`~meshprovision.db.cell_validation.sanitize_text`,
+            so no row text can make ``content.xml`` unloadable.
         ods_row: The cell's 1-based ODS row number.
 
     Returns:
@@ -218,8 +220,9 @@ def _build_data_cell(
         content-validation reference when the column has one.
     """
     if value:
-        cell = odf_table.TableCell(valuetype="string", stringvalue=value)
-        cell.addElement(odf_text.P(text=value))
+        text = cell_validation.sanitize_text(value)
+        cell = odf_table.TableCell(valuetype="string", stringvalue=text)
+        cell.addElement(odf_text.P(text=text))
     else:
         cell = odf_table.TableCell()
     formula = schema.formula_for(sheet_spec, col.name, ods_row)
@@ -366,6 +369,7 @@ def write_database(
     backup: bool = True,
     backup_dir: Path | None = None,
     retention: int = DEFAULT_RETENTION,
+    check: Callable[[bytes], object] | None = None,
 ) -> WrittenFile:
     """Build and atomically write a complete ODS database.
 
@@ -380,6 +384,9 @@ def write_database(
         backup_dir: Directory to store the backup under, when ``backup``
             is true.
         retention: Number of backups to retain, when ``backup`` is true.
+        check: Called with the serialized document before anything is
+            backed up or written; an exception it raises propagates and
+            leaves ``path`` untouched.
 
     Returns:
         The exact bytes written and the written file's on-disk identity
@@ -396,6 +403,8 @@ def write_database(
     buf = io.BytesIO()
     doc.write(buf)
     data = buf.getvalue()
+    if check is not None:
+        check(data)
     with atomic_write(path, backup=backup, backup_dir=backup_dir, retention=retention) as tmp:
         tmp.write_bytes(data)
         tmp_stat = tmp.stat()

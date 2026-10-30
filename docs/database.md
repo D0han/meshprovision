@@ -134,6 +134,12 @@ otherwise reported by fingerprint only, never its raw material;
   says so. Every write -- the database, each backup, the known-good copy
   and the pending-key file -- is flushed to disk before it takes its
   final name, so a power cut cannot leave any of them empty or torn.
+  Before writing, `mesh` loads the new content back in memory and refuses
+  to replace the database (taking no backup either) if it would not load.
+  In a text cell, a carriage return (`\r\n` or `\r`) is stored as a line
+  feed, and a control character or other code point a spreadsheet cannot
+  hold (a lone surrogate, a non-character) as `�` (U+FFFD), on save and on
+  load alike.
   When the database path is a symlink, the `backups/` directory sits
   beside the file the link points to, and everything in it (backups, the
   known-good copy, pending-key files) is named after that file, not the

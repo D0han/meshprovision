@@ -43,6 +43,7 @@ from meshprovision.db import (
 from meshprovision.db.backups import DEFAULT_RETENTION
 from meshprovision.db.known_good import refresh_known_good
 from meshprovision.errors import (
+    AtomicWriteError,
     DbConcurrentModificationError,
     DbIntegrityError,
     DuplicateNodeError,
@@ -847,20 +848,22 @@ class OdsDatabase:
             DbConcurrentModificationError: If the file changed on disk
                 since this session last observed it. A subclass of
                 :class:`AtomicWriteError`.
-            AtomicWriteError: If the write or backup fails.
+            AtomicWriteError: If the write or backup fails, or the
+                serialized document does not load back (nothing is
+                backed up or written then; see below).
 
-        On success, also best-effort refreshes the file's known-good
-        safety copy (see :func:`meshprovision.db.known_good.
-        refresh_known_good`) from exactly the bytes just written --
-        mirroring what :func:`load_database` already does for a
-        successful read, so the copy no longer goes stale between a
-        write and whatever load happens to run next. Re-validates those
-        bytes via :func:`parse_database` first; if that disagrees (which
-        should not happen, since they are the same bytes
-        :func:`~meshprovision.db.ods_write.write_database` just
-        produced), the refresh is skipped and a warning logged, never
-        raised -- the write itself already succeeded and must not be
-        rolled back over a safety-copy problem.
+        The serialized bytes are validated via :func:`parse_database`
+        before anything touches disk, so a document that would not load
+        (a cell odfpy cannot serialize, a duplicate node id) never
+        replaces the good file. On success, also best-effort refreshes
+        the file's known-good safety copy (see
+        :func:`meshprovision.db.known_good.refresh_known_good`) from
+        exactly those bytes -- mirroring what :func:`load_database`
+        already does for a successful read, so the copy no longer goes
+        stale between a write and whatever load happens to run next. A
+        refresh failure is logged as a warning, never raised -- the
+        write itself already succeeded and must not be rolled back over
+        a safety-copy problem.
         """
         if not self._is_dirty:
             _logger.debug("save() called on a clean database; nothing to write.")
@@ -875,6 +878,7 @@ class OdsDatabase:
             backup=backup,
             backup_dir=self._backup_dir,
             retention=self._retention,
+            check=self._check_loads,
         )
         self._is_dirty = False
         self._disk_identity = (
@@ -892,16 +896,16 @@ class OdsDatabase:
             len(self._rows.get(schema.NODES_SHEET, ())),
             len(self._rows.get(schema.KEYS_SHEET, ())),
         )
-        # Best-effort: re-validate what was just written and refresh the
-        # known-good copy from it, exactly as load_database() does for a
-        # read, so the copy does not go stale until the next load happens
-        # to run (see the module-level discussion in load_database()).
-        # Reuses written.stat/written.data rather than re-stat'ing
-        # self._path -- stat'ing again here could pick up a concurrent
-        # writer's identity instead of the bytes this save() actually
-        # wrote, the same TOCTOU load_database() avoids on the read side.
+        # Best-effort: refresh the known-good copy from the bytes just
+        # written (already validated by _check_loads), exactly as
+        # load_database() does for a read, so the copy does not go stale
+        # until the next load happens to run (see the module-level
+        # discussion in load_database()). Reuses written.stat/written.data
+        # rather than re-stat'ing self._path -- stat'ing again here could
+        # pick up a concurrent writer's identity instead of the bytes this
+        # save() actually wrote, the same TOCTOU load_database() avoids on
+        # the read side.
         try:
-            parse_database(written.data, source=self._path)
             refresh_known_good(self._path, content=written.data, source_stat=written.stat)
         except MeshprovisionError as exc:
             _logger.warning(
@@ -909,6 +913,25 @@ class OdsDatabase:
                 self._path,
                 exc,
             )
+
+    def _check_loads(self, data: bytes) -> None:
+        """Refuse to write a serialized document that would not load back.
+
+        Args:
+            data: The serialized ``.ods`` bytes about to be written.
+
+        Raises:
+            AtomicWriteError: If :func:`parse_database` rejects ``data``;
+                nothing has been backed up or written yet.
+        """
+        try:
+            parse_database(data, source=self._path)
+        except MeshprovisionError as exc:
+            raise AtomicWriteError(
+                f"{self._path} was not written: the new content would not load back ({exc})",
+                path=str(self._path),
+                hint="The database file is unchanged; please report this as a bug.",
+            ) from exc
 
     @classmethod
     def create(

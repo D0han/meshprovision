@@ -1258,6 +1258,66 @@ def test_ods_database_save_refreshes_known_good_copy(tmp_path: Path) -> None:
     assert status.provenance is KnownGoodProvenance.VERIFIED
 
 
+@pytest.mark.parametrize(
+    ("notes", "expected"),
+    [
+        ("a\rb", "a\nb"),
+        ("a\r\nb", "a\nb"),
+        ("a\x0bb", "a\ufffdb"),
+        ("a\x00b", "a\ufffdb"),
+        ("a\x7fb", "a\ufffdb"),
+        ("a\ufffeb", "a\ufffdb"),
+        ("a\U0001fffeb", "a\ufffdb"),
+        ("a\tb\nc", "a\tb\nc"),
+        ("a\x85b", "a\x85b"),
+    ],
+    ids=["cr", "crlf", "vt", "nul", "del", "u-fffe", "plane-1-nonchar", "tab-lf", "nel"],
+)
+def test_text_with_control_characters_saves_loadable_and_reads_back_stable(
+    tmp_path: Path, notes: str, expected: str
+) -> None:
+    r"""A carriage return used to make save() write a content.xml no parser loads.
+
+    odfpy writes ``\r`` as ``&#12;``; the value now reaches the file as
+    ``\n``, and every character odfpy turns into U+FFFD is U+FFFD on both
+    the write and the load side, so a second save and load change nothing.
+    """
+    path = tmp_path / "db.ods"
+    db = ods.OdsDatabase.create(path)
+    db.replace("Nodes", [NodeRecord(node_id="00000001", short_name="S", notes=notes).to_row()])
+    db.save()
+
+    reloaded = ods.OdsDatabase(path)
+    reloaded.load()
+    assert reloaded.rows("Nodes")[0]["notes"] == expected
+    assert known_good_info(path) is not None
+
+    reloaded.replace("Nodes", reloaded.rows("Nodes"))
+    reloaded.save()
+    again = ods.OdsDatabase(path)
+    again.load()
+    assert again.rows("Nodes")[0]["notes"] == expected
+
+
+def test_save_refuses_content_that_would_not_load_and_keeps_the_file(tmp_path: Path) -> None:
+    """save() validates the serialized bytes before backing up or replacing anything."""
+    path = tmp_path / "db.ods"
+    db = ods.OdsDatabase.create(path)
+    db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
+    db.save()
+    good = path.read_bytes()
+    backups_before = backups.list_backups(path)
+    duplicate = NodeRecord(node_id="deadbe01", short_name="X").to_row()
+    db.replace("Nodes", [*db.rows("Nodes"), duplicate])
+
+    with pytest.raises(AtomicWriteError, match="would not load back") as exc_info:
+        db.save()
+
+    assert isinstance(exc_info.value.__cause__, DuplicateNodeError)
+    assert path.read_bytes() == good
+    assert backups.list_backups(path) == backups_before
+
+
 def test_ods_database_load_after_save_takes_known_good_fast_path(tmp_path: Path) -> None:
     """The load right after a `save()` finds the known-good copy already current.
 
