@@ -245,7 +245,9 @@ class PositionSection(BaseModel):
         position_broadcast_smart_enabled: Whether smart (distance/time
             gated) position broadcasting is enabled.
         fixed_position: Whether this node's position is fixed rather than
-            GPS-tracked.
+            GPS-tracked. ``None`` (omitted) leaves the device's own
+            setting alone, so a position fixed with ``--setlat`` stays
+            fixed across ``mesh provision`` runs.
         gps_update_interval: GPS fix update interval, seconds.
         position_flags: Bitmask of which position fields to include in
             broadcasts.
@@ -262,7 +264,7 @@ class PositionSection(BaseModel):
 
     position_broadcast_secs: int | None = Field(default=None, ge=0)
     position_broadcast_smart_enabled: bool | None = None
-    fixed_position: bool = False
+    fixed_position: bool | None = None
     gps_update_interval: int | None = Field(default=None, ge=0)
     position_flags: int | None = Field(default=None, ge=0)
     broadcast_smart_minimum_distance: int | None = Field(default=None, ge=0)

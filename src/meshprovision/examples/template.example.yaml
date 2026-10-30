@@ -84,6 +84,9 @@ lora:
 position:
   position_broadcast_secs: 900
   position_broadcast_smart_enabled: true
+  # Explicit opt-in: false turns a fixed position off on every run. Omit
+  # it to leave the device's own setting alone (keep a position fixed
+  # with --setlat/--setlon/--setalt).
   fixed_position: false
   # fixed_latitude / fixed_longitude / fixed_altitude are not accepted
   # here -- meshprovision never applies them. Set them with the

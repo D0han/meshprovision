@@ -306,6 +306,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A template that does not set `position.fixed_position` leaves the device's
+  own setting alone: it defaulted to `false`, so every `mesh provision` run
+  planned `fixed_position: True -> False` on a node whose position was fixed
+  with `meshtastic --setlat/--setlon/--setalt` (as the template docs advise)
+  and the node stopped broadcasting it (the coordinates stay on the device,
+  unused). Set `fixed_position: false` (as the example template does) to
+  keep forcing it off.
 - `mesh status` draws the Seen By counts of a node that uplinks itself
   (marked `@`) but no other gateway relayed in 30 days bold orange, not the
   bold red of a node nobody hears: `0/0/0@` is a node heard only through its

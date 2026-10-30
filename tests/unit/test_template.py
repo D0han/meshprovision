@@ -567,6 +567,23 @@ def test_unknown_packet_signature_policy_raises() -> None:
         TemplateConfig(security={"packet_signature_policy": "NOT_A_REAL_POLICY"})
 
 
+@pytest.mark.parametrize(
+    ("position", "expected"),
+    [(None, None), ({"position_broadcast_secs": 900}, None), ({"fixed_position": False}, False)],
+    ids=["no-position-block", "position-without-it", "explicit-false"],
+)
+def test_fixed_position_is_only_set_when_the_template_says_so(
+    position: dict[str, object] | None, expected: bool | None
+) -> None:
+    """An omitted ``fixed_position`` is ``None``: the device's own setting is left alone."""
+    cfg = TemplateConfig() if position is None else TemplateConfig(position=position)
+
+    assert cfg.position.fixed_position is expected
+    assert ("fixed_position" in cfg.position.model_dump(exclude_none=True)) is (
+        expected is not None
+    )
+
+
 def test_position_fixed_field_rejected() -> None:
     """A template setting fixed_latitude/longitude/altitude is refused outright.
 

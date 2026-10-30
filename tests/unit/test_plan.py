@@ -175,6 +175,53 @@ def test_position_section_normal_field_is_diffed(make_live, template) -> None:
     assert "position_broadcast_secs" in fields
 
 
+def test_template_without_fixed_position_leaves_a_fixed_position_alone(make_live, template) -> None:
+    """A position fixed with ``meshtastic --setlat`` survives a provision run.
+
+    ``fixed_position`` defaulted to ``False``, so every template that did
+    not mention it planned ``True -> False`` and turned the fixed position
+    off (the coordinates stay on the device, unused).
+    """
+    live = make_live(
+        template,
+        section_overrides={"position": {"fixed_position": True}},
+        security=make_security(empty=True),
+    )
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+
+    plan = build_plan(inputs)
+
+    assert plan.section("position") is None
+
+
+@pytest.mark.parametrize(
+    ("live_value", "desired"),
+    [(True, False), (False, True), (None, False)],
+    ids=["turn-off", "turn-on", "unset-to-false"],
+)
+def test_explicit_fixed_position_is_still_planned(
+    make_live, template, live_value: bool | None, *, desired: bool
+) -> None:
+    template2 = template.model_copy(
+        update={"position": template.position.model_copy(update={"fixed_position": desired})}
+    )
+    live = make_live(
+        template,
+        section_overrides={"position": {"fixed_position": live_value}},
+        security=make_security(empty=True),
+    )
+    inputs = PlanInputs(
+        live=live, template=template2, db_entry=None, state=detect.NodeState.FACTORY
+    )
+
+    position = build_plan(inputs).section("position")
+
+    assert position is not None
+    assert [(c.field, c.current, c.desired) for c in position.changes] == [
+        ("fixed_position", live_value, desired)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Already-correct node.
 # ---------------------------------------------------------------------------
