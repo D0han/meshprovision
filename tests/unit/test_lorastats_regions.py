@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
@@ -16,6 +17,7 @@ from meshprovision.datasources.lorastats import (
     LORASTATS_BASE_URL,
     LORASTATS_MAX_REGIONS,
     LORASTATS_NODES_PATH,
+    LORASTATS_STALE_RECORD_SECONDS,
     LORASTATS_STATUS_PATH,
     LORASTATS_STATUS_TTL_SECONDS,
     LorastatsSource,
@@ -24,6 +26,7 @@ from meshprovision.datasources.lorastats import (
 from meshprovision.datasources.region_memo import RegionMemo
 from meshprovision.errors import HttpError, RateLimitError, SettingsError
 from meshprovision.nodeid import NodeId
+from meshprovision.status.merge import DEFAULT_OFFLINE_AFTER
 from tests.conftest import LORASTATS_NODES_PAGE_REGIONS
 
 pytestmark = pytest.mark.unit
@@ -73,6 +76,25 @@ def _mock(
 
         regions[region] = respx.get(url__startswith=_region_url(region)).mock(side_effect=answer)
     return _Lorastats(status=status_route, regions=regions)
+
+
+def _ago(seconds: float) -> str:
+    """A ``LastSeen`` that many seconds before the real clock (records are judged by it)."""
+    return (datetime.now(tz=UTC) - timedelta(seconds=seconds)).isoformat()
+
+
+_FRESH = 300.0
+_STALE = 20 * 86400.0
+
+
+def _mock_seen(last_seen: Mapping[str, str]) -> _Lorastats:
+    """Mock lorastats for a known node with a record, last heard as given, in each region named."""
+    mocked = _mock()
+    for region, route in mocked.regions.items():
+        if region in last_seen:
+            record = {"NodeId": _NODE.hex, "ShortName": "MTa1", "LastSeen": last_seen[region]}
+            route.mock(side_effect=None, return_value=httpx.Response(200, json=[record]))
+    return mocked
 
 
 def _client(tmp_path: Path, now: list[float], *, ttl: float = 300.0) -> CachedHTTPClient:
@@ -522,3 +544,178 @@ def test_a_known_node_found_nowhere_costs_one_status_and_one_request_per_region(
     assert client.stats.network_requests == 1 + len(regions) <= 1 + LORASTATS_MAX_REGIONS
     asked = [call.request.url.raw_path.decode().split("/")[2] for call in nodes.calls]
     assert asked == [quote(region, safe="") for region in regions]  # in order, percent-encoded
+
+
+def test_the_stale_record_limit_is_mesh_statuss_offline_floor() -> None:
+    assert timedelta(seconds=LORASTATS_STALE_RECORD_SECONDS) == DEFAULT_OFFLINE_AFTER
+
+
+@respx.mock
+def test_a_record_a_few_hours_old_is_not_stale(tmp_path: Path) -> None:
+    """A node heard every 3 h must not cost every region between its packets."""
+    now = [_NOW]
+    mocked = _mock_seen({"Zachód": _ago(3 * 3600)})
+    memo = _memo(tmp_path, now)
+    memo.remember(_NODE, "Zachód")
+    source, _ = _source(tmp_path, now, memo=memo)
+
+    assert source.fetch_node(_NODE) is not None
+    assert mocked.calls() == {"status": 0, "Zachód": 1, "Gdańsk": 0, "Rzeszów": 0}
+
+
+@respx.mock
+@pytest.mark.parametrize("remembered", [True, False], ids=["memo", "no-memo"])
+def test_a_failing_other_region_keeps_the_stale_record_instead_of_failing(
+    tmp_path: Path, remembered: bool
+) -> None:
+    """Asking the other regions for a stale node made one failing region fail the source."""
+    now = [_NOW]
+    mocked = _mock_seen({"Zachód": _ago(_STALE)})
+    mocked.regions["Gdańsk"].mock(side_effect=None, return_value=httpx.Response(500))
+    memo = _memo(tmp_path, now)
+    if remembered:
+        memo.remember(_NODE, "Zachód")
+    source, _ = _source(tmp_path, now, memo=memo)
+
+    observations = source.fetch_nodes([_NODE])
+
+    assert observations[_NODE].region_queried == "Zachód"
+    assert mocked.calls()["Gdańsk"] >= 1
+    assert _memo(tmp_path, now).region_for(_NODE) == "Zachód"
+
+
+@respx.mock
+def test_a_failing_region_ends_the_search_for_a_stale_node(tmp_path: Path) -> None:
+    """The regions after a failing one are not asked (the host may be down: retries each)."""
+    now = [_NOW]
+    regions = ("Zachód", "Gdańsk", "Rzeszów")
+    mocked = _mock_seen({"Zachód": _ago(_STALE), "Rzeszów": _ago(_FRESH)})
+    mocked.regions["Gdańsk"].mock(side_effect=None, return_value=httpx.Response(500))
+    source, _ = _source(tmp_path, now, regions=regions, memo=_memo(tmp_path, now))
+
+    observation = source.fetch_node(_NODE)
+
+    assert observation is not None
+    assert observation.region_queried == "Zachód"
+    assert mocked.calls()["Rzeszów"] == 0
+
+
+@respx.mock
+def test_a_failing_region_before_any_match_still_fails_the_call(tmp_path: Path) -> None:
+    now = [_NOW]
+    mocked = _mock_seen({"Gdańsk": _ago(_STALE)})
+    mocked.regions["Zachód"].mock(side_effect=None, return_value=httpx.Response(500))
+    source, _ = _source(tmp_path, now, memo=_memo(tmp_path, now))
+
+    with pytest.raises(HttpError):
+        source.fetch_node(_NODE)
+
+
+@respx.mock
+def test_a_stale_record_in_the_remembered_region_loses_to_a_fresh_one_elsewhere(
+    tmp_path: Path,
+) -> None:
+    """A node re-provisioned elsewhere kept being reported from the region it left, 20 days old."""
+    now = [_NOW]
+    mocked = _mock_seen({"Zachód": _ago(_STALE), "Gdańsk": _ago(_FRESH)})
+    memo = _memo(tmp_path, now)
+    memo.remember(_NODE, "Zachód")
+    source, _ = _source(tmp_path, now, memo=memo)
+
+    observation = source.fetch_node(_NODE)
+
+    assert observation is not None
+    assert observation.region_queried == "Gdańsk"
+    assert mocked.calls() == {"status": 0, "Zachód": 1, "Gdańsk": 1, "Rzeszów": 0}
+    assert _memo(tmp_path, now).region_for(_NODE) == "Gdańsk"
+
+
+@respx.mock
+@pytest.mark.parametrize(
+    ("age", "asked_elsewhere"),
+    [(LORASTATS_STALE_RECORD_SECONDS - 60, 0), (LORASTATS_STALE_RECORD_SECONDS + 60, 1)],
+)
+def test_a_fresh_record_in_the_remembered_region_is_the_only_request(
+    tmp_path: Path, age: float, asked_elsewhere: int
+) -> None:
+    now = [_NOW]
+    mocked = _mock_seen({"Zachód": _ago(age)})
+    memo = _memo(tmp_path, now)
+    memo.remember(_NODE, "Zachód")
+    source, _ = _source(tmp_path, now, memo=memo)
+
+    observation = source.fetch_node(_NODE)
+
+    assert observation is not None
+    assert observation.region_queried == "Zachód"
+    assert mocked.calls() == {"status": 0, "Zachód": 1, "Gdańsk": asked_elsewhere, "Rzeszów": 0}
+
+
+@respx.mock
+def test_a_stale_record_found_nowhere_else_is_returned_and_the_memo_kept(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [_NOW]
+    mocked = _mock_seen({"Zachód": _ago(_STALE)})
+    memo = _memo(tmp_path, now)
+    memo.remember(_NODE, "Zachód")
+    changes: list[str] = []
+    monkeypatch.setattr(memo, "remember", lambda node, region: changes.append(f"{node} {region}"))
+    monkeypatch.setattr(memo, "forget", lambda node: changes.append(f"forget {node}"))
+    source, _ = _source(tmp_path, now, memo=memo)
+
+    observation = source.fetch_node(_NODE)
+
+    assert observation is not None
+    assert observation.region_queried == "Zachód"
+    assert mocked.calls() == {"status": 0, "Zachód": 1, "Gdańsk": 1, "Rzeszów": 0}
+    assert changes == []
+
+
+@respx.mock
+def test_without_a_memo_a_stale_match_asks_every_region_once_and_the_freshest_wins(
+    tmp_path: Path,
+) -> None:
+    now = [_NOW]
+    regions = ("Zachód", "Gdańsk", "Rzeszów")
+    mocked = _mock_seen({"Zachód": _ago(_STALE), "Gdańsk": _ago(_STALE / 2)})
+    source, client = _source(tmp_path, now, regions=regions, memo=_memo(tmp_path, now))
+
+    observation = source.fetch_node(_NODE)
+
+    assert observation is not None
+    assert observation.region_queried == "Gdańsk"
+    assert mocked.calls() == {"status": 1, "Zachód": 1, "Gdańsk": 1, "Rzeszów": 1}
+    assert client.stats.network_requests == 1 + len(regions)
+    assert _memo(tmp_path, now).region_for(_NODE) == "Gdańsk"
+
+
+@respx.mock
+def test_a_single_region_with_a_stale_record_is_still_one_request(tmp_path: Path) -> None:
+    now = [_NOW]
+    mocked = _mock_seen({"Gdańsk": _ago(_STALE)})
+    source, _ = _source(tmp_path, now, regions=("Gdańsk",))
+
+    observation = source.fetch_node(_NODE)
+
+    assert observation is not None
+    assert mocked.calls() == {"status": 0, "Zachód": 0, "Gdańsk": 1, "Rzeszów": 0}
+
+
+@respx.mock
+@pytest.mark.parametrize(("remembered", "expected"), [("Gdańsk", "Gdańsk"), (None, "Zachód")])
+def test_on_a_tie_the_remembered_region_then_the_earlier_one_wins(
+    tmp_path: Path, remembered: str | None, expected: str
+) -> None:
+    now = [_NOW]
+    seen = _ago(_STALE)
+    _mock_seen({"Zachód": seen, "Gdańsk": seen})
+    memo = _memo(tmp_path, now)
+    if remembered is not None:
+        memo.remember(_NODE, remembered)
+    source, _ = _source(tmp_path, now, memo=memo)
+
+    observation = source.fetch_node(_NODE)
+
+    assert observation is not None
+    assert observation.region_queried == expected

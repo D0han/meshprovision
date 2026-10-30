@@ -405,14 +405,23 @@ node lives:
 
 - the region a node was last found in is remembered in
   `lorastats_regions.json` in the cache directory (for 30 days) and asked
-  first, alone, while it keeps answering; a remembered region that is no
-  longer in the list is ignored;
+  first, alone, while it keeps answering with a record of the node heard in
+  the last 24 hours (`mesh status`'s offline floor, so a node heard every few
+  hours costs one request); a remembered region that is no longer in the list
+  is ignored;
 - otherwise lorastats.pl's region-free status endpoint is asked first: a node
   it does not know (HTTP 404) is not asked about in any region, and not asked
   about again for an hour; for a known one the regions are asked in order
-  until one answers.
+  until one answers with such a record;
+- a region's record heard longer ago does not end the search (a node moved to
+  another region leaves its old record behind): the other regions are asked
+  too, once each, and the freshest record wins and is remembered (the
+  remembered region, else the earlier one, on a tie). A region that fails
+  then ends the search with the record in hand instead of failing lorastats
+  for the run.
 
-So each node costs one request when its remembered region answers, one when
+So each node costs one request when its remembered region answers with a
+fresh record, one when
 lorastats does not know it, and at most one more than the number of regions
 otherwise (with lorastats.pl's 10 regions: 11, at most 17 with 16 regions).
 Reading the region list adds one request a week. A single region is asked

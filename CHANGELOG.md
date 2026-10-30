@@ -54,9 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cache directory and asked first, and lorastats.pl's region-free status
   endpoint is asked before trying every region, so a node lorastats does not
   know (HTTP 404) is not asked about in any region for an hour. Per node that
-  is one request when the remembered region answers, else at most one more
-  than the number of regions. `--json` names the region each node was found
-  in (`lorastats_region`).
+  is one request when the remembered region answers with a record heard in
+  the last 24 hours, else at most one more than the number of regions.
+  `--json` names the region each node was found in (`lorastats_region`).
 - `mesh status` shows when the device last reported its metrics (new `Metrics`
   column, loranet's `lastDeviceMetrics`), so the age of `Batt`, `Volt`,
   `ChUtil` and `AirTx` is no longer guessed from `Last seen`. It also gains an
@@ -515,6 +515,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A node that moved to another lorastats region (re-provisioned, say) is
+  reported from its new region: the region remembered for it, or the first
+  one in the list that knew it, answered with the record it left behind, 20
+  days old, and no other region was asked, so `mesh status` and `mesh health`
+  used its old last-seen, boot, preset and region (and fetched its history
+  from the old region) for as long as the old region kept the record. A
+  record heard over 24 hours ago now makes the other regions be asked too,
+  once each, and the freshest wins; a region failing meanwhile leaves the
+  record in hand instead of failing lorastats for the run.
 - `mesh health` no longer counts a node's own gateway topic as a gateway that
   heard it, as `mesh status`'s Seen By already does not: a node that only
   uplinks itself was "uplinked by one gateway only" and is now "heard by no

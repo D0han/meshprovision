@@ -27,7 +27,8 @@ when more than one region is asked:
 
 - a :class:`~meshprovision.datasources.region_memo.RegionMemo` remembers
   the region each node was last found in, which is asked first and alone
-  while it keeps answering;
+  while it keeps answering with a fresh record (heard within
+  :data:`LORASTATS_STALE_RECORD_SECONDS`);
 - before asking the regions for a node without such an answer, the
   region-free ``/Node/{hex}/Status`` endpoint is asked whether lorastats
   knows the node at all. Only its HTTP status is read (the body is Polish
@@ -35,12 +36,18 @@ when more than one region is asked:
   500 (known, but no packet received) mean known. The answer is reused
   for at least :data:`LORASTATS_STATUS_TTL_SECONDS`.
 
+A record older than that does not end the search: a node that moved
+(re-provisioned for another region) keeps its old record in the region
+it left, so the other regions are asked too and the freshest record wins
+(the memo's region, then the earlier region, on a tie), without the
+status probe when the memo's region answered.
+
 Per node and cache window that is one request when the memo's region
-answers, one for a node lorastats does not know, and at most
-``1 + len(regions)`` otherwise (the status probe plus every region, the
-memo's included), with at most :data:`LORASTATS_MAX_REGIONS` regions. A
-single region is asked directly, exactly one request per node, without
-probe or memo.
+answers with a fresh record, one for a node lorastats does not know, and
+at most ``1 + len(regions)`` otherwise (the status probe plus every
+region, the memo's included), with at most :data:`LORASTATS_MAX_REGIONS`
+regions. A single region is asked directly, exactly one request per
+node, without probe or memo.
 """
 
 from __future__ import annotations
@@ -63,7 +70,7 @@ from meshprovision.datasources.models import (
     parse_iso8601,
 )
 from meshprovision.enums import hw_model_table, role_table
-from meshprovision.errors import MissingContactError, NodeIdError, SettingsError
+from meshprovision.errors import DataSourceError, MissingContactError, NodeIdError, SettingsError
 from meshprovision.nodeid import NodeId, NodeIdLike
 
 if TYPE_CHECKING:
@@ -76,6 +83,7 @@ __all__ = [
     "LORASTATS_MAX_REGIONS",
     "LORASTATS_MIN_TTL_SECONDS",
     "LORASTATS_NODES_PATH",
+    "LORASTATS_STALE_RECORD_SECONDS",
     "LORASTATS_STATUS_PATH",
     "LORASTATS_STATUS_TTL_SECONDS",
     "REGION_PATTERN",
@@ -99,6 +107,16 @@ One request per node per poll is the request storm lorastats.pl bans IPs
 for; with this floor, ``--cache-ttl 0`` and a short ``--watch --interval``
 still ask for each node at most once a minute (``--no-cache`` still forces
 a fresh fetch)."""
+
+LORASTATS_STALE_RECORD_SECONDS: Final[float] = 24 * 3600.0
+"""A region's record of a node last heard longer ago than this does not end the search.
+
+``mesh status``'s offline floor (:data:`~meshprovision.status.merge.DEFAULT_OFFLINE_AFTER`,
+not imported: data sources do not depend on :mod:`meshprovision.status`), not a node's own
+threshold, so a node heard every few hours is not asked for in every region between its
+packets: the other regions are asked too, and the freshest record wins. A record without a
+``LastSeen`` ends it, as before (asking every region for it would cost the most requests
+and could not find a fresher one by time)."""
 
 LORASTATS_STATUS_PATH: Final[str] = "/Node/{node}/Status"
 """Region-free per-node status endpoint; only its HTTP status is read."""
@@ -246,7 +264,12 @@ class LorastatsSource(BaseHTTPDataSource):
         ``region``), the memo's region is asked first; when it does not
         answer, or there is none, the status endpoint is asked whether
         lorastats knows the node (no region is asked when it does not),
-        then every other configured region in order. The memo is updated
+        then every other configured region in order. When it answers
+        with a stale record (see :data:`LORASTATS_STALE_RECORD_SECONDS`),
+        every other region is asked too, without the status probe, and
+        the freshest record wins; a failing region then ends the search
+        with the stale record instead of failing the call. A stale match
+        likewise does not stop the other regions without a memo. The memo is updated
         to the region that answered, or the entry is dropped when its
         region no longer does. See the module docstring for the request
         budget.
@@ -326,23 +349,27 @@ class LorastatsSource(BaseHTTPDataSource):
             force_refresh: Forwarded to every request.
 
         Returns:
-            The observation and the region that answered, or ``None``.
+            The observation and the region that answered (the freshest
+            when the memo's region answered with a stale record), or
+            ``None``.
         """
         remembered = self._remembered_region(nid, regions)
+        first = None
         if remembered is not None:
-            found = self._search(nid, (remembered,), tracker, force_refresh)
-            if found is not None:
-                return found
-        if self._unknown_to_lorastats(nid, force_refresh):
+            first = self._search(nid, (remembered,), tracker, force_refresh)
+            if first is not None and not _is_stale(first[0]):
+                return first
+        if first is None and self._unknown_to_lorastats(nid, force_refresh):
             found = None
         else:
             others = tuple(candidate for candidate in regions if candidate != remembered)
-            found = self._search(nid, others, tracker, force_refresh)
+            found = self._search(nid, others, tracker, force_refresh, known=first)
         if self._memo is not None:
-            if found is not None:
+            if found is None:
+                if remembered is not None:
+                    self._memo.forget(nid)
+            elif found[1] != remembered:
                 self._memo.remember(nid, found[1])
-            elif remembered is not None:
-                self._memo.forget(nid)
         return found
 
     def _remembered_region(self, nid: NodeId, regions: tuple[str, ...]) -> str | None:
@@ -396,32 +423,47 @@ class LorastatsSource(BaseHTTPDataSource):
         regions: Sequence[str],
         tracker: CoercionTracker,
         force_refresh: bool | None,
+        *,
+        known: tuple[NodeObservation, str] | None = None,
     ) -> tuple[NodeObservation, str] | None:
-        """Ask each of ``regions`` in turn for ``nid``, stopping at the first match.
+        """Ask each of ``regions`` in turn for ``nid``, stopping at the first fresh match.
 
-        Adds every record that could not be inspected to
-        :attr:`last_fetch_skipped`.
+        A stale match (see :data:`LORASTATS_STALE_RECORD_SECONDS`) does not
+        stop it: the freshest match wins, the earlier region on a tie.
+        Once a stale match is in hand, a failing region ends the search
+        with it (logged) instead of failing the call. Adds every record
+        that could not be inspected to :attr:`last_fetch_skipped`.
 
         Args:
             nid: The node to look up.
             regions: The validated regions to ask, in order.
             tracker: Collects field-coercion failures.
             force_refresh: Forwarded to every request.
+            known: A stale match already found (in the memo's region),
+                which wins ties.
 
         Returns:
             The observation and the region that answered, or ``None``.
+
+        Raises:
+            meshprovision.errors.DataSourceError: If a region fails before
+                any match is in hand.
         """
+        best = known
         for candidate in regions:
-            region_segment = quote(candidate, safe="")
-            url = f"{self._base_url}{LORASTATS_NODES_PATH.format(region=region_segment)}"
-            payload = self.get_json(
-                url,
-                params={"node": nid.hex},
-                ttl=max(self._client.ttl, LORASTATS_MIN_TTL_SECONDS),
-                force_refresh=force_refresh,
-                validate=functools.partial(require_json_list, url=url, source=self.name),
-            )
-            records = require_json_list(payload, url=url, source=self.name)
+            try:
+                records = self._region_records(candidate, nid, force_refresh)
+            except DataSourceError as exc:
+                if best is None:
+                    raise
+                _logger.warning(
+                    "lorastats region %s failed for node %s (%s); using its record from %s",
+                    candidate,
+                    nid.hex,
+                    exc.message,
+                    best[1],
+                )
+                return best
             if not records:
                 continue
             record, record_skipped = _match_record(records, nid)
@@ -440,8 +482,36 @@ class LorastatsSource(BaseHTTPDataSource):
                     nid.hex,
                 )
                 continue
-            return observation, candidate
-        return None
+            best = _fresher(best, (observation, candidate))
+            if not _is_stale(observation):
+                return best
+        return best
+
+    def _region_records(self, region: str, nid: NodeId, force_refresh: bool | None) -> list[Any]:
+        """Ask one region for ``nid``'s records.
+
+        Args:
+            region: The validated region.
+            nid: The node to look up.
+            force_refresh: Forwarded to the request.
+
+        Returns:
+            The decoded JSON array (empty for "no data").
+
+        Raises:
+            meshprovision.errors.DataSourceError: If the request fails or
+                the body is not a JSON array.
+        """
+        region_segment = quote(region, safe="")
+        url = f"{self._base_url}{LORASTATS_NODES_PATH.format(region=region_segment)}"
+        payload = self.get_json(
+            url,
+            params={"node": nid.hex},
+            ttl=max(self._client.ttl, LORASTATS_MIN_TTL_SECONDS),
+            force_refresh=force_refresh,
+            validate=functools.partial(require_json_list, url=url, source=self.name),
+        )
+        return require_json_list(payload, url=url, source=self.name)
 
     def _configured(self) -> tuple[str, ...]:
         """Return the configured regions, else the region list's (loaded once by it).
@@ -457,6 +527,26 @@ class LorastatsSource(BaseHTTPDataSource):
             return self._regions
         listed = self._region_list.regions(self._client) if self._region_list else ()
         return validate_regions(listed)
+
+
+def _is_stale(observation: NodeObservation) -> bool:
+    """Tell whether a record's ``LastSeen`` is older than :data:`LORASTATS_STALE_RECORD_SECONDS`."""
+    if observation.last_seen is None:
+        return False
+    age = observation.observed_at - observation.last_seen
+    return age.total_seconds() > LORASTATS_STALE_RECORD_SECONDS
+
+
+def _fresher(
+    first: tuple[NodeObservation, str] | None, second: tuple[NodeObservation, str] | None
+) -> tuple[NodeObservation, str] | None:
+    """Return the match whose node was heard last: ``first`` on a tie or an unknown time."""
+    if first is None or second is None:
+        return first or second
+    first_seen, second_seen = first[0].last_seen, second[0].last_seen
+    if first_seen is not None and second_seen is not None and second_seen > first_seen:
+        return second
+    return first
 
 
 def _match_record(records: list[Any], nid: NodeId) -> tuple[Mapping[str, Any] | None, int]:
