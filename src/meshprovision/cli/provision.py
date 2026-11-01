@@ -64,6 +64,8 @@ from meshprovision.errors import (
     NodeNotEnrolledError,
     PlanConflictError,
 )
+from meshprovision.network.maintenance import maintenance_note
+from meshprovision.network.store import NETWORK_DIRNAME
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import apply, connection, detect, plan_render, repair
 from meshprovision.provisioning import plan as plan_mod
@@ -520,6 +522,9 @@ def run_provision(
                 "This node is not in the database and does not look factory-default; "
                 "it may belong to someone else."
             )
+        note = maintenance_note(change_plan.node_id, ctx.settings.cache_dir / NETWORK_DIRNAME)
+        if note is not None:
+            ctx.warn(note)
         question = f"Apply this plan to {change_plan.node_id.display} over {session.describe()}?"
         if not ctx.confirm(question, default=False):
             raise click.Abort()

@@ -176,6 +176,27 @@ class RegionStore:
         """
         return self._directory / region_dirname(region)
 
+    def regions(self) -> tuple[str, ...]:
+        """Name the regions with a store, from their state files.
+
+        Returns:
+            Every region whose directory holds a readable state file that
+            names a region stored under that directory, sorted.
+        """
+        try:
+            directories = [e for e in self._directory.iterdir() if _REGION_DIR_RE.match(e.name)]
+        except OSError:
+            return ()
+        found = []
+        for directory in directories:
+            document = read_json(
+                directory / _STATE_FILENAME, max_bytes=_STATE_MAX_BYTES, what=_WHAT
+            )
+            region = document.get("region") if isinstance(document, dict) else None
+            if isinstance(region, str) and region_dirname(region) == directory.name:
+                found.append(region)
+        return tuple(sorted(found))
+
     def state(self, region: str) -> RegionState:
         """Read when ``region`` was last fetched.
 

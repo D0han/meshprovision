@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh provision` warns (stderr, before the apply confirmation, without
+  blocking) when the node about to be written and rebooted carried traffic
+  others depend on: impact level `medium` or `high` in the last 24 hours of
+  a region `mesh network` stored at most 48 hours ago. Offline (the store
+  only), silent on `--dry-run`, for an empty plan or without recent data;
+  `--yes`, `--json` and the prompt are unchanged.
 - `mesh network impact [NODE]...`: what depends on our nodes, or on any node
   (ours or not), over `--days` (default 1): the region's relayed receptions it
   carried (only when its relay byte resolves to it; otherwise the output says

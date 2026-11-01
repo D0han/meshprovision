@@ -72,6 +72,24 @@ keypair recorded (`origin=captured`), not regenerated; a key already
 registered under another ref is refused, unless that ref is the one
 being bootstrapped with `mesh admin bootstrap --ref`.
 
+**Maintenance warning.** Applying a plan writes the device's
+configuration and reboots it. Before asking for confirmation (and also
+with `--yes`, `--json` or `--non-interactive`), a non-empty plan is
+checked against what [`mesh network`](#mesh-network) last stored: when, in
+the 24 hours before a region's last fetch (at most 48 hours ago), the
+node's [impact level](#mesh-network-impact) was `medium` or `high` -- every
+other node counting, ours included -- one warning goes to stderr, for
+example `warning: !deadbe01 carried 100.0% of Zachód's relayed traffic in
+the 24 h before 2026-11-01 01:30; 1 node(s) used it as their only first
+hop; 1 node(s) and 1 gateway(s) got at least half of their relayed
+receptions through it. Applying this plan reboots it. See: mesh network
+impact deadbe01`. It asks nothing (no request, no contact), changes
+nothing else (the prompt, `--yes` and the JSON on stdout stay as they
+are), says nothing on `--dry-run`, for an empty plan, without a recent
+store or when the node carries little, and any problem reading the store
+just leaves it out. `mesh admin bootstrap` runs the same pipeline and
+gives the same warning.
+
 **Transport selection priority:** `--port` > `--ble-address`/`--ble-scan`
 > `--host` > auto (serial first; exactly one port is auto-used, zero
 ports offers BLE then a TCP host prompt, several ports prompts).
