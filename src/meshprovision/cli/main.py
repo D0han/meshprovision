@@ -40,6 +40,7 @@ from meshprovision.cli.health import health
 from meshprovision.cli.help_format import MeshGroup, help_requested
 from meshprovision.cli.init_cmd import init, maybe_offer_setup
 from meshprovision.cli.logging_setup import LOG_LEVELS, configure_logging, resolve_log_level
+from meshprovision.cli.network import network
 from meshprovision.cli.peers import peers
 from meshprovision.cli.provision import provision
 from meshprovision.cli.status import status
@@ -204,5 +205,5 @@ def cli(
     ctx.obj = cli_ctx
 
 
-for command in (provision, status, health, admin, db, adopt, template, init, peers):
+for command in (provision, status, health, network, admin, db, adopt, template, init, peers):
     cli.add_command(command)

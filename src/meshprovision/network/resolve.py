@@ -156,7 +156,11 @@ class Resolution:
 
 
 def relay_candidates(
-    traffic: Traffic, nodes: Iterable[NodeObservation] = (), *, start: float
+    traffic: Traffic,
+    nodes: Iterable[NodeObservation] = (),
+    *,
+    start: float,
+    mute: Collection[str] = (),
 ) -> Mapping[int, tuple[str, ...]]:
     """List the nodes heard in the window by the last byte of their id.
 
@@ -166,6 +170,8 @@ def relay_candidates(
             ``start`` was heard too, and a ``CLIENT_MUTE`` node (which
             never rebroadcasts) is never a candidate.
         start: The start of the window, epoch seconds.
+        mute: More ``CLIENT_MUTE`` nodes, by hex id (the role their own
+            node info advertised).
 
     Returns:
         Byte -> candidates' hex ids, sorted.
@@ -182,9 +188,9 @@ def relay_candidates(
             if node.last_seen is not None and node.last_seen.timestamp() >= start
         ),
     }
-    mute = {node.node_id.hex for node in listed if node.role == _MUTE_ROLE}
+    silent = {*mute, *(node.node_id.hex for node in listed if node.role == _MUTE_ROLE)}
     by_byte: defaultdict[int, list[str]] = defaultdict(list)
-    for node in sorted(heard - mute):
+    for node in sorted(heard - silent):
         by_byte[int(node, 16) & _MASK].append(node)
     return MappingProxyType({byte: tuple(by_byte[byte]) for byte in sorted(by_byte)})
 

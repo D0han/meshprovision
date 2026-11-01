@@ -362,3 +362,9 @@ def test_the_candidate_as_a_gateway_covers_without_hearing_itself() -> None:
     )
 
     assert resolution.candidates == (CandidateScore(_RELAY, 1.0, 0.0),)
+
+
+def test_a_node_whose_own_node_info_says_client_mute_is_no_candidate() -> None:
+    traffic = Traffic(packets={"000000a1": 1, "000001a1": 1})
+
+    assert relay_candidates(traffic, start=NOW, mute={"000000a1"}) == {0xA1: ("000001a1",)}

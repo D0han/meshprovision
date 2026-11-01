@@ -23,6 +23,7 @@ from meshprovision.errors import (
     SettingsError,
 )
 from meshprovision.health.history import HOUR_SECONDS, floor_hour
+from meshprovision.network.keystore import KeyStore
 from meshprovision.network.refresh import (
     NETWORK_DEFAULT_MAX_REGIONS,
     NETWORK_FORCED_REFRESH_INTERVAL_SECONDS,
@@ -76,7 +77,12 @@ def _setup(
     store = RegionStore(tmp_path / "network", clock=lambda: now[0])
     feed = _Feed()
     refresher = RegionRefresher(
-        store, cast("LorastatsRegionFeed", feed), force=force, clock=lambda: now[0]
+        store,
+        cast("LorastatsRegionFeed", feed),
+        keys=KeyStore(tmp_path / "network", clock=lambda: now[0]),
+        known_bad=frozenset(),
+        force=force,
+        clock=lambda: now[0],
     )
     return refresher, feed, store, now
 
@@ -254,7 +260,12 @@ def test_a_503_storm_costs_one_request_and_its_retries(tmp_path: Path) -> None:
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", sleep=slept.append
     )
-    refresher = RegionRefresher(RegionStore(tmp_path / "network"), LorastatsRegionFeed(client))
+    refresher = RegionRefresher(
+        RegionStore(tmp_path / "network"),
+        LorastatsRegionFeed(client),
+        keys=KeyStore(tmp_path / "network"),
+        known_bad=frozenset(),
+    )
 
     outcome = refresher.refresh(["A", "B", "C"])
 

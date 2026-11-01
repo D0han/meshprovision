@@ -47,6 +47,7 @@ CLI_COMMAND_MODULES: Final[frozenset[str]] = frozenset(
         "health",
         "init_cmd",
         "main",
+        "network",
         "peers",
         "provision",
         "status",
@@ -109,6 +110,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("cli/provision_apply.py", _CLI_COMMANDS),
     ("cli/provision_keys.py", _CLI_COMMANDS),
     ("cli/health.py", _READ_ONLY_CLI_FORBIDDEN),
+    ("cli/network.py", _READ_ONLY_CLI_FORBIDDEN),
     ("cli/status.py", _READ_ONLY_CLI_FORBIDDEN),
     ("cli/template_cmd.py", _READ_ONLY_CLI_FORBIDDEN),
     (
@@ -129,6 +131,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("health/rules.py", _PURE_HEALTH_FORBIDDEN),
     ("network/buckets.py", _PURE_HEALTH_FORBIDDEN),
     ("network/hourjson.py", _PURE_HEALTH_FORBIDDEN),
+    ("network/keys.py", _PURE_HEALTH_FORBIDDEN),
     ("network/rawpackets.py", _PURE_HEALTH_FORBIDDEN),
     ("network/resolve.py", _PURE_HEALTH_FORBIDDEN),
     (

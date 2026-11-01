@@ -28,7 +28,15 @@ documented here rather than buried.
    lorastats does not know) is asked before trying them all. Invalid paths
    elsewhere return HTML with HTTP 200 — so
    the datasource asserts the body actually parses as JSON and never
-   trusts the status code.
+   trusts the status code. **Exception: `mesh network`** asks for whole
+   regions (`/API/{region}/PacketsRaw/JSON` and `/API/{region}/Nodes/JSON`
+   without `node=`), because its views are region-wide by definition. It
+   does so in a class of its own (`LorastatsRegionFeed`; `LorastatsSource`
+   still has no bulk method), only for the regions our nodes live in (at
+   most 4 unless `--region` names others), at most once every 15 minutes
+   per region and always from `since=` once a region has been fetched
+   (about 0.6 MB per hour instead of 25 MB per day), keeping only hourly
+   counts; see [`mesh network`](commands.md#mesh-network).
 4. **`odfpy` directly, not `pandas`.** pandas type-coerces cells, and a
    hex node id like `1234567e8` is silently parsed as a float in
    scientific notation, corrupting the primary key. Every cell is read

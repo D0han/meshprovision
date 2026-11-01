@@ -2,7 +2,7 @@
 
 Part of the meshprovision docs — see the [README](../README.md).
 
-The toolkit installs **one** console script, `mesh`, with nine
+The toolkit installs **one** console script, `mesh`, with ten
 subcommands/subcommand groups. **Global options go before the
 subcommand** — for example `mesh --no-cache status --json`, not
 `mesh status --no-cache`. Every command and subcommand supports
@@ -812,6 +812,129 @@ seen.
   the autumn DST change may be filed an hour early.
 - lorastats keeps about a day or two: what is older comes from the local
   history, so a node first refreshed today has today's data only.
+
+## `mesh network`
+
+Region-wide views of the mesh from lorastats.pl's raw packets: every
+gateway's uplink of every packet in a region, not only our nodes'. Read-only
+like `mesh health`: it never writes to the database or to any device; it
+keeps a 30-day store of each region's traffic in the cache directory.
+
+```bash
+mesh network keys                     # key scan of our nodes' regions, last 30 days
+mesh network keys --region Zachód     # another region (repeatable)
+mesh network keys --no-fetch --json   # stored data only, no request at all
+```
+
+| Subcommand | What it shows |
+|---|---|
+| `keys` | Every public key the region's nodes advertise, and what is wrong with them |
+
+| Option (every subcommand) | Meaning |
+|---|---|
+| `--days N` | Window of the stored data, 1 to 30 days (default: 30 for `keys`) |
+| `--region R` | A lorastats region to look at (repeatable, at most 16); default: our nodes' regions |
+| `--no-fetch` | Ask nothing: use the stored data only (no `MESHPROVISION_CONTACT` needed) |
+| `--refresh` | Fetch even if fetched in the last 15 minutes (still at most once a minute per region); refused with `--no-fetch` |
+| `--json` | Emit one JSON document instead of text |
+
+"Ours" is every active (not archived) node of the database, observed ones
+included.
+
+**Which regions.** Without `--region`, the lorastats regions our nodes were
+last found in, as remembered by `mesh status` and `mesh health` (the region
+memo in the cache directory; nothing is asked to find them), the region of
+most nodes first, at most 4. A `mesh network` run with no region given and
+none remembered stops with exit code 2: run `mesh status` once, or pass
+`--region`. Never every region: a busy region's day of raw packets is about
+25 MB.
+
+**What it asks, and how often.** This is the one place meshprovision asks
+lorastats for whole regions instead of per node (see [design
+notes](design-notes.md)), so it keeps to a budget. Per selected region:
+
+| Request | When | Size |
+|---|---|---|
+| `/API/{region}/PacketsRaw/JSON` | at most once every 15 minutes (once a minute with `--refresh`); with `since=` once the region has been fetched | about 25 MB for a busy region's first day, then about 0.6 MB per hour since the previous fetch |
+| `/API/{region}/Nodes/JSON` (no `node=`) | kept in the HTTP cache for at least an hour | 0.1-2 MB |
+| `--no-fetch` | nothing | |
+
+The raw packets are fetched fresh, at most 48 MiB each, and never kept in the
+HTTP cache: they are summarized and dropped, one region at a time. The node
+list is capped at 4 MiB; global `--no-cache` applies to it. A 429, a 5xx or
+a transport error (after the client's retries) stops the run's requests:
+every later one is reported as "not asked: lorastats failed for ..." instead
+of costing its own retries, and after a 429 no `mesh` process asks
+lorastats.pl again for the cool-down `mesh status` documents.
+
+**The store.** `network/r-<digest>/` in the cache directory, one directory
+per region (the digest is of the region's name, so `Zachód` and `zachód` stay
+apart on any file system). Per UTC hour it keeps only counts: packets per
+sender; relayed receptions per relay byte and gateway, and direct receptions
+per sender and gateway, each with their SNR and RSSI sums; per sender the
+receptions each relay byte carried last (and how many had taken one hop);
+packets that only one relay byte or only one gateway carried; and the links
+seen in traceroutes and neighbour reports. Never a payload, a position, a
+text or a key. A refresh asks from one hour before the start of the hour of
+the previous fetch and replaces those hours, as for `mesh health`'s history,
+so nothing is counted twice; silent hours are recorded as such. `keys.json`
+holds the keys seen (as 64-bit digests, see below), `relays.json` the node
+each relay byte was last resolved to (for a week), `state.json` the last
+fetch. Bounds: 30 days; a day file at most 8 MiB, a region at most 64 MiB,
+all regions at most 256 MiB (the oldest days of the region refreshed longest
+ago go first); a region not refreshed for 30 days is removed. Files are
+written atomically and owner-only; a missing, corrupt or foreign file reads
+as empty. Deleting the directory only loses the history.
+
+**Exit codes** (every subcommand): `3` when no selected region has any data
+(nothing stored, and the fetch failed or `--no-fetch` was given); `6` for
+`keys` when a critical finding involves one of our nodes; `7` when a request
+failed (a region's raw packets or its node list; the output then says how
+old the stored data is); else `0`.
+
+### `mesh network keys`
+
+Every node-info packet that travels unencrypted (the default channel)
+carries its sender's public key. Each refresh records, per node and key, a
+64-bit digest of the key (never the key), the hours it was heard, the node's
+short name, hardware and role, whether its id is derived from the key
+(firmware 2.8 sets `node id = crc32(public key)`) and the [weak-key
+audit](security.md#cve-2025-52464-and-the-weak-key-audit)'s verdict, computed
+while the key was in memory. The scan then reports, for the window:
+
+| Finding | Severity |
+|---|---|
+| *our key on another id*: one of our nodes' database public key advertised by another node | critical; `info` (a *migration*) when that node's id is the key's derived id and ours was last heard before it first was: our node moved to its firmware 2.8 id and the database should follow |
+| *our id, other key*: one of our nodes advertising a key that is not its database key (not an old key last heard before the database key first was: a re-key) | critical when the database key is derived from the node id (a firmware 2.8 node cannot change its key and keep its id), else warning (database out of date, re-flashed, or a spoof) |
+| *weak key*: the audit's findings | the audit's severity |
+| *clone*: one key on several ids heard at the same time (a common hour with overlapping first-to-last sightings), or alternating between them | critical |
+| *migration*: the only id derived from the key appeared after every other id holding it went quiet | info |
+| *hand-over*: one key on several ids one after another (a restored backup, a re-flashed node) | warning |
+| *key changed*: one id heard with more than one key (not one of ours with a database key: see above) | warning; critical when the old key was derived from the id and the new one is not |
+
+Example (the synthetic region of the end-to-end tests):
+
+```text
+Key scan: PL, last 30 days (data as of 2026-11-01 01:05:16)
+10 node(s) advertised a key (of 2 in lorastats' node list). Only nodes whose node info travels unencrypted (the default channel) can be seen.
+Our nodes: 1 of 3 advertised a key; no finding involves them.
+CRITICAL  clone (outsiders)  sha256:5cc7e745  2 nodes heard at the same time: c1000001 Cl1, c2000002 Cl2; their direct messages can be read by each other (CVE-2025-52464)
+CRITICAL  weak key (outsiders)  sha256:01d0fabd  5e000001 Weak: blocklist, low_entropy, small_order
+WARNING   hand-over (outsiders)  sha256:a47214d5  used by 4a000001 Old, then 4a000002 New; the older id was last heard 2026-10-31 20:05:16 (a restored backup or a re-flashed node)
+INFO      migration (outsiders)  sha256:edff37d9  11110001 Mig became c322e59d Mig (firmware >= 2.8 derives the node id from the key)
+Info: 1 node(s) use a key-derived id (firmware >= 2.8).
+```
+
+Keys are shown by the usual 8-digit fingerprint; `--json` gives each
+finding's `kind`, `severity`, `key` (the 16-digit digest), `nodes`, `fleet`,
+`checks` and `last_heard`, per region with `data_as_of`, `nodes_with_key`,
+`nodes_listed`, `fleet_seen` and `derived_ids`, plus `refresh` and
+`exit_code`. Exit code `6` only for a critical finding involving one of our
+nodes: findings about other people's devices are reported in full, but we
+cannot fix them, and a permanently failing exit code would only teach to
+ignore it. Only nodes on the default channel are visible (about half of a
+region's nodes in the sample this was designed on); the tool never contacts
+anyone.
 
 ## `mesh admin`
 

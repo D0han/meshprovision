@@ -240,6 +240,38 @@ used — the rest are not merged in. If none is found, this is logged at
 INFO (not an error): the audit still runs against the 7 built-in
 small-order points.
 
+### Network-wide key scan
+
+`mesh network keys` (see [Commands](commands.md#mesh-network-keys)) looks
+beyond our own `Keys` sheet: it reads the public key every node of a
+lorastats region advertises in its unencrypted node info and reports our
+keys on other ids, other keys on our ids, weak keys (the audit above, with
+the effective blocklist) and keys shared by several ids. A shared key is
+classified so as not to cry wolf:
+
+- **clone** (critical): two ids holding one key were heard at the same time
+  (in a common UTC hour, with overlapping first-to-last sightings), or the
+  sightings alternate between them (A, B, A). Two devices using one
+  identity at the same time is the CVE-2025-52464 vendor-cloning signature;
+  a hand-over cannot produce it (an old id last heard at 10:05 and a new one
+  first heard at 10:40 share the hour, not the time).
+- **migration** (info): firmware >= 2.8 derives the node id from the key
+  (`node id = crc32(public key)`, NodeDB `createNewIdentity()`), so a node
+  upgraded to it appears under a new id with its old key. Exactly one id
+  holding the key is derived from it, and every other one was last heard
+  before it first was.
+- **hand-over** (warning): otherwise, ids one after another -- a backup
+  restored onto new hardware, a node re-flashed with its old key.
+
+The evidence is the hours each id was heard with the key, kept for 30 days,
+so a migration last week is still recognised. Only nodes on the default
+channel can be seen. Keys are stored and shown as digests only (a 64-bit
+SHA-256 prefix in `keys.json`, the usual 8-digit fingerprint on screen),
+never as key bytes. The scan reads what nodes broadcast in clear; findings
+about other people's devices are for telling their owners, and the tool
+never contacts anyone. Only a critical finding involving one of our nodes
+makes it exit `6`.
+
 ## Secret hygiene
 
 - Nothing raw is ever logged or printed. Secrets are wrapped in

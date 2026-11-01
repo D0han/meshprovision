@@ -28,7 +28,9 @@ or over-large body) does not stop the others.
 (:mod:`meshprovision.health.refresh`): each refresh asks from one hour
 before the start of the hour of the previous one (the extra hour absorbs
 a misread Warsaw time around a DST change) and replaces that hour onwards
-(see :func:`~meshprovision.network.buckets.merge`). The raw rows are
+(see :func:`~meshprovision.network.buckets.merge`). The public keys a
+fetch saw are audited and recorded as digests
+(:mod:`meshprovision.network.keystore`) before the rows are dropped. The raw rows are
 dropped as soon as they are summarized; regions are refreshed one at a
 time, so at most one region's answer is in memory.
 """
@@ -38,7 +40,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -50,11 +52,13 @@ from meshprovision.health.history import floor_hour
 from meshprovision.health.packets import FUTURE_SKEW_SECONDS
 from meshprovision.health.refresh import SINCE_MARGIN_SECONDS
 from meshprovision.network.buckets import summarize
+from meshprovision.network.keys import observe
 from meshprovision.network.rawpackets import parse_raw
 
 if TYPE_CHECKING:
     from meshprovision.datasources.lorastats_region import LorastatsRegionFeed
     from meshprovision.datasources.models import NodeObservation
+    from meshprovision.network.keystore import KeyStore
     from meshprovision.network.store import RegionState, RegionStore
 
 __all__ = [
@@ -158,6 +162,8 @@ class RegionRefresher:
         store: RegionStore,
         feed: LorastatsRegionFeed,
         *,
+        keys: KeyStore,
+        known_bad: Collection[bytes],
         force: bool = False,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -166,12 +172,17 @@ class RegionRefresher:
         Args:
             store: Where the regions' traffic is kept.
             feed: What fetches the rows and node lists.
+            keys: Where the keys each fetch saw advertised are kept.
+            known_bad: The known-bad key blocklist, for the audit of
+                every key seen (while it is still in memory).
             force: Fetch once per :data:`NETWORK_FORCED_REFRESH_INTERVAL_SECONDS`
                 instead of :data:`NETWORK_REFRESH_INTERVAL_SECONDS`.
             clock: Callable returning the current unix epoch seconds.
         """
         self._store = store
         self._feed = feed
+        self._keys = keys
+        self._known_bad = known_bad
         self._force = force
         self._clock = clock
 
@@ -239,6 +250,7 @@ class RegionRefresher:
         parsed = parse_raw(self._feed.raw(region, since=asked), now=now)
         hours = summarize(parsed, since=since, fetched_at=now)
         self._store.update(region, hours, fetched_at=now, skipped_rows=parsed.skipped)
+        self._keys.update(region, observe(parsed.keys, self._known_bad))
         _logger.info(
             "lorastats: %d reception(s) in %s, %d row(s) skipped",
             len(parsed.receptions),

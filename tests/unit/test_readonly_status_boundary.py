@@ -119,3 +119,33 @@ def test_health_report_never_imports_a_write_capable_module() -> None:
     }
     offenders = sorted(name for name in imported if name.startswith(_REPORT_FORBIDDEN_MODULES))
     assert offenders == [], f"health/report.py must not import: {offenders}"
+
+
+def test_cli_network_never_names_a_write_capable_symbol() -> None:
+    code = source_without_docstring(SRC / "cli" / "network.py")
+    found = sorted(name for name in _CLI_STATUS_FORBIDDEN if name in code)
+    assert found == [], f"cli/network.py must not reference: {found}"
+
+
+def test_network_report_never_calls_a_write_operation() -> None:
+    tree = ast.parse((SRC / "network" / "report.py").read_text(encoding="utf-8"))
+    offenders = sorted(
+        {
+            node.attr
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Attribute) and node.attr in _REPORT_FORBIDDEN_ATTRS
+        }
+    )
+    assert offenders == [], f"network/report.py must not call: {offenders}"
+
+
+def test_network_report_never_imports_a_write_capable_module() -> None:
+    tree = ast.parse((SRC / "network" / "report.py").read_text(encoding="utf-8"))
+    imported = {
+        f"{node.module}.{alias.name}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+        for alias in node.names
+    }
+    offenders = sorted(name for name in imported if name.startswith(_REPORT_FORBIDDEN_MODULES))
+    assert offenders == [], f"network/report.py must not import: {offenders}"
