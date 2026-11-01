@@ -110,9 +110,10 @@ reports !NEW (firmware >= 2.8 derives the node id from the public key);
 the database follows it.` Any other id is still a stop: a device holding
 our key under another id, or reporting the derived id without our private
 key, ends FAILED with the database not updated, as before. A fresh key
-whose derived id would be reserved or another row's is drawn again before
-anything is sent. If the new id already has a row, nothing is saved (exit
-code 4).
+whose derived id would be reserved (below 4, or the broadcast address),
+another row's or a key row's owner is drawn again (up to 16 times)
+before anything is sent. If the new id already has a row, nothing is
+saved (exit code 4).
 
 **Transport selection priority:** `--port` > `--ble-address`/`--ble-scan`
 > `--host` > auto (serial first; exactly one port is auto-used, zero
