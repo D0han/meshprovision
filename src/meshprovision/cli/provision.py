@@ -48,6 +48,7 @@ from meshprovision.cli.provision_apply import ProvisionOptions, apply_and_persis
 from meshprovision.cli.provision_keys import (
     finalize_admin_key_rotation_error,
     select_keypair,
+    taken_node_ids,
 )
 from meshprovision.cli.transport import (
     TransportOptions,
@@ -529,7 +530,11 @@ def run_provision(
         if not ctx.confirm(question, default=False):
             raise click.Abort()
 
-    keypair = select_keypair(change_plan, live)
+    keypair = select_keypair(
+        change_plan,
+        live,
+        taken=taken_node_ids(db.nodes, db.keys, own=change_plan.node_id),
+    )
 
     if keypair is not None and change_plan.key_plan.regenerate:
         # Write-ahead, before any device write (the database's write lock

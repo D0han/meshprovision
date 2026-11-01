@@ -14,20 +14,30 @@ Meshtastic node ids appear in the wild in four distinct forms:
 
 :class:`NodeId` normalizes all four into one immutable, hashable,
 orderable value object with round-trip-safe conversions between them.
+
+Firmware >= 2.8 derives a node's id from its public key
+(:func:`key_derived_id`), and never picks a reserved id for itself
+(:func:`is_reserved_id`); both live here so every layer can use them.
 """
 
 from __future__ import annotations
 
+import zlib
 from dataclasses import dataclass
 from typing import Final, TypeAlias
 
 from meshprovision.errors import NodeIdError
 
 __all__ = [
+    "BROADCAST_NODE_NUM",
+    "KEY_DERIVED_ID_KEY_BYTES",
     "NODE_ID_HEX_WIDTH",
     "NODE_ID_MAX",
+    "RESERVED_NODE_NUMS_BELOW",
     "NodeId",
     "NodeIdLike",
+    "is_reserved_id",
+    "key_derived_id",
 ]
 
 NodeIdLike: TypeAlias = "str | int | NodeId"
@@ -38,6 +48,15 @@ NODE_ID_MAX: Final[int] = 0xFFFFFFFF
 
 NODE_ID_HEX_WIDTH: Final[int] = 8
 """Width, in hex digits, of the zero-padded hex form of a node id."""
+
+BROADCAST_NODE_NUM: Final[int] = NODE_ID_MAX
+"""The broadcast address (firmware ``NODENUM_BROADCAST``); never a node's own id."""
+
+RESERVED_NODE_NUMS_BELOW: Final[int] = 4
+"""Ids below this are reserved (firmware ``NUM_RESERVED``); never a node's own id."""
+
+KEY_DERIVED_ID_KEY_BYTES: Final[int] = 32
+"""Length of the public key a node id is derived from (an X25519 key)."""
 
 _HEX_DIGITS: Final[frozenset[str]] = frozenset("0123456789abcdef")
 
@@ -353,3 +372,47 @@ class NodeId:
             For example ``"NodeId('!a0cb5cc4')"``.
         """
         return f"NodeId({self.display!r})"
+
+
+def key_derived_id(public_key: bytes) -> NodeId:
+    """Return the node id firmware >= 2.8 derives from a public key.
+
+    Firmware 2.8's ``NodeDB::createNewIdentity()`` sets the node number
+    to the CRC-32 of the public key whenever the key changes, and at
+    every boot of a node that holds one. The CRC is zlib's (IEEE 802.3)
+    CRC-32, matched against the ids and keys real 2.8 nodes advertise.
+
+    Args:
+        public_key: The node's raw public key.
+
+    Returns:
+        ``NodeId(zlib.crc32(public_key))``.
+
+    Raises:
+        NodeIdError: If ``public_key`` is not exactly
+            :data:`KEY_DERIVED_ID_KEY_BYTES` bytes.
+    """
+    if len(public_key) != KEY_DERIVED_ID_KEY_BYTES:
+        raise NodeIdError(
+            f"A node id derives only from a {KEY_DERIVED_ID_KEY_BYTES}-byte public key, "
+            f"got {len(public_key)} bytes",
+            raw=len(public_key),
+        )
+    return NodeId(zlib.crc32(public_key))
+
+
+def is_reserved_id(node: NodeId) -> bool:
+    """Tell whether an id is one no node may have: reserved, or the broadcast address.
+
+    Firmware avoids these when it picks an id itself, but not when it
+    derives one from a key, so a key whose derived id is reserved must
+    never be written to a node.
+
+    Args:
+        node: The id to check.
+
+    Returns:
+        ``True`` below :data:`RESERVED_NODE_NUMS_BELOW` or at
+        :data:`BROADCAST_NODE_NUM`.
+    """
+    return node.num < RESERVED_NODE_NUMS_BELOW or node.num == BROADCAST_NODE_NUM

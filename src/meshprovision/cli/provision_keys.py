@@ -1,7 +1,8 @@
 """Key custody for ``mesh provision``: which keypair to write, and how it is recorded.
 
 Split out of :mod:`meshprovision.cli.provision` for size, with no change in
-behavior: choosing the keypair to send (:func:`select_keypair`), the origin
+behavior: choosing the keypair to send (:func:`select_keypair`, which draws
+a fresh one through :func:`fresh_node_keypair`), the origin
 recorded for the node's own key (:func:`node_key_origin`), registering an
 operator-named admin alias (:func:`register_admin_alias`), filling a
 proven private key into an out-of-band-rotated record
@@ -17,7 +18,7 @@ through :func:`meshprovision.crypto.redact.fingerprint`.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
@@ -28,7 +29,7 @@ from meshprovision.db import schema
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import AdminKeyRotationRefusedError, KeyMaterialError, PlanConflictError
-from meshprovision.nodeid import NodeId
+from meshprovision.nodeid import NodeId, is_reserved_id, key_derived_id
 from meshprovision.provisioning import detect
 from meshprovision.provisioning import plan as plan_mod
 from meshprovision.provisioning.key_registry import adopt_canonical_ref
@@ -38,19 +39,90 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from meshprovision.cli.common import CliContext, DbSession
+    from meshprovision.db.keys import KeyRepository
+    from meshprovision.db.nodes import NodeRepository
 
 __all__ = [
+    "KEYGEN_ATTEMPTS",
     "admin_key_mismatch_hint",
     "capture_proven_private_key",
     "finalize_admin_key_rotation_error",
+    "fresh_node_keypair",
     "node_key_origin",
     "register_admin_alias",
     "select_keypair",
+    "taken_node_ids",
 ]
+
+KEYGEN_ATTEMPTS: Final[int] = 16
+"""How many keypairs :func:`fresh_node_keypair` draws before giving up."""
+
+
+def taken_node_ids(nodes: NodeRepository, keys: KeyRepository, *, own: NodeId) -> frozenset[NodeId]:
+    """Collect the ids a fresh key's derived id must not be: every other id the database uses.
+
+    Args:
+        nodes: The node repository.
+        keys: The key repository.
+        own: The node being provisioned (its own id is no clash).
+
+    Returns:
+        Every ``Nodes`` row's id and every ``Keys`` row owner that is a node
+        id (a key filed under a node id with no row would still block the
+        save after a firmware 2.8 renumber), archived rows included, except
+        ``own``.
+    """
+    owners = (record.owner_node_id for record in keys.all())
+    taken = {record.node for record in nodes.all()} | {
+        NodeId.from_hex(owner) for owner in owners if schema.is_canonical_node_owner(owner)
+    }
+    return frozenset(taken - {own})
+
+
+def fresh_node_keypair(
+    taken: Collection[NodeId],
+    *,
+    generate: Callable[[], crypto_keys.KeyPair] = crypto_keys.generate_keypair,
+    attempts: int = KEYGEN_ATTEMPTS,
+) -> crypto_keys.KeyPair:
+    """Generate a node keypair whose key-derived id is free to use.
+
+    Firmware >= 2.8 renumbers a node to the id derived from its key
+    (:func:`~meshprovision.nodeid.key_derived_id`) without checking it,
+    so a key whose derived id is reserved, or already another database
+    row's, is drawn again. Firmware-agnostic: an older node keeps its id
+    and the extra draw costs nothing.
+
+    Args:
+        taken: The ids of the database's other rows.
+        generate: The keypair generator, injectable for tests.
+        attempts: How many keypairs to draw at most.
+
+    Returns:
+        The first keypair drawn whose derived id is neither reserved nor
+        in ``taken``.
+
+    Raises:
+        KeyMaterialError: If none of ``attempts`` draws had a usable id
+            (with a working generator, practically never).
+    """
+    for _ in range(attempts):
+        keypair = generate()
+        derived = key_derived_id(keypair.public)
+        if not is_reserved_id(derived) and derived not in taken:
+            return keypair
+    raise KeyMaterialError(
+        f"No usable node keypair in {attempts} draws: every key-derived id was reserved "
+        "or already in the database",
+        reason="no usable key-derived node id",
+    )
 
 
 def select_keypair(
-    change_plan: plan_mod.ChangePlan, live: detect.LiveConfig
+    change_plan: plan_mod.ChangePlan,
+    live: detect.LiveConfig,
+    *,
+    taken: Collection[NodeId] = (),
 ) -> crypto_keys.KeyPair | None:
     """Choose the keypair (if any) to apply for the node's key plan.
 
@@ -58,6 +130,8 @@ def select_keypair(
         change_plan: The plan being applied.
         live: The device's live-read configuration, consulted when the
             plan adopts the device's own already-existing keypair.
+        taken: The ids of the database's other rows, which a fresh key's
+            derived id must avoid (see :func:`fresh_node_keypair`).
 
     Returns:
         A freshly generated keypair for ``regenerate``, the device's own
@@ -65,11 +139,13 @@ def select_keypair(
         changes nothing.
 
     Raises:
+        KeyMaterialError: If no fresh keypair with a usable derived id
+            could be drawn.
         PlanConflictError: If the plan wants to adopt the device's key but
             the device reported no key material.
     """
     if change_plan.key_plan.regenerate:
-        keypair: crypto_keys.KeyPair | None = crypto_keys.generate_keypair()
+        keypair: crypto_keys.KeyPair | None = fresh_node_keypair(taken)
     elif change_plan.key_plan.adopt_device_key:
         # plan_node_keypair only sets adopt_device_key once it has confirmed
         # both are present -- this guards the type, not a real code path.

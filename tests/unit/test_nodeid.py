@@ -7,7 +7,14 @@ import random
 import pytest
 
 from meshprovision.errors import NodeIdError
-from meshprovision.nodeid import NODE_ID_MAX, NodeId
+from meshprovision.nodeid import (
+    BROADCAST_NODE_NUM,
+    NODE_ID_MAX,
+    RESERVED_NODE_NUMS_BELOW,
+    NodeId,
+    is_reserved_id,
+    key_derived_id,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -115,3 +122,44 @@ def test_constructor_rejects_bool_and_out_of_range() -> None:
         NodeId(-1)
     with pytest.raises(NodeIdError):
         NodeId(NODE_ID_MAX + 1)
+
+
+@pytest.mark.parametrize(
+    ("public_key", "expected"),
+    [
+        pytest.param(bytes(32), 0x190A55AD, id="zeros"),
+        pytest.param(bytes(range(32)), 0x91267E8A, id="counting"),
+        pytest.param(b"\xff" * 32, 0xFF6CAB0B, id="ones"),
+    ],
+)
+def test_key_derived_id_is_the_zlib_crc32_of_the_key(public_key: bytes, expected: int) -> None:
+    assert key_derived_id(public_key) == NodeId(expected)
+
+
+@pytest.mark.parametrize("length", [0, 31, 33])
+def test_key_derived_id_refuses_a_key_that_is_not_32_bytes(length: int) -> None:
+    with pytest.raises(NodeIdError, match="32-byte public key") as caught:
+        key_derived_id(bytes(length))
+    assert caught.value.raw == length
+
+
+@pytest.mark.parametrize(
+    ("num", "reserved"),
+    [
+        pytest.param(0, True, id="zero"),
+        pytest.param(RESERVED_NODE_NUMS_BELOW - 1, True, id="last-reserved"),
+        pytest.param(RESERVED_NODE_NUMS_BELOW, False, id="first-usable"),
+        pytest.param(0xDEADBE01, False, id="ordinary"),
+        pytest.param(BROADCAST_NODE_NUM - 1, False, id="below-broadcast"),
+        pytest.param(BROADCAST_NODE_NUM, True, id="broadcast"),
+    ],
+)
+def test_is_reserved_id_matches_the_firmware_reserved_and_broadcast_ids(
+    num: int, reserved: bool
+) -> None:
+    assert is_reserved_id(NodeId(num)) is reserved
+
+
+def test_reserved_constants_match_the_firmware_values() -> None:
+    assert RESERVED_NODE_NUMS_BELOW == 4
+    assert BROADCAST_NODE_NUM == 0xFFFFFFFF

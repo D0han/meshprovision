@@ -44,7 +44,6 @@ to that.
 
 from __future__ import annotations
 
-import zlib
 from collections import defaultdict
 from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass
@@ -56,6 +55,7 @@ from meshprovision.crypto.redact import REDACTION_DIGEST_CHARS, fingerprint
 from meshprovision.crypto.weakkeys import audit_public_key
 from meshprovision.health.history import floor_hour
 from meshprovision.network.rawpackets import AdvertisedKey
+from meshprovision.nodeid import key_derived_id
 
 __all__ = [
     "KEY_DIGEST_CHARS",
@@ -234,7 +234,7 @@ def short_digest(digest: str) -> str:
 
 def _derived(node: str, public_key: bytes) -> bool:
     """Tell whether a node's id is the CRC-32 of its public key (firmware 2.8)."""
-    return zlib.crc32(public_key) == int(node, 16)
+    return key_derived_id(public_key).num == int(node, 16)
 
 
 def fleet_key(node: str, public_key: bytes | None) -> FleetKey:

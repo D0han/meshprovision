@@ -353,6 +353,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh provision` draws a fresh node key again (up to 16 times) when the
+  node id firmware >= 2.8 would derive from it (`crc32(public key)`) is
+  reserved (below 4, or the broadcast address), already another database
+  row's, or the owner of a key row: such a node would renumber onto that id
+  after the key write.
 - A template that does not set `position.fixed_position` leaves the device's
   own setting alone: it defaulted to `false`, so every `mesh provision` run
   planned `fixed_position: True -> False` on a node whose position was fixed
