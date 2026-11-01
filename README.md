@@ -84,7 +84,7 @@ One console script, `mesh`, with ten subcommands/subcommand groups.
 | `mesh peers` | Give the connected device every fleet node as a favorited contact (`--apply` to write). |
 | `mesh status` | Read-only network health from loranet.pl/lorastats.pl, merged with the database. |
 | `mesh health` | Per-node health, importance and suggestions from lorastats packet reports, with a 30-day local history. |
-| `mesh network` | Region-wide views from lorastats raw packets: `keys` (network-wide key scan), `relays` (relays we depend on but don't own). |
+| `mesh network` | Region-wide views from lorastats raw packets: `keys` (network-wide key scan), `relays` (relays we depend on but don't own), `impact` (what depends on our nodes). |
 | `mesh admin` | Admin-key custody: `bootstrap`, `import`, `list`. |
 | `mesh db` | Database integrity/backup: `verify`, `backup`, `restore`, `list`, `forget`. |
 | `mesh template` | `validate` a template file — no database or device needed. |

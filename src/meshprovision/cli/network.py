@@ -17,10 +17,15 @@ from typing import TYPE_CHECKING, Final, TypeVar
 
 import click
 
-from meshprovision.cli.common import CONTEXT_SETTINGS, handle_cli_errors, pass_cli
+from meshprovision.cli.common import (
+    CONTEXT_SETTINGS,
+    handle_cli_errors,
+    node_ids_callback,
+    pass_cli,
+)
 from meshprovision.cli.help_format import MeshCommand, MeshGroup
 from meshprovision.errors import SettingsError
-from meshprovision.network import render
+from meshprovision.network import render, render_impact
 from meshprovision.network.report import (
     DEFAULT_KEYS_DAYS,
     DEFAULT_TRAFFIC_DAYS,
@@ -32,6 +37,7 @@ from meshprovision.network.report import (
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
+    from meshprovision.nodeid import NodeId
 
 __all__ = ["DEFAULT_RELAY_ROWS", "MAX_RELAY_ROWS", "network"]
 
@@ -231,6 +237,54 @@ def relays(
         click.echo(render.render_relays_json(report, everything=everything))
     else:
         render.render_relays_console(report, console=ctx.out, everything=everything, limit=limit)
+    code = report.exit_code()
+    if code:
+        raise SystemExit(code)
+
+
+@network.command(name="impact", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
+@click.argument("nodes", nargs=-1, callback=node_ids_callback, metavar="[NODE]...")
+@_common_options(DEFAULT_TRAFFIC_DAYS)
+@pass_cli
+@handle_cli_errors
+def impact(
+    ctx: CliContext,
+    *,
+    nodes: tuple[NodeId, ...],
+    days: int,
+    regions: tuple[str, ...],
+    no_fetch: bool,
+    refresh: bool,
+    json_output: bool,
+) -> None:
+    """Show what depends on our nodes, or on any NODE.
+
+    Without NODE: how much of the region's relayed traffic our nodes
+    carried, how many outside origins and gateways rely on them, and each
+    of our nodes' impact level. With NODE (ours or not): that node in
+    detail. Shares are of receptions at gateways, by last hop: who carries
+    traffic now, not what breaks without it.
+
+    Args:
+        ctx: The shared CLI context.
+        nodes: Nodes to detail; empty means our nodes' summary.
+        days: The window, from ``--days``.
+        regions: The regions, from ``--region``.
+        no_fetch: Ask nothing, from ``--no-fetch``.
+        refresh: Fetch within the 15-minute interval, from ``--refresh``.
+        json_output: Emit JSON, from ``--json``.
+
+    Raises:
+        SystemExit: 3 when no region has any data, 7 when a request failed.
+    """
+    report = _collect(
+        ctx, days=days, regions=regions, no_fetch=no_fetch, refresh=refresh, traffic=True
+    )
+    detail = [node.hex for node in dict.fromkeys(nodes)]
+    if json_output:
+        click.echo(render_impact.render_impact_json(report, nodes=detail))
+    else:
+        render_impact.render_impact_console(report, console=ctx.out, nodes=detail)
     code = report.exit_code()
     if code:
         raise SystemExit(code)

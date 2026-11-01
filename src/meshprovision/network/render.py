@@ -1,4 +1,4 @@
-"""Presentation of a :class:`~meshprovision.network.report.NetworkReport`: text and JSON.
+"""Presentation of the ``mesh network keys`` and ``relays`` views: text and JSON.
 
 Like :mod:`meshprovision.health.render` this only reads a report; only the
 ``render_*_console`` functions touch a ``Console``, and they print
@@ -6,13 +6,14 @@ Like :mod:`meshprovision.health.render` this only reads a report; only the
 name such as ``[/]`` or ``[link=...]`` stays text). Every text that came from
 a data source, the database or a store is passed through
 :func:`~meshprovision.termsafe.terminal_safe` (or
-:func:`~meshprovision.termsafe.json_dumps_safe`).
+:func:`~meshprovision.termsafe.json_dumps_safe`). The shared pieces are in
+:mod:`meshprovision.network.render_common`, ``impact`` is in
+:mod:`meshprovision.network.render_impact`.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
 from rich import box
@@ -22,15 +23,26 @@ from rich.text import Text
 
 from meshprovision.network.keys import FindingKind, KeyFinding, Severity, short_digest
 from meshprovision.network.relays import RelayRow, RelayTable, byte_label, relay_table
-from meshprovision.status import timefmt
+from meshprovision.network.render_common import (
+    MAX_NAMED,
+    PROXY_CAVEAT,
+    confidence_text,
+    data_line,
+    iso,
+    label,
+    names,
+    percent,
+    refresh_json,
+    refresh_lines,
+    text_cell,
+    time_text,
+)
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
     from rich.console import Console
 
-    from meshprovision.network.refresh import NetworkRefresh
     from meshprovision.network.report import NetworkReport, RegionReport
-    from meshprovision.network.resolve import Resolution
 
 __all__ = [
     "keys_to_json_dict",
@@ -40,7 +52,6 @@ __all__ = [
     "render_keys_json",
     "render_relays_console",
     "render_relays_json",
-    "text_cell",
 ]
 
 _SEVERITY_STYLES: Final[dict[Severity, str]] = {
@@ -57,123 +68,16 @@ _KIND_LABELS: Final[dict[FindingKind, str]] = {
     FindingKind.MIGRATION: "migration",
     FindingKind.KEY_CHANGED: "key changed",
 }
-_MAX_NAMED: Final[int] = 8
-"""Nodes named in one finding's text; ``--json`` lists all."""
-
 _COVERAGE_NOTE: Final[str] = (
     "Only nodes whose node info travels unencrypted (the default channel) can be seen."
 )
 
 
-def _time(epoch: float | None) -> str:
-    """Render an epoch time in local time, ``-`` when unknown."""
-    if epoch is None:
-        return "-"
-    return timefmt.format_local(datetime.fromtimestamp(epoch, tz=UTC), include_zone=False)
-
-
-def _iso(epoch: float | None) -> str | None:
-    """Render an epoch time as ISO-8601 UTC."""
-    return None if epoch is None else timefmt.isoformat_z(datetime.fromtimestamp(epoch, tz=UTC))
-
-
-def _names(report: NetworkReport, region: RegionReport) -> dict[str, str]:
-    """Build the short name of every node a region's view knows one for.
-
-    Our database's names win over a node's own node info, which wins over
-    lorastats' node list.
-
-    Args:
-        report: The report.
-        region: The region.
-
-    Returns:
-        Hex id -> terminal-safe short name.
-    """
-    found = {
-        node.node_id.hex: terminal_safe(node.short_name) for node in region.nodes if node.short_name
-    }
-    found.update({entry.node: entry.short_name for entry in region.keys.seen if entry.short_name})
-    found.update({member.node: member.short_name for member in report.fleet if member.short_name})
-    return found
-
-
-def _label(node: str, known: Mapping[str, str]) -> str:
-    """Render a node as ``<hex id> <short name>`` (just the id without a name).
-
-    Args:
-        node: The hex id.
-        known: Hex id -> short name.
-
-    Returns:
-        The label.
-    """
-    name = known.get(node)
-    return f"{node} {name}" if name else node
-
-
-def _data_line(report: NetworkReport, region: RegionReport, what: str) -> Text:
-    """Render a view's first line: what, where, the window and how fresh the data is.
-
-    Args:
-        report: The report.
-        region: The region.
-        what: The view's name, for example ``"Key scan"``.
-
-    Returns:
-        The line.
-    """
-    window = "last 24 h" if report.days == 1 else f"last {report.days} days"
-    fresh = "no data yet" if region.fetched_at is None else f"data as of {_time(region.fetched_at)}"
-    return Text(f"{what}: {terminal_safe(region.region)}, {window} ({fresh})", style="bold")
-
-
-def _refresh_lines(refresh: NetworkRefresh | None) -> Iterable[Text]:
-    """Render what a refresh could not do, one line each.
-
-    Args:
-        refresh: The refresh, or ``None`` without fetching.
-
-    Yields:
-        One line per failure, and one for unusable rows.
-    """
-    if refresh is None:
-        yield Text("Nothing fetched (--no-fetch): stored data only.", style="dim")
-        return
-    for failure in refresh.failures:
-        text = f"{terminal_safe(failure.region)}: {terminal_safe(failure.message)}"
-        yield Text(text, style="dim red")
-    if refresh.skipped_rows:
-        yield Text(
-            f"lorastats: {refresh.skipped_rows} row(s) could not be used", style="dim yellow"
-        )
-
-
-def _refresh_json(refresh: NetworkRefresh | None) -> dict[str, object] | None:
-    """Render what a refresh did as JSON.
-
-    Args:
-        refresh: The refresh, or ``None`` without fetching.
-
-    Returns:
-        ``{"refreshed", "failures", "skipped_rows"}``, or ``None``.
-    """
-    if refresh is None:
-        return None
-    return {
-        "refreshed": list(refresh.refreshed),
-        "failures": [
-            {"region": f.region, "message": f.message, "hint": f.hint} for f in refresh.failures
-        ],
-        "skipped_rows": refresh.skipped_rows,
-    }
-
-
 def _finding_text(finding: KeyFinding, known: Mapping[str, str]) -> str:
     """Describe one key finding in a sentence."""
-    named = [_label(node, known) for node in finding.nodes[:_MAX_NAMED]]
-    if len(finding.nodes) > _MAX_NAMED:
-        named.append(f"and {len(finding.nodes) - _MAX_NAMED} more")
+    named = [label(node, known) for node in finding.nodes[:MAX_NAMED]]
+    if len(finding.nodes) > MAX_NAMED:
+        named.append(f"and {len(finding.nodes) - MAX_NAMED} more")
     listed = ", ".join(named)
     kind = finding.kind
     if kind is FindingKind.OUR_KEY_ELSEWHERE:
@@ -198,7 +102,7 @@ def _finding_text(finding: KeyFinding, known: Mapping[str, str]) -> str:
     if kind is FindingKind.HANDOVER:
         return (
             f"used by {', then '.join(named)}; the older id was last heard "
-            f"{_time(finding.last_heard)} (a restored backup or a re-flashed node)"
+            f"{time_text(finding.last_heard)} (a restored backup or a re-flashed node)"
         )
     if kind is FindingKind.MIGRATION:
         return f"{' became '.join(named)} (firmware >= 2.8 derives the node id from the key)"
@@ -219,9 +123,9 @@ def _finding_line(finding: KeyFinding, known: Mapping[str, str]) -> Text:
 def _keys_lines(report: NetworkReport, region: RegionReport) -> Iterable[Text]:
     """Render one region's key scan."""
     scan = region.keys
-    known = _names(report, region)
+    known = names(report, region)
     of = f" (of {len(region.nodes)} in lorastats' node list)" if region.nodes else ""
-    yield _data_line(report, region, "Key scan")
+    yield data_line(report, region, "Key scan")
     yield Text(f"{scan.nodes} node(s) advertised a key{of}. {_COVERAGE_NOTE}")
     ours = sum(1 for finding in scan.findings if finding.fleet)
     yield Text(
@@ -248,7 +152,7 @@ def render_keys_console(report: NetworkReport, *, console: Console) -> None:
             console.print()
         for line in _keys_lines(report, region):
             console.print(line, markup=False, highlight=False)
-    for line in _refresh_lines(report.refresh):
+    for line in refresh_lines(report.refresh):
         console.print(line, markup=False, highlight=False)
 
 
@@ -268,7 +172,7 @@ def keys_to_json_dict(report: NetworkReport) -> dict[str, object]:
         regions.append(
             {
                 "region": region.region,
-                "data_as_of": _iso(region.fetched_at),
+                "data_as_of": iso(region.fetched_at),
                 "nodes_with_key": scan.nodes,
                 "nodes_listed": len(region.nodes) if region.nodes else None,
                 "fleet_seen": list(scan.fleet_seen),
@@ -281,18 +185,18 @@ def keys_to_json_dict(report: NetworkReport) -> dict[str, object]:
                         "nodes": list(f.nodes),
                         "fleet": f.fleet,
                         "checks": list(f.checks),
-                        "last_heard": _iso(f.last_heard),
+                        "last_heard": iso(f.last_heard),
                     }
                     for f in scan.findings
                 ],
             }
         )
     return {
-        "generated_at": _iso(report.generated_at),
+        "generated_at": iso(report.generated_at),
         "days": report.days,
         "fleet_nodes": len(report.fleet),
         "regions": regions,
-        "refresh": _refresh_json(report.refresh),
+        "refresh": refresh_json(report.refresh),
         "exit_code": report.exit_code(crypto=report.keys_critical),
     }
 
@@ -309,25 +213,6 @@ def render_keys_json(report: NetworkReport) -> str:
     return json_dumps_safe(keys_to_json_dict(report), indent=2)
 
 
-_PROXY_CAVEAT: Final[str] = (
-    "Shares are of receptions at gateways, by last hop. Meshtastic floods: when a relay is "
-    "gone, another node usually rebroadcasts instead. These numbers show who carries "
-    "traffic now, not what breaks without it."
-)
-
-
-def _percent(share: float | None) -> str:
-    """Render a share as a percentage, ``-`` when unknown."""
-    return "-" if share is None else f"{100 * share:.1f}%"
-
-
-def _confidence(resolution: Resolution) -> str:
-    """Render a resolution's label, with the date of a learned one."""
-    if resolution.learned_at is not None:
-        return f"{resolution.confidence.value} (learned {_time(resolution.learned_at)})"
-    return resolution.confidence.value
-
-
 def _relay_name(row: RelayRow, known: Mapping[str, str]) -> tuple[str, str]:
     """Render a row's relay and name cells (an unattributed byte names its candidates)."""
     resolution = row.resolution
@@ -336,18 +221,6 @@ def _relay_name(row: RelayRow, known: Mapping[str, str]) -> tuple[str, str]:
         return node, known.get(node, "")
     candidates = ", ".join(score.node for score in resolution.candidates)
     return byte_label(resolution.byte), f"{resolution.confidence.value} ({candidates})"
-
-
-def text_cell(value: str) -> Text:
-    """Make a table cell plain, terminal-safe text: never rich markup (a name may be ``[/]``).
-
-    Args:
-        value: The cell's text.
-
-    Returns:
-        The cell.
-    """
-    return Text(terminal_safe(value))
 
 
 def _relay_table(table: RelayTable, known: Mapping[str, str], limit: int) -> Table:
@@ -374,13 +247,13 @@ def _relay_table(table: RelayTable, known: Mapping[str, str], limit: int) -> Tab
             relay,
             name or "-",
             row.role or "-",
-            _confidence(row.resolution),
-            _percent(row.our_share) if row.our_receptions else "-",
+            confidence_text(row.resolution),
+            percent(row.our_share) if row.our_receptions else "-",
             str(len(row.our_origins)),
-            ", ".join(_label(node, known) for node in row.our_sole_first_hop) or "-",
-            _percent(row.region_share),
-            f"{row.gateways_relying} (max {_percent(row.max_gateway_share)})",
-            _time(row.last_seen),
+            ", ".join(label(node, known) for node in row.our_sole_first_hop) or "-",
+            percent(row.region_share),
+            f"{row.gateways_relying} (max {percent(row.max_gateway_share)})",
+            time_text(row.last_seen),
             "; ".join(row.gaps) or "-",
         )
         grid.add_row(*(text_cell(cell) for cell in cells))
@@ -392,11 +265,11 @@ def _relays_lines(
 ) -> Iterable[RenderableType]:
     """Render one region's relay table."""
     table = relays_of(report, region, everything=everything)
-    known = _names(report, region)
+    known = names(report, region)
     what = (
         "Relays by share of relayed traffic" if everything else "Relays we depend on but don't own"
     )
-    yield _data_line(report, region, what)
+    yield data_line(report, region, what)
     yield Text(
         f"{table.our_packets} of our packets, {table.our_relayed} of their receptions relayed; "
         f"{table.relayed} relayed receptions in the region"
@@ -446,8 +319,8 @@ def render_relays_console(
             console.print()
         for item in _relays_lines(report, region, everything=everything, limit=limit):
             console.print(item, markup=False, highlight=False)
-    console.print(Text(_PROXY_CAVEAT, style="dim"), markup=False, highlight=False)
-    for line in _refresh_lines(report.refresh):
+    console.print(Text(PROXY_CAVEAT, style="dim"), markup=False, highlight=False)
+    for line in refresh_lines(report.refresh):
         console.print(line, markup=False, highlight=False)
 
 
@@ -458,7 +331,7 @@ def _row_json(row: RelayRow) -> dict[str, object]:
         "byte": resolution.byte,
         "node": resolution.node,
         "confidence": resolution.confidence.value,
-        "learned_at": _iso(resolution.learned_at),
+        "learned_at": iso(resolution.learned_at),
         "candidates": [
             {"node": c.node, "coverage": round(c.coverage, 4), "distance_db": c.distance}
             for c in resolution.candidates
@@ -475,8 +348,8 @@ def _row_json(row: RelayRow) -> dict[str, object]:
         "max_gateway_share": round(row.max_gateway_share, 4),
         "gateways_hearing_directly": row.heard_directly_by,
         "role": row.role,
-        "last_seen": _iso(row.last_seen),
-        "last_boot": _iso(row.last_boot),
+        "last_seen": iso(row.last_seen),
+        "last_boot": iso(row.last_boot),
         "gaps": list(row.gaps),
     }
 
@@ -497,7 +370,7 @@ def relays_to_json_dict(report: NetworkReport, *, everything: bool) -> dict[str,
         regions.append(
             {
                 "region": region.region,
-                "data_as_of": _iso(region.fetched_at),
+                "data_as_of": iso(region.fetched_at),
                 "relayed_receptions": table.relayed,
                 "our_packets": table.our_packets,
                 "our_relayed_receptions": table.our_relayed,
@@ -505,10 +378,10 @@ def relays_to_json_dict(report: NetworkReport, *, everything: bool) -> dict[str,
             }
         )
     return {
-        "generated_at": _iso(report.generated_at),
+        "generated_at": iso(report.generated_at),
         "days": report.days,
         "regions": regions,
-        "refresh": _refresh_json(report.refresh),
+        "refresh": refresh_json(report.refresh),
         "exit_code": report.exit_code(),
     }
 

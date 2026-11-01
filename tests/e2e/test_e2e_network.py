@@ -405,6 +405,8 @@ def test_relays_limit_and_a_mute_node_are_respected(
 
     assert result.exit_code == 0, result.output
     assert "2 more (--limit)." in result.stdout
+    assert mini.ROUTER in result.stdout
+    assert "0xe4" not in result.stdout and mini.COLLIDER not in result.stdout
     assert mini.MUTE not in result.stdout
 
 
@@ -477,7 +479,7 @@ def _hostile_rows(now: float, name: str) -> list[dict[str, object]]:
 
 
 @pytest.mark.parametrize("name", _MARKUP_NAMES)
-@pytest.mark.parametrize("view", [["keys"], ["relays"]])
+@pytest.mark.parametrize("view", [["keys"], ["relays"], ["impact", mini.ROUTER]])
 def test_a_name_that_is_rich_markup_is_printed_as_text(
     runner: CliRunner,
     env: dict[str, str],
@@ -515,3 +517,122 @@ def test_a_learned_relay_is_stamped_with_its_datas_time_not_renewed_offline(
 
     assert result.exit_code == 0, result.output
     assert (directory / "relays.json").read_bytes() == before
+
+
+def test_impact_sums_up_what_depends_on_our_nodes(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    db = _seed(seed_db)
+    before = db_fingerprint(db)
+
+    result, _ = _run(runner, env, ["impact", "--region", "PL"])
+
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert "Impact of our nodes: PL, last 24 h (data as of " in out
+    assert "Our nodes carried 25 of 153 relayed receptions (16.3%); possibly 0 more" in out
+    assert "1 of 3 origins (with >= 20 relayed receptions) got >= 50% via us, 1 >= 80%;" in out
+    assert "1 of 3 gateways >= 50%, 0 >= 80%; 25 of 122 outsider packets" in out
+    assert [cell.strip() for cell in _cells(out, mini.OURS_RELAY)] == [
+        mini.OURS_RELAY,
+        "Our3",
+        "0x03: high",
+        "16.3%",
+        "1",
+        "1",
+        "1",
+        "0",
+        "high",
+    ]
+    assert _cells(out, mini.OURS_TWO)[2].strip() == f"0xbc: attributed to {mini.COLLIDER}"
+    assert _cells(out, mini.OURS_ONE)[2].strip() == "0x01: not seen as a relay"
+    assert "not what breaks without it" in out
+    assert db_fingerprint(db) == before
+
+
+def test_impact_of_any_node_in_detail(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+
+    result, _ = _run(runner, env, ["impact", "--region", "PL", mini.ROUTER, f"!{mini.OURS_TWO}"])
+
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert f"Impact of {mini.ROUTER} Rtr: PL" in out
+    assert "Carried 107 of 153 relayed receptions (69.9%)." in out
+    assert "via it: a1000011 (100.0%), a2000012 (100.0%)" in out
+    assert "via it: 6a000072 (100.0%), 6a000071 (85.1%)" in out
+    assert "Was the only first hop seen of: a1000011, a2000012" in out
+    assert "Packets whose every reception it relayed last: 57" in out
+    assert f"Impact of {mini.OURS_TWO} Our2: PL" in out
+    assert f"Relay byte 0xbc: attributed to {mini.COLLIDER}" in out
+    assert out.count("Level: high") == 1 and out.count("Level: low") == 1
+
+
+def test_impact_json(runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]) -> None:
+    _seed(seed_db)
+
+    summary, _ = _run(runner, env, ["impact", "--region", "PL", "--json"])
+    detail, _ = _run(runner, env, ["impact", "--region", "PL", "--json", mini.OURS_RELAY])
+
+    assert summary.exit_code == detail.exit_code == 0
+    (region,) = json.loads(summary.stdout)["regions"]
+    assert region["fleet"] == {
+        "relayed_receptions": 153,
+        "carried": 25,
+        "possibly_carried": 0,
+        "origins_judged": 3,
+        "origins_relying_half": 1,
+        "origins_relying_most": 1,
+        "gateways_judged": 3,
+        "gateways_relying_half": 1,
+        "gateways_relying_most": 0,
+        "outsider_packets": 122,
+        "sole_path_packets": 25,
+        "only_gateway_origins": 0,
+    }
+    assert [node["node"] for node in region["nodes"]] == [
+        mini.OURS_ONE,
+        mini.OURS_RELAY,
+        mini.OURS_TWO,
+    ]
+    (node,) = json.loads(detail.stdout)["regions"][0]["nodes"]
+    assert node == {
+        "node": mini.OURS_RELAY,
+        "relay_byte": 3,
+        "relay_confidence": "high",
+        "relay_attributed_to": mini.OURS_RELAY,
+        "carried": 25,
+        "carried_share": 0.1634,
+        "origins_relying": [{"node": "a3000013", "share": 1.0}],
+        "gateways_relying": [{"node": mini.G3, "share": 0.6944}],
+        "sole_first_hop_for": ["a3000013"],
+        "sole_path_packets": 25,
+        "only_gateway_for": [],
+        "level": "high",
+    }
+    assert "fleet" not in json.loads(detail.stdout)["regions"][0]
+
+
+def test_impact_refuses_a_malformed_node(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+
+    result, lorastats = _run(runner, env, ["impact", "--region", "PL", "not-a-node"])
+
+    assert result.exit_code == 2, result.output
+    assert lorastats.raw == []
+
+
+@pytest.mark.parametrize("view", [["impact"]])
+def test_our_own_name_in_a_table_is_printed_as_text(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], view: list[str]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id=mini.OURS_RELAY, short_name="[/]", long_name="Our three")])
+
+    result, _ = _run(runner, env, [*view, "--region", "PL"])
+
+    assert result.exit_code == 0, result.output
+    assert f"{mini.OURS_RELAY}   [/]" in result.stdout

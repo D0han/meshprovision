@@ -826,12 +826,15 @@ mesh network keys --region Zachód     # another region (repeatable)
 mesh network keys --no-fetch --json   # stored data only, no request at all
 mesh network relays                   # relays carrying our packets, last 24 h
 mesh network relays --all --days 7    # every relay of the region by share
+mesh network impact                   # what depends on our nodes
+mesh network impact c464e761          # what depends on any node, in detail
 ```
 
 | Subcommand | What it shows |
 |---|---|
 | `keys` | Every public key the region's nodes advertise, and what is wrong with them |
 | `relays` | The relays carrying our packets that are not ours (`--all`: every relay), with how much we depend on each |
+| `impact [NODE]...` | What depends on our nodes (or on any node): traffic carried, who relies on it, an impact level |
 
 | Option (every subcommand) | Meaning |
 |---|---|
@@ -994,6 +997,78 @@ Shares are of receptions at gateways, by last hop. Meshtastic floods: when a rel
 `last_boot` and `gaps`, per region with `relayed_receptions`, `our_packets`
 and `our_relayed_receptions`. Default window 1 day. Exit code `0` (3/7 as
 above).
+
+### `mesh network impact`
+
+What depends on our nodes (without `NODE`), or on any node, ours or not
+(`mesh network impact NODE...`), over `--days` (default 1). For a node:
+
+- **Carried**: the region's relayed receptions whose relay byte resolves
+  (`high`/`medium`) to it. A node whose byte resolves to another node, or is
+  ambiguous, is credited with nothing, and its line says so ("0xbc:
+  attributed to bb0000bc"): never a guess.
+- **Origins / gateways relying on it**: other nodes with at least 20 relayed
+  receptions that got at least 50 % of them through it.
+- **Only first hop of**: other nodes with at least 20 first-hop events that
+  went at least 90 % through it, never heard directly by a gateway.
+- **Packets whose every reception it relayed last.**
+- **Would no longer be seen by MQTT/lorastats without it**: other nodes with
+  at least 5 packets of which at least half were uplinked by it alone, as a
+  gateway. Not "cut off from the mesh": gateways are MQTT visibility.
+
+For one of ours, our other nodes do not count as depending on it. Its
+**level** is `high` when any origin or gateway relies on it for 80 % or more,
+it is anyone's only first hop or only gateway, or it carried 10 % of the
+region's relayed receptions; `medium` when it carried 3 %, or anyone relies
+on it for 50 %; else `low`. Without `NODE` the view also sums up our nodes
+together: the receptions they carried (and those of ambiguous bytes with one
+of ours among the candidates, shown but never added), how many outsider
+origins and gateways rely on us for 50 % and 80 %, the outsider packets that
+reached gateways only through us, and the outsiders seen by MQTT mostly only
+through our gateways. Example (the end-to-end tests' region):
+
+```text
+Impact of our nodes: PL, last 24 h (data as of 2026-11-01 01:25:48)
+Our nodes carried 25 of 153 relayed receptions (16.3%); possibly 0 more (ambiguous relay bytes with one of ours among the candidates).
+Outsiders relying on us: 1 of 3 origins (with >= 20 relayed receptions) got >= 50% via us, 1 >= 80%; 1 of 3 gateways >= 50%, 0 >= 80%; 25 of 122 outsider packets reached gateways only via us; 0 origin(s) seen by MQTT mostly only through our gateways.
+
+  Node       Name   Relay byte                     Carried   Origins>=50%   Gateways>=50%   Sole 1st hop for   Only gateway for   Level
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  d0000a01   Our1   0x01: not seen as a relay      0.0%      0              0               0                  0                  low
+  d0000c03   Our3   0x03: high                     16.3%     1              1               1                  0                  high
+  d00000bc   Our2   0xbc: attributed to bb0000bc   0.0%      0              0               0                  0                  low
+
+Shares are of receptions at gateways, by last hop. Meshtastic floods: when a relay is gone, another node usually rebroadcasts instead. These numbers show who carries traffic now, not what breaks without it.
+```
+
+and `mesh network impact c0ffee61` for an outsider's router:
+
+```text
+Impact of c0ffee61 Rtr: PL, last 24 h (data as of 2026-11-01 01:25:48)
+Level: high
+Relay byte 0x61: high
+Carried 107 of 153 relayed receptions (69.9%).
+Origins getting >= 50% of their relayed receptions via it: a1000011 (100.0%), a2000012 (100.0%)
+Gateways getting >= 50% of their relayed receptions via it: 6a000072 (100.0%), 6a000071 (85.1%)
+Was the only first hop seen of: a1000011, a2000012
+Packets whose every reception it relayed last: 57
+Would no longer be seen by MQTT/lorastats without it: -
+```
+
+These are shares of receptions at gateways, by last hop: Meshtastic floods,
+and when a relay is gone another node usually rebroadcasts instead (its own
+rebroadcast was suppressed only because it heard this one first), so they
+show who carries traffic now, not what breaks without it; the only stronger
+claim is "was the only first hop seen". `--json` gives per region either
+`fleet` (`relayed_receptions`, `carried`, `possibly_carried`,
+`origins_judged`, `origins_relying_half`, `origins_relying_most`,
+`gateways_judged`, `gateways_relying_half`, `gateways_relying_most`,
+`outsider_packets`, `sole_path_packets`, `only_gateway_origins`) and `nodes`,
+or (with `NODE`) just `nodes`; each node has `relay_byte`,
+`relay_confidence`, `relay_attributed_to`, `carried`, `carried_share`,
+`origins_relying`, `gateways_relying` (each `node` and `share`),
+`sole_first_hop_for`, `sole_path_packets`, `only_gateway_for` and `level`.
+Exit code `0` (3/7 as above).
 
 ## `mesh admin`
 

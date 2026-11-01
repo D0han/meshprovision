@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh network impact [NODE]...`: what depends on our nodes, or on any node
+  (ours or not), over `--days` (default 1): the region's relayed receptions it
+  carried (only when its relay byte resolves to it; otherwise the output says
+  what the byte resolves to), the origins and gateways that got at least half
+  of their relayed receptions through it, the nodes it was the only first hop
+  of, the packets only it relayed, the nodes it was mostly the only MQTT
+  uplink for, and an impact level (`high`/`medium`/`low`). Without `NODE` it
+  also sums up our nodes together (carried, possibly carried through
+  ambiguous bytes, outsiders relying on us at 50 % and 80 %). Every share is
+  of receptions at gateways by last hop, and is printed with that caveat.
 - `mesh network relays`: the relays that carry our nodes' packets but are not
   ours, in the regions our nodes live in (or `--region`), over `--days`
   (default 1). Each relay byte is resolved to a node by comparing the SNR and
