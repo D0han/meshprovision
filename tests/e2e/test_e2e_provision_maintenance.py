@@ -161,3 +161,21 @@ def test_an_already_provisioned_node_with_nothing_to_apply_gets_no_warning(
 
     assert again.exit_code == 0, again.output
     assert _WARNING not in again.stderr
+
+
+@pytest.mark.parametrize(
+    ("firmware", "renumbers"), [("2.8.0.47db0e3", True), ("2.7.11", False)], ids=["2.8", "2.7"]
+)
+def test_the_warning_says_a_key_write_on_firmware_2_8_changes_the_node_id(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, firmware: str, renumbers: bool
+) -> None:
+    iface = FakeMeshInterface(_NODE, firmware_version=firmware)
+    iface.localNode.localConfig.lora.region = 3  # EU_868: the plan writes no region
+    bus.use(iface)
+    _seed_store(env)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0, result.output
+    changes = "Applying this plan reboots it and changes its node id (firmware >= 2.8 derives"
+    assert (changes in result.stderr) is renumbers

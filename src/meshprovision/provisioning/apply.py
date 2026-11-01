@@ -51,6 +51,7 @@ or a ``WriteResult``; nothing here ever does a bare ``except Exception``.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import hmac
 import logging
 import sys
@@ -67,7 +68,7 @@ from meshprovision.errors import (
     PlanConflictError,
     ProvisioningError,
 )
-from meshprovision.nodeid import NodeId
+from meshprovision.nodeid import NodeId, key_derived_id
 from meshprovision.provisioning import connection, detect
 from meshprovision.provisioning.apply_session import (
     DEFAULT_RECONNECT_ATTEMPTS,
@@ -415,26 +416,69 @@ def _write_in_order(
     return results, attempted, stop_reason
 
 
+def _holds_our_new_key(
+    plan: ChangePlan, live_after: detect.LiveConfig, *, keypair: KeyPair | None
+) -> bool:
+    """Tell whether the reconnected device holds the keypair this run generated.
+
+    That private key exists nowhere else: a device holding it is the one
+    this run wrote to.
+
+    Args:
+        plan: The plan being applied.
+        live_after: The freshly re-read live configuration.
+        keypair: The keypair this run applied, if any.
+
+    Returns:
+        ``True`` only when the plan regenerated the key and the device
+        reports exactly its private half (compared in constant time).
+    """
+    return (
+        plan.key_plan.regenerate
+        and keypair is not None
+        and live_after.security.private_key is not None
+        and hmac.compare_digest(live_after.security.private_key.reveal(), keypair.private.reveal())
+    )
+
+
+def _proven_renumber(
+    plan: ChangePlan, live_after: detect.LiveConfig, *, keypair: KeyPair | None
+) -> bool:
+    """Tell whether a reconnect to another id is the firmware 2.8 renumber this run caused.
+
+    Firmware >= 2.8 sets the node id to the CRC-32 of the public key when
+    the key changes (verified in firmware source, ``createNewIdentity``),
+    so after this run's key write and reboot the same device answers as
+    ``key_derived_id(keypair.public)``. Accepted only with both proofs: the
+    device holds this run's private key, and reports exactly that id.
+    Firmware-agnostic: an older device never reports that id.
+
+    Args:
+        plan: The plan being applied.
+        live_after: The freshly re-read live configuration.
+        keypair: The keypair this run applied, if any.
+
+    Returns:
+        ``True`` when the new id is proven to be the same device's.
+    """
+    return (
+        keypair is not None
+        and _holds_our_new_key(plan, live_after, keypair=keypair)
+        and live_after.node_id == key_derived_id(keypair.public)
+    )
+
+
 def _possible_node_renumber(
     plan: ChangePlan, live_after: detect.LiveConfig, *, keypair: KeyPair | None
 ) -> WriteResult | None:
-    """Give the unverified firmware-2.8 node-renumber case its own diagnostic.
+    """Give a renumber to an unexpected id, by the device holding our key, its own diagnostic.
 
-    Firmware 2.8 may derive a node's number from its public key
-    (unverified against source -- see the project's firmware-2.8 notes).
-    If that is true, a key regeneration on the *same* physical device can
-    make the final-verify reconnect land on a new node number that looks
-    exactly like a device swap to :func:`_identity_mismatch`. This
-    function narrows that case: the device the reconnect actually
-    answered from holds the private key this process just generated, a
-    secret that exists nowhere else. That is strong evidence it is the
-    same device, just reporting a new number -- so the message tells the
-    operator that, instead of sending them hunting for a swap that never
-    happened.
-
-    This is diagnostic text only. It does not weaken the refusal: either
-    way the database is not updated, and re-keying a database row to a
-    new node id is never done automatically.
+    The device the reconnect answered from holds the private key this
+    process just generated, a secret that exists nowhere else -- strong
+    evidence it is the same device -- but it reports an id other than the
+    one firmware 2.8 derives from that key (:func:`_proven_renumber` has
+    already ruled that case in). Not a swap, not the expected renumber
+    either: stopped, nothing persisted.
 
     Args:
         plan: The plan being applied.
@@ -444,23 +488,19 @@ def _possible_node_renumber(
             one.
 
     Returns:
-        The distinct ``"<verify>"`` :class:`WriteResult` when the
-        evidence matches; otherwise ``None`` (the caller falls back to
+        The distinct ``"<verify>"`` :class:`WriteResult` when the device
+        holds our key; otherwise ``None`` (the caller falls back to
         :func:`_identity_mismatch`'s ordinary message).
     """
-    if not (
-        plan.key_plan.regenerate
-        and keypair is not None
-        and live_after.security.private_key is not None
-        and hmac.compare_digest(live_after.security.private_key.reveal(), keypair.private.reveal())
-    ):
+    if keypair is None or not _holds_our_new_key(plan, live_after, keypair=keypair):
         return None
     return WriteResult(
         "<verify>",
         WriteStatus.FAILED,
         f"the device now reports node {live_after.node_id.display} but holds the keypair "
-        "this run generated. Its node number appears to have changed (firmware 2.8+ "
-        "derives it from the public key); stopped; the database was NOT updated",
+        "this run generated. Its node number appears to have changed, but not to "
+        f"{key_derived_id(keypair.public).display}, the id firmware 2.8+ derives from that "
+        "key; stopped; the database was NOT updated",
     )
 
 
@@ -526,14 +566,16 @@ def _verify_after_apply(
         )
         return _stopped(plan, results, security_attempted=security_attempted)
 
-    if live_after.node_id != plan.node_id:
+    renumbered = live_after.node_id != plan.node_id and _proven_renumber(
+        plan, live_after, keypair=keypair
+    )
+    if live_after.node_id != plan.node_id and not renumbered:
         # Never run verify_plan against another device: its comparisons
         # would be meaningless, and a CONFIRMED line would be actively
         # misleading. 3b: when this run generated a keypair that the
         # reconnected device -- despite the different node number --
-        # actually holds, that is the unverified firmware-2.8
-        # node-renumber case, not a swap; give it a distinct message, but
-        # the refusal to persist is identical either way.
+        # actually holds, give it a distinct message, but the refusal to
+        # persist is identical either way.
         results.append(
             _possible_node_renumber(plan, live_after, keypair=keypair)
             or _identity_mismatch(plan, live_after.node_id)
@@ -552,6 +594,11 @@ def _verify_after_apply(
     )
 
     outcome = _stopped(plan, results, security_attempted=security_attempted)
+    if renumbered:
+        # The same device, proven by the key: the outcome follows it.
+        outcome = dataclasses.replace(
+            outcome, node_id=live_after.node_id, previous_node_id=plan.node_id
+        )
     if outcome.uncertain or not outcome.ok:
         _logger.warning(
             "Node %s left in an UNCERTAIN STATE: %s",
@@ -563,18 +610,13 @@ def _verify_after_apply(
         return outcome
 
     fingerprint = redact.fingerprint(keypair.public) if keypair is not None else None
-    return ApplyOutcome(
-        node_id=plan.node_id,
-        results=outcome.results,
-        dry_run=False,
-        verified=True,
-        public_key_fingerprint=fingerprint,
-        security_attempted=security_attempted,
-        record=plan.to_record(
-            confirmed_short_name=_confirmed_name(outcome.results, "short_name"),
-            confirmed_long_name=_confirmed_name(outcome.results, "long_name"),
-        ),
+    record = plan.to_record(
+        confirmed_short_name=_confirmed_name(outcome.results, "short_name"),
+        confirmed_long_name=_confirmed_name(outcome.results, "long_name"),
     )
+    if renumbered:
+        record = record.with_updates(node_id=live_after.node_id.hex)
+    return dataclasses.replace(outcome, public_key_fingerprint=fingerprint, record=record)
 
 
 def apply_plan(

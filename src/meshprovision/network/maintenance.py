@@ -49,7 +49,11 @@ _MUTE_ROLE: Final[str] = "CLIENT_MUTE"
 
 
 def maintenance_note(
-    node: NodeId, directory: Path, *, clock: Callable[[], float] = time.time
+    node: NodeId,
+    directory: Path,
+    *,
+    renumbers: bool = False,
+    clock: Callable[[], float] = time.time,
 ) -> str | None:
     """Say what depends on ``node``, from the ``mesh network`` store, if it matters.
 
@@ -57,6 +61,8 @@ def maintenance_note(
         node: The node about to be provisioned.
         directory: The network store directory
             (``cache_dir /`` :data:`~meshprovision.network.store.NETWORK_DIRNAME`).
+        renumbers: Whether applying the plan also changes the node's id
+            (a key write on firmware >= 2.8), said in the sentence.
         clock: Callable returning the current unix epoch seconds.
 
     Returns:
@@ -65,13 +71,13 @@ def maintenance_note(
         recent data, or anything failed.
     """
     try:
-        return _note(node, directory, clock())
+        return _note(node, directory, clock(), renumbers=renumbers)
     except Exception as exc:  # a hint must never break provisioning
         _logger.debug("no maintenance note for %s: %s", node.hex, exc, exc_info=True)
         return None
 
 
-def _note(node: NodeId, directory: Path, now: float) -> str | None:
+def _note(node: NodeId, directory: Path, now: float, *, renumbers: bool) -> str | None:
     """Find the region where ``node`` matters most and describe it."""
     store = RegionStore(directory)
     keys = KeyStore(directory)
@@ -88,7 +94,7 @@ def _note(node: NodeId, directory: Path, now: float) -> str | None:
         impact = node_impact(traffic, resolutions, node.hex)
         if impact.level is not Level.LOW and (worst is None or _rank(impact) > _rank(worst[0])):
             worst = (impact, region, fetched_at)
-    return None if worst is None else _sentence(node, *worst)
+    return None if worst is None else _sentence(node, *worst, renumbers=renumbers)
 
 
 def _rank(impact: NodeImpact) -> tuple[bool, float]:
@@ -96,7 +102,9 @@ def _rank(impact: NodeImpact) -> tuple[bool, float]:
     return impact.level is Level.HIGH, impact.carried_share
 
 
-def _sentence(node: NodeId, impact: NodeImpact, region: str, fetched_at: float) -> str:
+def _sentence(
+    node: NodeId, impact: NodeImpact, region: str, fetched_at: float, *, renumbers: bool
+) -> str:
     """Describe the impact in one sentence, ending with where to look."""
     as_of = time.strftime("%Y-%m-%d %H:%M", time.localtime(fetched_at))
     parts = [
@@ -112,6 +120,11 @@ def _sentence(node: NodeId, impact: NodeImpact, region: str, fetched_at: float) 
         )
     if impact.only_gateway_for:
         parts.append(f"it was the only MQTT uplink of {len(impact.only_gateway_for)} node(s)")
+    applying = (
+        "reboots it and changes its node id (firmware >= 2.8 derives it from the new key)"
+        if renumbers
+        else "reboots it"
+    )
     return (
-        "; ".join(parts) + f". Applying this plan reboots it. See: mesh network impact {node.hex}"
+        "; ".join(parts) + f". Applying this plan {applying}. See: mesh network impact {node.hex}"
     )

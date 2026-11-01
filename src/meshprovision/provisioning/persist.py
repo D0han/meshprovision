@@ -5,7 +5,10 @@
 :func:`meshprovision.provisioning.apply.apply_plan` -- it refuses outright
 when any write is left in an uncertain state, and turns a failed save
 into an :class:`~meshprovision.errors.AtomicWriteError` that says the
-device and the database now disagree.
+device and the database now disagree. After a proven firmware 2.8
+renumber (:attr:`~meshprovision.provisioning.apply_session.ApplyOutcome.previous_node_id`)
+it first moves the node's row to the new id with
+:func:`~meshprovision.db.renumber.renumber_rows`.
 
 Split out of :mod:`meshprovision.provisioning.apply`, which imports
 :func:`persist_result` and re-exports it in its own ``__all__``
@@ -21,13 +24,22 @@ keypair is only handed to :meth:`~meshprovision.db.keys.KeyRecord.for_keypair`.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 from meshprovision.crypto.keys import KeyPair
 from meshprovision.db.keys import KeyRecord, KeyRepository
+from meshprovision.db.node_record import NodeRecord
 from meshprovision.db.nodes import NodeRepository
+from meshprovision.db.renumber import (
+    append_note,
+    check_new_id,
+    check_renumber,
+    renumber_note,
+    renumber_rows,
+)
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode, ref_for
 from meshprovision.errors import AtomicWriteError, DbConcurrentModificationError
+from meshprovision.nodeid import NodeId
 from meshprovision.provisioning.apply_session import ApplyOutcome
 
 __all__ = ["persist_result", "save_failure_opening"]
@@ -113,6 +125,41 @@ def _unrecorded_keypair_hint(origin: KeyOrigin, *, had_row: bool, had_key: bool)
     )
 
 
+def _follow_renumber(
+    old: NodeId,
+    record: NodeRecord,
+    *,
+    nodes: NodeRepository,
+    keys: KeyRepository,
+    now: datetime,
+) -> NodeRecord:
+    """Move the node's row to the id a proven firmware 2.8 renumber gave it, in memory.
+
+    Args:
+        old: The id the plan was built for (``previous_node_id``).
+        record: The row to persist, already under the new id.
+        nodes: The node repository.
+        keys: The key repository.
+        now: The time recorded on changed rows and in the note.
+
+    Returns:
+        ``record`` with the moved row's ``notes`` (the old ones plus the
+        renumber note), or with the note appended when the node had no
+        row (a first provisioning).
+
+    Raises:
+        RenumberRefusedError: If the new id is not free (a row or key rows
+            under it, or reserved) or the old row is archived.
+    """
+    new = record.node
+    if nodes.find(old) is None:
+        check_new_id(nodes, keys, old=old, new=new)
+        return record.with_updates(notes=append_note(record.notes, renumber_note(old, until=now)))
+    check_renumber(nodes, keys, old=old, new=new, force=True)
+    renumber_rows(nodes, keys, old=old, new=new, now=now)
+    return record.with_updates(notes=nodes.get(new).notes)
+
+
 def persist_result(
     outcome: ApplyOutcome,
     *,
@@ -166,6 +213,11 @@ def persist_result(
             before this run (no row, an observed row, a recorded public
             key) and by ``origin`` (a pending-keypair file to recover from,
             or the device's own key to adopt again).
+        RenumberRefusedError: After a proven firmware 2.8 renumber, if the
+            new id is not free in the database (see
+            :func:`~meshprovision.db.renumber.check_new_id`); nothing is
+            written, and the pending-keypair file keeps the key the device
+            now holds.
     """
     if not outcome.may_update_database or outcome.record is None:
         _logger.warning(
@@ -179,16 +231,23 @@ def persist_result(
     # lets the save-failure hint tell a first provision (no row, no key)
     # apart from an already-recorded node, and an observed (`mesh adopt`)
     # row, which the re-run must --enroll again, from a managed one.
-    prior = nodes.find(outcome.record.node_id)
-    had_key = keys.find(ref_for(outcome.record.node_id, KeyType.ADMIN_PUBLIC)) is not None
+    record = outcome.record
+    known_as = outcome.previous_node_id.hex if outcome.previous_node_id else record.node_id
+    prior = nodes.find(known_as)
+    had_key = keys.find(ref_for(known_as, KeyType.ADMIN_PUBLIC)) is not None
+    if outcome.previous_node_id is not None:
+        moved_at = now if now is not None else datetime.now(tz=UTC)
+        record = _follow_renumber(
+            outcome.previous_node_id, record, nodes=nodes, keys=keys, now=moved_at
+        )
     if keypair is not None:
         public_record, private_record = KeyRecord.for_keypair(
-            outcome.record.node_id, keypair, origin=origin, created_ts=now
+            record.node_id, keypair, origin=origin, created_ts=now
         )
         keys.upsert(public_record)
         keys.upsert(private_record)
 
-    nodes.upsert(outcome.record, now=now)
+    nodes.upsert(record, now=now)
     try:
         nodes.db.save()
     except (AtomicWriteError, OSError) as exc:
@@ -206,6 +265,12 @@ def persist_result(
                 origin, had_row=prior is not None, had_key=had_key
             )
             hint = f"{hint} {keypair_hint}"
+        if outcome.previous_node_id is not None:
+            hint = (
+                f"{hint} The node now reports {record.node.display} (firmware >= 2.8 derived "
+                "it from the new key): if the re-run names a `mesh db renumber` command, run "
+                "that first."
+            )
         raise AtomicWriteError(
             f"Node {outcome.node_id.display} was written and verified on the "
             f"device, but the database could not be saved ({exc}); the device and "

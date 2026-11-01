@@ -59,6 +59,7 @@ from __future__ import annotations
 from typing import Any, Final
 
 from meshprovision.enums import MODULES_WITHOUT_ENABLED
+from meshprovision.firmware import derives_node_id_from_key
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
@@ -556,6 +557,17 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         removed_admin_key_refs=admin_plan.removed_refs,
         rejected_admin_key_refs=admin_plan.rejected_refs,
     )
+
+    if regenerate and derives_node_id_from_key(live.firmware_version):
+        warnings.append(
+            PlanWarning(
+                PlanWarningCode.NODE_ID_CHANGES,
+                f"Applying this plan changes the node id of {live.node_id.display}: firmware "
+                ">= 2.8 derives it from the new key. The database follows it to the new id.",
+                section="security",
+                field="public_key",
+            )
+        )
 
     lockdown = evaluate_lockdown(inputs, admin_plan.desired)
     if lockdown.reason == LockdownReason.ALLOW_LOCKDOWN_NOT_SET:

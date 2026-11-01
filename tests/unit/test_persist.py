@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
 from meshprovision.crypto.keys import KeyPair, generate_keypair
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
+from meshprovision.db.renumber import renumber_note
 from meshprovision.db.schema import KeyOrigin, ManagementMode
-from meshprovision.errors import AtomicWriteError, ExitCode
+from meshprovision.errors import AtomicWriteError, ExitCode, RenumberRefusedError
+from meshprovision.nodeid import key_derived_id
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.apply import apply_plan
 from meshprovision.provisioning.apply_session import (
@@ -324,3 +328,160 @@ def test_persist_result_save_failure_hint_asks_for_enroll_only_for_an_observed_r
     )
     assert (hint == f"{_SAVE_FAILURE_HINT_BASE} {enroll}") is asks_for_enroll
     assert (hint == _SAVE_FAILURE_HINT_BASE) is not asks_for_enroll
+
+
+def _renumbered_outcome(kp: KeyPair, *, record: NodeRecord) -> ApplyOutcome:
+    """A confirmed outcome after a proven renumber to ``kp``'s derived id."""
+    new = key_derived_id(kp.public)
+    return ApplyOutcome(
+        node_id=new,
+        results=(),
+        dry_run=False,
+        verified=True,
+        record=record.with_updates(node_id=new.hex),
+        previous_node_id=fake_node_id(),
+    )
+
+
+def _session(tmp_path) -> tuple[OdsDatabase, NodeRepository, KeyRepository]:
+    db = OdsDatabase.create(tmp_path / "db.ods")
+    return db, NodeRepository(db), KeyRepository(db)
+
+
+_THEN = datetime(2026, 11, 1, 12, 0, tzinfo=UTC)
+
+
+def test_persist_result_moves_the_row_of_a_renumbered_node_to_its_new_id(tmp_path) -> None:
+    old_kp, kp = generate_keypair(), generate_keypair()
+    new = key_derived_id(kp.public)
+    db, nodes, keys = _session(tmp_path)
+    old = NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE, notes="roof")
+    nodes.upsert(old)
+    for record in KeyRecord.for_keypair("deadbe01", old_kp, origin=KeyOrigin.GENERATED):
+        keys.upsert(record)
+    nodes.upsert(
+        NodeRecord(
+            node_id="cafe0003",
+            management=ManagementMode.TEMPLATE,
+            authorized_admin_keys=("deadbe01_pub",),
+        )
+    )
+    db.save()
+
+    persisted = persist_result(
+        _renumbered_outcome(kp, record=old),
+        nodes=nodes,
+        keys=keys,
+        keypair=kp,
+        origin=KeyOrigin.GENERATED,
+        now=_THEN,
+    )
+
+    assert persisted is True
+    reloaded = OdsDatabase(tmp_path / "db.ods")
+    reloaded.load()
+    rows = NodeRepository(reloaded)
+    assert rows.find("deadbe01") is None
+    assert rows.get(new).notes == f"roof; {renumber_note(fake_node_id(), until=_THEN)}"
+    assert rows.get("cafe0003").authorized_admin_keys == (f"{new.hex}_pub",)
+    stored = KeyRepository(reloaded).keypair_for(new.hex)
+    assert stored.public == kp.public
+    assert KeyRepository(reloaded).find("deadbe01_pub") is None
+
+
+def test_persist_result_records_a_renumbered_first_provisioning_with_the_note(tmp_path) -> None:
+    kp = generate_keypair()
+    new = key_derived_id(kp.public)
+    _db, nodes, keys = _session(tmp_path)
+
+    persisted = persist_result(
+        _renumbered_outcome(kp, record=NodeRecord(node_id="deadbe01")),
+        nodes=nodes,
+        keys=keys,
+        keypair=kp,
+        origin=KeyOrigin.GENERATED,
+        now=_THEN,
+    )
+
+    assert persisted is True
+    assert [record.node_id for record in nodes.all()] == [new.hex]
+    assert nodes.get(new).notes == renumber_note(fake_node_id(), until=_THEN)
+    assert keys.keypair_for(new.hex).public == kp.public
+
+
+@pytest.mark.parametrize("prior_row", [True, False], ids=["moved-row", "first-provisioning"])
+def test_persist_result_refuses_a_renumber_onto_an_id_that_has_a_row(
+    tmp_path, prior_row: bool
+) -> None:
+    kp = generate_keypair()
+    new = key_derived_id(kp.public)
+    db, nodes, keys = _session(tmp_path)
+    if prior_row:
+        nodes.upsert(NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE))
+    nodes.upsert(NodeRecord(node_id=new.hex, short_name="ZZ99"))
+    db.save()
+    mtime_before = (tmp_path / "db.ods").stat().st_mtime_ns
+
+    with pytest.raises(RenumberRefusedError, match="already has a row"):
+        persist_result(
+            _renumbered_outcome(kp, record=NodeRecord(node_id="deadbe01")),
+            nodes=nodes,
+            keys=keys,
+            keypair=kp,
+            origin=KeyOrigin.GENERATED,
+        )
+
+    assert (tmp_path / "db.ods").stat().st_mtime_ns == mtime_before
+
+
+def test_persist_result_save_failure_after_a_renumber_says_where_the_node_went(
+    tmp_path, monkeypatch
+) -> None:
+    kp = generate_keypair()
+    new = key_derived_id(kp.public)
+    db, nodes, keys = _session(tmp_path)
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AtomicWriteError("disk went away", path="x")
+
+    monkeypatch.setattr(db, "save", _boom)
+
+    with pytest.raises(AtomicWriteError) as excinfo:
+        persist_result(
+            _renumbered_outcome(kp, record=NodeRecord(node_id="deadbe01")),
+            nodes=nodes,
+            keys=keys,
+            keypair=kp,
+            origin=KeyOrigin.GENERATED,
+        )
+
+    assert f"The node now reports {new.display}" in excinfo.value.user_message
+    assert "`mesh db renumber`" in excinfo.value.user_message
+
+
+def test_persist_result_save_failure_after_a_renumber_hints_from_the_old_rows_history(
+    tmp_path, monkeypatch
+) -> None:
+    """The row the node had (under its old id) is what the re-run finds, not a FOREIGN node."""
+    kp = generate_keypair()
+    db, nodes, keys = _session(tmp_path)
+    old = NodeRecord(node_id="deadbe01", management=ManagementMode.OBSERVED)
+    nodes.upsert(old)
+    db.save()
+
+    def _boom(*args: object, **kwargs: object) -> None:
+        raise AtomicWriteError("disk went away", path="x")
+
+    monkeypatch.setattr(db, "save", _boom)
+
+    with pytest.raises(AtomicWriteError) as excinfo:
+        persist_result(
+            _renumbered_outcome(kp, record=old),
+            nodes=nodes,
+            keys=keys,
+            keypair=kp,
+            origin=KeyOrigin.GENERATED,
+        )
+
+    assert "sees the node as FOREIGN" not in excinfo.value.user_message
+    assert "pass --enroll again on the re-run" in excinfo.value.user_message

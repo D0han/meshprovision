@@ -127,7 +127,8 @@ class ApplyOutcome:
     """The full outcome of one :func:`~meshprovision.provisioning.apply.apply_plan` call.
 
     Attributes:
-        node_id: The node the plan was applied to.
+        node_id: The node the plan was applied to; after a proven
+            firmware 2.8 renumber, the id the node reports now.
         results: Every :class:`WriteResult` produced, in execution order.
         dry_run: Whether this outcome came from a dry run (no device
             writes were attempted).
@@ -147,6 +148,10 @@ class ApplyOutcome:
             signal that a regenerated key or new admin keys may have left
             the host -- see :func:`~meshprovision.provisioning.apply.apply_plan`'s
             stop-on-first-failure behavior.
+        previous_node_id: Set only after a proven firmware 2.8 renumber
+            (the reconnected device reports the id derived from the key
+            this run wrote, and holds its private key): the id the plan
+            was built for, which :attr:`node_id` replaced.
     """
 
     node_id: NodeId
@@ -156,6 +161,7 @@ class ApplyOutcome:
     public_key_fingerprint: str | None = None
     record: NodeRecord | None = None
     security_attempted: bool = False
+    previous_node_id: NodeId | None = None
 
     @property
     def ok(self) -> bool:

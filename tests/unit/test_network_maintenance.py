@@ -183,3 +183,15 @@ def test_a_node_whose_own_node_info_says_client_mute_does_not_make_the_byte_ambi
     )
 
     assert _note(tmp_path) is not None
+
+
+def test_a_plan_that_renumbers_the_node_says_so(tmp_path: Path) -> None:
+    _seed(tmp_path, "PL")
+
+    note = maintenance_note(_NODE, tmp_path, renumbers=True, clock=lambda: NOW)
+
+    assert note is not None
+    assert note.endswith(
+        "Applying this plan reboots it and changes its node id (firmware >= 2.8 derives it "
+        "from the new key). See: mesh network impact deadbe01"
+    )

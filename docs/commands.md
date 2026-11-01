@@ -88,7 +88,31 @@ nothing else (the prompt, `--yes` and the JSON on stdout stay as they
 are), says nothing on `--dry-run`, for an empty plan, without a recent
 store or when the node carries little, and any problem reading the store
 just leaves it out. `mesh admin bootstrap` runs the same pipeline and
-gives the same warning.
+gives the same warning. When the plan writes a new node key and the
+device runs firmware >= 2.8, it ends `Applying this plan reboots it and
+changes its node id (firmware >= 2.8 derives it from the new key)`.
+
+**Firmware >= 2.8: the node id follows the key.** Firmware 2.8 sets the
+node id to `crc32(public key)` at every boot and after every key change
+(see [Firmware 2.8 and beyond](firmware-compatibility.md)), so a plan that
+writes a new node key (a FACTORY node, `--force-regenerate-key`) brings the
+device back under a new id after its reboot. The plan says so in advance
+(warning code `node_id_changes`, for a parseable firmware version >= 2.8).
+The final verify then accepts the new id only with both proofs: it is
+exactly the id derived from the public key this run wrote, and the device
+holds this run's private key (a secret that exists nowhere else); the
+verify then runs as usual and, when everything is confirmed, the database
+follows the node: its row, key rows and key references move to the new id
+as `mesh db renumber` would move them (with a `node id was !OLD until
+<date>` note), a first provisioning is recorded under the new id with the
+same note, and the region memo entry moves too. It prints `Node !OLD now
+reports !NEW (firmware >= 2.8 derives the node id from the public key);
+the database follows it.` Any other id is still a stop: a device holding
+our key under another id, or reporting the derived id without our private
+key, ends FAILED with the database not updated, as before. A fresh key
+whose derived id would be reserved or another row's is drawn again before
+anything is sent. If the new id already has a row, nothing is saved (exit
+code 4).
 
 **Transport selection priority:** `--port` > `--ble-address`/`--ble-scan`
 > `--host` > auto (serial first; exactly one port is auto-used, zero

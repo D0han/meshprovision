@@ -86,43 +86,6 @@ def test_a_fresh_key_avoids_the_ids_of_the_other_rows_but_not_its_own(
     assert seen == [frozenset({NodeId.from_hex("cafe0001")})]
 
 
-def test_a_fresh_key_avoids_an_id_that_only_owns_key_rows(
-    runner: CliRunner,
-    env: dict[str, str],
-    bus: DeviceBus,
-    seed_db: Callable[..., Path],
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A key filed under a node id with no row would block the save after a 2.8 renumber."""
-    orphan = KeyRecord.from_material(
-        "cafe0002", KeyType.ADMIN_PUBLIC, generate_keypair().public, origin=KeyOrigin.IMPORTED
-    )
-    alias = KeyRecord.from_material(
-        "ADMIN1", KeyType.ADMIN_PUBLIC, generate_keypair().public, origin=KeyOrigin.IMPORTED
-    )
-    seed_db(
-        nodes=[NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE)],
-        keys=[orphan, alias],
-    )
-    bus.use(FakeMeshInterface("deadbe01"))
-    seen: list[Collection[NodeId]] = []
-
-    def spy(taken: Collection[NodeId]) -> KeyPair:
-        seen.append(taken)
-        return generate_keypair()
-
-    monkeypatch.setattr(provision_keys, "fresh_node_keypair", spy)
-
-    result = invoke(
-        runner,
-        ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--force-regenerate-key"],
-        env,
-    )
-
-    assert result.exit_code == 0, result.stderr
-    assert seen == [frozenset({NodeId.from_hex("cafe0002")})]
-
-
 def test_db_renumber_moves_the_row_keys_references_pending_keypair_and_region_memo(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], keypair: KeyPair
 ) -> None:
@@ -232,53 +195,6 @@ def test_db_renumber_rejects_a_malformed_id_as_a_usage_error(
     result = invoke(runner, ["db", "renumber", _OLD.hex, "not-an-id"], env)
 
     assert result.exit_code == 2
-
-
-def test_db_renumber_reminds_about_admin_nodes_whenever_the_public_key_moved(
-    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], keypair: KeyPair
-) -> None:
-    """No other row references the key yet: the template may still name it."""
-    pub, priv = KeyRecord.for_keypair(_OLD.hex, keypair, origin=KeyOrigin.GENERATED)
-    seed_db(
-        nodes=[NodeRecord(node_id=_OLD.hex, management=ManagementMode.TEMPLATE)], keys=[pub, priv]
-    )
-    new = key_derived_id(keypair.public)
-
-    result = invoke(runner, ["db", "renumber", _OLD.hex, new.hex, "--yes"], env)
-
-    assert result.exit_code == 0, result.stderr
-    assert f"admin_nodes names {_OLD.hex}, change it to {new.hex}" in result.stderr
-    assert "references rewritten" not in result.stderr
-
-
-def test_db_renumber_without_a_public_key_gives_no_admin_nodes_reminder(
-    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
-) -> None:
-    seed_db(nodes=[NodeRecord(node_id=_OLD.hex, management=ManagementMode.TEMPLATE)])
-
-    result = invoke(runner, ["db", "renumber", _OLD.hex, "cafe0002", "--force", "--yes"], env)
-
-    assert result.exit_code == 0, result.stderr
-    assert "admin_nodes" not in result.stderr
-
-
-def test_db_renumber_never_overwrites_a_pending_keypair_filed_under_the_new_id(
-    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], keypair: KeyPair
-) -> None:
-    db_path = _seed_keyed(seed_db, keypair)
-    new = key_derived_id(keypair.public)
-    theirs = generate_keypair()
-    pending_keys.write_pending(db_path, new, theirs, now=datetime.now(tz=UTC))
-    before = db_fingerprint(db_path)
-
-    result = invoke(runner, ["db", "renumber", _OLD.hex, new.hex, "--yes", "--force"], env)
-
-    assert result.exit_code == ExitCode.DB
-    assert f"A pending keypair is already filed under {new.display}" in result.stderr
-    assert db_fingerprint(db_path) == before
-    kept = pending_keys.load_pending(db_path, new)
-    assert kept is not None
-    assert kept.matches(public=theirs.public, private=theirs.private)
 
 
 def _device(node: NodeId, keypair: KeyPair, **kwargs: object) -> FakeMeshInterface:
@@ -403,6 +319,235 @@ def test_a_pending_keypair_whose_derived_id_the_device_does_not_report_is_left_a
 
     assert "holds the pending keypair" not in result.stderr
     assert pending_keys.load_pending(db_path, _OLD) is not None
+
+
+_FW_28 = "2.8.0.47db0e3"
+
+
+def _device_28(node: str = _OLD.hex, **kwargs: object) -> FakeMeshInterface:
+    """A firmware 2.8 device that renumbers after a key write, its region already set."""
+    iface = FakeMeshInterface(node, firmware_version=_FW_28, derive_id_from_key=True, **kwargs)  # type: ignore[arg-type]
+    iface.localNode.localConfig.lora.region = 3  # EU_868, as the example template wants
+    return iface
+
+
+def test_a_factory_provisioning_on_firmware_2_8_follows_the_node_to_its_new_id(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, db_path: Path
+) -> None:
+    iface = bus.use(_device_28())
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    new = iface.nid
+    public = bytes(iface.localNode.localConfig.security.public_key)
+    assert new == key_derived_id(public)
+    assert new != _OLD
+    assert "Applying this plan changes the node id of !deadbe01" in result.stderr
+    assert (
+        f"Node {_OLD.display} now reports {new.display} (firmware >= 2.8 derives the node id "
+        "from the public key); the database follows it."
+    ) in result.stderr
+    loaded = ods.load_database(db_path)
+    assert [row["node_id"] for row in loaded.nodes] == [new.hex]
+    assert loaded.nodes[0]["notes"].startswith("node id was !deadbe01 until ")
+    records = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert set(records) == {f"{new.hex}_pub", f"{new.hex}_priv"}
+    assert records[f"{new.hex}_pub"].material() == public
+    assert pending_keys.load_pending(db_path, _OLD) is None
+    assert pending_keys.load_pending(db_path, new) is None
+
+
+def test_a_forced_regenerate_on_firmware_2_8_moves_the_row(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+) -> None:
+    """A node backing an admin key is refused a new key, so no reference ever moves here."""
+    pub, priv = KeyRecord.for_keypair(_OLD.hex, keypair, origin=KeyOrigin.GENERATED)
+    row = NodeRecord(
+        node_id=_OLD.hex,
+        management=ManagementMode.TEMPLATE,
+        short_name="MT00",
+        long_name="Meshtastic MT00",
+        notes="roof",
+    )
+    db_path = seed_db(nodes=[row], keys=[pub, priv])
+    memo_path = Path(env["MESHPROVISION_CACHE_DIR"]) / REGION_MEMO_FILENAME
+    RegionMemo(memo_path).remember(_OLD, "Zachód")
+    iface = bus.use(_device_28(short_name="MT00", long_name="Meshtastic MT00"))
+    iface.localNode.localConfig.security.public_key = keypair.public
+    iface.localNode.localConfig.security.private_key = keypair.private.reveal()
+
+    result = invoke(
+        runner,
+        ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--force-regenerate-key"],
+        env,
+    )
+
+    assert result.exit_code == 0, result.stderr
+    new = iface.nid
+    assert new == key_derived_id(bytes(iface.localNode.localConfig.security.public_key))
+    loaded = ods.load_database(db_path)
+    assert [row["node_id"] for row in loaded.nodes] == [new.hex]
+    assert loaded.nodes[0]["short_name"] == "MT00"
+    assert loaded.nodes[0]["notes"].startswith("roof; node id was !deadbe01 until ")
+    records = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert set(records) == {f"{new.hex}_pub", f"{new.hex}_priv"}
+    assert records[f"{new.hex}_pub"].material() != keypair.public
+    assert RegionMemo(memo_path).region_for(new) == "Zachód"
+    assert RegionMemo(memo_path).region_for(_OLD) is None
+
+
+def test_a_2_8_renumber_whose_save_fails_is_finished_after_mesh_db_renumber(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+) -> None:
+    """The device moved, the database did not: the next runs find the key and follow it."""
+    from meshprovision.db import ods_write
+
+    pub, priv = KeyRecord.for_keypair(_OLD.hex, keypair, origin=KeyOrigin.GENERATED)
+    db_path = seed_db(
+        nodes=[
+            NodeRecord(
+                node_id=_OLD.hex,
+                management=ManagementMode.TEMPLATE,
+                short_name="MT00",
+                long_name="Meshtastic MT00",
+            )
+        ],
+        keys=[pub, priv],
+    )
+    iface = bus.use(_device_28(short_name="MT00", long_name="Meshtastic MT00"))
+    iface.localNode.localConfig.security.public_key = keypair.public
+    iface.localNode.localConfig.security.private_key = keypair.private.reveal()
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+
+    def _raise(*args: object, **kwargs: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    with pytest.MonkeyPatch.context() as save_fails:
+        save_fails.setattr(ods_write, "write_database", _raise)
+        first = invoke(
+            runner,
+            ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--force-regenerate-key"],
+            env,
+        )
+
+    new = iface.nid
+    assert first.exit_code == ExitCode.DB
+    assert f"The node now reports {new.display}" in first.stderr
+    assert [row["node_id"] for row in ods.load_database(db_path).nodes] == [_OLD.hex]
+
+    bus.use(iface)
+    refused = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert refused.exit_code == ExitCode.PROVISIONING
+    assert f"mesh db renumber {_OLD.hex} {new.hex}" in refused.stderr
+
+    moved = invoke(runner, ["db", "renumber", _OLD.hex, new.hex, "--yes"], env)
+    assert moved.exit_code == 0, moved.stderr
+
+    bus.use(iface)
+    finished = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert finished.exit_code == 0, finished.stderr
+    assert iface.nid == new
+    loaded = ods.load_database(db_path)
+    assert [row["node_id"] for row in loaded.nodes] == [new.hex]
+    records = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert records[f"{new.hex}_pub"].material() == bytes(
+        iface.localNode.localConfig.security.public_key
+    )
+    assert pending_keys.load_pending(db_path, new) is None
+
+
+def test_a_fresh_key_avoids_an_id_that_only_owns_key_rows(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A key filed under a node id with no row would block the save after a 2.8 renumber."""
+    orphan = KeyRecord.from_material(
+        "cafe0002", KeyType.ADMIN_PUBLIC, generate_keypair().public, origin=KeyOrigin.IMPORTED
+    )
+    alias = KeyRecord.from_material(
+        "ADMIN1", KeyType.ADMIN_PUBLIC, generate_keypair().public, origin=KeyOrigin.IMPORTED
+    )
+    seed_db(
+        nodes=[NodeRecord(node_id="deadbe01", management=ManagementMode.TEMPLATE)],
+        keys=[orphan, alias],
+    )
+    bus.use(FakeMeshInterface("deadbe01"))
+    seen: list[Collection[NodeId]] = []
+
+    def spy(taken: Collection[NodeId]) -> KeyPair:
+        seen.append(taken)
+        return generate_keypair()
+
+    monkeypatch.setattr(provision_keys, "fresh_node_keypair", spy)
+
+    result = invoke(
+        runner,
+        ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--force-regenerate-key"],
+        env,
+    )
+
+    assert result.exit_code == 0, result.stderr
+    assert seen == [frozenset({NodeId.from_hex("cafe0002")})]
+
+
+def test_db_renumber_reminds_about_admin_nodes_whenever_the_public_key_moved(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], keypair: KeyPair
+) -> None:
+    """No other row references the key yet: the template may still name it."""
+    pub, priv = KeyRecord.for_keypair(_OLD.hex, keypair, origin=KeyOrigin.GENERATED)
+    seed_db(
+        nodes=[NodeRecord(node_id=_OLD.hex, management=ManagementMode.TEMPLATE)], keys=[pub, priv]
+    )
+    new = key_derived_id(keypair.public)
+
+    result = invoke(runner, ["db", "renumber", _OLD.hex, new.hex, "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert f"admin_nodes names {_OLD.hex}, change it to {new.hex}" in result.stderr
+    assert "references rewritten" not in result.stderr
+
+
+def test_db_renumber_without_a_public_key_gives_no_admin_nodes_reminder(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id=_OLD.hex, management=ManagementMode.TEMPLATE)])
+
+    result = invoke(runner, ["db", "renumber", _OLD.hex, "cafe0002", "--force", "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert "admin_nodes" not in result.stderr
+
+
+def test_db_renumber_never_overwrites_a_pending_keypair_filed_under_the_new_id(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], keypair: KeyPair
+) -> None:
+    db_path = _seed_keyed(seed_db, keypair)
+    new = key_derived_id(keypair.public)
+    theirs = generate_keypair()
+    pending_keys.write_pending(db_path, new, theirs, now=datetime.now(tz=UTC))
+    before = db_fingerprint(db_path)
+
+    result = invoke(runner, ["db", "renumber", _OLD.hex, new.hex, "--yes", "--force"], env)
+
+    assert result.exit_code == ExitCode.DB
+    assert f"A pending keypair is already filed under {new.display}" in result.stderr
+    assert db_fingerprint(db_path) == before
+    kept = pending_keys.load_pending(db_path, new)
+    assert kept is not None
+    assert kept.matches(public=theirs.public, private=theirs.private)
 
 
 def test_a_node_with_its_own_row_is_not_refused_for_another_rows_pending_keypair(

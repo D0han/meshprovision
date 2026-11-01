@@ -65,6 +65,7 @@ from meshprovision.errors import (
     NodeNotEnrolledError,
     PlanConflictError,
 )
+from meshprovision.firmware import derives_node_id_from_key
 from meshprovision.network.maintenance import maintenance_note
 from meshprovision.network.store import NETWORK_DIRNAME
 from meshprovision.nodeid import NodeId
@@ -177,7 +178,8 @@ class ProvisionResult:
     """The full outcome of one :func:`run_provision` call.
 
     Attributes:
-        node_id: The provisioned node's id.
+        node_id: The provisioned node's id; after a proven firmware 2.8
+            renumber, the id it reports now.
         plan: The change plan that was built and (unless a dry run)
             applied.
         persisted: Whether the database was updated.
@@ -580,7 +582,12 @@ def run_provision(
                 "This node is not in the database and does not look factory-default; "
                 "it may belong to someone else."
             )
-        note = maintenance_note(change_plan.node_id, ctx.settings.cache_dir / NETWORK_DIRNAME)
+        note = maintenance_note(
+            change_plan.node_id,
+            ctx.settings.cache_dir / NETWORK_DIRNAME,
+            renumbers=change_plan.key_plan.regenerate
+            and derives_node_id_from_key(live.firmware_version),
+        )
         if note is not None:
             ctx.warn(note)
         question = f"Apply this plan to {change_plan.node_id.display} over {session.describe()}?"
@@ -617,7 +624,7 @@ def run_provision(
         pending_keys.clear_pending(db.path, pending_owner)
 
     return ProvisionResult(
-        node_id=change_plan.node_id,
+        node_id=outcome.node_id,
         plan=change_plan,
         persisted=persisted,
         exit_code=outcome.exit_code,

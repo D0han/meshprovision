@@ -47,6 +47,7 @@ class PlanWarningCode(StrEnum):
     DEFAULT_CHANNEL_REBOOT_UNKNOWN = "default_channel_reboot_unknown"
     FIELD_UNSUPPORTED_BY_FIRMWARE = "field_unsupported_by_firmware"
     PRIMARY_CHANNEL_UNAVAILABLE = "primary_channel_unavailable"
+    NODE_ID_CHANGES = "node_id_changes"
 
 
 @dataclass(frozen=True, slots=True)

@@ -56,7 +56,7 @@ from meshprovision.db import ods_write
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import ConnectionFailedError
-from meshprovision.nodeid import NodeId
+from meshprovision.nodeid import NodeId, key_derived_id
 from meshprovision.provisioning import connection, discovery
 from tests.conftest import real_set_owner_or_exit, real_write_config_or_exit
 
@@ -373,6 +373,7 @@ class FakeMeshInterface:
         fail_exc: Callable[[str], BaseException] | None = None,
         fail_reads_after_write: bool = False,
         owner_write_echoed: bool = True,
+        derive_id_from_key: bool = False,
     ) -> None:
         """Initialize a fake device at factory or custom naming defaults.
 
@@ -410,6 +411,10 @@ class FakeMeshInterface:
                 updates the cached user. Only meaningful with
                 ``--no-reconnect``: a reconnect here re-reads the same
                 unchanged ``user``, unlike a real device.
+            derive_id_from_key: When ``True``, persisting a ``security``
+                section with a public key renumbers the device to the id
+                derived from it, as firmware >= 2.8 does at the reboot
+                after a key write (``NodeDB::createNewIdentity``).
         """
         self.nid = NodeId.from_hex(node_id)
         self.drop_security_keys = drop_security_keys
@@ -417,6 +422,7 @@ class FakeMeshInterface:
         self.fail_exc = fail_exc
         self.fail_reads_after_write = fail_reads_after_write
         self.owner_write_echoed = owner_write_echoed
+        self.derive_id_from_key = derive_id_from_key
         self.closed = 0
 
         self.myInfo = SimpleNamespace(my_node_num=self.nid.num)
@@ -581,6 +587,11 @@ class _FakeConnectionNode:
             # reads) is unaffected.
             device.localNode.localConfig.security.private_key = b""
             device.localNode.localConfig.security.public_key = b""
+
+        public = bytes(device.localNode.localConfig.security.public_key)
+        if device.derive_id_from_key and section == "security" and public:
+            device.nid = key_derived_id(public)
+            device.myInfo.my_node_num = device.nid.num
 
     def beginSettingsTransaction(self) -> None:  # noqa: N802 -- matches Node's own spelling
         """Switch this connection into buffering mode.

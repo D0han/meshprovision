@@ -601,6 +601,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` of a FACTORY node, and `mesh provision
+  --force-regenerate-key`, on firmware >= 2.8 ended FAILED with "database
+  NOT updated": firmware 2.8 derives the node id from the public key
+  (`crc32`), so after the key write and reboot the device answered under a
+  new id, which the final verify treated as a device swap, leaving the
+  device with the new key and the database with no row (or a row under the
+  dead id). The verify now follows the node when the new id is exactly the
+  one derived from the key this run wrote and the device holds this run's
+  private key, then moves the row (as `mesh db renumber` does) or records a
+  first provisioning under the new id, both with a note of the old id.
+  Anything else (another id, no proof of the private key) is still refused.
+  The plan warns beforehand (`node_id_changes`) and so does the maintenance
+  warning. A save that fails after the renumber says where the node went.
 - A database number cell that rounds to zero at 7 decimals from below
   (`gps_lat` `-0.00000004`, or `-0`) is stored as `0`, not `-0`.
 - A carriage return in a text cell (a node name set with one from an app,

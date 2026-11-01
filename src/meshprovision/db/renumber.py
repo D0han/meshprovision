@@ -46,6 +46,7 @@ __all__ = [
     "NOTE_SEPARATOR",
     "Renumbered",
     "append_note",
+    "check_new_id",
     "check_renumber",
     "renumber_note",
     "renumber_rows",
@@ -151,27 +152,14 @@ def check_renumber(
         NodeNotFoundError: If ``old`` has no row.
         RenumberRefusedError: If ``new`` is ``old``, reserved, or taken (a
             row, a key row under its references, or a pending keypair); if
-            ``old``'s row is
-            archived; or, without ``force``, if ``new`` is not the id
+            ``old``'s row is archived; or, without ``force``, if ``new`` is not the id
             derived from ``pending_public`` or from ``old``'s recorded
             public key (which no other node row may hold).
     """
-    if new == old:
-        _refuse(f"{old.display} already has that id.", old=old, new=new)
-    if is_reserved_id(new):
-        _refuse(f"{new.display} is reserved; no node can have it.", old=old, new=new)
     record = nodes.get(old)
     if record.is_archived:
         _refuse(f"Node {old.display} was archived via `mesh db forget`.", old=old, new=new)
-    if nodes.find(new) is not None:
-        _refuse(f"Node {new.display} already has a row in the database.", old=old, new=new)
-    stray = [ref for ref in _own_refs(new) if keys.find(ref) is not None]
-    if stray:
-        _refuse(
-            f"The Keys sheet already has {', '.join(stray)}; {new.display} is not free.",
-            old=old,
-            new=new,
-        )
+    check_new_id(nodes, keys, old=old, new=new)
     if new_has_pending:
         _refuse(
             f"A pending keypair is already filed under {new.display}; it is not overwritten.",
@@ -185,6 +173,34 @@ def check_renumber(
     if not force:
         _check_proof(keys, old=old, new=new, pending_public=pending_public)
     return record
+
+
+def check_new_id(nodes: NodeRepository, keys: KeyRepository, *, old: NodeId, new: NodeId) -> None:
+    """Check that ``new`` is free for ``old``'s node: not ``old``, not reserved, unused.
+
+    Args:
+        nodes: The node repository.
+        keys: The key repository.
+        old: The id the node had (need not have a row).
+        new: The id it is to have.
+
+    Raises:
+        RenumberRefusedError: If ``new`` is ``old``, reserved, has a row,
+            or has key rows under its own references.
+    """
+    if new == old:
+        _refuse(f"{old.display} already has that id.", old=old, new=new)
+    if is_reserved_id(new):
+        _refuse(f"{new.display} is reserved; no node can have it.", old=old, new=new)
+    if nodes.find(new) is not None:
+        _refuse(f"Node {new.display} already has a row in the database.", old=old, new=new)
+    stray = [ref for ref in _own_refs(new) if keys.find(ref) is not None]
+    if stray:
+        _refuse(
+            f"The Keys sheet already has {', '.join(stray)}; {new.display} is not free.",
+            old=old,
+            new=new,
+        )
 
 
 def _check_proof(

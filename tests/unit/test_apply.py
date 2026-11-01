@@ -24,6 +24,7 @@ from meshprovision.errors import (
     ExitCode,
     PlanConflictError,
 )
+from meshprovision.nodeid import key_derived_id
 from meshprovision.provisioning import apply as apply_module
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.apply import (
@@ -1090,6 +1091,131 @@ def test_apply_plan_final_verify_node_renumber_without_matching_keypair_is_an_or
     assert verify_result.status == WriteStatus.FAILED
     assert verify_result.message.startswith("reconnected to a different node")
     assert "node number appears to have changed" not in verify_result.message
+
+
+def _security_only_regenerate_plan(make_live: Callable[..., object]) -> ChangePlan:
+    """A FACTORY plan cut down to its key-regenerating ``security`` section."""
+    template = minimal_template()
+    live = make_live(template, security=make_security(empty=True))
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    plan = build_plan(inputs)
+    security_section = next(s for s in plan.sections if s.section == "security")
+    plan = dataclasses.replace(plan, sections=(security_section,))
+    assert plan.key_plan.regenerate is True
+    return plan
+
+
+def _renumbered_to(node_num: int) -> Callable[[int, FakeIfaceForApply], FakeIfaceForApply]:
+    """An ``on_refresh`` callback: the same device, with what was written, under ``node_num``."""
+    return lambda _n, cur: cur.reopened(node_num=node_num)
+
+
+def test_apply_plan_follows_a_renumber_to_the_id_derived_from_the_key_it_wrote(make_live) -> None:
+    """K3: firmware 2.8 renumbers to crc32(new public key); the key proves the same device."""
+    plan = _security_only_regenerate_plan(make_live)
+    kp = generate_keypair()
+    derived = key_derived_id(kp.public)
+    first_iface = FakeIfaceForApply()
+    session = _FakeSessionTracksRefresh(first_iface, _renumbered_to(derived.num))
+
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert outcome.ok, outcome.describe()
+    assert outcome.may_update_database is True
+    assert outcome.node_id == derived
+    assert outcome.previous_node_id == plan.node_id
+    assert outcome.record is not None
+    assert outcome.record.node_id == derived.hex
+    assert any(
+        r.section == "security" and r.field == "public_key" and r.status == WriteStatus.CONFIRMED
+        for r in outcome.results
+    )
+    assert outcome.public_key_fingerprint == redact.fingerprint(kp.public)
+
+
+def test_apply_plan_derived_id_without_our_private_key_is_an_ordinary_mismatch(make_live) -> None:
+    """The derived id alone proves nothing: anyone can advertise our public key."""
+    plan = _security_only_regenerate_plan(make_live)
+    kp, other_kp = generate_keypair(), generate_keypair()
+    first_iface = FakeIfaceForApply()
+    impostor = first_iface.reopened(node_num=key_derived_id(kp.public).num)
+    impostor.localNode.localConfig.security.public_key = kp.public
+    impostor.localNode.localConfig.security.private_key = other_kp.private.reveal()
+    session = _FakeSessionTracksRefresh(first_iface, _serve(impostor))
+
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.message.startswith("reconnected to a different node")
+    assert outcome.may_update_database is False
+    assert outcome.previous_node_id is None
+    assert outcome.node_id == plan.node_id
+
+
+def test_apply_plan_does_not_follow_a_renumber_when_the_plan_wrote_no_key(make_live) -> None:
+    """A plan that adopts the device's own key wrote nothing a renumber could follow."""
+    kp, other_kp = generate_keypair(), generate_keypair()
+    plan = adopt_device_key_plan(make_live, kp, other_kp)
+    device_change = SectionChange(
+        section="device",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="device", field="role", current="CLIENT", desired="ROUTER"),),
+    )
+    plan = dataclasses.replace(plan, sections=(device_change,))
+    first_iface = FakeIfaceForApply()
+    first_iface.localNode.localConfig.security.public_key = kp.public
+    first_iface.localNode.localConfig.security.private_key = kp.private.reveal()
+    session = _FakeSessionTracksRefresh(first_iface, _renumbered_to(key_derived_id(kp.public).num))
+
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert outcome.may_update_database is False
+    assert outcome.previous_node_id is None
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert verify_result.message.startswith("reconnected to a different node")
+
+
+def test_apply_plan_a_third_id_holding_our_key_names_the_id_it_should_have_been(
+    make_live,
+) -> None:
+    plan = _security_only_regenerate_plan(make_live)
+    kp = generate_keypair()
+    first_iface = FakeIfaceForApply()
+    session = _FakeSessionTracksRefresh(first_iface, _renumbered_to(0xCAFE0002))
+
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    verify_result = next(r for r in outcome.results if r.section == "<verify>")
+    assert f"but not to {key_derived_id(kp.public).display}" in verify_result.message
+    assert outcome.may_update_database is False
+    assert outcome.previous_node_id is None
+
+
+def test_apply_plan_a_followed_renumber_with_a_failed_check_is_not_persisted(
+    make_live,
+) -> None:
+    """The renumber is followed, but a key that did not read back still blocks the save."""
+    plan = _security_only_regenerate_plan(make_live)
+    kp, other_kp = generate_keypair(), generate_keypair()
+    derived = key_derived_id(kp.public)
+
+    def _renumbered_reporting_another_public_key(
+        _n: int, cur: FakeIfaceForApply
+    ) -> FakeIfaceForApply:
+        fresh = cur.reopened(node_num=derived.num)
+        fresh.localNode.localConfig.security.public_key = other_kp.public
+        return fresh
+
+    session = _FakeSessionTracksRefresh(
+        FakeIfaceForApply(), _renumbered_reporting_another_public_key
+    )
+
+    outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
+
+    assert outcome.may_update_database is False
+    assert outcome.record is None
+    assert (outcome.node_id, outcome.previous_node_id) == (derived, plan.node_id)
+    assert any(r.section == "security" and not r.ok for r in outcome.results)
 
 
 def test_apply_plan_same_node_reconnect_is_unaffected_by_the_identity_check(make_live) -> None:

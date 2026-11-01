@@ -24,6 +24,7 @@ from meshprovision.cli.provision_keys import (
     register_admin_alias,
 )
 from meshprovision.crypto import keys as crypto_keys
+from meshprovision.datasources.region_memo import REGION_MEMO_FILENAME, RegionMemo
 from meshprovision.db import pending_keys
 from meshprovision.errors import AtomicWriteError
 from meshprovision.nodeid import NodeId
@@ -131,6 +132,28 @@ def record_proven_private_key(
         ctx.info(line)
 
 
+def _renumber_line(outcome: apply.ApplyOutcome, *, persisted: bool) -> str:
+    """Say that a proven firmware 2.8 renumber moved the node, and where the database is.
+
+    Args:
+        outcome: The apply outcome, with ``previous_node_id`` set.
+        persisted: Whether the database was updated.
+
+    Returns:
+        One operator-facing line.
+    """
+    line = (
+        f"Node {outcome.previous_node_id} now reports {outcome.node_id} (firmware >= 2.8 "
+        "derives the node id from the public key); "
+    )
+    if persisted:
+        return f"{line}the database follows it."
+    return (
+        f"{line}the database was not updated: the next `mesh provision` of "
+        f"{outcome.node_id} finds this run's keypair by its key."
+    )
+
+
 def apply_and_persist(
     ctx: CliContext,
     db: DbSession,
@@ -200,7 +223,7 @@ def apply_and_persist(
                 ctx,
                 db,
                 admin_ref=opts.admin_ref,
-                node_id=change_plan.node_id,
+                node_id=outcome.node_id,
                 keypair=keypair,
                 node_origin=node_origin,
             )
@@ -226,16 +249,22 @@ def apply_and_persist(
             )
         raise
 
+    if outcome.previous_node_id is not None:
+        ctx.warn(_renumber_line(outcome, persisted=persisted))
     if persisted:
         ctx.success(f"Database updated: {db.path}")
         # The database and the device are now known to agree: any pending
         # keypair recorded for this node -- from this run or an earlier
         # interrupted one -- is provably no longer needed.
         pending_keys.clear_pending(db.path, change_plan.node_id)
+        if outcome.previous_node_id is not None:
+            RegionMemo(ctx.settings.cache_dir / REGION_MEMO_FILENAME).move(
+                outcome.previous_node_id, outcome.node_id
+            )
         record_proven_private_key(
             ctx,
             db,
-            node_id=change_plan.node_id,
+            node_id=outcome.node_id,
             live_private_key=live.security.private_key,
             now=now,
         )

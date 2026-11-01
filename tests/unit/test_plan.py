@@ -977,3 +977,48 @@ def test_to_record_never_clears_admin_keys_when_desired_empty(make_live, templat
     plan = build_plan(inputs)
     new_record = plan.to_record()
     assert new_record.authorized_admin_keys == ("PRE_pub",)
+
+
+@pytest.mark.parametrize(
+    ("firmware", "keyed", "warned"),
+    [
+        pytest.param("2.8.0.47db0e3", False, True, id="2.8-regenerates"),
+        pytest.param("2.8.1", True, False, id="2.8-keeps-key"),
+        pytest.param("2.7.11", False, False, id="2.7"),
+        pytest.param("weird", False, False, id="unparseable"),
+    ],
+)
+def test_a_key_write_on_firmware_2_8_warns_that_the_node_id_changes(
+    make_live, template, keypair, firmware: str, keyed: bool, warned: bool
+) -> None:
+    if keyed:
+        live = make_live(
+            template, security=make_security(keypair=keypair), firmware_version=firmware
+        )
+        record = NodeRecord(
+            node_id="deadbe01", short_name=live.short_name, long_name=live.long_name
+        )
+        inputs = PlanInputs(
+            live=live,
+            template=template,
+            db_entry=record,
+            state=detect.NodeState.PROVISIONED,
+            db_public_key=keypair.public,
+        )
+    else:
+        live = make_live(template, security=make_security(empty=True), firmware_version=firmware)
+        inputs = PlanInputs(
+            live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY
+        )
+
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.regenerate is not keyed
+    warnings = [w for w in plan.warnings if w.code == PlanWarningCode.NODE_ID_CHANGES]
+    assert bool(warnings) is warned
+    if warned:
+        assert warnings[0].message == (
+            f"Applying this plan changes the node id of {live.node_id.display}: firmware >= 2.8 "
+            "derives it from the new key. The database follows it to the new id."
+        )
+        assert (warnings[0].section, warnings[0].field) == ("security", "public_key")

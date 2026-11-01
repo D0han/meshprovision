@@ -13,9 +13,12 @@ from __future__ import annotations
 import re
 from typing import Final
 
-__all__ = ["parse_firmware_version"]
+__all__ = ["KEY_DERIVED_ID_MIN_FIRMWARE", "derives_node_id_from_key", "parse_firmware_version"]
 
 _FIRMWARE_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
+
+KEY_DERIVED_ID_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
+"""The first firmware that derives a node's id from its public key (``createNewIdentity``)."""
 
 
 def parse_firmware_version(raw: str) -> tuple[int, int, int] | None:
@@ -35,3 +38,21 @@ def parse_firmware_version(raw: str) -> tuple[int, int, int] | None:
     if match is None:
         return None
     return (int(match.group(1)), int(match.group(2)), int(match.group(3)))
+
+
+def derives_node_id_from_key(raw: str) -> bool:
+    """Tell whether a firmware version derives the node id from the public key.
+
+    Firmware >= 2.8 sets the node id to the CRC-32 of the public key at
+    every boot and after every key change. An empty or unparseable version
+    counts as older firmware: the callers only warn or refuse for 2.8.
+
+    Args:
+        raw: The raw firmware version string.
+
+    Returns:
+        ``True`` only for a parseable version >=
+        :data:`KEY_DERIVED_ID_MIN_FIRMWARE`.
+    """
+    parsed = parse_firmware_version(raw)
+    return parsed is not None and parsed >= KEY_DERIVED_ID_MIN_FIRMWARE
