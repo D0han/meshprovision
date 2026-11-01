@@ -6,8 +6,10 @@ name: region names are Unicode, and ``Zachód`` and ``zachód`` are two
 regions even on a case-insensitive file system. In it, one file per UTC
 day, ``YYYY-MM-DD.json``, holding that day's hours (see
 :mod:`meshprovision.network.buckets`), and ``state.json``, when the region
-was last fetched. Every file also names its region; one that names
-another reads as empty.
+was last fetched, and ``relays.json``, the node each relay byte was last
+resolved ``high`` to (see :mod:`meshprovision.network.resolve`), kept for
+:data:`LEARNED_RELAY_MAX_AGE_SECONDS`. Every file also names its region;
+one that names another reads as empty.
 
 Each file is written like a node's health history
 (:mod:`meshprovision.health.store`): created owner-only in an owner-only
@@ -40,21 +42,31 @@ import re
 import time
 import unicodedata
 from collections import defaultdict
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.datasources.json_store import read_json, write_json
-from meshprovision.health.history import HOUR_SECONDS, floor_hour
+from meshprovision.health.history import FUTURE_SKEW_SECONDS, HOUR_SECONDS, floor_hour
 from meshprovision.network.buckets import NETWORK_RETENTION_SECONDS, RegionHour, merge, prune
-from meshprovision.network.hourjson import hour_from_json, hour_to_json, read_count, read_number
+from meshprovision.network.hourjson import (
+    hour_from_json,
+    hour_to_json,
+    read_count,
+    read_hex_id,
+    read_number,
+    read_relay_byte,
+)
+from meshprovision.network.resolve import Confidence, LearnedRelay, Resolution
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 __all__ = [
     "DAY_MAX_BYTES",
+    "LEARNED_RELAY_MAX_AGE_SECONDS",
     "NETWORK_DIRNAME",
     "REGION_MAX_BYTES",
     "STORE_MAX_TOTAL_BYTES",
@@ -81,7 +93,13 @@ REGION_MAX_BYTES: Final[int] = 64 * 1024 * 1024
 STORE_MAX_TOTAL_BYTES: Final[int] = 256 * 1024 * 1024
 """The most bytes all regions' day files take."""
 
+LEARNED_RELAY_MAX_AGE_SECONDS: Final[float] = 7 * 24 * 3600.0
+"""How long a relay byte's learned node is used (a week)."""
+
 _STATE_FILENAME: Final[str] = "state.json"
+_RELAYS_FILENAME: Final[str] = "relays.json"
+_RELAYS_MAX_BYTES: Final[int] = 256 * 1024
+_BYTE_MASK: Final[int] = 0xFF
 _STATE_MAX_BYTES: Final[int] = 64 * 1024
 _DAY_SECONDS: Final[int] = 24 * HOUR_SECONDS
 _DAY_FILE_RE: Final[re.Pattern[str]] = re.compile(r"^(\d{4}-\d{2}-\d{2})\.json\Z")
@@ -224,6 +242,60 @@ class RegionStore:
         write_json(self.path_for(region) / _STATE_FILENAME, state, what=_WHAT)
         self._sweep(now)
 
+    def learned_relays(self, region: str) -> Mapping[int, LearnedRelay]:
+        """Read the nodes ``region``'s relay bytes were last resolved ``high`` to.
+
+        Args:
+            region: The region.
+
+        Returns:
+            Byte -> its learned node, for the entries at most
+            :data:`LEARNED_RELAY_MAX_AGE_SECONDS` old (none when there is
+            no usable file).
+        """
+        path = self.path_for(region) / _RELAYS_FILENAME
+        document = read_json(path, max_bytes=_RELAYS_MAX_BYTES, what=_WHAT)
+        relays = document.get("relays") if _is_document(document, region) else None
+        now = self._clock()
+        learned = {}
+        oldest, newest = now - LEARNED_RELAY_MAX_AGE_SECONDS, now + FUTURE_SKEW_SECONDS
+        for key, value in (relays if isinstance(relays, dict) else {}).items():
+            entry = _learned(key, value)
+            if entry is not None and oldest <= entry[1].time <= newest:
+                learned[entry[0]] = entry[1]
+        return MappingProxyType(dict(sorted(learned.items())))
+
+    def remember_relays(
+        self, region: str, resolutions: Mapping[int, Resolution], *, seen_at: float
+    ) -> None:
+        """Record every relay byte resolved ``high``, keeping the other current entries.
+
+        Each entry is stamped with when its evidence is from, never with the
+        time of this call, so looking at old data again (``--no-fetch``, a
+        long window) never renews an entry: a byte keeps its newer entry.
+
+        Args:
+            region: The region.
+            resolutions: The window's resolutions (see
+                :func:`~meshprovision.network.resolve.resolve_relays`).
+            seen_at: When the window's data was fetched, epoch seconds.
+        """
+        current = self.learned_relays(region)
+        learned = dict(current)
+        for byte, resolution in resolutions.items():
+            if resolution.confidence is not Confidence.HIGH or resolution.node is None:
+                continue
+            if byte not in current or current[byte].time < seen_at:
+                learned[byte] = LearnedRelay(resolution.node, seen_at)
+        if learned == current:
+            return
+        document = {
+            "version": STORE_VERSION,
+            "region": region,
+            "relays": {str(b): [e.node, e.time] for b, e in sorted(learned.items())},
+        }
+        write_json(self.path_for(region) / _RELAYS_FILENAME, document, what=_WHAT)
+
     def _day_files(self, region: str) -> list[tuple[str, Path]]:
         """List ``region``'s day files, oldest first (``[]`` when there is no directory)."""
         try:
@@ -294,6 +366,17 @@ class RegionStore:
                 )
                 regions.append(_RegionFiles(directory, _mtime(directory / _STATE_FILENAME), days))
         return regions
+
+
+def _learned(key: object, value: object) -> tuple[int, LearnedRelay] | None:
+    """Read one ``relays.json`` entry: ``"<byte>": [<hex id>, <time>]``."""
+    byte = read_relay_byte(key)
+    if byte is None or not isinstance(value, list) or len(value) != 2:
+        return None
+    node, seen = read_hex_id(value[0]), read_number(value[1], 0, math.inf)
+    if node is None or seen is None or int(node, 16) & _BYTE_MASK != byte:
+        return None
+    return byte, LearnedRelay(node, seen)
 
 
 def _delete_days(region: _RegionFiles, doomed: list[_DayFile]) -> None:

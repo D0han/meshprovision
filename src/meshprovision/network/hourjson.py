@@ -40,7 +40,14 @@ from meshprovision.network.buckets import (
     Traffic,
 )
 
-__all__ = ["hour_from_json", "hour_to_json", "read_count", "read_number"]
+__all__ = [
+    "hour_from_json",
+    "hour_to_json",
+    "read_count",
+    "read_hex_id",
+    "read_number",
+    "read_relay_byte",
+]
 
 _HEX_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{8}\Z")
 _BYTE_RE: Final[re.Pattern[str]] = re.compile(r"^[1-9][0-9]{0,2}\Z")
@@ -101,12 +108,12 @@ def hour_from_json(value: object) -> RegionHour | None:
     if hour is None or hour % HOUR_SECONDS:
         return None
     maps = (
-        _map(fields.get("pk", {}), _hex, read_count),
-        _nested(fields.get("rl", {}), _byte, _hex, _radio),
-        _nested(fields.get("dr", {}), _hex, _hex, _radio),
-        _nested(fields.get("ob", {}), _hex, _byte, _last_hop),
-        _nested(fields.get("so", {}), _hex, _byte, read_count),
-        _nested(fields.get("og", {}), _hex, _hex, read_count),
+        _map(fields.get("pk", {}), read_hex_id, read_count),
+        _nested(fields.get("rl", {}), read_relay_byte, read_hex_id, _radio),
+        _nested(fields.get("dr", {}), read_hex_id, read_hex_id, _radio),
+        _nested(fields.get("ob", {}), read_hex_id, read_relay_byte, _last_hop),
+        _nested(fields.get("so", {}), read_hex_id, read_relay_byte, read_count),
+        _nested(fields.get("og", {}), read_hex_id, read_hex_id, read_count),
     )
     edges, unrelayed = _edges(fields.get("ed", [])), read_count(fields.get("nr", 0))
     if edges is None or unrelayed is None or any(part is None for part in maps):
@@ -132,12 +139,12 @@ def read_count(value: object, high: int = _MAX_COUNT) -> int | None:
     return value if 0 <= value <= high else None
 
 
-def _hex(key: object) -> str | None:
+def read_hex_id(key: object) -> str | None:
     """Read a canonical (lowercase, 8-digit) hex node id key."""
     return key if isinstance(key, str) and _HEX_RE.match(key) else None
 
 
-def _byte(key: object) -> int | None:
+def read_relay_byte(key: object) -> int | None:
     """Read a relay byte key: a canonical decimal ``1..255``."""
     if not isinstance(key, str) or not _BYTE_RE.match(key):
         return None
@@ -199,7 +206,12 @@ def _edges(value: object) -> Mapping[tuple[str, str, str], int] | None:
     for item in value:
         if not isinstance(item, list) or len(item) != 4:
             return None
-        a, b, source, count = _hex(item[0]), _hex(item[1]), item[2], read_count(item[3])
+        a, b, source, count = (
+            read_hex_id(item[0]),
+            read_hex_id(item[1]),
+            item[2],
+            read_count(item[3]),
+        )
         if a is None or b is None or a >= b or source not in _SOURCES or not count:
             return None
         edges[(a, b, source)] = count

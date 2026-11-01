@@ -12,7 +12,9 @@ import pytest
 from meshprovision.health.history import HOUR_SECONDS, floor_hour
 from meshprovision.network import store as store_module
 from meshprovision.network.buckets import NETWORK_RETENTION_SECONDS, RegionHour, Traffic
+from meshprovision.network.resolve import Confidence, LearnedRelay, Resolution
 from meshprovision.network.store import (
+    LEARNED_RELAY_MAX_AGE_SECONDS,
     STORE_VERSION,
     RegionState,
     RegionStore,
@@ -330,3 +332,128 @@ def test_a_store_that_cannot_be_written_never_raises(tmp_path: Path) -> None:
 
     assert store.load(_REGION, start=0) == ()
     assert store.state(_REGION) == RegionState()
+
+
+def _resolution(byte: int, node: str | None, confidence: Confidence) -> Resolution:
+    return Resolution(byte, confidence, node)
+
+
+def test_bytes_resolved_high_are_learned_and_read_back(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+
+    store.remember_relays(
+        _REGION,
+        seen_at=NOW,
+        resolutions={
+            0x61: _resolution(0x61, "c464e761", Confidence.HIGH),
+            0xBC: _resolution(0xBC, "f24810bc", Confidence.MEDIUM),
+            0xE4: _resolution(0xE4, None, Confidence.AMBIGUOUS),
+        },
+    )
+
+    assert store.learned_relays(_REGION) == {0x61: LearnedRelay("c464e761", NOW)}
+    path = store.path_for(_REGION) / "relays.json"
+    assert json.loads(path.read_text(encoding="utf-8")) == {
+        "version": STORE_VERSION,
+        "region": _REGION,
+        "relays": {"97": ["c464e761", NOW]},
+    }
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_learning_keeps_the_other_bytes_and_renews_a_byte(tmp_path: Path) -> None:
+    _store(tmp_path, NOW - 3600).remember_relays(
+        _REGION,
+        seen_at=NOW - 3600,
+        resolutions={
+            0x61: _resolution(0x61, "c464e761", Confidence.HIGH),
+            0xBC: _resolution(0xBC, "f24810bc", Confidence.HIGH),
+        },
+    )
+    store = _store(tmp_path)
+
+    store.remember_relays(
+        _REGION, {0xBC: _resolution(0xBC, "7c5b07bc", Confidence.HIGH)}, seen_at=NOW
+    )
+
+    assert store.learned_relays(_REGION) == {
+        0x61: LearnedRelay("c464e761", NOW - 3600),
+        0xBC: LearnedRelay("7c5b07bc", NOW),
+    }
+
+
+@pytest.mark.parametrize(
+    ("age", "kept"),
+    [
+        (LEARNED_RELAY_MAX_AGE_SECONDS, True),
+        (LEARNED_RELAY_MAX_AGE_SECONDS + 1, False),
+        (-300, True),
+        (-301, False),
+    ],
+)
+def test_a_learned_byte_is_used_for_a_week(tmp_path: Path, age: float, kept: bool) -> None:
+    _store(tmp_path, NOW - age).remember_relays(
+        _REGION, {0x61: _resolution(0x61, "c464e761", Confidence.HIGH)}, seen_at=NOW - age
+    )
+
+    assert (0x61 in _store(tmp_path).learned_relays(_REGION)) is kept
+
+
+def test_nothing_new_to_learn_writes_nothing(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+
+    store.remember_relays(
+        _REGION, {0xE4: _resolution(0xE4, None, Confidence.AMBIGUOUS)}, seen_at=NOW
+    )
+
+    assert not (store.path_for(_REGION) / "relays.json").exists()
+
+
+@pytest.mark.parametrize(
+    "relays",
+    [
+        pytest.param({"97": ["c464e762", NOW]}, id="node-of-another-byte"),
+        pytest.param({"0": ["c464e700", NOW]}, id="byte-0"),
+        pytest.param({"97": ["C464E761", NOW]}, id="uppercase-id"),
+        pytest.param({"97": ["c464e761", "now"]}, id="time-not-a-number"),
+        pytest.param({"97": ["c464e761"]}, id="too-short"),
+        pytest.param({"97": "c464e761"}, id="not-a-list"),
+    ],
+)
+def test_a_malformed_learned_entry_is_dropped(tmp_path: Path, relays: dict[str, object]) -> None:
+    store = _store(tmp_path)
+    document = {
+        "version": STORE_VERSION,
+        "region": _REGION,
+        "relays": {**relays, "188": ["f24810bc", NOW]},
+    }
+    _write(store.path_for(_REGION) / "relays.json", document)
+
+    assert store.learned_relays(_REGION) == {0xBC: LearnedRelay("f24810bc", NOW)}
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        pytest.param("{", id="corrupt"),
+        pytest.param({"version": STORE_VERSION, "region": "x", "relays": {}}, id="other-region"),
+        pytest.param({"version": STORE_VERSION, "region": _REGION, "relays": []}, id="not-a-map"),
+    ],
+)
+def test_an_unusable_learned_file_reads_as_empty(tmp_path: Path, document: object) -> None:
+    store = _store(tmp_path)
+    _write(store.path_for(_REGION) / "relays.json", document)
+
+    assert store.learned_relays(_REGION) == {}
+
+
+def test_old_evidence_never_renews_a_learned_byte(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    high = {0x61: _resolution(0x61, "c464e761", Confidence.HIGH)}
+    store.remember_relays(_REGION, high, seen_at=NOW - 3600)
+
+    store.remember_relays(_REGION, high, seen_at=NOW - 7200)
+    assert store.learned_relays(_REGION) == {0x61: LearnedRelay("c464e761", NOW - 3600)}
+
+    store.remember_relays(_REGION, high, seen_at=NOW - 60)
+    assert store.learned_relays(_REGION) == {0x61: LearnedRelay("c464e761", NOW - 60)}
