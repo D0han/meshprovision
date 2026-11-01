@@ -38,16 +38,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
-import httpx
-
 from meshprovision.datasources.lorastats import LORASTATS_MIN_TTL_SECONDS
-from meshprovision.errors import (
-    DataSourceError,
-    HttpError,
-    InvalidResponseError,
-    NodeIdError,
-    RateLimitError,
-)
+from meshprovision.datasources.lorastats_failures import is_outage
+from meshprovision.errors import DataSourceError, NodeIdError
 from meshprovision.health.history import (
     HOUR_SECONDS,
     GatewayCheck,
@@ -96,8 +89,6 @@ GATEWAY_CHECK_WINDOW_SECONDS: Final[float] = 3600.0
 
 SINCE_MARGIN_SECONDS: Final[float] = HOUR_SECONDS
 """How much earlier than needed a refresh asks from (one hour, for DST)."""
-
-_SERVER_ERROR_MIN: Final[int] = 500
 
 
 @dataclass(frozen=True, slots=True)
@@ -313,14 +304,7 @@ def _tripped(exc: DataSourceError, node: NodeId) -> DataSourceError | None:
         The error to report for every later node (no request made) when
         ``exc`` is a 429, a 5xx or a transport error, else ``None``.
     """
-    if isinstance(exc, RateLimitError):
-        down = True
-    elif not isinstance(exc, HttpError) or isinstance(exc, InvalidResponseError):
-        down = False
-    elif exc.status_code is not None:
-        down = exc.status_code >= _SERVER_ERROR_MIN
-    else:
-        down = isinstance(exc.__cause__, httpx.TransportError)
+    down = is_outage(exc)
     _logger.warning("lorastats packets for %s failed: %s", node.hex, exc.message)
     if not down:
         return None
