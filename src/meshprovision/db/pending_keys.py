@@ -14,7 +14,10 @@ This module closes that gap with a small per-node sidecar file, written
 and cleared once the database and the device are known to agree. A
 later ``mesh provision`` of the same node loads it and, if the device's
 live-reported keypair still matches it exactly, recovers it automatically
-instead of losing the key or spuriously regenerating it again.
+instead of losing the key or spuriously regenerating it again. A node
+that firmware >= 2.8 renumbered after the key write (its id derives from
+the key) no longer matches its file's name; :func:`find_pending_holding`
+finds the file by the keypair the device holds instead.
 
 Imports only :mod:`meshprovision.db.atomic_writer`,
 :mod:`meshprovision.db.backups` and :mod:`meshprovision.db.schema` (never
@@ -26,6 +29,7 @@ alongside it, not a dependent of it.
 from __future__ import annotations
 
 import base64
+import glob
 import hmac
 import json
 import logging
@@ -39,11 +43,14 @@ from meshprovision.crypto.redact import SecretBytes
 from meshprovision.db import schema
 from meshprovision.db.atomic_writer import write_bytes_atomic
 from meshprovision.db.backups import backup_dir_for, backup_name_targets
-from meshprovision.nodeid import NodeId
+from meshprovision.errors import NodeIdError
+from meshprovision.nodeid import NODE_ID_HEX_WIDTH, NodeId
 
 __all__ = [
+    "MAX_PENDING_SCANNED",
     "PendingKeypair",
     "clear_pending",
+    "find_pending_holding",
     "load_pending",
     "move_pending",
     "pending_key_path",
@@ -53,6 +60,9 @@ __all__ = [
 _logger = logging.getLogger(__name__)
 
 _SIDECAR_FORMAT: Final[int] = 1
+
+MAX_PENDING_SCANNED: Final[int] = 256
+"""Most pending-keypair files :func:`find_pending_holding` reads in one search."""
 
 
 def pending_key_path(db_path: Path, node_id: NodeId) -> Path:
@@ -291,6 +301,70 @@ def move_pending(db_path: Path, old: NodeId, new: NodeId) -> Path | None:
     write_pending(db_path, new, keypair, now=pending.created_ts)
     clear_pending(db_path, old)
     return pending_key_path(db_path, new)
+
+
+def _pending_files(db_path: Path) -> list[tuple[Path, NodeId]]:
+    """List every pending-keypair file of this database with the node id its name carries.
+
+    Args:
+        db_path: The database's own path.
+
+    Returns:
+        ``(path, node id)`` pairs, the current spelling's first, each
+        spelling's by name; a name whose id part is not an 8-digit hex id
+        is skipped. Empty when the backup directory cannot be listed.
+    """
+    found: list[tuple[Path, NodeId]] = []
+    directory = backup_dir_for(db_path)
+    for name in backup_name_targets(db_path):
+        prefix = f"{name.stem}.pending-"
+        try:
+            paths = sorted(directory.glob(f"{glob.escape(prefix)}*.json"))
+        except OSError as exc:
+            _logger.warning("Could not list pending keypairs in %s: %s", directory, exc)
+            return found
+        for path in paths:
+            token = path.name[len(prefix) : -len(".json")]
+            try:
+                node_id = NodeId.from_hex(token)
+            except NodeIdError:
+                continue
+            if len(token) == NODE_ID_HEX_WIDTH and token == node_id.hex:
+                found.append((path, node_id))
+    return found
+
+
+def find_pending_holding(
+    db_path: Path, *, public: bytes, private: bytes | SecretBytes
+) -> PendingKeypair | None:
+    """Find the pending keypair, filed under any node id, that a device holds exactly.
+
+    For a node renumbered after the key write (firmware >= 2.8 derives the
+    id from the key): its file is still named after the id it had. Both
+    halves must match (see :meth:`PendingKeypair.matches`). Never raises;
+    an unreadable or malformed file is skipped as :func:`load_pending`
+    would treat it.
+
+    Args:
+        db_path: The database's own path.
+        public: The device's live-reported public key.
+        private: The device's live-reported private key.
+
+    Returns:
+        The first matching keypair (its :attr:`~PendingKeypair.node_id` is
+        the id its file is named after), or ``None``. At most
+        :data:`MAX_PENDING_SCANNED` files are read.
+    """
+    for path, node_id in _pending_files(db_path)[:MAX_PENDING_SCANNED]:
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            _logger.warning("Could not read pending keypair at %s: %s", path, exc)
+            continue
+        pending = _parse_pending(path, raw, node_id)
+        if pending is not None and pending.matches(public=public, private=private):
+            return pending
+    return None
 
 
 def clear_pending(db_path: Path, node_id: NodeId) -> None:

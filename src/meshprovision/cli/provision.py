@@ -82,12 +82,14 @@ from meshprovision.provisioning.pipeline import (
     resolve_admin_keys,
     resolve_removed_admin_refs,
 )
+from meshprovision.provisioning.renumbered import refuse_renumbered, renumbered_pending
 
 if TYPE_CHECKING:
     from pathlib import Path
 
     from meshprovision.cli.common import CliContext, DbSession
     from meshprovision.config.template import TemplateConfig
+    from meshprovision.db.pending_keys import PendingKeypair
 
 __all__ = [
     "ProvisionOptions",
@@ -231,12 +233,54 @@ class _GatheredPlanInputs(NamedTuple):
     ``live``, the recorded public key and whether a pending keypair was
     recovered travel inside :attr:`inputs` (its ``live``,
     ``db_public_key`` and ``pending_keypair_recovered`` fields).
+    ``pending_owner`` is the id the pending keypair's file is named after,
+    cleared after the save: the node's own id, or the id it had when
+    firmware 2.8 renumbered it after the key write.
     """
 
     inputs: plan_mod.PlanInputs
     detection: detect.Detection
     drifts: tuple[repair.Drift, ...]
     pending_path: Path
+    pending_owner: NodeId | None
+
+
+def _load_pending(
+    ctx: CliContext, db: DbSession, live: detect.LiveConfig, *, has_row: bool
+) -> PendingKeypair | None:
+    """Load the node's pending keypair, or one it holds that is filed under its old id.
+
+    Args:
+        ctx: The shared CLI context.
+        db: The already-open database session.
+        live: The device's live configuration.
+        has_row: Whether the node's id has a row of its own: then only its
+            own pending keypair is looked at.
+
+    Returns:
+        The pending keypair filed under the node's id; else, when the node
+        has no row and holds one filed under another id whose derived id it
+        now reports (firmware 2.8 renumbered it after the key write) and
+        that id has no row, that one (see
+        :func:`~meshprovision.provisioning.renumbered.renumbered_pending`);
+        else ``None``.
+
+    Raises:
+        NodeRenumberedError: If the keypair it holds is filed under an id
+            that still has a live row.
+    """
+    pending = pending_keys.load_pending(db.path, live.node_id)
+    public, private = live.security.real_public_key, live.security.real_private_key
+    if pending is not None or has_row or public is None or private is None:
+        return pending
+    held = pending_keys.find_pending_holding(db.path, public=public, private=private)
+    found = renumbered_pending(live, held, nodes=db.nodes)
+    if found is not None:
+        ctx.info(
+            f"The device holds the pending keypair of {found.node_id.display} and reports the id "
+            f"derived from it (firmware >= 2.8): recovering it for {live.node_id.display}."
+        )
+    return found
 
 
 def _gather_plan_inputs(
@@ -274,11 +318,16 @@ def _gather_plan_inputs(
         NodeNotEnrolledError: If the node's database record has
             ``management == ManagementMode.OBSERVED`` and ``opts.enroll``
             is not set.
+        NodeRenumberedError: If the node has no row under its id but is a
+            database node firmware >= 2.8 renumbered (see
+            :mod:`meshprovision.provisioning.renumbered`).
     """
     iface = session.interface
     live = detect.read_live_config(iface)
 
     record = db.nodes.find(live.node_id)
+    if record is None:
+        refuse_renumbered(live, nodes=db.nodes, keys=db.keys)
     detection = detect.classify(live, db_entry=record)
     ctx.info(detection.summary())
 
@@ -321,7 +370,7 @@ def _gather_plan_inputs(
     # have left a keypair on disk that the device still holds. Both halves
     # must match exactly -- the private half is what proves this is the
     # device the pending keypair was actually written to.
-    pending = pending_keys.load_pending(db.path, live.node_id)
+    pending = _load_pending(ctx, db, live, has_row=record is not None)
     pending_matches = (
         pending is not None
         and live.security.public_key is not None
@@ -418,7 +467,11 @@ def _gather_plan_inputs(
     if pending is not None:
         pending_path = pending.path
     return _GatheredPlanInputs(
-        inputs=inputs, detection=detection, drifts=drifts, pending_path=pending_path
+        inputs=inputs,
+        detection=detection,
+        drifts=drifts,
+        pending_path=pending_path,
+        pending_owner=pending.node_id if pending is not None else None,
     )
 
 
@@ -465,9 +518,13 @@ def run_provision(
         NodeNotEnrolledError: If the node's database record has
             ``management == ManagementMode.OBSERVED`` and ``opts.enroll``
             is not set.
+        NodeRenumberedError: If the node is a database node firmware
+            >= 2.8 renumbered; its row must be moved first.
         click.Abort: If the operator declines the confirmation prompt.
     """
-    inputs, detection, drifts, pending_path = _gather_plan_inputs(ctx, session, db, template, opts)
+    inputs, detection, drifts, pending_path, pending_owner = _gather_plan_inputs(
+        ctx, session, db, template, opts
+    )
     live = inputs.live
     db_public_key = inputs.db_public_key
     pending_matches = inputs.pending_keypair_recovered
@@ -555,6 +612,9 @@ def run_provision(
         opts=opts,
         pending_keypair_recovered=pending_matches,
     )
+    if persisted and pending_owner is not None:
+        # Named after the id the node had, when firmware 2.8 renumbered it.
+        pending_keys.clear_pending(db.path, pending_owner)
 
     return ProvisionResult(
         node_id=change_plan.node_id,

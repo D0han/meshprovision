@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NEW` must be free (no row, key rows or pending keypair) and not
   reserved, and `OLD` not archived, always.
   `--yes`, `--json`.
+- `mesh provision`, `mesh admin bootstrap` and `mesh adopt` recognise a
+  database node that firmware >= 2.8 renumbered: when the id a device
+  reports has no row but is the id derived from exactly one live row's
+  recorded public key, or from the pending keypair an interrupted run left
+  for a row that still exists (which the device holds), they refuse before
+  writing anything (exit code 5) and name the `mesh db renumber OLD NEW`
+  command to run first. Such a node used to be treated as FOREIGN (and
+  `mesh adopt` recorded it under a second row). `mesh provision` recovers a
+  pending keypair the device holds whose id has no row (an interrupted
+  factory provisioning) for the new id; a node with a row of its own only
+  ever uses its own pending keypair.
 - `mesh network graph`: a relay graph of the region (direct, last-hop,
   first-hop, traceroute and neighbour-report edges, with their evidence;
   MQTT joins every gateway) for single points of failure, with the observed

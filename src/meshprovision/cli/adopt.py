@@ -64,6 +64,7 @@ from meshprovision.provisioning import adopt as adopt_mod
 from meshprovision.provisioning import backup as backup_mod
 from meshprovision.provisioning import connection, detect
 from meshprovision.provisioning.pipeline import adopt_would_rotate_admin_key, node_key_admin_refs
+from meshprovision.provisioning.renumbered import refuse_renumbered, refuse_renumbered_pending
 
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
@@ -631,6 +632,11 @@ def adopt(
             :func:`~meshprovision.cli.adopt_backup.resolve_node_id`.
         NodeArchivedError: If the node's database record was archived
             via ``mesh db forget`` -- not bypassable with ``--force``.
+        NodeRenumberedError: If the node has no row under its id but its
+            public key is exactly one row's, or it holds the pending
+            keypair of a live row, and its id derives from that key
+            (firmware >= 2.8 renumbered it) -- not bypassable with
+            ``--force``; the hint names the ``mesh db renumber`` command.
         AdoptionRefusedError: If the node's database record is already
             ``management=template`` and ``--force`` was not passed.
         AdminKeyRotationRefusedError: If the node's recorded key currently
@@ -687,6 +693,9 @@ def adopt(
         extra_warnings = (*extra_warnings, *_own_keypair_warnings(live, known_bad=known_bad))
 
         existing = db.nodes.find(live.node_id)
+        if existing is None:
+            refuse_renumbered(live, nodes=db.nodes, keys=db.keys)
+            refuse_renumbered_pending(live, db_path=db.path, nodes=db.nodes)
         if existing is not None and existing.is_archived:
             raise NodeArchivedError(
                 f"Node {live.node_id.display} was archived via `mesh db forget`.",

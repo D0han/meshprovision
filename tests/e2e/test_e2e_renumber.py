@@ -279,3 +279,200 @@ def test_db_renumber_never_overwrites_a_pending_keypair_filed_under_the_new_id(
     kept = pending_keys.load_pending(db_path, new)
     assert kept is not None
     assert kept.matches(public=theirs.public, private=theirs.private)
+
+
+def _device(node: NodeId, keypair: KeyPair, **kwargs: object) -> FakeMeshInterface:
+    """A device reporting ``node`` and holding ``keypair``."""
+    iface = FakeMeshInterface(node.hex, **kwargs)  # type: ignore[arg-type]
+    iface.localNode.localConfig.security.public_key = keypair.public
+    iface.localNode.localConfig.security.private_key = keypair.private.reveal()
+    return iface
+
+
+@pytest.mark.parametrize("command", ["provision", "adopt"])
+def test_a_node_reporting_the_id_derived_from_a_rows_key_is_refused_with_the_command(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+    command: str,
+) -> None:
+    db_path = _seed_keyed(seed_db, keypair)
+    before = db_fingerprint(db_path)
+    new = key_derived_id(keypair.public)
+    iface = bus.use(_device(new, keypair))
+
+    result = invoke(runner, [command, "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert f"This is {_OLD.display} (same public key) now reporting {new.display}" in result.stderr
+    assert f"mesh db renumber {_OLD.hex} {new.hex}" in result.stderr
+    assert iface.localNode.written_sections == []
+    assert db_fingerprint(db_path) == before
+
+
+def test_our_key_on_an_id_not_derived_from_it_is_not_taken_for_a_renumber(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+) -> None:
+    _seed_keyed(seed_db, keypair)
+    bus.use(_device(NodeId.from_hex("cafe0002"), keypair))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--dry-run"], env)
+
+    assert "mesh db renumber" not in result.stderr
+
+
+def test_an_interrupted_regenerate_is_followed_through_renumber_to_recovery(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+) -> None:
+    """The device took the pending key and renumbered; the database still has the old row."""
+    pub, priv = KeyRecord.for_keypair(_OLD.hex, keypair, origin=KeyOrigin.GENERATED)
+    db_path = seed_db(
+        nodes=[NodeRecord(node_id=_OLD.hex, management=ManagementMode.TEMPLATE)], keys=[pub, priv]
+    )
+    pending = generate_keypair()
+    pending_keys.write_pending(db_path, _OLD, pending, now=datetime.now(tz=UTC))
+    new = key_derived_id(pending.public)
+    bus.use(_device(new, pending))
+
+    refused = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert refused.exit_code == ExitCode.PROVISIONING
+    assert "holds the keypair an interrupted `mesh provision` wrote to it" in refused.stderr
+    assert f"mesh db renumber {_OLD.hex} {new.hex}" in refused.stderr
+
+    moved = invoke(runner, ["db", "renumber", _OLD.hex, new.hex, "--yes"], env)
+    assert moved.exit_code == 0, moved.stderr
+
+    recovered = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert recovered.exit_code == 0, recovered.stderr
+    loaded = ods.load_database(db_path)
+    assert [row["node_id"] for row in loaded.nodes] == [new.hex]
+    records = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert records[f"{new.hex}_pub"].material() == pending.public
+    assert records[f"{new.hex}_pub"].origin is KeyOrigin.GENERATED
+    assert pending_keys.load_pending(db_path, new) is None
+
+
+def test_an_interrupted_factory_provisioning_is_recovered_under_the_new_id(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    db_path: Path,
+) -> None:
+    pending = generate_keypair()
+    pending_keys.write_pending(db_path, _OLD, pending, now=datetime.now(tz=UTC))
+    new = key_derived_id(pending.public)
+    # The names landed before the key write, as an interrupted run leaves them.
+    bus.use(_device(new, pending, short_name="MT00", long_name="Meshtastic MT00"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert f"holds the pending keypair of {_OLD.display}" in result.stderr
+    loaded = ods.load_database(db_path)
+    assert [row["node_id"] for row in loaded.nodes] == [new.hex]
+    records = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert records[f"{new.hex}_pub"].material() == pending.public
+    assert records[f"{new.hex}_pub"].origin is KeyOrigin.GENERATED
+    assert pending_keys.load_pending(db_path, _OLD) is None
+    assert pending_keys.load_pending(db_path, new) is None
+
+
+def test_a_pending_keypair_whose_derived_id_the_device_does_not_report_is_left_alone(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    db_path: Path,
+) -> None:
+    pending = generate_keypair()
+    pending_keys.write_pending(db_path, _OLD, pending, now=datetime.now(tz=UTC))
+    bus.use(_device(NodeId.from_hex("cafe0002"), pending))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert "holds the pending keypair" not in result.stderr
+    assert pending_keys.load_pending(db_path, _OLD) is not None
+
+
+def test_a_node_with_its_own_row_is_not_refused_for_another_rows_pending_keypair(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+) -> None:
+    """With a row of its own the node is provisioned as itself; only its own pending file counts."""
+    pending = generate_keypair()
+    new = key_derived_id(pending.public)
+    pub, priv = KeyRecord.for_keypair(_OLD.hex, keypair, origin=KeyOrigin.GENERATED)
+    db_path = seed_db(
+        nodes=[
+            NodeRecord(node_id=_OLD.hex, management=ManagementMode.TEMPLATE),
+            NodeRecord(
+                node_id=new.hex,
+                management=ManagementMode.TEMPLATE,
+                short_name="MT00",
+                long_name="Meshtastic MT00",
+            ),
+        ],
+        keys=[pub, priv],
+    )
+    pending_keys.write_pending(db_path, _OLD, pending, now=datetime.now(tz=UTC))
+    bus.use(_device(new, pending, short_name="MT00", long_name="Meshtastic MT00"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert "mesh db renumber" not in result.stderr
+    assert pending_keys.load_pending(db_path, _OLD) is not None
+
+
+def test_adopt_refuses_a_device_holding_a_live_rows_pending_keypair(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+) -> None:
+    """Adopting it would record one device under two rows."""
+    pub, priv = KeyRecord.for_keypair(_OLD.hex, keypair, origin=KeyOrigin.GENERATED)
+    db_path = seed_db(
+        nodes=[NodeRecord(node_id=_OLD.hex, management=ManagementMode.TEMPLATE)], keys=[pub, priv]
+    )
+    pending = generate_keypair()
+    pending_keys.write_pending(db_path, _OLD, pending, now=datetime.now(tz=UTC))
+    new = key_derived_id(pending.public)
+    bus.use(_device(new, pending, short_name="MT00", long_name="Meshtastic MT00"))
+    before = db_fingerprint(db_path)
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "holds the keypair an interrupted `mesh provision` wrote to it" in result.stderr
+    assert f"mesh db renumber {_OLD.hex} {new.hex}" in result.stderr
+    assert db_fingerprint(db_path) == before
+
+
+def test_adopt_ignores_a_pending_keypair_whose_id_has_no_row(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, db_path: Path
+) -> None:
+    pending = generate_keypair()
+    pending_keys.write_pending(db_path, _OLD, pending, now=datetime.now(tz=UTC))
+    new = key_derived_id(pending.public)
+    bus.use(_device(new, pending, short_name="MT00", long_name="Meshtastic MT00"))
+
+    result = invoke(runner, ["adopt", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert [row["node_id"] for row in ods.load_database(db_path).nodes] == [new.hex]

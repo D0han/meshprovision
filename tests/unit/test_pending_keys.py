@@ -440,3 +440,76 @@ def test_move_pending_keeps_the_old_file_when_the_new_one_cannot_be_written(
     loaded = pending_keys.load_pending(db_path, _NODE)
     assert loaded is not None
     assert loaded.matches(public=kp.public, private=kp.private)
+
+
+def test_find_pending_holding_finds_the_keypair_filed_under_another_id(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    db_path = tmp_path / "nodes_db.ods"
+    held, other = keypair_factory(), keypair_factory()
+    pending_keys.write_pending(db_path, _OTHER_NODE, other, now=datetime.now(tz=UTC))
+    pending_keys.write_pending(db_path, _NODE, held, now=datetime.now(tz=UTC))
+
+    found = pending_keys.find_pending_holding(db_path, public=held.public, private=held.private)
+
+    assert found is not None
+    assert found.node_id == _NODE
+    assert found.path == pending_keys.pending_key_path(db_path, _NODE)
+
+
+def test_find_pending_holding_needs_both_halves(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    db_path = tmp_path / "nodes_db.ods"
+    held, other = keypair_factory(), keypair_factory()
+    pending_keys.write_pending(db_path, _NODE, held, now=datetime.now(tz=UTC))
+
+    assert (
+        pending_keys.find_pending_holding(db_path, public=held.public, private=other.private)
+        is None
+    )
+
+
+def test_find_pending_holding_skips_odd_names_and_bad_files(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    db_path = tmp_path / "nodes_db.ods"
+    held = keypair_factory()
+    pending_keys.write_pending(db_path, _NODE, held, now=datetime.now(tz=UTC))
+    real = pending_keys.pending_key_path(db_path, _NODE)
+    for token in ("DEADBE01", "beef", "not-hex!"):
+        (real.parent / f"nodes_db.pending-{token}.json").write_bytes(real.read_bytes())
+    (real.parent / f"nodes_db.pending-{_OTHER_NODE.hex}.json").write_text("{", encoding="utf-8")
+
+    found = pending_keys.find_pending_holding(db_path, public=held.public, private=held.private)
+
+    assert found is not None
+    assert found.path == real
+
+
+def test_find_pending_holding_reads_at_most_the_scan_limit(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "nodes_db.ods"
+    held = keypair_factory()
+    pending_keys.write_pending(db_path, _OTHER_NODE, keypair_factory(), now=datetime.now(tz=UTC))
+    pending_keys.write_pending(db_path, _NODE, held, now=datetime.now(tz=UTC))
+    assert pending_keys.MAX_PENDING_SCANNED == 256
+
+    monkeypatch.setattr(pending_keys, "MAX_PENDING_SCANNED", 1)
+
+    # Sorted by name, cafe0002's file is read first; deadbe01's never is.
+    assert (
+        pending_keys.find_pending_holding(db_path, public=held.public, private=held.private) is None
+    )
+
+
+def test_find_pending_holding_without_a_backup_directory_is_none(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    held = keypair_factory()
+    db_path = tmp_path / "nodes_db.ods"
+
+    assert (
+        pending_keys.find_pending_holding(db_path, public=held.public, private=held.private) is None
+    )

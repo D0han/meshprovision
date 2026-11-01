@@ -151,6 +151,20 @@ A node archived via `mesh db forget` is refused outright, checked before
 the enrollment gate (exit code 5, no bypass flag) — `mesh admin
 bootstrap` inherits this too.
 
+A node that firmware >= 2.8 renumbered (it derives the node id from the
+public key, see [Firmware 2.8 and beyond](firmware-compatibility.md)) is
+refused before anything is written (exit code 5, `NodeRenumberedError`,
+no bypass flag) when the id it reports has no row and either its public
+key is exactly one live row's recorded key, or it holds (both halves) the
+pending keypair an interrupted run wrote for another id that still has a
+row — in both cases only when the reported id is the one derived from
+that key. The message names the row and the command that moves it,
+`mesh db renumber OLD NEW` (see [`mesh db`](#mesh-db)); re-run afterwards.
+A pending keypair of an id with no row (an interrupted factory
+provisioning) is instead recovered for the new id, and its file cleared
+once the row is saved. A node whose id has a row of its own only ever uses its
+own pending keypair. `mesh admin bootstrap` inherits both.
+
 A node whose recorded key also backs an authorized admin key is refused
 (exit code 5, `AdminKeyRotationRefusedError`, no bypass flag —
 `--force-regenerate-key`, `--allow-weak-admin-key`, `--allow-lockdown`,
@@ -253,7 +267,13 @@ Re-adopting a `management=template` row is refused unless `--force` is
 passed, and the confirmation prompt names the demotion explicitly. A
 node archived via `mesh db forget` is refused outright, `--force`
 included — archiving is a separate, deliberate decommission decision
-that `mesh adopt` never silently reverses.
+that `mesh adopt` never silently reverses. A node firmware >= 2.8
+renumbered is refused the same way as by `mesh provision`, naming the
+`mesh db renumber` command, `--force` included: when the id it reports has
+no row and is derived from exactly one live row's recorded public key, or
+from the pending keypair an interrupted `mesh provision` left for a row that
+still exists (which the device holds). `mesh adopt` never recovers a
+pending keypair: one whose id has no row is ignored.
 
 **Typical workflow for an existing fleet:**
 
@@ -1419,9 +1439,12 @@ the pre-existing `AtomicWriteError` raised on a filesystem failure
 itself — both share exit code 4, since the message text is the intended
 disambiguation channel between them, not the exit code.
 
-Exit code 5 (`PROVISIONING`) also covers two `mesh adopt`/`--enroll`
-refusals: `NodeNotEnrolledError` (a `management=observed` node touched by
-`mesh provision` without `--enroll`) and `AdoptionRefusedError` (a
+Exit code 5 (`PROVISIONING`) also covers `NodeRenumberedError`: `mesh
+provision`/`mesh adopt` met a database node under the id firmware >= 2.8
+derived from its key (run the `mesh db renumber` command it names). It
+also covers two `mesh adopt`/`--enroll` refusals: `NodeNotEnrolledError`
+(a `management=observed` node touched by `mesh provision` without
+`--enroll`) and `AdoptionRefusedError` (a
 `management=template` node re-adopted without `--force`) — again
 disambiguated by message text, not exit code. `mesh adopt --from-backup`
 adds `NodeIdentityError` to this same code: its node id could not be

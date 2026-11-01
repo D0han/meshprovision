@@ -68,6 +68,7 @@ __all__ = [
     "NodeIdentityError",
     "NodeNotEnrolledError",
     "NodeNotFoundError",
+    "NodeRenumberedError",
     "NonInteractiveError",
     "PlanConflictError",
     "ProvisioningError",
@@ -1039,6 +1040,33 @@ class NodeArchivedError(ProvisioningError):
         """
         super().__init__(message, hint=hint)
         self.node_id = node_id
+
+
+class NodeRenumberedError(ProvisioningError):
+    """The connected node is a database node that firmware >= 2.8 renumbered.
+
+    Firmware 2.8 derives a node's id from its public key, so the device
+    reports an id the database has no row for. Raised before anything is
+    written; the hint names the ``mesh db renumber`` command that moves
+    the row.
+
+    Attributes:
+        old: The id the database knows the node by, for display.
+        new: The id the device reports now, for display.
+    """
+
+    def __init__(self, message: str, *, old: str, new: str, hint: str | None = None) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Human-readable description of what went wrong.
+            old: The id the database knows the node by, for display.
+            new: The id the device reports now, for display.
+            hint: Actionable suggestion; normally the renumber command.
+        """
+        super().__init__(message, hint=hint)
+        self.old = old
+        self.new = new
 
 
 class AdoptionRefusedError(ProvisioningError):
