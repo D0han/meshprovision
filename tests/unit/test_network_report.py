@@ -16,7 +16,16 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType, ref_for
 from meshprovision.network.keys import FindingKind, FleetKey, KeyFinding, KeyScan, Severity
 from meshprovision.network.refresh import NetworkRefresh, RegionFailure
-from meshprovision.network.report import FleetNode, NetworkReport, RegionReport, load_fleet
+from meshprovision.network.report import (
+    FleetNode,
+    LoranetView,
+    NetworkReport,
+    RegionReport,
+    load_fleet,
+    loranet_ids,
+)
+from meshprovision.network.resolve import Confidence, Resolution
+from meshprovision.nodeid import NodeId
 from tests.unit.network_fixtures import NOW
 
 pytestmark = pytest.mark.unit
@@ -96,3 +105,61 @@ def test_without_fetching_nothing_failed() -> None:
 
     assert report.exit_code() == 0
     assert report.start == NOW - 24 * 3600
+
+
+@pytest.mark.parametrize(
+    ("loranet", "code"),
+    [
+        pytest.param(None, 0, id="not-wanted"),
+        pytest.param(LoranetView(asked=False), 0, id="not-asked"),
+        pytest.param(LoranetView(asked=True), 0, id="answered"),
+        pytest.param(LoranetView(asked=True, error="HTTP 500"), 7, id="failed"),
+    ],
+)
+def test_a_loranet_failure_degrades_the_exit_code(loranet: LoranetView | None, code: int) -> None:
+    report = NetworkReport(NOW, 1, (), (RegionReport("R", NOW, None, _scan()),), None, loranet)
+
+    assert report.exit_code() == code
+
+
+def test_no_data_still_beats_a_loranet_failure() -> None:
+    report = NetworkReport(
+        NOW, 1, (), (RegionReport("R", None, None, _scan()),), None, LoranetView(True, error="x")
+    )
+
+    assert report.exit_code() == 3
+
+
+@pytest.mark.parametrize(
+    ("view", "usable"),
+    [
+        (LoranetView(asked=False), False),
+        (LoranetView(asked=True, error="down"), False),
+        (LoranetView(asked=True), True),
+    ],
+)
+def test_loranet_observations_are_usable_only_when_it_answered(
+    view: LoranetView, usable: bool
+) -> None:
+    assert (view.usable is not None) is usable
+
+
+def test_loranet_is_asked_about_every_resolved_relay_node_of_every_region() -> None:
+    first = RegionReport(
+        "A",
+        NOW,
+        None,
+        _scan(),
+        resolutions={
+            0x61: Resolution(0x61, Confidence.HIGH, "c0ffee61"),
+            0xE4: Resolution(0xE4, Confidence.AMBIGUOUS, None),
+        },
+    )
+    second = RegionReport(
+        "B", NOW, None, _scan(), resolutions={1: Resolution(1, Confidence.MEDIUM, "aa000001")}
+    )
+
+    assert loranet_ids((first, second)) == {
+        NodeId.from_hex("c0ffee61"),
+        NodeId.from_hex("aa000001"),
+    }

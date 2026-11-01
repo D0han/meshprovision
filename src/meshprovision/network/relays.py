@@ -23,6 +23,14 @@ All shares are of **receptions at gateways, by last hop**: they show who
 carries traffic now, not what breaks without it (Meshtastic floods, and
 another node usually rebroadcasts when one is gone).
 
+An attributed relay's *device health* (battery, voltage, uptime, channel
+utilization) comes from loranet's node dump when the caller passes it
+(:func:`device_health`); nothing is invented: a battery level of 101 means
+external power, and a value no device reports (a battery level of 0 or
+above 101, a voltage at or below zero or above :data:`MAX_PLAUSIBLE_VOLTAGE`,
+a percentage outside 0-100, a negative uptime or one past a 32-bit counter)
+is left out.
+
 This module imports nothing that reads files or the network (no
 ``httpx``, ``pathlib``, :mod:`meshprovision.cache` or
 :mod:`meshprovision.db`); ``tests/unit/test_import_contracts.py`` holds it
@@ -37,6 +45,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from meshprovision.health.rules import BATTERY_WARN_PERCENT
+
 if TYPE_CHECKING:
     from datetime import datetime
 
@@ -46,15 +56,24 @@ if TYPE_CHECKING:
     from meshprovision.network.resolve import Resolution
 
 __all__ = [
+    "DEVICE_METRICS_FRESH_SECONDS",
+    "EXTERNAL_POWER_LEVEL",
+    "MAX_PLAUSIBLE_VOLTAGE",
+    "MAX_UPTIME_SECONDS",
     "MIN_RELAYED",
+    "NOT_IN_LORANET",
+    "RECENT_REBOOT_SECONDS",
     "RELYING_SHARE",
     "SOLE_FIRST_HOP_MIN_EVENTS",
     "SOLE_FIRST_HOP_MIN_EVENTS_OURS",
     "SOLE_FIRST_HOP_SHARE",
+    "DeviceHealth",
     "FirstHops",
     "RelayRow",
     "RelayTable",
     "byte_label",
+    "device_health",
+    "device_notes",
     "first_hops",
     "gateway_relayed",
     "relay_table",
@@ -74,6 +93,119 @@ MIN_RELAYED: Final[int] = 20
 
 RELYING_SHARE: Final[float] = 0.5
 """A gateway relies on a relay that carried at least this share of its relayed receptions."""
+
+EXTERNAL_POWER_LEVEL: Final[int] = 101
+"""The battery level Meshtastic reports on external power."""
+
+DEVICE_METRICS_FRESH_SECONDS: Final[float] = 24 * 3600.0
+"""Device metrics older than this are shown with their age."""
+
+RECENT_REBOOT_SECONDS: Final[float] = 3600.0
+"""A node that booted less than this long ago is noted (``mesh status``'s uptime rule)."""
+
+MAX_PLAUSIBLE_VOLTAGE: Final[float] = 100.0
+"""A reported voltage above this is not a device's (left out)."""
+
+MAX_UPTIME_SECONDS: Final[int] = 0xFFFFFFFF
+"""Uptime is a 32-bit count of seconds; anything larger is left out."""
+
+NOT_IN_LORANET: Final[str] = "not in loranet"
+"""The identity gap of a relay node loranet's node dump does not hold."""
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceHealth:
+    """A relay node's device health, as loranet last had it.
+
+    Attributes:
+        battery_level: Its battery level, percent (``None``: unknown, or
+            external power).
+        external_power: Whether it reported external power (level 101).
+        voltage: Its voltage (``None``: unknown, or at or below zero).
+        uptime_seconds: Its uptime when the metrics were taken.
+        channel_utilization: Its channel utilization, percent.
+        air_util_tx: Its transmit air utilization, percent.
+        metrics_at: When it sent those device metrics, epoch seconds.
+    """
+
+    battery_level: int | None = None
+    external_power: bool = False
+    voltage: float | None = None
+    uptime_seconds: int | None = None
+    channel_utilization: float | None = None
+    air_util_tx: float | None = None
+    metrics_at: float | None = None
+
+    @property
+    def known(self) -> bool:
+        """Whether anything at all is known."""
+        return (
+            any(
+                value is not None
+                for value in (
+                    self.battery_level,
+                    self.voltage,
+                    self.uptime_seconds,
+                    self.channel_utilization,
+                    self.air_util_tx,
+                )
+            )
+            or self.external_power
+        )
+
+
+def device_health(observation: NodeObservation) -> DeviceHealth:
+    """Map a loranet observation to a relay's device health, inventing nothing.
+
+    Args:
+        observation: The node's loranet observation.
+
+    Returns:
+        Its device health: level 101 is external power (no level); a level
+        of 0 or above 101, a voltage outside (0, :data:`MAX_PLAUSIBLE_VOLTAGE`],
+        a percentage outside 0-100 and an uptime outside
+        0-:data:`MAX_UPTIME_SECONDS` are left out.
+    """
+    level = observation.battery_level
+    voltage = observation.voltage
+    uptime = observation.uptime_seconds
+    return DeviceHealth(
+        battery_level=level if level is not None and 0 < level < EXTERNAL_POWER_LEVEL else None,
+        external_power=level == EXTERNAL_POWER_LEVEL,
+        voltage=voltage if voltage is not None and 0 < voltage <= MAX_PLAUSIBLE_VOLTAGE else None,
+        uptime_seconds=uptime if uptime is not None and 0 <= uptime <= MAX_UPTIME_SECONDS else None,
+        channel_utilization=_percent(observation.channel_utilization),
+        air_util_tx=_percent(observation.air_util_tx),
+        metrics_at=_epoch(observation.last_device_metrics),
+    )
+
+
+def _percent(value: float | None) -> float | None:
+    """Keep a percentage only when it is one (0 to 100)."""
+    return value if value is not None and 0 <= value <= 100 else None
+
+
+def device_notes(device: DeviceHealth, *, now: float) -> tuple[str, ...]:
+    """Note what is worth a look in a relay's device health.
+
+    Args:
+        device: The device health.
+        now: The current time, epoch seconds.
+
+    Returns:
+        ``rebooted <1h ago`` when it booted less than
+        :data:`RECENT_REBOOT_SECONDS` before ``now`` (its uptime counted
+        from when its metrics were taken, when known), ``battery low`` at
+        or below the health rules' warning level.
+    """
+    notes = []
+    if device.uptime_seconds is not None:
+        taken = device.metrics_at if device.metrics_at is not None else now
+        if now - (taken - device.uptime_seconds) < RECENT_REBOOT_SECONDS:
+            notes.append("rebooted <1h ago")
+    if device.battery_level is not None and device.battery_level <= BATTERY_WARN_PERCENT:
+        notes.append("battery low")
+    return tuple(notes)
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +266,8 @@ class RelayRow:
         last_seen: When lorastats last heard its node, epoch seconds.
         last_boot: When its node last booted, epoch seconds.
         gaps: What is not known about its node's identity.
+        device: Its node's device health from loranet (``None``: no node,
+            loranet not asked or failed, or not in loranet).
     """
 
     resolution: Resolution
@@ -152,6 +286,7 @@ class RelayRow:
     last_seen: float | None = None
     last_boot: float | None = None
     gaps: tuple[str, ...] = ()
+    device: DeviceHealth | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +364,7 @@ def relay_table(
     nodes: Iterable[NodeObservation] = (),
     keys: Iterable[KeySeen] = (),
     everything: bool = False,
+    loranet: Mapping[str, NodeObservation] | None = None,
 ) -> RelayTable:
     """Build the relay table of a region's window.
 
@@ -240,6 +376,9 @@ def relay_table(
         keys: The window's key sightings (for node info and derived ids).
         everything: Every relay not ours, by region share (else only those
             that carried our packets, by our dependence on them).
+        loranet: loranet's observations by hex id, for device health;
+            ``None`` when loranet was not asked or failed (no gap is then
+            reported for it).
 
     Returns:
         The table. A byte attributed to one of our nodes is never a row.
@@ -253,7 +392,7 @@ def relay_table(
         node: first_hops(traffic, resolutions, node).sole(SOLE_FIRST_HOP_MIN_EVENTS_OURS)
         for node in mine
     }
-    context = _Context(traffic, total, our_relayed, mine, sole, nodes, keys)
+    context = _Context(traffic, total, our_relayed, mine, sole, nodes, keys, loranet)
     rows = [
         _row(byte, resolution, context)
         for byte, resolution in resolutions.items()
@@ -291,6 +430,7 @@ class _Context:
         sole: Mapping[str, str | None],
         nodes: Iterable[NodeObservation],
         keys: Iterable[KeySeen],
+        loranet: Mapping[str, NodeObservation] | None,
     ) -> None:
         self.traffic = traffic
         self.total = total
@@ -304,6 +444,7 @@ class _Context:
             if entry.node not in seen or entry.last > seen[entry.node].last:
                 seen[entry.node] = entry
         self.keys = seen
+        self.loranet = loranet
 
 
 def _row(byte: int, resolution: Resolution, context: _Context) -> RelayRow:
@@ -345,6 +486,7 @@ def _row(byte: int, resolution: Resolution, context: _Context) -> RelayRow:
         last_seen=last_seen,
         last_boot=last_boot,
         gaps=gaps,
+        device=_device(node, context),
     )
 
 
@@ -363,6 +505,8 @@ def _identity(
         gaps.append("no node info")
     elif not seen.derived:
         gaps.append("id not key-derived")
+    if context.loranet is not None and node not in context.loranet:
+        gaps.append(NOT_IN_LORANET)
     role = listed.role if listed is not None and listed.role else None
     return (
         len(context.traffic.direct.get(node, {})),
@@ -371,6 +515,13 @@ def _identity(
         _epoch(None if listed is None else listed.last_boot),
         tuple(gaps),
     )
+
+
+def _device(node: str | None, context: _Context) -> DeviceHealth | None:
+    """Look up an attributed relay node's device health in loranet's observations."""
+    if node is None or context.loranet is None or node not in context.loranet:
+        return None
+    return device_health(context.loranet[node])
 
 
 def _epoch(value: datetime | None) -> float | None:

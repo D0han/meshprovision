@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh network relays` shows each attributed relay's device health from
+  loranet.pl (a **Device** column: battery or `ext` for external power,
+  voltage, uptime, channel utilization, with the metrics' age when over a
+  day), notes `rebooted <1h ago`, `battery low` and `not in loranet`, and a
+  `device` object per row in `--json`. One loranet download per run, through
+  the HTTP cache `mesh status` uses; `--no-fetch` asks loranet nothing and
+  says so; a failed download keeps the table and exits `7`.
 - `mesh db renumber OLD NEW`: moves a node's database row to the id its
   firmware now reports. Firmware >= 2.8 derives a node's id from its public
   key (`crc32(public key)`), so a node upgraded from 2.7, or one whose key

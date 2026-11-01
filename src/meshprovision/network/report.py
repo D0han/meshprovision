@@ -8,6 +8,10 @@ operations). The only files it writes are the HTTP cache and the region
 stores in the cache directory (:mod:`meshprovision.network.store`,
 :mod:`meshprovision.network.keystore`).
 
+The ``relays`` and ``graph`` views also read loranet's node dump (one
+download per run, through the HTTP cache ``mesh status`` shares) for the
+nodes the views name (:class:`LoranetView`); ``--no-fetch`` asks nothing.
+
 "Us" is every active (not archived) node of the database, observed ones
 included. The regions are the ones asked for, else those our nodes were
 last found in (:func:`~meshprovision.network.refresh.select_regions`).
@@ -21,13 +25,14 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from meshprovision.datasources.loranet import LoranetSource
 from meshprovision.datasources.lorastats_region import LorastatsRegionFeed
 from meshprovision.datasources.region_memo import REGION_MEMO_FILENAME, RegionMemo
 from meshprovision.db.keys import KeyRepository
 from meshprovision.db.nodes import NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyType, ref_for
-from meshprovision.errors import DbIntegrityError, ExitCode
+from meshprovision.errors import DataSourceError, DbIntegrityError, ExitCode
 from meshprovision.network.buckets import Traffic, combine
 from meshprovision.network.keys import FleetKey, KeyScan, fleet_key, scan_keys
 from meshprovision.network.keystore import KeyStore
@@ -49,10 +54,12 @@ __all__ = [
     "DEFAULT_TRAFFIC_DAYS",
     "MAX_DAYS",
     "FleetNode",
+    "LoranetView",
     "NetworkOptions",
     "NetworkReport",
     "RegionReport",
     "load_fleet",
+    "loranet_ids",
     "run_network",
 ]
 
@@ -81,6 +88,8 @@ class NetworkOptions:
             minute per region).
         traffic: Whether to load the traffic and resolve relay bytes (the
             key scan does not need them).
+        loranet: Whether to read loranet's node dump for the resolved
+            relay nodes (``relays`` and ``graph``); never without ``fetch``.
     """
 
     days: int
@@ -88,6 +97,30 @@ class NetworkOptions:
     fetch: bool = True
     refresh: bool = False
     traffic: bool = True
+    loranet: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class LoranetView:
+    """What loranet's node dump said about the nodes a view names.
+
+    Attributes:
+        asked: Whether loranet was asked at all (``False`` with ``--no-fetch``).
+        nodes: Its observation of each node it holds, by hex id.
+        data_as_of: When the dump was fetched (the HTTP cache keeps it),
+            epoch seconds.
+        error: Why it could not be had, terminal-safe; ``None`` when it was.
+    """
+
+    asked: bool
+    nodes: Mapping[str, NodeObservation] = field(default_factory=lambda: MappingProxyType({}))
+    data_as_of: float | None = None
+    error: str | None = None
+
+    @property
+    def usable(self) -> Mapping[str, NodeObservation] | None:
+        """The observations, or ``None`` when loranet was not asked or failed."""
+        return self.nodes if self.asked and self.error is None else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,6 +172,8 @@ class NetworkReport:
         fleet: Our nodes, in database order.
         regions: Each region's view, in the order they were chosen.
         refresh: What the refresh did (``None`` without fetching).
+        loranet: What loranet said about the resolved relay nodes
+            (``None`` for the views that do not ask it).
     """
 
     generated_at: float
@@ -146,6 +181,7 @@ class NetworkReport:
     fleet: tuple[FleetNode, ...]
     regions: tuple[RegionReport, ...]
     refresh: NetworkRefresh | None = None
+    loranet: LoranetView | None = None
 
     @property
     def start(self) -> float:
@@ -168,13 +204,15 @@ class NetworkReport:
             3 (:attr:`ExitCode.DATASOURCE`) when no region has any data;
             else 6 (:attr:`ExitCode.CRYPTO`) for ``crypto``; else 7
             (:attr:`ExitCode.STATUS_DEGRADED`) when a request failed (the
-            stored data was used); else 0.
+            stored data was used, or loranet could not be had); else 0.
         """
         if all(region.fetched_at is None for region in self.regions):
             return int(ExitCode.DATASOURCE)
         if crypto:
             return int(ExitCode.CRYPTO)
         if self.refresh is not None and self.refresh.failures:
+            return int(ExitCode.STATUS_DEGRADED)
+        if self.loranet is not None and self.loranet.error is not None:
             return int(ExitCode.STATUS_DEGRADED)
         return int(ExitCode.OK)
 
@@ -258,8 +296,48 @@ def run_network(
         _region(region, store, keystore, fleet, refresh, start=start, traffic=options.traffic)
         for region in regions
     )
+    loranet = None
+    if options.loranet:
+        loranet = _loranet(client, views) if options.fetch else LoranetView(asked=False)
     return NetworkReport(
-        generated_at=now, days=options.days, fleet=fleet, regions=views, refresh=refresh
+        generated_at=now,
+        days=options.days,
+        fleet=fleet,
+        regions=views,
+        refresh=refresh,
+        loranet=loranet,
+    )
+
+
+def loranet_ids(views: tuple[RegionReport, ...]) -> frozenset[NodeId]:
+    """The nodes a view asks loranet about: every resolved relay node of every region.
+
+    Args:
+        views: The regions' views.
+
+    Returns:
+        Their ids.
+    """
+    return frozenset(
+        NodeId.from_hex(resolution.node)
+        for view in views
+        for resolution in view.resolutions.values()
+        if resolution.node is not None
+    )
+
+
+def _loranet(client: CachedHTTPClient, views: tuple[RegionReport, ...]) -> LoranetView:
+    """Read loranet's node dump once for the views' nodes; a failure is reported, not raised."""
+    source = LoranetSource(client)
+    try:
+        found = source.fetch_nodes(loranet_ids(views))
+    except DataSourceError as exc:
+        return LoranetView(asked=True, error=terminal_safe(str(exc)))
+    as_of = source.last_fetch_data_as_of
+    return LoranetView(
+        asked=True,
+        nodes=MappingProxyType({node.hex: observation for node, observation in found.items()}),
+        data_as_of=None if as_of is None else as_of.timestamp(),
     )
 
 

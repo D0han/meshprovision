@@ -119,6 +119,7 @@ def _collect(
     no_fetch: bool,
     refresh: bool,
     traffic: bool,
+    loranet: bool = False,
 ) -> NetworkReport:
     """Run the data side of a view.
 
@@ -128,7 +129,12 @@ def _collect(
     if refresh and no_fetch:
         raise SettingsError("--refresh has no effect with --no-fetch.", hint="Drop one of the two.")
     options = NetworkOptions(
-        days=days, regions=regions, fetch=not no_fetch, refresh=refresh, traffic=traffic
+        days=days,
+        regions=regions,
+        fetch=not no_fetch,
+        refresh=refresh,
+        traffic=traffic,
+        loranet=loranet,
     )
     known_bad = ctx.known_bad_keys()
     with ctx.http_client(require_contact=not no_fetch) as client:
@@ -215,7 +221,9 @@ def relays(
     the share of our relayed receptions it carried, which of our nodes
     use it as their only first hop, its share of the region's relayed
     traffic, the gateways that rely on it, and its health and identity
-    gaps. Shares are of receptions at gateways, by last hop.
+    gaps, with its device health (battery, voltage, uptime, channel
+    utilization) from loranet's node dump. Shares are of receptions at
+    gateways, by last hop.
 
     Args:
         ctx: The shared CLI context.
@@ -228,10 +236,17 @@ def relays(
         limit: The most rows per region, from ``--limit``.
 
     Raises:
-        SystemExit: 3 when no region has any data, 7 when a request failed.
+        SystemExit: 3 when no region has any data, 7 when a request failed
+            (loranet's included).
     """
     report = _collect(
-        ctx, days=days, regions=regions, no_fetch=no_fetch, refresh=refresh, traffic=True
+        ctx,
+        days=days,
+        regions=regions,
+        no_fetch=no_fetch,
+        refresh=refresh,
+        traffic=True,
+        loranet=True,
     )
     if json_output:
         click.echo(render.render_relays_json(report, everything=everything))

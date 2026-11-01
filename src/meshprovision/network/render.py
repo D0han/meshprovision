@@ -22,7 +22,15 @@ from rich.table import Table
 from rich.text import Text
 
 from meshprovision.network.keys import FindingKind, KeyFinding, Severity, short_digest
-from meshprovision.network.relays import RelayRow, RelayTable, byte_label, relay_table
+from meshprovision.network.relays import (
+    DEVICE_METRICS_FRESH_SECONDS,
+    DeviceHealth,
+    RelayRow,
+    RelayTable,
+    byte_label,
+    device_notes,
+    relay_table,
+)
 from meshprovision.network.render_common import (
     MAX_NAMED,
     PROXY_CAVEAT,
@@ -42,10 +50,12 @@ from meshprovision.termsafe import json_dumps_safe, terminal_safe
 if TYPE_CHECKING:
     from rich.console import Console
 
-    from meshprovision.network.report import NetworkReport, RegionReport
+    from meshprovision.network.report import LoranetView, NetworkReport, RegionReport
 
 __all__ = [
+    "device_text",
     "keys_to_json_dict",
+    "loranet_line",
     "relays_of",
     "relays_to_json_dict",
     "render_keys_console",
@@ -223,7 +233,78 @@ def _relay_name(row: RelayRow, known: Mapping[str, str]) -> tuple[str, str]:
     return byte_label(resolution.byte), f"{resolution.confidence.value} ({candidates})"
 
 
-def _relay_table(table: RelayTable, known: Mapping[str, str], limit: int) -> Table:
+def _duration(seconds: float) -> str:
+    """Render a duration compactly: ``65s``, ``12m``, ``5h``, ``10d``."""
+    for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
+        if seconds >= size:
+            return f"{int(seconds // size)}{unit}"
+    return f"{max(int(seconds), 0)}s"
+
+
+def device_text(device: DeviceHealth | None, *, now: float) -> str:
+    """Render a relay's device health in one cell.
+
+    Args:
+        device: Its device health, or ``None``.
+        now: The current time, epoch seconds.
+
+    Returns:
+        For example ``"77% 3.97V, up 10d, ChU 2.0%"`` or ``"ext 12.80V, up
+        2d, ChU 7.9% (metrics 3d old)"``; ``-`` when nothing is known.
+    """
+    if device is None or not device.known:
+        return "-"
+    power = (
+        "ext"
+        if device.external_power
+        else (f"{device.battery_level}%" if device.battery_level is not None else "")
+    )
+    if device.voltage is not None:
+        power = f"{power} {device.voltage:.2f}V".strip()
+    parts = [power] if power else []
+    if device.uptime_seconds is not None:
+        parts.append(f"up {_duration(device.uptime_seconds)}")
+    if device.channel_utilization is not None:
+        parts.append(f"ChU {device.channel_utilization:.1f}%")
+    text = ", ".join(parts) or "-"
+    if device.metrics_at is not None and now - device.metrics_at > DEVICE_METRICS_FRESH_SECONDS:
+        text = f"{text} (metrics {_duration(now - device.metrics_at)} old)"
+    return text
+
+
+def _notes(row: RelayRow, now: float) -> str:
+    """Render a row's notes: its identity gaps, then what its device health shows."""
+    notes = (*row.gaps, *(() if row.device is None else device_notes(row.device, now=now)))
+    return "; ".join(notes) or "-"
+
+
+def loranet_line(loranet: LoranetView | None) -> Text | None:
+    """Say why loranet's device health is missing, if it is.
+
+    Args:
+        loranet: What loranet said, or ``None`` for a view that does not ask it.
+
+    Returns:
+        ``loranet not asked (--no-fetch)`` (dim) or ``loranet: <error>``;
+        ``None`` when it answered or was not wanted.
+    """
+    if loranet is None:
+        return None
+    if not loranet.asked:
+        return Text("loranet not asked (--no-fetch): no device health.", style="dim")
+    if loranet.error is not None:
+        return Text(f"loranet: {terminal_safe(loranet.error)}")
+    return None
+
+
+def loranet_json(loranet: LoranetView | None) -> dict[str, object] | None:
+    """Render what loranet said as JSON (``None`` for a view that does not ask it)."""
+    if loranet is None:
+        return None
+    return {"asked": loranet.asked, "data_as_of": iso(loranet.data_as_of), "error": loranet.error}
+
+
+def _relay_table(table: RelayTable, known: Mapping[str, str], limit: int, *, now: float) -> Table:
     """Build the relays table."""
     grid = Table(box=box.SIMPLE_HEAVY, header_style="bold")
     columns: tuple[tuple[str, JustifyMethod], ...] = (
@@ -237,6 +318,7 @@ def _relay_table(table: RelayTable, known: Mapping[str, str], limit: int) -> Tab
         ("Region", "right"),
         ("Gateways>=50%", "right"),
         ("Last seen", "left"),
+        ("Device", "left"),
         ("Notes", "left"),
     )
     for column, justify in columns:
@@ -254,7 +336,8 @@ def _relay_table(table: RelayTable, known: Mapping[str, str], limit: int) -> Tab
             percent(row.region_share),
             f"{row.gateways_relying} (max {percent(row.max_gateway_share)})",
             time_text(row.last_seen),
-            "; ".join(row.gaps) or "-",
+            device_text(row.device, now=now),
+            _notes(row, now),
         )
         grid.add_row(*(text_cell(cell) for cell in cells))
     return grid
@@ -277,7 +360,7 @@ def _relays_lines(
     if not table.rows:
         yield Text("No relay carried any of our packets." if not everything else "No relay.")
         return
-    yield _relay_table(table, known, limit)
+    yield _relay_table(table, known, limit, now=report.generated_at)
     if len(table.rows) > limit:
         yield Text(f"{len(table.rows) - limit} more (--limit).", style="dim")
 
@@ -300,6 +383,7 @@ def relays_of(report: NetworkReport, region: RegionReport, *, everything: bool) 
         nodes=region.nodes,
         keys=region.keys.seen,
         everything=everything,
+        loranet=None if report.loranet is None else report.loranet.usable,
     )
 
 
@@ -322,6 +406,25 @@ def render_relays_console(
     console.print(Text(PROXY_CAVEAT, style="dim"), markup=False, highlight=False)
     for line in refresh_lines(report.refresh):
         console.print(line, markup=False, highlight=False)
+    missing = loranet_line(report.loranet)
+    if missing is not None:
+        console.print(missing, markup=False, highlight=False)
+
+
+def _device_json(device: DeviceHealth | None) -> dict[str, object] | None:
+    """Render a relay's device health as JSON."""
+    if device is None:
+        return None
+    return {
+        "source": "loranet",
+        "battery_level": device.battery_level,
+        "external_power": device.external_power,
+        "voltage": device.voltage,
+        "uptime_seconds": device.uptime_seconds,
+        "channel_utilization": device.channel_utilization,
+        "air_util_tx": device.air_util_tx,
+        "metrics_at": iso(device.metrics_at),
+    }
 
 
 def _row_json(row: RelayRow) -> dict[str, object]:
@@ -351,6 +454,7 @@ def _row_json(row: RelayRow) -> dict[str, object]:
         "last_seen": iso(row.last_seen),
         "last_boot": iso(row.last_boot),
         "gaps": list(row.gaps),
+        "device": _device_json(row.device),
     }
 
 
@@ -362,7 +466,8 @@ def relays_to_json_dict(report: NetworkReport, *, everything: bool) -> dict[str,
         everything: Every relay not ours (``--all``).
 
     Returns:
-        ``{"generated_at", "days", "regions": [...], "refresh", "exit_code"}``.
+        ``{"generated_at", "days", "regions": [...], "refresh", "loranet",
+        "exit_code"}``.
     """
     regions = []
     for region in report.regions:
@@ -382,6 +487,7 @@ def relays_to_json_dict(report: NetworkReport, *, everything: bool) -> dict[str,
         "days": report.days,
         "regions": regions,
         "refresh": refresh_json(report.refresh),
+        "loranet": loranet_json(report.loranet),
         "exit_code": report.exit_code(),
     }
 

@@ -6,7 +6,7 @@ import base64
 import hashlib
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +14,7 @@ import httpx
 import pytest
 import respx
 
+from meshprovision.datasources.loranet import LORANET_NODES_URL
 from meshprovision.datasources.lorastats import LORASTATS_BASE_URL, LORASTATS_NODES_PATH
 from meshprovision.datasources.lorastats_region import LORASTATS_PACKETS_RAW_PATH
 from meshprovision.datasources.region_memo import REGION_MEMO_FILENAME
@@ -21,6 +22,7 @@ from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyType, ref_for
 from meshprovision.network.store import NETWORK_DIRNAME, region_dirname
+from meshprovision.nodeid import NodeId
 from tests.e2e.conftest import db_fingerprint, invoke
 from tests.unit import network_fixtures as mini
 
@@ -50,10 +52,32 @@ def _seed(seed_db: Callable[..., Path], keys: dict[str, bytes] | None = None) ->
     )
 
 
-class _Lorastats:
-    """respx routes for a region's PacketsRaw and Nodes, recording each request."""
+def _loranet_dump(now: float) -> dict[str, dict[str, object]]:
+    """Loranet's node dump for the mini region: only the router, on external power."""
+    return {
+        NodeId.from_hex(mini.ROUTER).decimal: {
+            "shortName": "Rtr",
+            "batteryLevel": 101,
+            "voltage": 12.8,
+            "uptime": 2 * 86400,
+            "chUtil": 7.9,
+            "airUtilTx": 1.2,
+            "lastDeviceMetrics": int(now) - 600,
+        }
+    }
 
-    def __init__(self, *, status: int = 200, rows: Sequence[dict[str, object]] = ()) -> None:
+
+class _Lorastats:
+    """respx routes for a region's PacketsRaw and Nodes and loranet's dump, recording requests."""
+
+    def __init__(
+        self,
+        *,
+        status: int = 200,
+        rows: Sequence[dict[str, object]] = (),
+        loranet: Mapping[str, object] | None = None,
+        loranet_status: int = 200,
+    ) -> None:
         now = time.time()
         self.rows = list(rows) or mini.mini_region(now)
         self.nodes = mini.mini_region_nodes(now)
@@ -68,6 +92,16 @@ class _Lorastats:
         self.router.get(url__startswith=base + LORASTATS_NODES_PATH.format(region="PL")).mock(
             side_effect=self._nodes
         )
+        self.dump = _loranet_dump(now) if loranet is None else loranet
+        self.loranet_status = loranet_status
+        self.loranet: list[httpx.Request] = []
+        self.router.get(LORANET_NODES_URL).mock(side_effect=self._loranet)
+
+    def _loranet(self, request: httpx.Request) -> httpx.Response:
+        self.loranet.append(request)
+        if self.loranet_status != 200:
+            return httpx.Response(self.loranet_status)
+        return httpx.Response(200, json=self.dump)
 
     def _raw(self, request: httpx.Request) -> httpx.Response:
         self.raw.append(request)
@@ -379,6 +413,107 @@ def test_relays_shows_the_relays_we_depend_on(
     assert db_fingerprint(db) == before
 
 
+def test_relays_show_each_relays_device_health_from_one_loranet_download(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+
+    result, lorastats = _run(runner, env, ["relays", "--region", "PL", "--all"])
+
+    assert result.exit_code == 0, result.output
+    router = [cell.strip() for cell in _cells(result.stdout, mini.ROUTER)]
+    assert router[-2] == "ext 12.80V, up 2d, ChU 7.9%"
+    assert router[-1] == "id not key-derived"
+    assert "Device" in result.stdout
+    assert "not in loranet" in result.stdout
+    assert len(lorastats.loranet) == 1
+    assert "loranet" not in result.stderr
+
+
+def test_a_freshly_rebooted_relay_on_a_low_battery_is_noted(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    now = time.time()
+    dump = {
+        NodeId.from_hex(mini.ROUTER).decimal: {
+            "batteryLevel": 15,
+            "uptime": 65,
+            "lastDeviceMetrics": int(now) - 60,
+        }
+    }
+
+    result, _ = _run(runner, env, ["relays", "--region", "PL"], _Lorastats(loranet=dump))
+
+    router = [cell.strip() for cell in _cells(result.stdout, mini.ROUTER)]
+    assert router[-2] == "15%, up 1m"
+    assert router[-1] == "id not key-derived; rebooted <1h ago; battery low"
+
+
+def test_absurd_device_numbers_from_loranet_are_left_out(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    dump = {
+        NodeId.from_hex(mini.ROUTER).decimal: {
+            "batteryLevel": 250,
+            "voltage": 1e308,
+            "chUtil": 1e308,
+            "uptime": -100,
+            "lastDeviceMetrics": int(time.time()) - 60,
+        }
+    }
+
+    result, _ = _run(runner, env, ["relays", "--region", "PL"], _Lorastats(loranet=dump))
+
+    router = [cell.strip() for cell in _cells(result.stdout, mini.ROUTER)]
+    assert router[-2:] == ["-", "id not key-derived"]
+
+
+def test_relays_without_fetching_ask_loranet_nothing_and_say_so(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    _run(runner, env, ["relays", "--region", "PL"])
+
+    result, lorastats = _run(runner, env, ["relays", "--region", "PL", "--no-fetch"])
+
+    assert result.exit_code == 0, result.output
+    assert lorastats.loranet == []
+    assert "loranet not asked (--no-fetch): no device health." in result.stdout
+    router = [cell.strip() for cell in _cells(result.stdout, mini.ROUTER)]
+    assert router[-2] == "-"
+    assert "not in loranet" not in result.stdout
+
+
+def test_a_loranet_failure_exits_seven_and_keeps_the_table(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+
+    result, lorastats = _run(
+        runner, env, ["relays", "--region", "PL"], _Lorastats(loranet_status=500)
+    )
+
+    assert result.exit_code == 7, result.output
+    assert len(lorastats.loranet) >= 1
+    assert "loranet: " in result.stdout
+    router = [cell.strip() for cell in _cells(result.stdout, mini.ROUTER)]
+    assert router[-2:] == ["-", "id not key-derived"]
+
+
+@pytest.mark.parametrize("view", [["keys"], ["impact"]])
+def test_keys_and_impact_never_ask_loranet(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], view: list[str]
+) -> None:
+    _seed(seed_db)
+
+    result, lorastats = _run(runner, env, [*view, "--region", "PL"])
+
+    assert result.exit_code == 0, result.output
+    assert lorastats.loranet == []
+
+
 def test_relays_all_lists_every_relay_but_ours_by_region_share(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:
@@ -419,7 +554,16 @@ def test_relays_json_carries_every_row_and_field(
 
     assert result.exit_code == 0, result.output
     document = json.loads(result.stdout)
-    assert sorted(document) == ["days", "exit_code", "generated_at", "refresh", "regions"]
+    assert sorted(document) == [
+        "days",
+        "exit_code",
+        "generated_at",
+        "loranet",
+        "refresh",
+        "regions",
+    ]
+    assert document["loranet"]["asked"] is True
+    assert document["loranet"]["error"] is None
     (region,) = document["regions"]
     assert (
         region["relayed_receptions"],
@@ -454,7 +598,18 @@ def test_relays_json_carries_every_row_and_field(
         "last_seen": router["last_seen"],
         "last_boot": None,
         "gaps": ["id not key-derived"],
+        "device": {
+            "source": "loranet",
+            "battery_level": None,
+            "external_power": True,
+            "voltage": 12.8,
+            "uptime_seconds": 2 * 86400,
+            "channel_utilization": 7.9,
+            "air_util_tx": 1.2,
+            "metrics_at": router["device"]["metrics_at"],
+        },
     }
+    assert router["device"]["metrics_at"].endswith("Z")
     assert router["candidates"][0]["distance_db"] < 4
     assert router["last_seen"].endswith("Z")
     assert (ambiguous["byte"], ambiguous["node"], ambiguous["confidence"]) == (

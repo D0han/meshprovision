@@ -10,9 +10,18 @@ from meshprovision.datasources.models import NodeObservation
 from meshprovision.network.buckets import LastHop, Radio, Traffic
 from meshprovision.network.keys import KeySeen
 from meshprovision.network.relays import (
+    DEVICE_METRICS_FRESH_SECONDS,
+    EXTERNAL_POWER_LEVEL,
+    MAX_PLAUSIBLE_VOLTAGE,
+    MAX_UPTIME_SECONDS,
+    NOT_IN_LORANET,
+    RECENT_REBOOT_SECONDS,
+    DeviceHealth,
     FirstHops,
     RelayRow,
     byte_label,
+    device_health,
+    device_notes,
     first_hops,
     gateway_relayed,
     relay_table,
@@ -231,3 +240,148 @@ def test_a_gateway_needs_twenty_relayed_receptions_to_be_judged(
     (row,) = relay_table(traffic, resolutions, [_OURS]).rows
 
     assert (row.gateways_relying, row.max_gateway_share) == ((1, 1.0) if judged else (0, 0.0))
+
+
+def _loranet(node: str = _R, **fields: object) -> NodeObservation:
+    return NodeObservation(
+        node_id=NodeId.from_hex(node),
+        source="loranet",
+        observed_at=datetime.fromtimestamp(NOW, tz=UTC),
+        **fields,  # type: ignore[arg-type]
+    )
+
+
+@pytest.mark.parametrize(
+    ("fields", "expected"),
+    [
+        pytest.param(
+            {"battery_level": 101, "voltage": 12.8},
+            DeviceHealth(external_power=True, voltage=12.8),
+            id="external-power",
+        ),
+        pytest.param({"battery_level": 120}, DeviceHealth(), id="above-101"),
+        pytest.param({"uptime_seconds": -100}, DeviceHealth(), id="negative-uptime"),
+        pytest.param({"uptime_seconds": 2**32}, DeviceHealth(), id="uptime-past-32-bits"),
+        pytest.param(
+            {"uptime_seconds": 0xFFFFFFFF}, DeviceHealth(uptime_seconds=0xFFFFFFFF), id="max-uptime"
+        ),
+        pytest.param({"voltage": 1e308}, DeviceHealth(), id="absurd-voltage"),
+        pytest.param({"voltage": 100.0}, DeviceHealth(voltage=100.0), id="highest-voltage"),
+        pytest.param(
+            {"channel_utilization": 1e308, "air_util_tx": -1.0}, DeviceHealth(), id="bad-percent"
+        ),
+        pytest.param(
+            {"channel_utilization": 100.0, "air_util_tx": 0.0},
+            DeviceHealth(channel_utilization=100.0, air_util_tx=0.0),
+            id="edge-percent",
+        ),
+        pytest.param(
+            {"battery_level": 77, "voltage": 3.97},
+            DeviceHealth(battery_level=77, voltage=3.97),
+            id="battery",
+        ),
+        pytest.param({"battery_level": 0, "voltage": -0.001}, DeviceHealth(), id="nothing-real"),
+        pytest.param({"voltage": 0.0}, DeviceHealth(), id="zero-volts"),
+        pytest.param(
+            {
+                "uptime_seconds": 65,
+                "channel_utilization": 2.0,
+                "air_util_tx": 0.5,
+                "last_device_metrics": datetime.fromtimestamp(NOW - 600, tz=UTC),
+            },
+            DeviceHealth(
+                uptime_seconds=65, channel_utilization=2.0, air_util_tx=0.5, metrics_at=NOW - 600
+            ),
+            id="metrics",
+        ),
+        pytest.param({}, DeviceHealth(), id="empty"),
+    ],
+)
+def test_device_health_invents_nothing(fields: dict[str, object], expected: DeviceHealth) -> None:
+    assert device_health(_loranet(**fields)) == expected
+
+
+@pytest.mark.parametrize(
+    ("device", "known"),
+    [
+        (DeviceHealth(), False),
+        (DeviceHealth(external_power=True), True),
+        (DeviceHealth(air_util_tx=0.1), True),
+        (DeviceHealth(metrics_at=NOW), False),
+    ],
+)
+def test_device_health_is_known_when_any_value_is(device: DeviceHealth, known: bool) -> None:
+    assert device.known is known
+
+
+@pytest.mark.parametrize(
+    ("device", "notes"),
+    [
+        pytest.param(DeviceHealth(uptime_seconds=65), ("rebooted <1h ago",), id="fresh-boot"),
+        pytest.param(DeviceHealth(uptime_seconds=3600), (), id="an-hour-up"),
+        pytest.param(
+            DeviceHealth(uptime_seconds=65, metrics_at=NOW - 3 * 86400), (), id="old-metrics"
+        ),
+        pytest.param(
+            DeviceHealth(uptime_seconds=600, metrics_at=NOW - 600),
+            ("rebooted <1h ago",),
+            id="booted-twenty-minutes-ago",
+        ),
+        pytest.param(DeviceHealth(battery_level=20), ("battery low",), id="battery-at-warn"),
+        pytest.param(DeviceHealth(battery_level=21), (), id="battery-above-warn"),
+        pytest.param(DeviceHealth(external_power=True), (), id="external"),
+    ],
+)
+def test_device_notes(device: DeviceHealth, notes: tuple[str, ...]) -> None:
+    assert device_notes(device, now=NOW) == notes
+
+
+def test_the_device_thresholds() -> None:
+    assert (EXTERNAL_POWER_LEVEL, DEVICE_METRICS_FRESH_SECONDS, RECENT_REBOOT_SECONDS) == (
+        101,
+        86400.0,
+        3600.0,
+    )
+    assert NOT_IN_LORANET == "not in loranet"
+
+
+def test_loranet_gives_each_attributed_relay_its_device_or_a_gap() -> None:
+    loranet = {_R: _loranet(battery_level=101, uptime_seconds=86400)}
+
+    router, collider = relay_table(
+        _traffic(), _HIGH, [_OURS], everything=True, loranet=loranet
+    ).rows
+
+    assert router.device == DeviceHealth(external_power=True, uptime_seconds=86400)
+    assert NOT_IN_LORANET not in router.gaps
+    assert collider.device is None
+    assert collider.gaps[-1] == NOT_IN_LORANET
+
+
+def test_without_loranet_there_is_no_device_and_no_gap() -> None:
+    rows = relay_table(_traffic(), _HIGH, [_OURS], everything=True).rows
+
+    assert all(row.device is None and NOT_IN_LORANET not in row.gaps for row in rows)
+
+
+def test_an_ambiguous_byte_has_no_device() -> None:
+    resolutions = {0xE4: Resolution(0xE4, Confidence.AMBIGUOUS, None)}
+    traffic = Traffic(
+        relayed={0xE4: {_G1: Radio(5)}},
+        last_hops={_OURS: {0xE4: LastHop(5, 5)}},
+        packets={_OURS: 5},
+    )
+
+    (row,) = relay_table(traffic, resolutions, [_OURS], loranet={}).rows
+
+    assert (row.device, row.gaps) == (None, ())
+
+
+def test_a_negative_uptime_is_no_reboot() -> None:
+    device = device_health(_loranet(uptime_seconds=-100))
+
+    assert device_notes(device, now=NOW) == ()
+
+
+def test_the_plausibility_bounds() -> None:
+    assert (MAX_PLAUSIBLE_VOLTAGE, MAX_UPTIME_SECONDS) == (100.0, 0xFFFFFFFF)

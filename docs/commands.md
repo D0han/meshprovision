@@ -1064,9 +1064,21 @@ never heard directly by a gateway), **Region** (its share of the region's
 relayed receptions), **Gateways>=50%** (gateways with at least 20 relayed
 receptions that got at least half of them through it, and the largest such
 share), **Last seen** (lorastats' node list) and **Notes**, the gaps in what
-is known about it: not in lorastats' node list, no node info, or an id not
-derived from its key. Its battery, voltage, uptime and channel utilization
-from loranet.pl are not shown (yet); `mesh status --node ID` has them.
+is known about it: not in lorastats' node list, no node info, an id not
+derived from its key, or not in loranet; then `rebooted <1h ago` (its uptime,
+counted from when its metrics were sent, under an hour) and `battery low` (at
+or below 20 %, the `mesh health` warning level). **Device** is its device
+health from loranet.pl's node dump: battery (`ext` on external power, level
+101) and voltage, uptime, channel utilization (a value no device reports
+is left out: a battery level of 0 or above 101, a voltage at or below zero
+or above 100 V, a percentage outside 0-100, a negative uptime or one past
+a 32-bit counter), and `(metrics 3d old)` when loranet's device
+metrics are more than 24 hours old; `-` when loranet does not know it. The
+dump is downloaded once per run (13-16 MB, through the same HTTP cache as
+`mesh status`, so a `mesh status` just before costs nothing) and only for
+`relays` (and `graph`); `--no-fetch` asks loranet nothing and says so (`loranet
+not asked (--no-fetch)`), and a failed download prints `loranet: <error>`,
+keeps the table and exits `7`.
 A relay that is one of ours is never a row (see `mesh
 network impact`). Example (the end-to-end tests' region):
 
@@ -1074,10 +1086,10 @@ network impact`). Example (the end-to-end tests' region):
 Relays we depend on but don't own: PL, last 24 h (data as of 2026-11-01 01:19:46)
 20 of our packets, 10 of their receptions relayed; 153 relayed receptions in the region
 
-  Relay      Name                                       Role     Conf        Ours via   Our nodes   Sole 1st hop    Region    Gateways>=50%   Last seen             Notes
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  c0ffee61   Rtr                                        ROUTER   high           70.0%           1   d0000a01 Our1    69.9%   2 (max 100.0%)   2026-11-01 01:09:46   id not key-derived
-  0xe4       ambiguous (e10000e4, e20000e4, e30000e4)   -        ambiguous      30.0%           1   -                 7.2%    0 (max 30.6%)   -                     -
+  Relay      Name                                       Role     Conf        Ours via   Our nodes   Sole 1st hop    Region    Gateways>=50%   Last seen             Device                        Notes
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  c0ffee61   Rtr                                        ROUTER   high           70.0%           1   d0000a01 Our1    69.9%   2 (max 100.0%)   2026-11-01 01:09:46   ext 12.80V, up 2d, ChU 7.9%   id not key-derived
+  0xe4       ambiguous (e10000e4, e20000e4, e30000e4)   -        ambiguous      30.0%           1   -                 7.2%    0 (max 30.6%)   -                     -                             -
 
 Shares are of receptions at gateways, by last hop. Meshtastic floods: when a relay is gone, another node usually rebroadcasts instead. These numbers show who carries traffic now, not what breaks without it.
 ```
@@ -1088,9 +1100,12 @@ Shares are of receptions at gateways, by last hop. Meshtastic floods: when a rel
 `our_share`, `our_origins`, `our_sole_first_hop`, `our_sole_path_packets`
 (our packets whose every reception it relayed last), `gateways_relying`,
 `max_gateway_share`, `gateways_hearing_directly`, `role`, `last_seen`,
-`last_boot` and `gaps`, per region with `relayed_receptions`, `our_packets`
-and `our_relayed_receptions`. Default window 1 day. Exit code `0` (3/7 as
-above).
+`last_boot`, `gaps` and `device` (`null`, or `source` `loranet`,
+`battery_level`, `external_power`, `voltage`, `uptime_seconds`,
+`channel_utilization`, `air_util_tx`, `metrics_at`), per region with
+`relayed_receptions`, `our_packets` and `our_relayed_receptions`, plus
+`loranet` (`asked`, `data_as_of`, `error`). Default window 1 day. Exit code
+`0` (3/7 as above; 7 also when loranet failed).
 
 ### `mesh network impact`
 
