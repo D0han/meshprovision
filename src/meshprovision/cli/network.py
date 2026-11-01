@@ -25,7 +25,7 @@ from meshprovision.cli.common import (
 )
 from meshprovision.cli.help_format import MeshCommand, MeshGroup
 from meshprovision.errors import SettingsError
-from meshprovision.network import render, render_impact
+from meshprovision.network import render, render_graph, render_impact
 from meshprovision.network.report import (
     DEFAULT_KEYS_DAYS,
     DEFAULT_TRAFFIC_DAYS,
@@ -285,6 +285,50 @@ def impact(
         click.echo(render_impact.render_impact_json(report, nodes=detail))
     else:
         render_impact.render_impact_console(report, console=ctx.out, nodes=detail)
+    code = report.exit_code()
+    if code:
+        raise SystemExit(code)
+
+
+@network.command(name="graph", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
+@_common_options(DEFAULT_TRAFFIC_DAYS)
+@pass_cli
+@handle_cli_errors
+def graph(
+    ctx: CliContext,
+    *,
+    days: int,
+    regions: tuple[str, ...],
+    no_fetch: bool,
+    refresh: bool,
+    json_output: bool,
+) -> None:
+    """Build a relay graph of the region and look for single points of failure.
+
+    Observed: origins whose only first hop seen was one relay (the strong
+    claim). Inferred: nodes whose removal cuts well-observed nodes off from
+    MQTT in the graph (the weak claim). Our nodes: vertex-disjoint paths to
+    MQTT next to their observed first hops. Prints what the graph does not
+    claim; --json includes every edge with its evidence.
+
+    Args:
+        ctx: The shared CLI context.
+        days: The window, from ``--days``.
+        regions: The regions, from ``--region``.
+        no_fetch: Ask nothing, from ``--no-fetch``.
+        refresh: Fetch within the 15-minute interval, from ``--refresh``.
+        json_output: Emit JSON, from ``--json``.
+
+    Raises:
+        SystemExit: 3 when no region has any data, 7 when a request failed.
+    """
+    report = _collect(
+        ctx, days=days, regions=regions, no_fetch=no_fetch, refresh=refresh, traffic=True
+    )
+    if json_output:
+        click.echo(render_graph.render_graph_json(report))
+    else:
+        render_graph.render_graph_console(report, console=ctx.out)
     code = report.exit_code()
     if code:
         raise SystemExit(code)

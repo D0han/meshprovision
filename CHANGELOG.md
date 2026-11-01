@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh network graph`: a relay graph of the region (direct, last-hop,
+  first-hop, traceroute and neighbour-report edges, with their evidence;
+  MQTT joins every gateway) for single points of failure, with the observed
+  measure (nodes whose only first hop seen was one relay) and the inferred
+  one (cut vertices toward MQTT, counting only nodes with at least 20
+  receptions as cut off) labelled apart, our nodes' vertex-disjoint paths to
+  MQTT next to their observed first hops, and what the graph does not claim
+  printed every time. `--json` includes every edge for other graph tools.
 - `mesh provision` warns (stderr, before the apply confirmation, without
   blocking) when the node about to be written and rebooted carried traffic
   others depend on: impact level `medium` or `high` in the last 24 hours of

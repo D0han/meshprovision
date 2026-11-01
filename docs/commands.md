@@ -846,6 +846,7 @@ mesh network relays                   # relays carrying our packets, last 24 h
 mesh network relays --all --days 7    # every relay of the region by share
 mesh network impact                   # what depends on our nodes
 mesh network impact c464e761          # what depends on any node, in detail
+mesh network graph --json             # relay graph, single points, every edge
 ```
 
 | Subcommand | What it shows |
@@ -853,6 +854,7 @@ mesh network impact c464e761          # what depends on any node, in detail
 | `keys` | Every public key the region's nodes advertise, and what is wrong with them |
 | `relays` | The relays carrying our packets that are not ours (`--all`: every relay), with how much we depend on each |
 | `impact [NODE]...` | What depends on our nodes (or on any node): traffic carried, who relies on it, an impact level |
+| `graph` | A relay graph: observed sole first hops, inferred cut vertices toward MQTT, our nodes' paths |
 
 | Option (every subcommand) | Meaning |
 |---|---|
@@ -991,7 +993,9 @@ relayed receptions), **Gateways>=50%** (gateways with at least 20 relayed
 receptions that got at least half of them through it, and the largest such
 share), **Last seen** (lorastats' node list) and **Notes**, the gaps in what
 is known about it: not in lorastats' node list, no node info, or an id not
-derived from its key. A relay that is one of ours is never a row (see `mesh
+derived from its key. Its battery, voltage, uptime and channel utilization
+from loranet.pl are not shown (yet); `mesh status --node ID` has them.
+A relay that is one of ours is never a row (see `mesh
 network impact`). Example (the end-to-end tests' region):
 
 ```text
@@ -1087,6 +1091,74 @@ or (with `NODE`) just `nodes`; each node has `relay_byte`,
 `origins_relying`, `gateways_relying` (each `node` and `share`),
 `sole_first_hop_for`, `sole_path_packets`, `only_gateway_for` and `level`.
 Exit code `0` (3/7 as above).
+
+### `mesh network graph`
+
+A relay graph of the region over `--days` (default 1), for single points of
+failure. Its edges are undirected, between node ids, each with its evidence
+counted per source: `direct` (a sender and a gateway that heard it directly),
+`relayed` (a relay and a gateway that heard it as the last hop), `first_hop`
+(a sender and the relay that took its packet's first hop: receptions after
+exactly one hop) -- each kept from 2 observations -- and `traceroute` and
+`neighbor` (consecutive nodes of a traceroute, a node and a neighbour it
+reported) from one. A virtual node `MQTT` joins every gateway. Relayed
+receptions whose relay byte is ambiguous or unknown cannot be placed and are
+counted as left out. loranet's neighbour lists are not used (yet).
+
+Two measures, labelled and never merged into one score:
+
+- **Observed: sole first hops** (the strong claim): senders with at least
+  20 first-hop events (5 for ours) that went at least 90 % through one relay,
+  never heard directly by a gateway -- "was the only first hop".
+- **Inferred: cut vertices toward MQTT** (the weak claim): nodes whose
+  removal leaves others without any path to MQTT in the graph. Only nodes
+  with at least 20 receptions as a sender are counted as cut off: a node
+  heard once or twice has one edge because it was barely observed, not
+  because it has one neighbour.
+
+For each of our nodes: vertex-disjoint **paths to MQTT** in the graph
+(counted up to 4), its distinct observed **first hops**, its **sole first
+hop**, and the **gateways** that heard it directly, with a note: `single
+point (1 path)`, `no path to MQTT seen`, or `single observed first hop;
+other neighbours known` when the graph has other ways out but one relay
+always won the rebroadcast race. What the graph does **not** claim is printed
+above it: an absent edge is not an absent link (only the last and first hops
+of packets that reached a gateway are seen, the middle of a longer path only
+in traceroutes); flooding redundancy is suppressed on the air, hence
+invisible; gateways are MQTT visibility, not mesh connectivity (a node cut
+off from MQTT may still talk on the mesh); and one window of data does not
+model moved nodes or changing conditions. Example (the end-to-end tests'
+region):
+
+```text
+Relay graph: PL, last 24 h (data as of 2026-11-01 05:00:37)
+15 nodes, 16 edges (MQTT joins every gateway); 11 relayed receptions left out (ambiguous or unknown relay byte).
+Not claimed: An absent edge is not an absent link: only the last and first hops of packets that reached a gateway are seen (the middle of a longer path only in traceroutes).
+Not claimed: Flooding redundancy is suppressed on the air, hence invisible here.
+Not claimed: Gateways are MQTT visibility, not mesh connectivity: a node cut off from MQTT may still talk on the mesh.
+Not claimed: One window of data: moved nodes and changing conditions are not modelled.
+Observed: sole first hops (the only first hop seen; the strong claim)
+  c0ffee61 Rtr was the only first hop of a1000011, a2000012, d0000a01 Our1
+  d0000c03 Our3 was the only first hop of a3000013
+Inferred: cut vertices toward MQTT (the weak claim; only nodes with at least 20 receptions as an origin are counted as cut off)
+  c0ffee61 Rtr cuts off a1000011, a2000012
+  6a000073 cuts off a3000013
+  d0000c03 Our3 cuts off a3000013
+Our nodes
+
+  Node       Name   Paths to MQTT   First hops   Sole first hop   Gateways   Note
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  d0000a01   Our1   1               1            c0ffee61 Rtr     0          single point (1 path); single observed first hop
+  d0000c03   Our3   1               1            -                1          single point (1 path)
+  d00000bc   Our2   1               1            -                1          single point (1 path)
+```
+
+`--json` carries `not_claimed`, and per region `nodes`,
+`left_out_receptions`, every edge (`a`, `b`, `evidence` per source) for
+other graph tools, `observed_sole_first_hops` (`origin`, `first_hop`,
+`events`, `share`), `inferred_cut_vertices` (`node`, `cuts_off`) and `ours`
+(`paths_to_mqtt`, `first_hops`, `sole_first_hop`, `gateways`, `note`). No
+DOT export. Exit code `0` (3/7 as above).
 
 ## `mesh admin`
 

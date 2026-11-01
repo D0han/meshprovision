@@ -479,7 +479,7 @@ def _hostile_rows(now: float, name: str) -> list[dict[str, object]]:
 
 
 @pytest.mark.parametrize("name", _MARKUP_NAMES)
-@pytest.mark.parametrize("view", [["keys"], ["relays"], ["impact", mini.ROUTER]])
+@pytest.mark.parametrize("view", [["keys"], ["relays"], ["impact", mini.ROUTER], ["graph"]])
 def test_a_name_that_is_rich_markup_is_printed_as_text(
     runner: CliRunner,
     env: dict[str, str],
@@ -626,7 +626,7 @@ def test_impact_refuses_a_malformed_node(
     assert lorastats.raw == []
 
 
-@pytest.mark.parametrize("view", [["impact"]])
+@pytest.mark.parametrize("view", [["impact"], ["graph"]])
 def test_our_own_name_in_a_table_is_printed_as_text(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], view: list[str]
 ) -> None:
@@ -636,3 +636,90 @@ def test_our_own_name_in_a_table_is_printed_as_text(
 
     assert result.exit_code == 0, result.output
     assert f"{mini.OURS_RELAY}   [/]" in result.stdout
+
+
+def test_graph_keeps_observed_and_inferred_apart(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    db = _seed(seed_db)
+    before = db_fingerprint(db)
+
+    result, _ = _run(runner, env, ["graph", "--region", "PL"])
+
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert "Relay graph: PL, last 24 h (data as of " in out
+    assert "15 nodes, 16 edges (MQTT joins every gateway); 11 relayed receptions left out" in out
+    assert out.count("Not claimed: ") == 4
+    observed = out.index("Observed: sole first hops")
+    inferred = out.index("Inferred: cut vertices toward MQTT")
+    assert observed < inferred
+    assert (
+        f"{mini.ROUTER} Rtr was the only first hop of a1000011, a2000012, {mini.OURS_ONE} Our1"
+        in out
+    )
+    assert f"{mini.ROUTER} Rtr cuts off a1000011, a2000012" in out
+    assert f"{mini.G3} cuts off a3000013" in out
+    assert "a4000014" not in out[inferred:]
+    row = [cell.strip() for cell in _cells(out, mini.OURS_ONE)]
+    assert row == [
+        mini.OURS_ONE,
+        "Our1",
+        "1",
+        "1",
+        f"{mini.ROUTER} Rtr",
+        "0",
+        "single point (1 path); single observed first hop",
+    ]
+    assert db_fingerprint(db) == before
+
+
+def test_graph_json_lists_every_edge_with_its_evidence(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+
+    result, _ = _run(runner, env, ["graph", "--region", "PL", "--json"])
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert sorted(document) == [
+        "days",
+        "exit_code",
+        "generated_at",
+        "not_claimed",
+        "refresh",
+        "regions",
+    ]
+    assert len(document["not_claimed"]) == 4
+    (region,) = document["regions"]
+    assert sorted(region) == [
+        "data_as_of",
+        "edges",
+        "inferred_cut_vertices",
+        "left_out_receptions",
+        "nodes",
+        "observed_sole_first_hops",
+        "ours",
+        "region",
+    ]
+    assert (region["nodes"], region["left_out_receptions"], len(region["edges"])) == (15, 11, 16)
+    edges = {(e["a"], e["b"]): e["evidence"] for e in region["edges"]}
+    assert edges[(mini.G1, mini.ROUTER)] == {"direct": 6, "relayed": 57}
+    assert edges[(mini.G1, "MQTT")] == {"gateway": 1}
+    assert edges[("a1000011", mini.ROUTER)] == {"first_hop": 50}
+    assert {
+        "origin": "a3000013",
+        "first_hop": mini.OURS_RELAY,
+        "events": 25,
+        "share": 1.0,
+    } in region["observed_sole_first_hops"]
+    assert {"node": mini.OURS_RELAY, "cuts_off": ["a3000013"]} in region["inferred_cut_vertices"]
+    assert region["ours"][0] == {
+        "node": mini.OURS_ONE,
+        "paths_to_mqtt": 1,
+        "first_hops": 1,
+        "sole_first_hop": mini.ROUTER,
+        "gateways": 0,
+        "note": "single point (1 path); single observed first hop",
+    }
