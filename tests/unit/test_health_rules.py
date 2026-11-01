@@ -23,6 +23,8 @@ from meshprovision.health.rules import (
     CHATTY_PER_HOUR,
     DEFAULT_HOP_LIMIT,
     HOP_ADVICE_MIN_SAMPLES,
+    IMPORTANCE_HIGH_SCORE,
+    IMPORTANCE_MEDIUM_SCORE,
     MIN_RECEPTIONS,
     REBOOTS_WARN,
     REBOOTS_WINDOW_DAYS,
@@ -38,6 +40,7 @@ from meshprovision.health.rules import (
     Finding,
     Importance,
     NodeContext,
+    RegionImportance,
     Verdict,
     advise,
     assess,
@@ -701,3 +704,54 @@ def test_relay_concentration_names_a_likely_relay() -> None:
 )
 def test_no_relay_concentration_suggestion(metrics: NodeMetrics) -> None:
     assert _advice(metrics) == []
+
+
+def _region(level: str) -> RegionImportance:
+    return RegionImportance(region="Zachód", as_of=_NOW, level=level, carried_share=0.16)
+
+
+@pytest.mark.parametrize("fleet", ["low", "medium", "high"])
+@pytest.mark.parametrize("region_level", [None, "low", "medium", "high"])
+def test_importance_is_the_higher_of_the_fleet_and_the_region_level(
+    fleet: str, region_level: str | None
+) -> None:
+    metrics = {_NODE: _m(uplinks_itself=fleet != "low")}
+    if fleet == "high":
+        metrics[_OTHER] = _m(
+            node=_OTHER, receptions=MIN_RECEPTIONS, gateways=((_NODE.hex, MIN_RECEPTIONS),)
+        )
+    plain = rank_importance(metrics, {})[_NODE]
+    region = {} if region_level is None else {_NODE: _region(region_level)}
+
+    ranked = rank_importance(metrics, {}, region=region)[_NODE]
+
+    order = ("low", "medium", "high")
+    assert plain.level == fleet
+    applies = region_level in ("medium", "high")
+    expected = max(fleet, region_level, key=order.index) if applies else fleet
+    assert ranked.level == expected
+    assert (ranked.score, ranked.reasons, ranked.fleet_level) == (plain.score, plain.reasons, fleet)
+    assert ranked.network == (_region(region_level) if applies else None)
+
+
+def test_without_region_data_importance_is_what_it_was() -> None:
+    metrics = {_NODE: _m(uplinks_itself=True), _OTHER: _m(node=_OTHER)}
+
+    assert rank_importance(metrics, {}, region={}) == rank_importance(metrics, {})
+
+
+def test_a_region_entry_for_another_node_changes_nothing() -> None:
+    metrics = {_NODE: _m(), _OTHER: _m(node=_OTHER)}
+
+    ranked = rank_importance(metrics, {}, region={_OTHER: _region("high")})
+
+    assert ranked[_NODE] == Importance("low", 0)
+    assert ranked[_OTHER].level == "high"
+
+
+@pytest.mark.parametrize(
+    ("score", "level"),
+    [(0, "low"), (IMPORTANCE_MEDIUM_SCORE, "medium"), (IMPORTANCE_HIGH_SCORE, "high")],
+)
+def test_the_fleet_level_follows_the_score(score: int, level: str) -> None:
+    assert Importance("high", score, network=_region("high")).fleet_level == level

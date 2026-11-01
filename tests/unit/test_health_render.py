@@ -16,8 +16,9 @@ from meshprovision.health.history import GatewayCheck, LocalStatsPoint, NodeHist
 from meshprovision.health.metrics import BatteryTrend, NodeMetrics, RelayShare
 from meshprovision.health.refresh import RefreshFailure, RefreshOutcome
 from meshprovision.health.report import HealthReport, NodeHealth, assess_nodes
-from meshprovision.health.rules import Advice, Finding, Importance, Verdict
+from meshprovision.health.rules import Advice, Finding, Importance, RegionImportance, Verdict
 from meshprovision.nodeid import NodeId
+from meshprovision.status import timefmt
 from meshprovision.status.merge import MergedNode, Thresholds
 from meshprovision.status.report import SourceFailure, StatusReport
 
@@ -655,6 +656,8 @@ def test_json_importance_lists_each_relation() -> None:
         "uplinked": [_B.hex],
         "sole_gateway_for": ["0000c0de"],
         "dependents": ["0000d0d0"],
+        "fleet_level": "high",
+        "network": None,
     }
 
 
@@ -675,3 +678,71 @@ def test_json_without_fetching_has_no_refresh() -> None:
 
     assert document["refresh"] is None
     assert document["failures"] == []
+
+
+_REGION = RegionImportance(
+    region="Zachód",
+    as_of=_T - 600,
+    level="high",
+    carried_share=0.16,
+    sole_first_hop_for=12,
+    origins_relying=15,
+    gateways_relying=9,
+    only_gateway_for=1,
+)
+
+
+def test_the_detailed_report_says_where_a_region_raised_the_level() -> None:
+    importance = Importance("high", 4, ("MQTT gateway",), network=_REGION)
+
+    text = _detail(_health(importance=importance))
+
+    as_of = timefmt.format_local(datetime.fromtimestamp(_T - 600, tz=UTC))
+    assert (
+        "Importance: high (fleet score 4: medium; region Zachód: high)\n  - MQTT gateway\n"
+        f"  - region Zachód (mesh network data of {as_of}): carried 16.0% of relayed traffic; "
+        "only first hop of 12 nodes; 15 nodes and 9 gateways got at least half of their "
+        "relayed receptions through it; only MQTT uplink of 1 nodes"
+    ) in text
+
+
+def test_the_region_line_leaves_out_what_is_zero() -> None:
+    network = RegionImportance(region="PL", as_of=_T, level="medium", carried_share=0.039)
+
+    text = _detail(_health(importance=Importance("medium", 0, network=network)))
+
+    assert "Importance: medium (fleet score 0: low; region PL: medium)" in text
+    assert "carried 3.9% of relayed traffic\n" in text + "\n"
+    assert "first hop" not in text
+    assert "MQTT uplink" not in text
+
+
+def test_a_hostile_region_name_cannot_reach_the_terminal() -> None:
+    network = RegionImportance(
+        region="Za\x1b[31mch\x9bód\nInjected line", as_of=_T, level="high", carried_share=0.5
+    )
+
+    text = _detail(_health(importance=Importance("high", 0, network=network)))
+
+    assert not any(char in text for char in ("\x1b", "\x9b"))
+    assert "\nInjected line" not in text
+
+
+def test_json_importance_carries_the_region_and_the_fleet_level() -> None:
+    document = render.node_health_to_json_dict(
+        _health(importance=Importance("high", 4, network=_REGION))
+    )
+
+    importance = document["importance"]
+    assert importance["level"] == "high"
+    assert importance["fleet_level"] == "medium"
+    assert importance["network"] == {
+        "region": "Zachód",
+        "data_as_of": render._iso(_T - 600),
+        "level": "high",
+        "carried_share": 0.16,
+        "sole_first_hop_for": 12,
+        "origins_relying": 15,
+        "gateways_relying": 9,
+        "only_gateway_for": 1,
+    }

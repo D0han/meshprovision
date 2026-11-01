@@ -818,6 +818,25 @@ relay byte is unambiguously its own and carried at least half of that node's
 relayed receptions (20+); 1 for a router role (`ROUTER`, `ROUTER_LATE`,
 `ROUTER_CLIENT`, `REPEATER`).
 
+The level is then raised to how much the node's **region** relied on it, when
+[`mesh network`](#mesh-network) stored that region at most 48 hours ago: the
+node's [impact level](#mesh-network-impact) in the 24 hours before the fetch,
+every other node counting, in the region where it matters most (as the
+`mesh provision` maintenance warning reads it). Only `medium` or `high` counts;
+the level is the higher of the two, never a sum, and the score stays the fleet
+points. The detail then reads, for example, `Importance: high (fleet score 4:
+medium; region Zachód: high)`, with a last reason line `region Zachód (mesh
+network data of 2026-11-01 10:00:00 CET): carried 16.0% of relayed traffic;
+only first hop of 12 nodes; 15 nodes and 9 gateways got at least half of their
+relayed receptions through it`. The table's Importance column shows the
+raised level. This only reads the store, never fetches it (with or without
+`--no-fetch`); without fresh data, or when the
+region rates the node `low`, everything is as before. In `--json`,
+`importance` adds `fleet_level` (the level from the points alone) and
+`network`: `null`, or `region`, `data_as_of`, `level`, `carried_share`,
+`sole_first_hop_for`, `origins_relying`, `gateways_relying` and
+`only_gateway_for` (counts).
+
 **Suggestions** are worded as such; nothing is ever changed on a node:
 
 | Suggestion | When |

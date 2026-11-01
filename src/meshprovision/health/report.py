@@ -7,7 +7,9 @@ saves, replaces, upserts or deletes anything in it
 (``tests/unit/test_readonly_status_boundary.py`` walks it for those
 operations). Besides what ``mesh status`` writes (the HTTP cache, the
 lorastats region list and memo), it writes only the per-node health
-history files (:mod:`meshprovision.health.store`).
+history files (:mod:`meshprovision.health.store`). It also reads, never
+fetches, what ``mesh network`` stored (:func:`~meshprovision.network.
+maintenance.stored_impacts`), for how much each node's region relies on it.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.datasources.lorastats_packets import LorastatsPackets
@@ -28,6 +31,7 @@ from meshprovision.health.rules import (
     Finding,
     Importance,
     NodeContext,
+    RegionImportance,
     Verdict,
     advise,
     assess,
@@ -35,6 +39,8 @@ from meshprovision.health.rules import (
     rank_importance,
 )
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
+from meshprovision.network.maintenance import StoredImpact, stored_impacts
+from meshprovision.network.store import NETWORK_DIRNAME
 from meshprovision.nodeid import NodeId
 from meshprovision.status.cadence import learned_interval
 from meshprovision.status.merge import MergedNode, Thresholds, with_learned_cadence
@@ -64,6 +70,7 @@ __all__ = [
     "assess_status",
     "current_battery",
     "refresh_status_histories",
+    "region_importance",
     "rejudged_nodes",
     "run_health",
 ]
@@ -245,6 +252,7 @@ def assess_nodes(
     now: float,
     days: int,
     floor: Thresholds | None = None,
+    region: Mapping[NodeId, RegionImportance] = MappingProxyType({}),
 ) -> tuple[NodeHealth, ...]:
     """Judge each reported node's health from its history. Pure.
 
@@ -261,6 +269,8 @@ def assess_nodes(
         days: The window, in days.
         floor: The shortest thresholds the nodes were merged with
             (``None``: the defaults).
+        region: How much each node's region relied on it (see
+            :func:`~meshprovision.health.rules.rank_importance`).
 
     Returns:
         One :class:`NodeHealth` per reported node, in ``nodes`` order.
@@ -276,7 +286,7 @@ def assess_nodes(
         for node_id in everyone
     }
     roles = {node.node_id: _role(node, history_of(node.node_id)) for node in nodes}
-    importance = rank_importance(metrics, roles)
+    importance = rank_importance(metrics, roles, region=region)
     result = []
     for merged in nodes:
         node = _rejudged(merged, history_of(merged.node_id), now=now, floor=floors)
@@ -424,6 +434,38 @@ def assess_status(
     )
 
 
+def region_importance(stored: StoredImpact) -> RegionImportance:
+    """Map a stored region impact to what the pure rules know of it.
+
+    Args:
+        stored: A node's impact in its best stored region.
+
+    Returns:
+        The counts and level the rules and the renderer use.
+    """
+    impact = stored.impact
+    return RegionImportance(
+        region=stored.region,
+        as_of=stored.fetched_at,
+        level=impact.level.value,
+        carried_share=impact.carried_share,
+        sole_first_hop_for=len(impact.sole_first_hop_for),
+        origins_relying=len(impact.origins),
+        gateways_relying=len(impact.gateways),
+        only_gateway_for=len(impact.only_gateway_for),
+    )
+
+
+def _region_importances(
+    settings: Settings, nodes: Sequence[MergedNode], *, now: float
+) -> dict[NodeId, RegionImportance]:
+    """Read how much each reported node's region relied on it, from the store only."""
+    stored = stored_impacts(
+        (node.node_id for node in nodes), settings.cache_dir / NETWORK_DIRNAME, now=now
+    )
+    return {node: region_importance(impact) for node, impact in stored.items()}
+
+
 def run_health(
     settings: Settings,
     options: HealthOptions,
@@ -448,6 +490,10 @@ def run_health(
 
     Returns:
         The assembled report.
+
+    Each reported node's importance also counts how much its region relied
+    on it, from what ``mesh network`` stored (never fetched here; nothing
+    when the store has no recent data).
 
     Raises:
         meshprovision.errors.MissingContactError: If fetching and
@@ -493,6 +539,7 @@ def run_health(
         for node_id in fleet
     }
     generated_at = datetime.now(tz=UTC)
+    now = generated_at.timestamp()
     return HealthReport(
         generated_at=generated_at,
         days=options.days,
@@ -501,8 +548,9 @@ def run_health(
             nodes,
             histories,
             fleet=fleet,
-            now=generated_at.timestamp(),
+            now=now,
             days=options.days,
+            region=_region_importances(settings, nodes, now=now),
         ),
         status=status,
         refresh=outcome,

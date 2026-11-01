@@ -375,6 +375,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh health` importance also counts how much a node's region relies on
+  it: when `mesh network` stored the region at most 48 hours ago and the
+  node's impact level there is `medium` or `high`, the importance level is
+  the higher of that and the fleet level (the score stays the fleet points),
+  and the detail says why (`fleet score 4: medium; region Zachód: high` and a
+  reason line with the share carried and the nodes relying on it). A relay
+  the whole region depends on was rated by our own nodes' use of it only.
+  Read from the store only, never fetched. `--json` adds `fleet_level` and
+  `network` to `importance`.
 - `mesh provision` draws a fresh node key again (up to 16 times) when the
   node id firmware >= 2.8 would derive from it (`crc32(public key)`) is
   reserved (below 4, or the broadcast address), already another database

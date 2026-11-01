@@ -10,7 +10,8 @@ node configured to report every few hours is not judged like an hourly one:
 - a **verdict** (``ok``/``warn``/``crit``, ``unknown`` without any data)
   with the reasons that set it;
 - an **importance** (``high``/``medium``/``low``): a score that counts what
-  the rest of our fleet would lose without the node (see
+  the rest of our fleet would lose without the node, raised to how much
+  its region relied on it when ``mesh network`` data says so (see
   :func:`rank_importance`);
 - **suggestions**: configuration changes worth considering, worded as
   such; nothing here ever changes a node.
@@ -73,6 +74,7 @@ __all__ = [
     "Finding",
     "Importance",
     "NodeContext",
+    "RegionImportance",
     "Verdict",
     "advise",
     "assess",
@@ -197,6 +199,7 @@ IMPORTANCE_HIGH_SCORE: Final[int] = 5
 IMPORTANCE_MEDIUM_SCORE: Final[int] = 2
 """An importance score of this or more is ``medium``; below it ``low``."""
 
+_IMPORTANCE_LEVELS: Final[tuple[str, ...]] = ("low", "medium", "high")
 _EXTERNAL_POWER: Final[int] = 101
 """The battery level Meshtastic reports on external power."""
 _GATEWAY_POINTS: Final[int] = 3
@@ -260,16 +263,48 @@ class Advice:
 
 
 @dataclass(frozen=True, slots=True)
-class Importance:
-    """How much the rest of our fleet relies on a node.
+class RegionImportance:
+    """How much a whole region relied on a node, from the ``mesh network`` store.
 
     Attributes:
-        level: ``"high"``, ``"medium"`` or ``"low"``.
-        score: The points behind it.
-        reasons: Why, for a person.
+        region: The region's name (remote text: render it safely).
+        as_of: When the region's data was fetched, epoch seconds; it
+            covers the 24 hours before.
+        level: The node's impact level there: ``"high"``, ``"medium"`` or
+            ``"low"``.
+        carried_share: Its share of the region's relayed receptions.
+        sole_first_hop_for: How many nodes it was the only first hop of.
+        origins_relying: How many origins got at least half of their
+            relayed receptions through it.
+        gateways_relying: How many gateways did.
+        only_gateway_for: How many nodes it was mostly the only MQTT
+            uplink for.
+    """
+
+    region: str
+    as_of: float
+    level: str
+    carried_share: float
+    sole_first_hop_for: int = 0
+    origins_relying: int = 0
+    gateways_relying: int = 0
+    only_gateway_for: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class Importance:
+    """How much the rest of our fleet, and its region, rely on a node.
+
+    Attributes:
+        level: ``"high"``, ``"medium"`` or ``"low"``: the higher of
+            :attr:`fleet_level` and :attr:`network`'s level.
+        score: The fleet points behind :attr:`fleet_level`.
+        reasons: Why, for a person (the fleet's reasons).
         uplinked: Our nodes it uplinked as an MQTT gateway.
         sole_gateway_for: Our nodes no other gateway uplinked.
         dependents: Our nodes whose busiest relay is (likely) it.
+        network: How much its region relied on it, when that is at least
+            ``medium``; else ``None``.
     """
 
     level: str
@@ -278,6 +313,12 @@ class Importance:
     uplinked: tuple[NodeId, ...] = ()
     sole_gateway_for: tuple[NodeId, ...] = ()
     dependents: tuple[NodeId, ...] = ()
+    network: RegionImportance | None = None
+
+    @property
+    def fleet_level(self) -> str:
+        """The level the fleet points alone give."""
+        return _score_level(self.score)
 
 
 @dataclass(frozen=True, slots=True)
@@ -564,8 +605,25 @@ def _depends_on(metrics: NodeMetrics, relay: NodeId) -> bool:
     )
 
 
+def _score_level(score: int) -> str:
+    """The importance level a fleet score gives."""
+    if score >= IMPORTANCE_HIGH_SCORE:
+        return "high"
+    return "medium" if score >= IMPORTANCE_MEDIUM_SCORE else "low"
+
+
+def _combined(fleet_level: str, network: RegionImportance | None) -> str:
+    """The higher of the fleet level and the region's (max-combine; nothing counted twice)."""
+    if network is None:
+        return fleet_level
+    return max(fleet_level, network.level, key=_IMPORTANCE_LEVELS.index)
+
+
 def rank_importance(
-    metrics_by_node: Mapping[NodeId, NodeMetrics], roles: Mapping[NodeId, str | None]
+    metrics_by_node: Mapping[NodeId, NodeMetrics],
+    roles: Mapping[NodeId, str | None],
+    *,
+    region: Mapping[NodeId, RegionImportance] = MappingProxyType({}),
 ) -> dict[NodeId, Importance]:
     """Score how much the rest of our fleet relies on each node.
 
@@ -578,9 +636,14 @@ def rank_importance(
     :data:`IMPORTANCE_HIGH_SCORE`, ``medium`` from
     :data:`IMPORTANCE_MEDIUM_SCORE`.
 
+    A node whose region (``mesh network`` data) relied on it at least
+    ``medium`` gets the higher of the two levels; its score stays the fleet
+    points. A region rated ``low`` changes nothing.
+
     Args:
         metrics_by_node: Our nodes' metrics (the fleet).
         roles: Our nodes' roles, when known.
+        region: How much each node's region relied on it, when known.
 
     Returns:
         Each node's importance.
@@ -617,14 +680,11 @@ def rank_importance(
             )
             if applies
         ]
-        level = (
-            "high"
-            if score >= IMPORTANCE_HIGH_SCORE
-            else "medium"
-            if score >= IMPORTANCE_MEDIUM_SCORE
-            else "low"
-        )
-        result[node] = Importance(level, score, tuple(reasons), uplinked, sole, dependents)
+        network = region.get(node)
+        if network is not None and network.level == "low":
+            network = None
+        level = _combined(_score_level(score), network)
+        result[node] = Importance(level, score, tuple(reasons), uplinked, sole, dependents, network)
     return result
 
 

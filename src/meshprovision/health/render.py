@@ -33,6 +33,8 @@ from meshprovision.health.rules import (
     BATTERY_FROM_HISTORY,
     CHATTY_REFERENCE_PRESET,
     BatteryReading,
+    Importance,
+    RegionImportance,
     Verdict,
     chatty_limit,
 )
@@ -341,6 +343,55 @@ def _refresh_json(refresh: RefreshOutcome) -> dict[str, object]:
     }
 
 
+def _region_reason(network: RegionImportance) -> str:
+    """Say how much the region relied on a node, as one reason line."""
+    as_of = timefmt.format_local(datetime.fromtimestamp(network.as_of, tz=UTC))
+    parts = [f"carried {100 * network.carried_share:.1f}% of relayed traffic"]
+    if network.sole_first_hop_for:
+        parts.append(f"only first hop of {network.sole_first_hop_for} nodes")
+    if network.origins_relying or network.gateways_relying:
+        parts.append(
+            f"{network.origins_relying} nodes and {network.gateways_relying} gateways got "
+            "at least half of their relayed receptions through it"
+        )
+    if network.only_gateway_for:
+        parts.append(f"only MQTT uplink of {network.only_gateway_for} nodes")
+    return f"region {terminal_safe(network.region)} (mesh network data of {as_of}): " + "; ".join(
+        parts
+    )
+
+
+def _importance_text(importance: Importance) -> str:
+    """Write the importance line and its reasons; unchanged without region data."""
+    network = importance.network
+    reasons = list(importance.reasons)
+    if network is None:
+        head = f"Importance: {importance.level} (score {importance.score})"
+    else:
+        head = (
+            f"Importance: {importance.level} (fleet score {importance.score}: "
+            f"{importance.fleet_level}; region {terminal_safe(network.region)}: {network.level})"
+        )
+        reasons.append(_region_reason(network))
+    return head + "".join(f"\n  - {reason}" for reason in reasons)
+
+
+def _network_json(network: RegionImportance | None) -> dict[str, object] | None:
+    """Render how much the region relied on a node, or ``None``."""
+    if network is None:
+        return None
+    return {
+        "region": network.region,
+        "data_as_of": _iso(network.as_of),
+        "level": network.level,
+        "carried_share": network.carried_share,
+        "sole_first_hop_for": network.sole_first_hop_for,
+        "origins_relying": network.origins_relying,
+        "gateways_relying": network.gateways_relying,
+        "only_gateway_for": network.only_gateway_for,
+    }
+
+
 def _lines(health: NodeHealth, now: datetime) -> Iterable[str]:
     """Write the detailed report of one node, line by line."""
     node, metrics = health.node, health.metrics
@@ -351,10 +402,7 @@ def _lines(health: NodeHealth, now: datetime) -> Iterable[str]:
     yield f"Verdict: {health.verdict.value.upper()}" + "".join(
         f"\n  - {finding.severity.value}: {finding.text}" for finding in health.findings
     )
-    yield (
-        f"Importance: {health.importance.level} (score {health.importance.score})"
-        + "".join(f"\n  - {reason}" for reason in health.importance.reasons)
-    )
+    yield _importance_text(health.importance)
     yield (
         f"Window: last {metrics.days} d; {metrics.covered_hours} of {metrics.days * 24} hours "
         f"covered, {metrics.silent_hours} silent (longest {metrics.longest_silence_hours} in a "
@@ -527,6 +575,8 @@ def node_health_to_json_dict(health: NodeHealth) -> dict[str, object]:
             "uplinked": [node.hex for node in health.importance.uplinked],
             "sole_gateway_for": [node.hex for node in health.importance.sole_gateway_for],
             "dependents": [node.hex for node in health.importance.dependents],
+            "fleet_level": health.importance.fleet_level,
+            "network": _network_json(health.importance.network),
         },
         "suggestions": [{"code": a.code, "text": a.text} for a in health.advice],
         "role": health.role,

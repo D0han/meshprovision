@@ -26,11 +26,14 @@ from meshprovision.health.report import (
     assess_nodes,
     assess_status,
     refresh_status_histories,
+    region_importance,
     rejudged_nodes,
     run_health,
 )
-from meshprovision.health.rules import Verdict
+from meshprovision.health.rules import RegionImportance, Verdict
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
+from meshprovision.network.impact import Dependant, Level, NodeImpact
+from meshprovision.network.maintenance import StoredImpact
 from meshprovision.nodeid import NodeId
 from meshprovision.status.cadence import Cadence, CadenceSource
 from meshprovision.status.merge import Availability, MergedNode, Thresholds
@@ -318,3 +321,46 @@ def test_the_role_is_escaped_whichever_origin_wins() -> None:
         assert health[0].role == "ROUTER\\x0aVerdict: OK"
         assert all("\n" not in finding.text for finding in health[0].findings)
         assert all("\n" not in reason for reason in health[0].importance.reasons)
+
+
+def test_a_stored_region_impact_maps_to_its_counts() -> None:
+    impact = NodeImpact(
+        node=_A.hex,
+        resolution=None,
+        carried=40,
+        carried_share=0.16,
+        origins=(Dependant("a1", 0.9), Dependant("a2", 0.6)),
+        gateways=(Dependant("g1", 0.7),),
+        sole_first_hop_for=("a1", "a2", "a3"),
+        sole_path_packets=5,
+        only_gateway_for=(Dependant("a4", 0.6),),
+        level=Level.HIGH,
+    )
+
+    mapped = region_importance(StoredImpact(impact, "Zachód", 1_760_000_000.0))
+
+    assert mapped == RegionImportance(
+        region="Zachód",
+        as_of=1_760_000_000.0,
+        level="high",
+        carried_share=0.16,
+        sole_first_hop_for=3,
+        origins_relying=2,
+        gateways_relying=1,
+        only_gateway_for=1,
+    )
+
+
+def test_region_importance_reaches_the_reported_nodes_importance() -> None:
+    network = RegionImportance(region="PL", as_of=_NOW.timestamp(), level="high", carried_share=0.2)
+
+    (health,) = assess_nodes(
+        [MergedNode(node_id=_A)],
+        {},
+        fleet=(_A,),
+        now=_NOW.timestamp(),
+        days=7,
+        region={_A: network},
+    )
+
+    assert (health.importance.level, health.importance.network) == ("high", network)

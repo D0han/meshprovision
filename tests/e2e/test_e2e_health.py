@@ -21,6 +21,7 @@ from meshprovision.datasources.lorastats_packets import (
     LORASTATS_PACKET_REPORTS_PATH,
     LORASTATS_PACKETS_PARSED_PATH,
 )
+from meshprovision.datasources.lorastats_region import LORASTATS_PACKETS_RAW_PATH
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.health.packets import parse_receptions
 from meshprovision.nodeid import NodeId
@@ -577,3 +578,103 @@ def test_mesh_health_writes_no_packet_answer_to_the_http_cache(
     assert len(lorastats.reports) == len(lorastats.parsed) == len(lorastats.uplinked) == 1
     assert written  # the loranet dump is still cached
     assert not [url for url in written if "/PacketReports/" in url or "/PacketsParsed/" in url]
+
+
+def _seed_network_store(env: dict[str, str], *, node: str = _A, fetched_ago: float = 600.0) -> None:
+    """Store a region (``mesh network``) where ``node`` is the only first hop of an outsider."""
+    from meshprovision.network.buckets import summarize
+    from meshprovision.network.rawpackets import parse_raw
+    from meshprovision.network.store import NETWORK_DIRNAME, RegionStore
+    from tests.unit.network_fixtures import packet, row
+
+    fetched_at = time.time() - fetched_ago
+    at = fetched_at - 3600
+    relay = int(node[-2:], 16)
+    rows = [
+        row(
+            packet(0xA3000013, n, relay=relay, hop_limit=2, snr=6.0, rssi=-85),
+            gateway=_GATEWAYS[0],
+            time=at + n,
+        )
+        for n in range(1, 26)
+    ]
+    rows += [
+        row(packet(int(node, 16), 100 + n, snr=6.0, rssi=-85), gateway=_GATEWAYS[0], time=at + n)
+        for n in range(5)
+    ]
+    hours = summarize(parse_raw(rows, now=fetched_at), since=None, fetched_at=fetched_at)
+    directory = Path(env["MESHPROVISION_CACHE_DIR"]) / NETWORK_DIRNAME
+    RegionStore(directory, clock=lambda: fetched_at).update(
+        "Zachód", hours, fetched_at=fetched_at, skipped_rows=0
+    )
+
+
+def _importance(document: dict[str, Any], node: str) -> dict[str, Any]:
+    return next(n["importance"] for n in document["nodes"] if n["node_id"] == node)
+
+
+def test_a_node_its_region_relies_on_is_rated_from_the_stored_network_data(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    _seed_network_store(env)
+
+    with respx.mock(assert_all_mocked=True) as router:
+        result = invoke(runner, ["health", "--no-fetch", "--json"], env)
+        detail = invoke(runner, ["health", _A, "--no-fetch"], env)
+
+    assert result.exit_code == 0, result.output
+    assert router.calls.call_count == 0
+    importance = _importance(json.loads(result.stdout), _A)
+    assert (importance["level"], importance["fleet_level"], importance["score"]) == (
+        "high",
+        "low",
+        0,
+    )
+    assert importance["network"]["region"] == "Zachód"
+    assert importance["network"]["level"] == "high"
+    assert importance["network"]["sole_first_hop_for"] == 1
+    assert _importance(json.loads(result.stdout), _B)["network"] is None
+    assert "Importance: high (fleet score 0: low; region Zachód: high)" in detail.stdout
+    assert "  - region Zachód (mesh network data of " in detail.stdout
+
+
+def test_without_stored_network_data_importance_is_unchanged(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    _seed_network_store(env, fetched_ago=49 * 3600)
+
+    result = invoke(runner, ["health", "--no-fetch", "--json"], env)
+    detail = invoke(runner, ["health", _A, "--no-fetch"], env)
+
+    for node in (_A, _B):
+        importance = _importance(json.loads(result.stdout), node)
+        assert importance["network"] is None
+        assert importance["fleet_level"] == importance["level"]
+    assert "Importance: low (score 0)" in detail.stdout
+    assert "region Zachód" not in detail.stdout
+
+
+def test_mesh_health_reads_the_network_store_but_never_fetches_it(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+    rows: dict[str, Any],
+) -> None:
+    _seed(seed_db)
+    _seed_network_store(env)
+
+    router = mock_sources(nodes=_nodes(time.time()))
+    _Lorastats(router, rows)
+    with router:
+        result = invoke(runner, ["health", "--json"], env)
+        asked = [str(call.request.url) for call in router.calls]
+
+    assert result.exit_code == 0, result.output
+    assert _importance(json.loads(result.stdout), _A)["network"]["region"] == "Zachód"
+    assert asked
+    raw_path = LORASTATS_PACKETS_RAW_PATH.split("{region}")[1]
+    assert not any(raw_path in url for url in asked)
+    assert not any("Zach" in url for url in asked)
