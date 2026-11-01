@@ -6,7 +6,10 @@ parameter -- verified to shrink a ~1.84 MB bulk region dump down to a
 ~150-byte filtered response. This module therefore queries per node
 rather than pulling region dumps, and deliberately exposes no bulk-dump
 method at all: lorastats.pl's terms treat bulk scraping as grounds for an
-IP ban, so the absence is the safeguard.
+IP ban, so the absence is the safeguard. The region-wide views of
+``mesh network`` are the one exception, kept in a class of their own with
+a request budget
+(:class:`~meshprovision.datasources.lorastats_region.LorastatsRegionFeed`).
 
 Behaviors verified live and worth restating here because they drive
 this module's design:

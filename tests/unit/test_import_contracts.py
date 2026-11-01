@@ -91,7 +91,7 @@ _PURE_HEALTH_FORBIDDEN: Final[tuple[str, ...]] = (
     "meshprovision.db",
     "meshprovision.cli",
 )
-"""The pure ``health`` modules read no file and no network, and know no CLI."""
+"""The pure ``health`` and ``network`` modules read no file and no network, and know no CLI."""
 
 FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("errors.py", ("meshprovision",)),
@@ -127,6 +127,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("health/metrics.py", _PURE_HEALTH_FORBIDDEN),
     ("health/packets.py", _PURE_HEALTH_FORBIDDEN),
     ("health/rules.py", _PURE_HEALTH_FORBIDDEN),
+    ("network/rawpackets.py", _PURE_HEALTH_FORBIDDEN),
     (
         "provisioning/persist.py",
         (
