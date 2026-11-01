@@ -15,6 +15,13 @@ gateway), each with its evidence counted per source:
 Relayed receptions whose relay byte is ambiguous or unknown cannot be
 placed and are counted as left out.
 
+``loranet_neighbor`` edges are kept apart: loranet's neighbour lists are
+what a node reported hearing, over a longer horizon. Only reports made in
+the window between two nodes the observed graph already has count (the
+node set never grows), as evidence on the edge, and never in the observed
+measures below: :class:`LoranetPaths` repeats the inferred ones with those
+edges added, to report only the differences.
+
 **Measures**, never merged into one score:
 
 1. *Sole first hop* (observed, the strong claim): see
@@ -61,12 +68,14 @@ if TYPE_CHECKING:
     from meshprovision.network.resolve import Resolution
 
 __all__ = [
+    "LORANET_NEIGHBOR",
     "MAX_PATHS",
     "MIN_OBSERVED",
     "MIN_ORIGIN_RECEPTIONS",
     "MQTT",
     "CutVertex",
     "Edge",
+    "LoranetPaths",
     "OurRedundancy",
     "RelayGraph",
     "SoleFirstHop",
@@ -84,6 +93,9 @@ MIN_ORIGIN_RECEPTIONS: Final[int] = 20
 
 MAX_PATHS: Final[int] = 4
 """Vertex-disjoint paths are counted up to this."""
+
+LORANET_NEIGHBOR: Final[str] = "loranet_neighbor"
+"""The evidence key of a neighbour loranet's node dump says a node reported."""
 
 _SOURCES: Final[dict[str, str]] = {EDGE_TRACEROUTE: "traceroute", EDGE_NEIGHBOR: "neighbor"}
 
@@ -154,6 +166,23 @@ class OurRedundancy:
 
 
 @dataclass(frozen=True, slots=True)
+class LoranetPaths:
+    """The inferred measures again, with loranet's neighbour lists added.
+
+    Attributes:
+        reports: Neighbour reports kept (in the window, both ends in the graph).
+        only_loranet: Edges no observation shows, only those reports.
+        cut_vertices: The cut vertices of the graph with those edges.
+        ours: Each of our nodes and its vertex-disjoint paths to MQTT then.
+    """
+
+    reports: int
+    only_loranet: int
+    cut_vertices: tuple[CutVertex, ...]
+    ours: tuple[tuple[str, int], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class RelayGraph:
     """A region's relay graph and its measures.
 
@@ -164,6 +193,8 @@ class RelayGraph:
         sole_first_hops: Every origin with a sole first hop.
         cut_vertices: Every node that cuts a well-observed node off, the most first.
         ours: Our nodes' redundancy, in the order given.
+        with_loranet: The inferred measures with loranet's neighbour lists
+            added, when they were given.
     """
 
     nodes: int
@@ -172,6 +203,7 @@ class RelayGraph:
     sole_first_hops: tuple[SoleFirstHop, ...] = ()
     cut_vertices: tuple[CutVertex, ...] = ()
     ours: tuple[OurRedundancy, ...] = ()
+    with_loranet: LoranetPaths | None = None
 
 
 def _edges(
@@ -326,8 +358,57 @@ def _augment(capacity: defaultdict[tuple[str, str], int], start: str, end: str) 
     return True
 
 
-def build_graph(
+def _loranet_pairs(
+    reported: Mapping[str, Iterable[tuple[str, float]]],
+    nodes: Collection[str],
+    *,
+    start: float,
+    end: float,
+) -> Counter[tuple[str, str]]:
+    """Count the neighbour reports in the window between two nodes of the graph, per edge."""
+    pairs: Counter[tuple[str, str]] = Counter()
+    for reporter, neighbors in reported.items():
+        if reporter not in nodes:
+            continue
+        for neighbor, updated in neighbors:
+            if neighbor != reporter and neighbor in nodes and start <= updated <= end:
+                pairs[_key(reporter, neighbor)] += 1
+    return pairs
+
+
+def _merged(edges: tuple[Edge, ...], pairs: Mapping[tuple[str, str], int]) -> tuple[Edge, ...]:
+    """Add the loranet evidence to the observed edges, and the edges only it shows."""
+    by_key = {(edge.a, edge.b): dict(edge.evidence) for edge in edges}
+    for key, count in pairs.items():
+        by_key.setdefault(key, {})[LORANET_NEIGHBOR] = count
+    return tuple(
+        Edge(a, b, MappingProxyType(dict(sorted(evidence.items()))))
+        for (a, b), evidence in sorted(by_key.items())
+    )
+
+
+def _sole_first_hops(
     traffic: Traffic, resolutions: Mapping[int, Resolution], ours: Collection[str]
+) -> tuple[SoleFirstHop, ...]:
+    """Find every origin whose observed first hops were all one relay."""
+    sole = []
+    for origin in sorted(traffic.last_hops.keys() | traffic.direct.keys()):
+        hops = first_hops(traffic, resolutions, origin)
+        minimum = SOLE_FIRST_HOP_MIN_EVENTS_OURS if origin in ours else SOLE_FIRST_HOP_MIN_EVENTS
+        top = hops.sole(minimum)
+        if top is not None:
+            sole.append(SoleFirstHop(origin, top, hops.events, hops.relays[top] / hops.events))
+    return tuple(sole)
+
+
+def build_graph(
+    traffic: Traffic,
+    resolutions: Mapping[int, Resolution],
+    ours: Collection[str],
+    *,
+    loranet: Mapping[str, Iterable[tuple[str, float]]] | None = None,
+    start: float = float("-inf"),
+    end: float = float("inf"),
 ) -> RelayGraph:
     """Build a region's relay graph and work out its measures.
 
@@ -335,9 +416,14 @@ def build_graph(
         traffic: The window's traffic.
         resolutions: Each relay byte's resolution.
         ours: Our nodes' hex ids, in output order.
+        loranet: Each node's reported neighbours as ``(neighbour hex id,
+            report time)``, from loranet; ``None`` when not had.
+        start: The window's start, epoch seconds (for ``loranet``).
+        end: The window's end, epoch seconds (for ``loranet``).
 
     Returns:
-        The graph.
+        The graph. Its observed measures never count ``loranet``; its edges
+        carry it as ``loranet_neighbor`` evidence.
     """
     found, left_out = _edges(traffic, resolutions)
     edges = tuple(
@@ -346,20 +432,27 @@ def build_graph(
         if _kept(evidence)
     )
     adjacency = _adjacency(edges)
-    sole = []
-    for origin in sorted(traffic.last_hops.keys() | traffic.direct.keys()):
-        hops = first_hops(traffic, resolutions, origin)
-        minimum = SOLE_FIRST_HOP_MIN_EVENTS_OURS if origin in ours else SOLE_FIRST_HOP_MIN_EVENTS
-        top = hops.sole(minimum)
-        if top is not None:
-            sole.append(SoleFirstHop(origin, top, hops.events, hops.relays[top] / hops.events))
+    observed = _origin_receptions(traffic)
+    sole = _sole_first_hops(traffic, resolutions, ours)
     by_origin = {entry.origin: entry.first_hop for entry in sole}
+    with_loranet = None
+    if loranet is not None:
+        pairs = _loranet_pairs(loranet, adjacency.keys() - {MQTT}, start=start, end=end)
+        merged = _merged(edges, pairs)
+        combined = _adjacency(merged)
+        with_loranet = LoranetPaths(
+            reports=sum(pairs.values()),
+            only_loranet=len(merged) - len(edges),
+            cut_vertices=_cut_vertices(combined, observed),
+            ours=tuple((node, _disjoint_paths(combined, node)) for node in ours),
+        )
+        edges = merged
     return RelayGraph(
         nodes=len(adjacency.keys() - {MQTT}),
         edges=edges,
         left_out=left_out,
-        sole_first_hops=tuple(sole),
-        cut_vertices=_cut_vertices(adjacency, _origin_receptions(traffic)),
+        sole_first_hops=sole,
+        cut_vertices=_cut_vertices(adjacency, observed),
         ours=tuple(
             OurRedundancy(
                 node=node,
@@ -371,4 +464,5 @@ def build_graph(
             )
             for node in ours
         ),
+        with_loranet=with_loranet,
     )

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh network graph` adds loranet.pl's neighbour lists (what a node
+  reported hearing) apart from the observed graph: only reports made in the
+  window between two nodes the graph already has, as `loranet_neighbor`
+  edge evidence. The observed measures are unchanged; what the lists change
+  is reported separately (a cut vertex they bypass, our nodes' paths with
+  them, `with_loranet` in `--json`), with one more "Not claimed" line. Same
+  single loranet download as `relays`; `--no-fetch` and a failure as there.
 - `mesh network relays` shows each attributed relay's device health from
   loranet.pl (a **Device** column: battery or `ext` for external power,
   voltage, uptime, channel utilization, with the metrics' age when over a

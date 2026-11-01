@@ -2,20 +2,34 @@
 
 from __future__ import annotations
 
-import pytest
+import io
 
+import pytest
+from rich.console import Console
+
+from meshprovision.datasources.loranet import ReportedNeighbor
 from meshprovision.network.buckets import LastHop, Radio, Traffic
 from meshprovision.network.graph import (
+    LORANET_NEIGHBOR,
     MQTT,
     CutVertex,
+    LoranetPaths,
     OurRedundancy,
+    RelayGraph,
     SoleFirstHop,
     build_graph,
 )
 from meshprovision.network.keys import FleetKey, KeyScan
-from meshprovision.network.render_graph import graph_to_json_dict
-from meshprovision.network.report import FleetNode, NetworkReport, RegionReport
+from meshprovision.network.render_graph import graph_to_json_dict, render_graph_console
+from meshprovision.network.report import (
+    FleetNode,
+    LoranetView,
+    NetworkReport,
+    RegionReport,
+    heard_ids,
+)
 from meshprovision.network.resolve import Confidence, Resolution
+from meshprovision.nodeid import NodeId
 from tests.unit.network_fixtures import NOW
 
 pytestmark = pytest.mark.unit
@@ -179,3 +193,138 @@ def test_a_node_of_ours_without_a_path_is_said_so() -> None:
     (ours,) = graph_to_json_dict(report)["regions"][0]["ours"]  # type: ignore[index]
 
     assert ours["note"] == "no path to MQTT seen"
+
+
+def _observed(graph: RelayGraph) -> tuple[object, ...]:
+    """Every observed measure, to compare with and without loranet's lists."""
+    return (graph.nodes, graph.left_out, graph.sole_first_hops, graph.cut_vertices, graph.ours)
+
+
+def test_loranet_lists_never_change_the_observed_measures() -> None:
+    plain = build_graph(_chain(), _RES, (_OURS,))
+    reported = {_O: ((_GZ, NOW), (_OURS, NOW)), _OURS: ((_O, NOW),)}
+
+    with_lists = build_graph(_chain(), _RES, (_OURS,), loranet=reported, start=0, end=NOW)
+
+    assert _observed(with_lists) == _observed(plain)
+    assert plain.with_loranet is None
+    assert {e.a + e.b for e in plain.edges} <= {e.a + e.b for e in with_lists.edges}
+
+
+def test_an_empty_list_reports_nothing_and_adds_no_edge() -> None:
+    plain = build_graph(_chain(), _RES, (_OURS,))
+
+    graph = build_graph(_chain(), _RES, (_OURS,), loranet={}, start=0, end=NOW)
+
+    assert graph.edges == plain.edges
+    assert graph.with_loranet == LoranetPaths(0, 0, plain.cut_vertices, ((_OURS, 1),))
+
+
+def test_only_reports_in_the_window_between_nodes_of_the_graph_count() -> None:
+    reported = {
+        _O: (
+            (_GZ, NOW - 10),  # kept: both ends in the graph, in the window
+            (_OURS, NOW - 100_000),  # too old
+            ("b0000009", NOW - 10),  # never heard in the window
+            (_O, NOW - 10),  # itself
+        ),
+        _OURS: ((_O, NOW + 5),),  # after the window
+        "b0000009": ((_GZ, NOW - 10),),  # reporter not in the graph
+    }
+
+    graph = build_graph(_chain(), _RES, (), loranet=reported, start=NOW - 86400, end=NOW)
+
+    loranet = {(e.a, e.b): dict(e.evidence) for e in graph.edges if LORANET_NEIGHBOR in e.evidence}
+    assert loranet == {(min(_O, _GZ), max(_O, _GZ)): {LORANET_NEIGHBOR: 1}}
+    assert graph.with_loranet is not None
+    assert (graph.with_loranet.reports, graph.with_loranet.only_loranet) == (1, 1)
+    assert graph.nodes == build_graph(_chain(), _RES, ()).nodes
+
+
+def test_both_directions_are_summed_on_an_observed_edge() -> None:
+    reported = {_R: ((_GZ, NOW),), _GZ: ((_R, NOW),)}
+
+    graph = build_graph(_chain(), _RES, (), loranet=reported, start=0, end=NOW)
+
+    (edge,) = [e for e in graph.edges if {e.a, e.b} == {_R, _GZ}]
+    assert edge.evidence == {"direct": 5, "relayed": 25, LORANET_NEIGHBOR: 2}
+    assert graph.with_loranet is not None
+    assert graph.with_loranet.only_loranet == 0
+
+
+def test_a_loranet_edge_bypassing_a_cut_vertex_is_reported_apart() -> None:
+    """The router cuts the origin off; the origin reported hearing the gateway."""
+    reported = {_O: ((_GZ, NOW),)}
+
+    graph = build_graph(_chain(), _RES, (), loranet=reported, start=0, end=NOW)
+
+    assert CutVertex(_R, (_O,)) in graph.cut_vertices
+    assert graph.with_loranet is not None
+    assert all(cut.node != _R for cut in graph.with_loranet.cut_vertices)
+
+
+def test_our_paths_with_loranet_lists_are_counted_apart() -> None:
+    reported = {_OURS: (("b0000002", NOW),)}
+    traffic = Traffic(
+        direct={_R: {_G1: Radio(5)}, "b0000002": {_G2: Radio(5)}},
+        relayed={0x61: {_G1: Radio(6)}},
+        last_hops={_OURS: {0x61: LastHop(6, 6)}},
+    )
+
+    graph = build_graph(traffic, _RES, (_OURS,), loranet=reported, start=0, end=NOW)
+
+    assert graph.ours[0].paths == 1
+    assert graph.with_loranet is not None
+    assert graph.with_loranet.ours == ((_OURS, 2),)
+
+
+def _report_with_lists(neighbors: dict[str, tuple[ReportedNeighbor, ...]]) -> NetworkReport:
+    traffic = Traffic(
+        direct={_R: {_G1: Radio(5)}, "b0000002": {_G2: Radio(5)}},
+        relayed={0x61: {_G1: Radio(6)}},
+        last_hops={_OURS: {0x61: LastHop(6, 6)}},
+    )
+    region = RegionReport("PL", NOW, None, KeyScan((), (), (), ()), traffic, resolutions=_RES)
+    return NetworkReport(
+        NOW,
+        1,
+        (FleetNode(_OURS, "Our1", FleetKey(_OURS)),),
+        (region,),
+        loranet=LoranetView(asked=True, neighbors=neighbors),
+    )
+
+
+def test_our_paths_cell_shows_the_loranet_count_apart_only_when_it_differs() -> None:
+    reported = {_OURS: (ReportedNeighbor(NodeId.from_hex("b0000002"), None, NOW - 60),)}
+    buffer = io.StringIO()
+
+    render_graph_console(
+        _report_with_lists(reported), console=Console(file=buffer, width=250, color_system=None)
+    )
+    render_graph_console(
+        _report_with_lists({}), console=Console(file=buffer, width=250, color_system=None)
+    )
+
+    out = buffer.getvalue()
+    assert "1 (2 with loranet neighbour lists)" in out
+    assert out.count("with loranet neighbour lists)") == 1
+    assert out.count("Not claimed: loranet neighbour lists") == 2
+
+
+def test_heard_ids_are_every_origin_gateway_and_resolved_relay() -> None:
+    traffic = Traffic(
+        direct={_O: {_G1: Radio(2)}},
+        relayed={0x61: {_G2: Radio(3)}},
+        last_hops={"b0000009": {0x61: LastHop(3)}},
+    )
+    region = RegionReport("PL", NOW, None, KeyScan((), (), (), ()), traffic, resolutions=_RES)
+
+    assert heard_ids((region,)) == {NodeId.from_hex(n) for n in (_O, _G1, _G2, "b0000009", _R)}
+
+
+def test_reported_lists_only_when_loranet_answered() -> None:
+    entry = ReportedNeighbor(NodeId.from_hex(_O), 1.0, NOW)
+
+    assert LoranetView(asked=True, neighbors={_R: (entry,)}).reported == {_R: ((_O, NOW),)}
+    assert LoranetView(asked=False).reported is None
+    assert LoranetView(asked=True, error="down", neighbors={_R: (entry,)}).reported is None

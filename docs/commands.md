@@ -1190,7 +1190,22 @@ exactly one hop) -- each kept from 2 observations -- and `traceroute` and
 `neighbor` (consecutive nodes of a traceroute, a node and a neighbour it
 reported) from one. A virtual node `MQTT` joins every gateway. Relayed
 receptions whose relay byte is ambiguous or unknown cannot be placed and are
-counted as left out. loranet's neighbour lists are not used (yet).
+counted as left out.
+
+**loranet's neighbour lists** (what a node last reported hearing, kept by
+loranet.pl for weeks) are added apart, from the same single download as
+`mesh network relays` (which itself never reads them): only reports made in
+the window between two nodes the
+graph already has (the node set never grows; at most 64 per node; an entry
+that does not parse is skipped), as
+`loranet_neighbor` evidence (reports in both directions summed). The
+measures below never count them; a line says how many reports were used and
+how many edges only they show, each cut vertex they bypass says `loranet
+neighbour lists show another path for k of n`, and an our-node's paths read
+`1 (2 with loranet neighbour lists)` when they differ. Printed apart as one
+more "Not claimed" line: they are one-direction reports, shown apart, and
+never create a single point or a sole first hop. `--no-fetch` asks loranet
+nothing (and says so); a failed download keeps the graph and exits `7`.
 
 Two measures, labelled and never merged into one score:
 
@@ -1220,10 +1235,12 @@ region):
 ```text
 Relay graph: PL, last 24 h (data as of 2026-11-01 05:00:37)
 15 nodes, 16 edges (MQTT joins every gateway); 11 relayed receptions left out (ambiguous or unknown relay byte).
+loranet neighbour lists: 0 report(s) in the window between nodes of the graph, 0 edge(s) no observation shows (shown apart below).
 Not claimed: An absent edge is not an absent link: only the last and first hops of packets that reached a gateway are seen (the middle of a longer path only in traceroutes).
 Not claimed: Flooding redundancy is suppressed on the air, hence invisible here.
 Not claimed: Gateways are MQTT visibility, not mesh connectivity: a node cut off from MQTT may still talk on the mesh.
 Not claimed: One window of data: moved nodes and changing conditions are not modelled.
+Not claimed: loranet neighbour lists are what a node reported hearing (one direction, from the window only); they are shown apart and never create a single point or a sole first hop.
 Observed: sole first hops (the only first hop seen; the strong claim)
   c0ffee61 Rtr was the only first hop of a1000011, a2000012, d0000a01 Our1
   d0000c03 Our3 was the only first hop of a3000013
@@ -1244,8 +1261,11 @@ Our nodes
 `left_out_receptions`, every edge (`a`, `b`, `evidence` per source) for
 other graph tools, `observed_sole_first_hops` (`origin`, `first_hop`,
 `events`, `share`), `inferred_cut_vertices` (`node`, `cuts_off`) and `ours`
-(`paths_to_mqtt`, `first_hops`, `sole_first_hop`, `gateways`, `note`). No
-DOT export. Exit code `0` (3/7 as above).
+(`paths_to_mqtt`, `first_hops`, `sole_first_hop`, `gateways`, `note`), and
+`with_loranet`: `null`, or `reports`, `edges_only_from_loranet`,
+`cut_vertices` and `ours` (`node`, `paths`) with loranet's neighbour lists
+added; top level `loranet` (`asked`, `data_as_of`, `error`). No DOT export.
+Exit code `0` (3/7 as above).
 
 ## `mesh admin`
 

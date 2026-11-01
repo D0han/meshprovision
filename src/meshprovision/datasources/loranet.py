@@ -8,12 +8,17 @@ injected :class:`~meshprovision.cache.http.CachedHTTPClient` -- the cache
 layer is load-bearing here, not a nicety), indexes it by decimal id, and
 maps each entry into a normalized
 :class:`~meshprovision.datasources.models.NodeObservation`.
+
+An entry's ``neighbors`` list (``{"<decimal id>": {"snr": ..., "updated":
+<epoch>}}``, what the node last reported hearing) is parsed apart, on
+request, by :func:`parse_neighbors` (:meth:`LoranetSource.reported_neighbors`).
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 
@@ -38,7 +43,15 @@ from meshprovision.nodeid import NodeId
 if TYPE_CHECKING:
     from meshprovision.cache.http import CachedHTTPClient
 
-__all__ = ["LORANET_MIN_TTL_SECONDS", "LORANET_NODES_URL", "LoranetSource", "parse_node"]
+__all__ = [
+    "LORANET_MIN_TTL_SECONDS",
+    "LORANET_NODES_URL",
+    "MAX_REPORTED_NEIGHBORS",
+    "LoranetSource",
+    "ReportedNeighbor",
+    "parse_neighbors",
+    "parse_node",
+]
 
 _logger = logging.getLogger(__name__)
 
@@ -51,6 +64,12 @@ LORANET_MIN_TTL_SECONDS: Final[float] = 60.0
 The dump is ~13 MB; with this floor, ``--cache-ttl 0`` and a short
 ``--watch`` poll still download it at most once a minute (``--no-cache``
 still forces a fresh fetch)."""
+
+MAX_REPORTED_NEIGHBORS: Final[int] = 64
+"""The most neighbours kept from one node's ``neighbors`` list."""
+
+_MILLISECONDS_ABOVE: Final[float] = 1e11
+"""An epoch value above this is in milliseconds (1e11 s is the year 5138)."""
 
 _MAX_ENUM_TEXT: Final[int] = 64
 """Longest unrecognised role/hardware model/region text kept from the dump."""
@@ -69,6 +88,76 @@ _PARSE_NODE_EXCEPTIONS: Final[tuple[type[Exception], ...]] = (
 """Exception types :meth:`LoranetSource.fetch_all`/``fetch_nodes`` tolerate
 per malformed entry, logging and skipping rather than failing the whole
 13k-entry batch for one bad node."""
+
+_NEIGHBOR_EXCEPTIONS: Final[tuple[type[Exception], ...]] = (
+    *_PARSE_NODE_EXCEPTIONS,
+    ArithmeticError,
+)
+"""What one ``neighbors`` entry may raise and is skipped for (an overflowing number too)."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReportedNeighbor:
+    """A neighbour one node reported hearing, as loranet last had it.
+
+    Attributes:
+        node: The neighbour.
+        snr: The SNR it was heard with, when reported.
+        updated: When the report was made, epoch seconds.
+    """
+
+    node: NodeId
+    snr: float | None
+    updated: float
+
+
+def _neighbor(key: object, value: object) -> ReportedNeighbor | None:
+    """Parse one ``neighbors`` entry, or ``None`` when it is unusable."""
+    if not isinstance(key, str) or not isinstance(value, Mapping):
+        return None
+    try:
+        node = NodeId.from_decimal(key)
+    except NodeIdError:
+        return None
+    raw = value.get("updated")
+    if isinstance(raw, int | float) and not isinstance(raw, bool) and raw > _MILLISECONDS_ABOVE:
+        try:
+            raw = raw / 1000
+        except OverflowError:  # an integer too large for a float
+            return None
+    updated = parse_epoch(raw)
+    if updated is None:
+        return None
+    return ReportedNeighbor(node, coerce_float(value.get("snr")), updated.timestamp())
+
+
+def parse_neighbors(payload: object) -> tuple[ReportedNeighbor, ...]:
+    """Parse a loranet entry's ``neighbors`` list, inventing nothing.
+
+    Args:
+        payload: The raw ``neighbors`` value.
+
+    Returns:
+        The usable entries (a decimal node id, an ``updated`` epoch time in
+        seconds or milliseconds; ``snr`` optional; an entry that fails to
+        parse in any way is skipped), the first
+        :data:`MAX_REPORTED_NEIGHBORS` in the list's order; empty for
+        anything that is not an object.
+    """
+    if not isinstance(payload, Mapping):
+        return ()
+    found = []
+    for key, value in payload.items():
+        try:
+            neighbor = _neighbor(key, value)
+        except _NEIGHBOR_EXCEPTIONS as exc:  # one bad entry never fails the rest
+            _logger.debug("skipping loranet neighbour entry %r: %s", key, exc)
+            continue
+        if neighbor is not None:
+            found.append(neighbor)
+            if len(found) == MAX_REPORTED_NEIGHBORS:
+                break
+    return tuple(found)
 
 
 class LoranetSource(BaseHTTPDataSource):
@@ -221,6 +310,28 @@ class LoranetSource(BaseHTTPDataSource):
         self._last_fetch_skipped = skipped
         self._last_fetch_field_coercions = tracker.failures
         return result
+
+    def reported_neighbors(
+        self, ids: Collection[NodeId], *, force_refresh: bool | None = None
+    ) -> dict[NodeId, tuple[ReportedNeighbor, ...]]:
+        """Return the neighbour lists the given nodes reported, from the same dump.
+
+        Args:
+            ids: The node ids to look up.
+            force_refresh: Forwarded to :meth:`raw_index`.
+
+        Returns:
+            Each requested node that has a non-empty, usable list.
+        """
+        index = self.raw_index(force_refresh=force_refresh)
+        found: dict[NodeId, tuple[ReportedNeighbor, ...]] = {}
+        for node_id in ids:
+            entry = index.get(node_id.decimal)
+            if isinstance(entry, Mapping):
+                neighbors = parse_neighbors(entry.get("neighbors"))
+                if neighbors:
+                    found[node_id] = neighbors
+        return found
 
     def _validate_dump(self, payload: object) -> None:
         """Reject a dump that is not a usable node index (see :meth:`_check_dump_shape`).

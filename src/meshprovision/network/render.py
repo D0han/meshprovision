@@ -278,20 +278,21 @@ def _notes(row: RelayRow, now: float) -> str:
     return "; ".join(notes) or "-"
 
 
-def loranet_line(loranet: LoranetView | None) -> Text | None:
-    """Say why loranet's device health is missing, if it is.
+def loranet_line(loranet: LoranetView | None, *, missing: str = "device health") -> Text | None:
+    """Say why what a view reads from loranet is missing, if it is.
 
     Args:
         loranet: What loranet said, or ``None`` for a view that does not ask it.
+        missing: What the view then lacks (``device health``, ``neighbour lists``).
 
     Returns:
-        ``loranet not asked (--no-fetch)`` (dim) or ``loranet: <error>``;
-        ``None`` when it answered or was not wanted.
+        ``loranet not asked (--no-fetch): no <missing>.`` (dim) or
+        ``loranet: <error>``; ``None`` when it answered or was not wanted.
     """
     if loranet is None:
         return None
     if not loranet.asked:
-        return Text("loranet not asked (--no-fetch): no device health.", style="dim")
+        return Text(f"loranet not asked (--no-fetch): no {missing}.", style="dim")
     if loranet.error is not None:
         return Text(f"loranet: {terminal_safe(loranet.error)}")
     return None

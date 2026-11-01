@@ -9,8 +9,9 @@ stores in the cache directory (:mod:`meshprovision.network.store`,
 :mod:`meshprovision.network.keystore`).
 
 The ``relays`` and ``graph`` views also read loranet's node dump (one
-download per run, through the HTTP cache ``mesh status`` shares) for the
-nodes the views name (:class:`LoranetView`); ``--no-fetch`` asks nothing.
+download per run, through the HTTP cache ``mesh status`` shares): the
+resolved relay nodes' observations and the neighbour lists of the nodes
+the window heard (:class:`LoranetView`); ``--no-fetch`` asks nothing.
 
 "Us" is every active (not archived) node of the database, observed ones
 included. The regions are the ones asked for, else those our nodes were
@@ -37,6 +38,7 @@ from meshprovision.network.buckets import Traffic, combine
 from meshprovision.network.keys import FleetKey, KeyScan, fleet_key, scan_keys
 from meshprovision.network.keystore import KeyStore
 from meshprovision.network.refresh import NetworkRefresh, RegionRefresher, select_regions
+from meshprovision.network.relays import gateway_relayed
 from meshprovision.network.resolve import Resolution, relay_candidates, resolve_relays
 from meshprovision.network.store import NETWORK_DIRNAME, RegionStore
 from meshprovision.nodeid import NodeId
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
 
     from meshprovision.cache.http import CachedHTTPClient
     from meshprovision.config.settings import Settings
+    from meshprovision.datasources.loranet import ReportedNeighbor
     from meshprovision.datasources.models import NodeObservation
 
 __all__ = [
@@ -58,6 +61,7 @@ __all__ = [
     "NetworkOptions",
     "NetworkReport",
     "RegionReport",
+    "heard_ids",
     "load_fleet",
     "loranet_ids",
     "run_network",
@@ -90,6 +94,8 @@ class NetworkOptions:
             key scan does not need them).
         loranet: Whether to read loranet's node dump for the resolved
             relay nodes (``relays`` and ``graph``); never without ``fetch``.
+        neighbors: Whether to also read the neighbour lists from it (only
+            ``graph`` uses them).
     """
 
     days: int
@@ -98,6 +104,7 @@ class NetworkOptions:
     refresh: bool = False
     traffic: bool = True
     loranet: bool = False
+    neighbors: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,7 +113,9 @@ class LoranetView:
 
     Attributes:
         asked: Whether loranet was asked at all (``False`` with ``--no-fetch``).
-        nodes: Its observation of each node it holds, by hex id.
+        nodes: Its observation of each resolved relay node it holds, by hex id.
+        neighbors: The neighbour lists the nodes the window heard
+            reported, by hex id.
         data_as_of: When the dump was fetched (the HTTP cache keeps it),
             epoch seconds.
         error: Why it could not be had, terminal-safe; ``None`` when it was.
@@ -114,6 +123,9 @@ class LoranetView:
 
     asked: bool
     nodes: Mapping[str, NodeObservation] = field(default_factory=lambda: MappingProxyType({}))
+    neighbors: Mapping[str, tuple[ReportedNeighbor, ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     data_as_of: float | None = None
     error: str | None = None
 
@@ -121,6 +133,16 @@ class LoranetView:
     def usable(self) -> Mapping[str, NodeObservation] | None:
         """The observations, or ``None`` when loranet was not asked or failed."""
         return self.nodes if self.asked and self.error is None else None
+
+    @property
+    def reported(self) -> Mapping[str, tuple[tuple[str, float], ...]] | None:
+        """The neighbour lists as ``(neighbour hex id, report time)``, or ``None`` (see usable)."""
+        if not self.asked or self.error is not None:
+            return None
+        return {
+            node: tuple((entry.node.hex, entry.updated) for entry in entries)
+            for node, entries in self.neighbors.items()
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -298,7 +320,11 @@ def run_network(
     )
     loranet = None
     if options.loranet:
-        loranet = _loranet(client, views) if options.fetch else LoranetView(asked=False)
+        loranet = (
+            _loranet(client, views, neighbors=options.neighbors)
+            if options.fetch
+            else LoranetView(asked=False)
+        )
     return NetworkReport(
         generated_at=now,
         days=options.days,
@@ -326,17 +352,39 @@ def loranet_ids(views: tuple[RegionReport, ...]) -> frozenset[NodeId]:
     )
 
 
-def _loranet(client: CachedHTTPClient, views: tuple[RegionReport, ...]) -> LoranetView:
+def heard_ids(views: tuple[RegionReport, ...]) -> frozenset[NodeId]:
+    """The nodes whose neighbour lists a graph can use: every node the windows heard.
+
+    Args:
+        views: The regions' views.
+
+    Returns:
+        Every origin and gateway of the windows' traffic and every resolved
+        relay node.
+    """
+    heard: set[str] = set()
+    for view in views:
+        traffic = view.traffic
+        heard.update(traffic.direct, traffic.last_hops, gateway_relayed(traffic))
+        heard.update(gateway for cells in traffic.direct.values() for gateway in cells)
+    return frozenset({*(NodeId.from_hex(node) for node in heard), *loranet_ids(views)})
+
+
+def _loranet(
+    client: CachedHTTPClient, views: tuple[RegionReport, ...], *, neighbors: bool
+) -> LoranetView:
     """Read loranet's node dump once for the views' nodes; a failure is reported, not raised."""
     source = LoranetSource(client)
     try:
         found = source.fetch_nodes(loranet_ids(views))
+        lists = source.reported_neighbors(heard_ids(views)) if neighbors else {}
     except DataSourceError as exc:
         return LoranetView(asked=True, error=terminal_safe(str(exc)))
     as_of = source.last_fetch_data_as_of
     return LoranetView(
         asked=True,
         nodes=MappingProxyType({node.hex: observation for node, observation in found.items()}),
+        neighbors=MappingProxyType({node.hex: entries for node, entries in lists.items()}),
         data_as_of=None if as_of is None else as_of.timestamp(),
     )
 

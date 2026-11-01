@@ -14,7 +14,7 @@ import httpx
 import pytest
 import respx
 
-from meshprovision.datasources.loranet import LORANET_NODES_URL
+from meshprovision.datasources.loranet import LORANET_NODES_URL, LoranetSource
 from meshprovision.datasources.lorastats import LORASTATS_BASE_URL, LORASTATS_NODES_PATH
 from meshprovision.datasources.lorastats_region import LORASTATS_PACKETS_RAW_PATH
 from meshprovision.datasources.region_memo import REGION_MEMO_FILENAME
@@ -805,7 +805,9 @@ def test_graph_keeps_observed_and_inferred_apart(
     out = result.stdout
     assert "Relay graph: PL, last 24 h (data as of " in out
     assert "15 nodes, 16 edges (MQTT joins every gateway); 11 relayed receptions left out" in out
-    assert out.count("Not claimed: ") == 4
+    assert out.count("Not claimed: ") == 5
+    assert "Not claimed: loranet neighbour lists are what a node reported hearing" in out
+    assert "loranet neighbour lists: 0 report(s) in the window" in out
     observed = out.index("Observed: sole first hops")
     inferred = out.index("Inferred: cut vertices toward MQTT")
     assert observed < inferred
@@ -842,11 +844,12 @@ def test_graph_json_lists_every_edge_with_its_evidence(
         "days",
         "exit_code",
         "generated_at",
+        "loranet",
         "not_claimed",
         "refresh",
         "regions",
     ]
-    assert len(document["not_claimed"]) == 4
+    assert len(document["not_claimed"]) == 5
     (region,) = document["regions"]
     assert sorted(region) == [
         "data_as_of",
@@ -857,6 +860,7 @@ def test_graph_json_lists_every_edge_with_its_evidence(
         "observed_sole_first_hops",
         "ours",
         "region",
+        "with_loranet",
     ]
     assert (region["nodes"], region["left_out_receptions"], len(region["edges"])) == (15, 11, 16)
     edges = {(e["a"], e["b"]): e["evidence"] for e in region["edges"]}
@@ -878,3 +882,112 @@ def test_graph_json_lists_every_edge_with_its_evidence(
         "gateways": 0,
         "note": "single point (1 path); single observed first hop",
     }
+
+
+def _neighbors_dump(now: float) -> dict[str, dict[str, object]]:
+    """The mini dump, plus an origin the router cuts off reporting a gateway it heard."""
+    dump = _loranet_dump(now)
+    dump[NodeId.from_hex("a1000011").decimal] = {
+        "neighbors": {
+            NodeId.from_hex(mini.G1).decimal: {"snr": 5.5, "updated": int(now) - 600},
+            NodeId.from_hex(mini.G2).decimal: {"updated": int(now) - 40 * 86400},
+            NodeId.from_hex("77777777").decimal: {"updated": int(now) - 600},
+        }
+    }
+    return dump
+
+
+def test_graph_reports_loranet_neighbour_lists_apart(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    lorastats = _Lorastats(loranet=_neighbors_dump(time.time()))
+
+    result, _ = _run(runner, env, ["graph", "--region", "PL"], lorastats)
+    document, _ = _run(
+        runner, env, ["graph", "--region", "PL", "--json"], _Lorastats(loranet=lorastats.dump)
+    )
+    plain, _ = _run(runner, env, ["graph", "--region", "PL", "--json", "--no-fetch"])
+
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert "loranet neighbour lists: 1 report(s) in the window between nodes of the graph" in out
+    assert (
+        f"{mini.ROUTER} Rtr cuts off a1000011, a2000012; loranet neighbour lists show another "
+        "path for 1 of 2" in out
+    )
+    (region,) = json.loads(document.stdout)["regions"]
+    (before,) = json.loads(plain.stdout)["regions"]
+    for observed in ("nodes", "observed_sole_first_hops", "inferred_cut_vertices", "ours"):
+        assert region[observed] == before[observed]
+    edges = {(e["a"], e["b"]): e["evidence"] for e in region["edges"]}
+    assert edges[(mini.G1, "a1000011")] == {"loranet_neighbor": 1}
+    assert "77777777" not in json.dumps(region)
+    with_loranet = region["with_loranet"]
+    assert with_loranet["reports"] == 1
+    assert with_loranet["edges_only_from_loranet"] == 1
+    assert {"node": mini.ROUTER, "cuts_off": ["a2000012"]} in with_loranet["cut_vertices"]
+
+
+def test_graph_without_fetching_has_no_loranet_edges(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    _run(runner, env, ["graph", "--region", "PL"])
+
+    result, lorastats = _run(runner, env, ["graph", "--region", "PL", "--no-fetch", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert lorastats.loranet == []
+    document = json.loads(result.stdout)
+    assert document["loranet"] == {"asked": False, "data_as_of": None, "error": None}
+    assert len(document["not_claimed"]) == 4
+    (region,) = document["regions"]
+    assert region["with_loranet"] is None
+    assert all("loranet_neighbor" not in e["evidence"] for e in region["edges"])
+
+
+@pytest.mark.parametrize("view", ["relays", "graph"])
+def test_a_neighbour_time_too_large_for_a_float_breaks_nothing(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], view: str
+) -> None:
+    _seed(seed_db)
+    dump = _neighbors_dump(time.time())
+    dump[NodeId.from_hex("a2000012").decimal] = {
+        "neighbors": {NodeId.from_hex(mini.G1).decimal: {"updated": 10**400}}
+    }
+
+    result, _ = _run(runner, env, [view, "--region", "PL"], _Lorastats(loranet=dump))
+
+    assert result.exit_code == 0, result.output
+    assert mini.ROUTER in result.stdout
+
+
+def test_relays_never_read_the_neighbour_lists(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _seed(seed_db)
+
+    def boom(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("relays read the neighbour lists")
+
+    monkeypatch.setattr(LoranetSource, "reported_neighbors", boom)
+
+    result, _ = _run(runner, env, ["relays", "--region", "PL"])
+
+    assert result.exit_code == 0, result.output
+
+
+def test_graph_without_fetching_says_the_neighbour_lists_were_not_read(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    _run(runner, env, ["graph", "--region", "PL"])
+
+    result, _ = _run(runner, env, ["graph", "--region", "PL", "--no-fetch"])
+
+    assert "loranet not asked (--no-fetch): no neighbour lists." in result.stdout
+    assert "device health" not in result.stdout

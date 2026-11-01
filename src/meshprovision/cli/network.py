@@ -120,6 +120,7 @@ def _collect(
     refresh: bool,
     traffic: bool,
     loranet: bool = False,
+    neighbors: bool = False,
 ) -> NetworkReport:
     """Run the data side of a view.
 
@@ -135,6 +136,7 @@ def _collect(
         refresh=refresh,
         traffic=traffic,
         loranet=loranet,
+        neighbors=neighbors,
     )
     known_bad = ctx.known_bad_keys()
     with ctx.http_client(require_contact=not no_fetch) as client:
@@ -324,7 +326,9 @@ def graph(
     claim). Inferred: nodes whose removal cuts well-observed nodes off from
     MQTT in the graph (the weak claim). Our nodes: vertex-disjoint paths to
     MQTT next to their observed first hops. Prints what the graph does not
-    claim; --json includes every edge with its evidence.
+    claim; --json includes every edge with its evidence. loranet's
+    neighbour lists are added as edges of their own, and only what they
+    change in the inferred measures is reported, apart.
 
     Args:
         ctx: The shared CLI context.
@@ -335,10 +339,18 @@ def graph(
         json_output: Emit JSON, from ``--json``.
 
     Raises:
-        SystemExit: 3 when no region has any data, 7 when a request failed.
+        SystemExit: 3 when no region has any data, 7 when a request failed
+            (loranet's included).
     """
     report = _collect(
-        ctx, days=days, regions=regions, no_fetch=no_fetch, refresh=refresh, traffic=True
+        ctx,
+        days=days,
+        regions=regions,
+        no_fetch=no_fetch,
+        refresh=refresh,
+        traffic=True,
+        loranet=True,
+        neighbors=True,
     )
     if json_output:
         click.echo(render_graph.render_graph_json(report))

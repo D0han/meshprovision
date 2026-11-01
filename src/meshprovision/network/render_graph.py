@@ -4,6 +4,7 @@ Text and JSON of :mod:`meshprovision.network.graph` for each region of a
 :class:`~meshprovision.network.report.NetworkReport`, with the observed
 measure (sole first hops) and the inferred one (cut vertices) kept apart
 and labelled, and what the graph does not claim printed every time.
+loranet's neighbour lists only ever add a separate, labelled difference.
 Every name is printed as plain text, never as rich markup. The shared
 pieces are in :mod:`meshprovision.network.render_common`.
 """
@@ -20,10 +21,13 @@ from rich.text import Text
 
 from meshprovision.network.graph import (
     MIN_ORIGIN_RECEPTIONS,
+    CutVertex,
+    LoranetPaths,
     OurRedundancy,
     RelayGraph,
     build_graph,
 )
+from meshprovision.network.render import loranet_json, loranet_line
 from meshprovision.network.render_common import (
     MAX_NAMED,
     data_line,
@@ -42,6 +46,7 @@ if TYPE_CHECKING:
     from meshprovision.network.report import NetworkReport, RegionReport
 
 __all__ = [
+    "LORANET_NON_CLAIM",
     "NON_CLAIMS",
     "graph_of",
     "graph_to_json_dict",
@@ -59,6 +64,12 @@ NON_CLAIMS: Final[tuple[str, ...]] = (
 )
 """What the graph does not claim, printed above it."""
 
+LORANET_NON_CLAIM: Final[str] = (
+    "loranet neighbour lists are what a node reported hearing (one direction, from the window "
+    "only); they are shown apart and never create a single point or a sole first hop."
+)
+"""What loranet's neighbour edges do not claim, printed when they were read."""
+
 
 def graph_of(report: NetworkReport, region: RegionReport) -> RelayGraph:
     """Build a region's relay graph from a report.
@@ -70,7 +81,36 @@ def graph_of(report: NetworkReport, region: RegionReport) -> RelayGraph:
     Returns:
         The graph, with our nodes' redundancy in database order.
     """
-    return build_graph(region.traffic, region.resolutions, [m.node for m in report.fleet])
+    loranet = None if report.loranet is None else report.loranet.reported
+    return build_graph(
+        region.traffic,
+        region.resolutions,
+        [m.node for m in report.fleet],
+        loranet=loranet,
+        start=report.start,
+        end=report.generated_at,
+    )
+
+
+def _non_claims(graph: RelayGraph) -> tuple[str, ...]:
+    """What this graph does not claim (the loranet line only when its lists were read)."""
+    return NON_CLAIMS if graph.with_loranet is None else (*NON_CLAIMS, LORANET_NON_CLAIM)
+
+
+def _bypassed(cut: CutVertex, loranet: LoranetPaths | None) -> int:
+    """How many of a cut vertex's cut-off nodes loranet's lists give another path to MQTT."""
+    if loranet is None:
+        return 0
+    still = next((c.cuts_off for c in loranet.cut_vertices if c.node == cut.node), ())
+    return len(set(cut.cuts_off) - set(still))
+
+
+def _paths_cell(entry: OurRedundancy, loranet: LoranetPaths | None) -> str:
+    """Render our node's paths, with loranet's count apart when it differs."""
+    with_lists = None if loranet is None else dict(loranet.ours).get(entry.node)
+    if with_lists is None or with_lists == entry.paths:
+        return str(entry.paths)
+    return f"{entry.paths} ({with_lists} with loranet neighbour lists)"
 
 
 def _listed(nodes: Iterable[str], known: Mapping[str, str]) -> str:
@@ -111,7 +151,7 @@ def _ours_table(graph: RelayGraph, known: Mapping[str, str]) -> Table:
         cells = (
             entry.node,
             known.get(entry.node, "-"),
-            str(entry.paths),
+            _paths_cell(entry, graph.with_loranet),
             str(entry.first_hops),
             "-" if entry.sole_first_hop is None else label(entry.sole_first_hop, known),
             str(entry.gateways),
@@ -130,7 +170,13 @@ def _graph_lines(report: NetworkReport, region: RegionReport) -> Iterable[Render
         f"{graph.nodes} nodes, {len(graph.edges)} edges (MQTT joins every gateway); "
         f"{graph.left_out} relayed receptions left out (ambiguous or unknown relay byte)."
     )
-    for claim in NON_CLAIMS:
+    if graph.with_loranet is not None:
+        yield Text(
+            f"loranet neighbour lists: {graph.with_loranet.reports} report(s) in the window "
+            f"between nodes of the graph, {graph.with_loranet.only_loranet} edge(s) no "
+            "observation shows (shown apart below)."
+        )
+    for claim in _non_claims(graph):
         yield Text(f"Not claimed: {claim}", style="dim")
     yield Text(
         "Observed: sole first hops (the only first hop seen; the strong claim)", style="bold"
@@ -152,8 +198,16 @@ def _graph_lines(report: NetworkReport, region: RegionReport) -> Iterable[Render
         style="bold",
     )
     for cut in graph.cut_vertices:
+        bypassed = _bypassed(cut, graph.with_loranet)
+        apart = (
+            f"; loranet neighbour lists show another path for {bypassed} of {len(cut.cuts_off)}"
+            if bypassed
+            else ""
+        )
         yield Text(
-            terminal_safe(f"  {label(cut.node, known)} cuts off {_listed(cut.cuts_off, known)}")
+            terminal_safe(
+                f"  {label(cut.node, known)} cuts off {_listed(cut.cuts_off, known)}{apart}"
+            )
         )
     if not graph.cut_vertices:
         yield Text("  none")
@@ -175,6 +229,23 @@ def render_graph_console(report: NetworkReport, *, console: Console) -> None:
             console.print(item, markup=False, highlight=False)
     for line in refresh_lines(report.refresh):
         console.print(line, markup=False, highlight=False)
+    missing = loranet_line(report.loranet, missing="neighbour lists")
+    if missing is not None:
+        console.print(missing, markup=False, highlight=False)
+
+
+def _loranet_paths_json(loranet: LoranetPaths | None) -> dict[str, object] | None:
+    """Render the inferred measures with loranet's lists added, or ``None``."""
+    if loranet is None:
+        return None
+    return {
+        "reports": loranet.reports,
+        "edges_only_from_loranet": loranet.only_loranet,
+        "cut_vertices": [
+            {"node": c.node, "cuts_off": list(c.cuts_off)} for c in loranet.cut_vertices
+        ],
+        "ours": [{"node": node, "paths": paths} for node, paths in loranet.ours],
+    }
 
 
 def graph_to_json_dict(report: NetworkReport) -> dict[str, object]:
@@ -184,7 +255,9 @@ def graph_to_json_dict(report: NetworkReport) -> dict[str, object]:
         report: The report.
 
     Returns:
-        ``{"generated_at", "days", "not_claimed", "regions": [...], "refresh", "exit_code"}``.
+        ``{"generated_at", "days", "not_claimed", "regions": [...], "refresh",
+        "loranet", "exit_code"}``; each region's ``with_loranet`` is ``null``
+        unless loranet's neighbour lists were read.
     """
     regions = []
     for region in report.regions:
@@ -219,14 +292,20 @@ def graph_to_json_dict(report: NetworkReport) -> dict[str, object]:
                     }
                     for o in graph.ours
                 ],
+                "with_loranet": _loranet_paths_json(graph.with_loranet),
             }
         )
     return {
         "generated_at": iso(report.generated_at),
         "days": report.days,
-        "not_claimed": list(NON_CLAIMS),
+        "not_claimed": list(
+            NON_CLAIMS
+            if report.loranet is None or report.loranet.reported is None
+            else (*NON_CLAIMS, LORANET_NON_CLAIM)
+        ),
         "regions": regions,
         "refresh": refresh_json(report.refresh),
+        "loranet": loranet_json(report.loranet),
         "exit_code": report.exit_code(),
     }
 
