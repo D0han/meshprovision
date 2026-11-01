@@ -466,6 +466,25 @@ def test_a_2_8_renumber_whose_save_fails_is_finished_after_mesh_db_renumber(
     assert pending_keys.load_pending(db_path, new) is None
 
 
+@pytest.mark.parametrize("dry_run", [False, True], ids=["apply", "dry-run"])
+def test_a_firmware_2_8_device_without_a_region_is_refused_before_any_write(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, db_path: Path, dry_run: bool
+) -> None:
+    iface = FakeMeshInterface(_OLD.hex, firmware_version=_FW_28, derive_id_from_key=True)
+    bus.use(iface)
+    before = db_fingerprint(db_path)
+
+    args = ["provision", "--port", "/dev/ttyFAKE0", "--yes", *(["--dry-run"] if dry_run else [])]
+    result = invoke(runner, args, env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "has no LoRa region yet" in result.stderr
+    assert "meshtastic --set lora.region EU_868" in result.stderr
+    assert iface.localNode.written_sections == []
+    assert iface.nid == _OLD
+    assert db_fingerprint(db_path) == before
+
+
 def test_a_fresh_key_avoids_an_id_that_only_owns_key_rows(
     runner: CliRunner,
     env: dict[str, str],

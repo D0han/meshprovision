@@ -380,6 +380,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserved (below 4, or the broadcast address), already another database
   row's, or the owner of a key row: such a node would renumber onto that id
   after the key write.
+- `mesh provision` (and `mesh admin bootstrap`) refuses, before writing
+  anything and on `--dry-run` too (exit code 5), a plan that would set the
+  LoRa region of a firmware >= 2.8 device whose region is still `UNSET`:
+  firmware 2.8 creates the node's key and changes its node id the moment a
+  region is first set, in the middle of the run's writes. Set the region
+  first (Meshtastic app, or `meshtastic --set lora.region <R>`), reconnect,
+  and run it again. Older or unparseable firmware versions are unaffected.
+  `docs/firmware-compatibility.md` now records what firmware 2.8 does to
+  node ids, each point labelled verified (read in the firmware source) or
+  not, and that the `meshtastic` library is pinned to a commit.
 - A template that does not set `position.fixed_position` leaves the device's
   own setting alone: it defaulted to `false`, so every `mesh provision` run
   planned `fixed_position: True -> False` on a node whose position was fixed

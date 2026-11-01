@@ -175,6 +175,15 @@ A node archived via `mesh db forget` is refused outright, checked before
 the enrollment gate (exit code 5, no bypass flag) — `mesh admin
 bootstrap` inherits this too.
 
+A firmware >= 2.8 device whose LoRa region is still `UNSET` is refused
+when the plan would set it (exit code 5, before anything is written,
+`--dry-run` included): firmware 2.8 creates the node's key and changes its
+node id the moment a region is first set, which would send the rest of
+the run's writes to an id the device no longer has. Set the region first
+(Meshtastic app, or `meshtastic --set lora.region <R>`), reconnect, and
+run `mesh provision` again. An older or unparseable firmware version is
+not refused. `mesh admin bootstrap` inherits this.
+
 A node that firmware >= 2.8 renumbered (it derives the node id from the
 public key, see [Firmware 2.8 and beyond](firmware-compatibility.md)) is
 refused before anything is written (exit code 5, `NodeRenumberedError`,

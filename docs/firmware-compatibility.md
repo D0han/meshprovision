@@ -3,13 +3,23 @@
 Part of the meshprovision docs — see the [README](../README.md).
 
 Firmware 2.8 ([release notes](https://github.com/meshtastic/firmware/releases/tag/v2.8.0.47db0e3))
-makes several changes worth tracking here. As of this writing, the
-`meshtastic` Python library this project depends on is still at
-**2.7.11 on PyPI** — the same version pinned in `pyproject.toml` — so
-anything that needs a newer protobuf schema than 2.7.x defines is **not
-yet something meshprovision can read or write**, regardless of what
-changes here. This is a living record of what's known, what's already
-fixed, and what's deliberately not guessed at.
+makes several changes worth tracking here. This is a living record of
+what's known, what's already fixed, and what's deliberately not guessed
+at.
+
+**The `meshtastic` library is pinned to a commit, not a release.** The
+newest PyPI release when this was checked (2026-10-02), 2.7.11, has no
+firmware 2.8 protobuf fields, so
+`pyproject.toml` pins `meshtastic` to commit `be36666` of
+`meshtastic/python`'s unreleased `master` branch. That commit carries the
+2.8 schema: `security.packet_signature_policy` (XEdDSA packet signing,
+a template field), the `TINY_FAST`/`TINY_SLOW`/`MEDIUM_TURBO` modem
+presets and the new amateur-band regions. meshprovision reads its
+region/role/hardware tables from the *installed* library's enums
+(`enums.py`), so these need no code of their own. Once a 2.8-compatible
+release lands on PyPI, the pin goes back to a normal version constraint
+(after the full test suite, which catches silent enum renames such as
+`SENSELORA_RP2040` -> `MAKERFABS_TRACKER`).
 
 **Fixed already:** `long_name`'s enforced limit dropped from 39 to 25
 UTF-8 bytes. This needed no protobuf change — it's a validation constant
@@ -26,41 +36,85 @@ specifies — but if you're provisioning new nodes onto an existing US
 mesh, check your template names the preset your mesh actually uses
 rather than relying on the device's own factory default.
 
-**Blocked pending a `meshtastic` library update:** new LoRa regions
-(70cm/1.25m/2m amateur bands, EU region consolidation), new modem presets
-(`TinyFast`/`TinySlow`), XEdDSA packet-signing configuration, and the
-licensed-operator rebroadcast restriction are all new or changed protobuf
-fields the currently-pinned library has no definitions for.
-meshprovision reads region/role/hw_model from whatever enum tables the
-*installed* `meshtastic` package's protobufs expose (`enums.py`), so once
-a 2.8-compatible release lands on PyPI and the dependency floor is
-raised, these should mostly appear automatically — but that's untested
-until such a release exists, and this project's practice (see
-[CVE-2025-52464](security.md#cve-2025-52464-and-the-weak-key-audit)) is
-to verify against real source or a real device before claiming
-compatibility, not assume it.
+## Node identity: the node id follows the key
 
-**Found during research, not yet acted on — a real risk to the weak-key
-remediation workflow:** firmware 2.8 derives a node's number from its
-public key rather than its MAC address, specifically to stop an attacker
-spoofing a User packet from an existing node number with a new public
-key, and it refuses to update a NodeDB entry when a received `NodeInfo`
-reports a public key that doesn't match what's already on file for that
-node number (see
+Firmware 2.8 derives a node's id from its public key. This changes what
+"the same node" means for anything keyed by node id, the database
+included. What is known, and how sure:
+
+**Verified** means read in the firmware source at tags `v2.8.0.47db0e3`
+and `v2.8.1.8e6a88d` (and `develop` as of 2026-10-31); **unverified**
+means inferred, not read end to end. **Nothing here was tried on a
+device.**
+
+- *Verified:* `NodeDB::createNewIdentity()` sets the node number to the
+  CRC-32 of the public key whenever that differs from the current
+  number, and deletes the old self entry. It does not check the result
+  against reserved numbers (below 4) or the broadcast address, which the
+  firmware's own random pick avoids. Firmware 2.7.26 has no such code.
+- *Verified:* it runs after every successful key generation or
+  derivation, and the key is derived from the stored private key at
+  every boot. So a node that already has a key and is upgraded from 2.7
+  comes back under a new id on its first 2.8 boot, without any
+  provisioning.
+- *Verified:* an admin `set_config.security` carrying both keys (what
+  `mesh provision` sends) stores them and reboots the node; the new id
+  appears at that reboot. A FACTORY node always gets a new key, and
+  `--force-regenerate-key` writes one, so both end under a new id.
+- *Verified:* key generation waits while the LoRa region is `UNSET`.
+  The moment a region is first set, an unlicensed node mints its key and
+  takes the derived id at once, without a reboot.
+- *Verified:* `set_owner` regenerates the key only when `is_licensed`
+  toggles; `mesh provision` always writes back the device's own value, so
+  its name writes never renumber a node.
+- *Unverified:* the CRC is zlib's CRC-32 (`zlib.crc32` of the 32 raw key
+  bytes). The firmware's CRC function itself was not read; zlib's matches
+  the id of 27 of 307 keyed nodes of one real region, which chance would
+  not produce.
+- *Unverified:* what happens to admin messages still being sent after a
+  renumber in the middle of a session (the library addresses local admin
+  messages to the number it last heard; 2.8.0 does not tell connected
+  clients about the new number).
+
+What meshprovision does about it:
+
+- **A key write follows the node.** After `mesh provision` writes a new
+  node key, its final verify accepts a new id only when it is exactly the
+  one derived from the key it wrote and the device holds that run's
+  private key; it then moves the database row (or records a first
+  provisioning) under the new id. Any other id is still refused as a
+  possible device swap. The plan warns beforehand
+  ([`mesh provision`](commands.md#mesh-provision)).
+- **A fresh key never derives a used id.** A key whose derived id is
+  reserved, the broadcast address, or another database row's is drawn
+  again.
+- **A renumbered node is recognised, not adopted as a stranger.** A node
+  met under an id with no row, whose key is one row's (or whose pending
+  keypair from an interrupted run it holds), is refused with the exact
+  [`mesh db renumber OLD NEW`](commands.md#mesh-db) command to run first.
+  [`mesh network keys`](commands.md#mesh-network-keys) reports such a move
+  as a `migration`.
+- **A first region set is refused.** `mesh provision` refuses a plan
+  that would set the LoRa region of a 2.8 device whose region is still
+  `UNSET`, before writing anything: set the region first (Meshtastic app,
+  or `meshtastic --set lora.region <R>`), reconnect, and run it again.
+  Licensed nodes take another path in the firmware at that moment, not
+  traced; they are refused too. Older or unparseable firmware versions
+  are not refused.
+- `mesh health` history stays filed under the old id.
+
+**Resolved — the anti-spoofing check does not block a key rotation.**
+Firmware 2.8 refuses to update a NodeDB entry when a received `NodeInfo`
+reports a public key that doesn't match the one on file for that node
+number (see
 [`meshtastic/firmware` discussion #5007](https://github.com/meshtastic/firmware/discussions/5007)).
-That's backwards compatible for already-provisioned nodes — but this
-project's `--force-regenerate-key` workflow does exactly what the
-anti-spoofing check is designed to catch: it legitimately rotates a
-node's own public key in place, under the same node number, when the
-weak-key audit flags it as compromised. If other mesh peers already have
-that node cached with its old (compromised) key, this firmware behavior
-may make them refuse the new key on the next broadcast — potentially
-leaving peers trusting a key you've just revoked until they're
-individually made to forget and re-learn it. This is a mesh-wide security
-property meshprovision cannot see or control from a single provisioning
-connection, and it has not been verified against a real 2.8 device or an
-updated library. It's recorded here as a known, unresolved risk to
-revisit once real 2.8 tooling exists.
+That check lives in `NodeDB::updateUser()` (read in the firmware source,
+2026-10-02) and only fires on packets received over the mesh, not on the
+admin `set_config` path `--force-regenerate-key` uses, so the local write
+is unaffected. On 2.8 the rotated key also brings a new node id, so peers
+meet it under a number they have no key for. How peers treat the entry
+they cached for the old number was not verified; it is a mesh-wide
+effect meshprovision cannot see or control from one connection.
 
 **The same node-identity-trust concern, in a different shape:**
 `mesh adopt --from-backup` (see [`mesh adopt`](commands.md#mesh-adopt))

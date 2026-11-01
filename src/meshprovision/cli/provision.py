@@ -83,7 +83,11 @@ from meshprovision.provisioning.pipeline import (
     resolve_admin_keys,
     resolve_removed_admin_refs,
 )
-from meshprovision.provisioning.renumbered import refuse_renumbered, renumbered_pending
+from meshprovision.provisioning.renumbered import (
+    refuse_renumbered,
+    region_first_refusal,
+    renumbered_pending,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -522,6 +526,11 @@ def run_provision(
             is not set.
         NodeRenumberedError: If the node is a database node firmware
             >= 2.8 renumbered; its row must be moved first.
+        PlanConflictError: If the plan would set a firmware >= 2.8
+            device's LoRa region for the first time (see
+            :func:`~meshprovision.provisioning.renumbered.region_first_refusal`),
+            or regenerate a key with ``--no-reconnect``. Raised before
+            anything is written, ``--dry-run`` included.
         click.Abort: If the operator declines the confirmation prompt.
     """
     inputs, detection, drifts, pending_path, pending_owner = _gather_plan_inputs(
@@ -545,6 +554,10 @@ def run_provision(
             field="security.public_key",
             hint="Re-run without --no-reconnect.",
         )
+
+    region_refusal = region_first_refusal(change_plan, live)
+    if region_refusal is not None:
+        raise region_refusal
 
     if opts.admin_ref is not None and opts.admin_ref != change_plan.node_id.hex:
         existing_alias_pub = db.keys.find(schema.ref_for(opts.admin_ref, KeyType.ADMIN_PUBLIC))

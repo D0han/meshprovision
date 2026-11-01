@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -14,10 +15,14 @@ from meshprovision.db.pending_keys import PendingKeypair
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import NodeRenumberedError
 from meshprovision.nodeid import NodeId, key_derived_id
+from meshprovision.provisioning import detect
+from meshprovision.provisioning.plan import ChangePlan, PlanInputs, build_plan
 from meshprovision.provisioning.renumbered import (
     PENDING_KEY_EVIDENCE,
     SAME_KEY_EVIDENCE,
+    UNSET_REGION,
     refuse_renumbered,
+    region_first_refusal,
     renumber_command,
     renumbered_error,
     renumbered_pending,
@@ -234,3 +239,64 @@ def test_a_pending_keypair_of_an_archived_row_is_not_used(
     live = _live(make_live, keypair, key_derived_id(keypair.public))
 
     assert renumbered_pending(live, _pending(_OLD, keypair), nodes=nodes) is None
+
+
+def _region_plan(
+    make_live: Callable[..., LiveConfig], *, region: str, firmware: str
+) -> tuple[ChangePlan, LiveConfig]:
+    template = minimal_template()
+    live = make_live(
+        template,
+        security=make_security(empty=True),
+        firmware_version=firmware,
+        section_overrides={"lora": {"region": region}},
+    )
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    return build_plan(inputs), live
+
+
+def test_setting_the_first_region_on_firmware_2_8_is_refused_with_the_manual_step(
+    make_live: Callable[..., LiveConfig],
+) -> None:
+    plan, live = _region_plan(make_live, region=UNSET_REGION, firmware="2.8.0.47db0e3")
+
+    refusal = region_first_refusal(plan, live)
+
+    assert refusal is not None
+    assert refusal.field == "lora.region"
+    assert refusal.message.startswith("!deadbe01 has no LoRa region yet, and firmware >= 2.8")
+    assert refusal.hint == (
+        "Set the LoRa region first (Meshtastic app, or `meshtastic --set lora.region EU_868`), "
+        "reconnect, then run `mesh provision` again."
+    )
+    assert refusal.exit_code == 5
+
+
+@pytest.mark.parametrize(
+    ("region", "firmware"),
+    [
+        pytest.param(UNSET_REGION, "2.7.26", id="2.7"),
+        pytest.param(UNSET_REGION, "", id="no-version"),
+        pytest.param(UNSET_REGION, "custom-build", id="unparseable"),
+        pytest.param("US", "2.8.0", id="region-already-set"),
+        pytest.param("EU_868", "2.8.0", id="no-region-write"),
+    ],
+)
+def test_other_plans_are_not_refused_for_the_region(
+    make_live: Callable[..., LiveConfig], region: str, firmware: str
+) -> None:
+    plan, live = _region_plan(make_live, region=region, firmware=firmware)
+
+    assert region_first_refusal(plan, live) is None
+
+
+def test_a_plan_that_leaves_an_unset_region_alone_is_not_refused(
+    make_live: Callable[..., LiveConfig],
+) -> None:
+    """The template always names a region, so only a plan cut down by hand writes none."""
+    plan, live = _region_plan(make_live, region=UNSET_REGION, firmware="2.8.0")
+    plan = dataclasses.replace(
+        plan, sections=tuple(s for s in plan.sections if s.section != "lora")
+    )
+
+    assert region_first_refusal(plan, live) is None

@@ -245,6 +245,9 @@ def test_factory_provisioning_sets_and_confirms_packet_signature_policy(
         write_template(security={"packet_signature_policy": "PACKET_SIGNATURE_POLICY_STRICT"})
     )
     iface = bus.use(FakeMeshInterface("deadbe01", firmware_version="2.8.0"))
+    # A 2.8 device must have its region before mesh provision runs (the first
+    # region set changes its node id): EU_868, what the example template wants.
+    iface.localNode.localConfig.lora.region = 3
 
     result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
 

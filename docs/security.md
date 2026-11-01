@@ -1,8 +1,9 @@
 # Security
 
 Part of the meshprovision docs — see the [README](../README.md). See also
-[Firmware 2.8 and beyond](firmware-compatibility.md) for a related,
-still-open risk.
+[Firmware 2.8 and beyond](firmware-compatibility.md): on firmware 2.8 the
+node id follows the public key, so every key written to a node gives it a
+new id.
 
 ## Key generation
 
@@ -259,7 +260,9 @@ classified so as not to cry wolf:
   (`node id = crc32(public key)`, NodeDB `createNewIdentity()`), so a node
   upgraded to it appears under a new id with its old key. Exactly one id
   holding the key is derived from it, and every other one was last heard
-  before it first was.
+  before it first was. For one of our nodes, move its database row with
+  `mesh db renumber OLD NEW` (see
+  [Firmware 2.8 and beyond](firmware-compatibility.md#node-identity-the-node-id-follows-the-key)).
 - **hand-over** (warning): otherwise, ids one after another -- a backup
   restored onto new hardware, a node re-flashed with its old key.
 

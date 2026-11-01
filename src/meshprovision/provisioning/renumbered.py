@@ -16,7 +16,14 @@ FOREIGN. Two kinds of evidence say which row it was:
 anything, naming the ``mesh db renumber`` command that moves the row
 (:func:`renumbered_error`); a pending keypair whose id has no live row
 (an interrupted factory provisioning) is recovered under the new id
-instead. Nothing here writes anything.
+instead.
+
+One renumber cannot be followed: firmware 2.8 creates a node's first key,
+and so changes its id, the moment a LoRa region is first set, without a
+reboot and in the middle of a run's writes (verified in firmware source;
+what the rest of the run's admin messages then do is not).
+:func:`region_first_refusal` refuses such a plan before anything is
+written. Nothing here writes anything.
 """
 
 from __future__ import annotations
@@ -25,7 +32,8 @@ from typing import TYPE_CHECKING, Final
 
 from meshprovision.db.pending_keys import find_pending_holding
 from meshprovision.db.schema import KeyType, is_canonical_node_owner
-from meshprovision.errors import NodeRenumberedError
+from meshprovision.errors import NodeRenumberedError, PlanConflictError
+from meshprovision.firmware import derives_node_id_from_key
 from meshprovision.nodeid import NodeId, key_derived_id
 
 if TYPE_CHECKING:
@@ -36,12 +44,15 @@ if TYPE_CHECKING:
     from meshprovision.db.nodes import NodeRepository
     from meshprovision.db.pending_keys import PendingKeypair
     from meshprovision.provisioning.detect_types import LiveConfig
+    from meshprovision.provisioning.plan_types import ChangePlan
 
 __all__ = [
     "PENDING_KEY_EVIDENCE",
     "SAME_KEY_EVIDENCE",
+    "UNSET_REGION",
     "refuse_renumbered",
     "refuse_renumbered_pending",
+    "region_first_refusal",
     "renumber_command",
     "renumbered_error",
     "renumbered_pending",
@@ -55,6 +66,10 @@ PENDING_KEY_EVIDENCE: Final[str] = (
     "it holds the keypair an interrupted `mesh provision` wrote to it"
 )
 """Why a device is a row's node: it holds that row's pending keypair."""
+
+
+UNSET_REGION: Final[str] = "UNSET"
+"""The LoRa region a factory-fresh device reports before one is set."""
 
 
 def renumber_command(old: NodeId, new: NodeId) -> str:
@@ -176,6 +191,45 @@ def renumbered_pending(
     if record.is_archived:
         return None
     raise renumbered_error(pending.node_id, live.node_id, evidence=PENDING_KEY_EVIDENCE)
+
+
+def region_first_refusal(plan: ChangePlan, live: LiveConfig) -> PlanConflictError | None:
+    """Refuse a plan that sets a firmware 2.8 device's LoRa region for the first time.
+
+    Firmware 2.8 holds back key generation while the region is unset and
+    creates the key, renumbering the node, as soon as one is first set
+    (``AdminModule`` -> ``ensurePkiIdentity``): the rest of this run's
+    writes would go to an id the device no longer has. An empty or
+    unparseable firmware version is treated as older firmware.
+
+    Args:
+        plan: The plan about to be applied.
+        live: The device's live configuration the plan was built from.
+
+    Returns:
+        The refusal when the plan writes ``lora.region``, the device
+        reports :data:`UNSET_REGION` and its firmware is >= 2.8; else
+        ``None``.
+    """
+    lora = plan.section("lora")
+    change = next((c for c in lora.changes if c.field == "region"), None) if lora else None
+    if (
+        change is None
+        or str(live.value("lora", "region")) != UNSET_REGION
+        or not derives_node_id_from_key(live.firmware_version)
+    ):
+        return None
+    return PlanConflictError(
+        f"{live.node_id.display} has no LoRa region yet, and firmware >= 2.8 creates its key "
+        "and changes its node id the moment a region is first set: the rest of this run's "
+        "writes would go to an id the device no longer has.",
+        field="lora.region",
+        hint=(
+            "Set the LoRa region first (Meshtastic app, or "
+            f"`meshtastic --set lora.region {change.desired}`), reconnect, then run "
+            "`mesh provision` again."
+        ),
+    )
 
 
 def refuse_renumbered_pending(live: LiveConfig, *, db_path: Path, nodes: NodeRepository) -> None:
