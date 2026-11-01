@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh db renumber OLD NEW`: moves a node's database row to the id its
+  firmware now reports. Firmware >= 2.8 derives a node's id from its public
+  key (`crc32(public key)`), so a node upgraded from 2.7, or one whose key
+  changed, comes back under a new id. Moves the row (noting the old id and
+  the date in `notes`), its key rows, every admin key reference to them, its
+  pending-keypair file and its region memo entry; the health history stays
+  under the old id. `NEW` must be the id derived from the recorded public key
+  (held by no other node row) or from a pending keypair, unless `--force`;
+  `NEW` must be free (no row, key rows or pending keypair) and not
+  reserved, and `OLD` not archived, always.
+  `--yes`, `--json`.
 - `mesh network graph`: a relay graph of the region (direct, last-hop,
   first-hop, traceroute and neighbour-report edges, with their evidence;
   MQTT joins every gateway) for single points of failure, with the observed

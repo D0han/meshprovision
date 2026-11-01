@@ -44,6 +44,7 @@ CLI_COMMAND_MODULES: Final[frozenset[str]] = frozenset(
         "admin",
         "adopt",
         "db_cmd",
+        "db_renumber",
         "health",
         "init_cmd",
         "main",

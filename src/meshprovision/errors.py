@@ -73,6 +73,7 @@ __all__ = [
     "ProvisioningError",
     "RateLimitCoolingDownError",
     "RateLimitError",
+    "RenumberRefusedError",
     "SchemaError",
     "SettingsError",
     "TemplateValidationError",
@@ -788,6 +789,28 @@ class DatabaseLockedError(DbError):
         super().__init__(message, hint=hint)
         self.path = path
         self.holder_pid = holder_pid
+
+
+class RenumberRefusedError(DbError):
+    """``mesh db renumber`` refused to move a node's row to a new id.
+
+    Attributes:
+        old: The node id being moved, for display.
+        new: The id it was to move to, for display.
+    """
+
+    def __init__(self, message: str, *, old: str, new: str, hint: str | None = None) -> None:
+        """Initialize the error.
+
+        Args:
+            message: Human-readable description of what went wrong.
+            old: The node id being moved, for display.
+            new: The id it was to move to, for display.
+            hint: Optional actionable suggestion for resolving the error.
+        """
+        super().__init__(message, hint=hint)
+        self.old = old
+        self.new = new
 
 
 # ---------------------------------------------------------------------------

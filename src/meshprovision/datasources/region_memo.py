@@ -144,6 +144,34 @@ class RegionMemo:
         if len(entries) != len(current):
             self._write(entries)
 
+    def move(self, old: NodeId, new: NodeId) -> str | None:
+        """Re-file ``old``'s entry under ``new`` (a node renumbered by firmware 2.8).
+
+        The entry keeps its ``stored_at``: the region was found then, not
+        now. A newer entry ``new`` already has is kept (``old``'s is only
+        dropped). The file is only rewritten when ``old`` had a current entry.
+
+        Args:
+            old: The id the node had.
+            new: The id it has now.
+
+        Returns:
+            The region now remembered for ``new``, or ``None`` when ``old``
+            had no current entry.
+        """
+        current = self._read()
+        entry = current.get(old.hex)
+        if entry is None:
+            return None
+        kept = {key: value for key, value in current.items() if key != old.hex}
+        newer = kept.get(new.hex)
+        if newer is not None and newer[1] >= entry[1]:
+            entry = newer
+        entries = _newest({**kept, new.hex: entry})
+        self._entries = entries
+        self._write(entries)
+        return entry[0]
+
     def _is_current(self, stored_at: float) -> bool:
         """Return whether an entry stored at ``stored_at`` is still used.
 

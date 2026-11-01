@@ -1,4 +1,4 @@
-"""``mesh db`` group -- ``verify``, ``backup``, ``restore``, ``list``.
+"""``mesh db`` group -- ``verify``, ``backup``, ``restore``, ``list``, ``forget``, ``renumber``.
 
 ``mesh db verify`` re-validates a database that may already have loaded
 successfully (schema/validation/duplicate-row failures already raised out
@@ -22,7 +22,9 @@ its row is never removed, only its ``archived_at`` cell is set, so
 ``authorized_admin_keys``/``notes`` survive for audit history while
 :attr:`~meshprovision.db.nodes.NodeRecord.is_archived` gates whether
 ``mesh status``/``mesh provision``/``mesh admin bootstrap``/``mesh adopt``
-still act on it.
+still act on it. ``mesh db renumber`` (defined in
+:mod:`meshprovision.cli.db_renumber`, registered here) moves a node's row
+to the id firmware 2.8 derived from its key.
 
 Beyond the timestamped backups ``backup``/``restore`` manage, a single
 known-good safety copy (see :func:`~meshprovision.db.known_good
@@ -58,6 +60,7 @@ from meshprovision.cli.common import (
     node_id_callback,
     pass_cli,
 )
+from meshprovision.cli.db_renumber import db_renumber
 from meshprovision.cli.help_format import MeshGroup
 from meshprovision.db import atomic_writer, backups, locking, ods, schema
 from meshprovision.db.known_good import (
@@ -86,6 +89,7 @@ __all__ = [
     "db_backup",
     "db_forget",
     "db_list",
+    "db_renumber",
     "db_restore",
     "db_verify",
 ]
@@ -677,3 +681,6 @@ def db_forget(ctx: CliContext, *, node_id: NodeId, yes: bool, json_output: bool)
     ctx.success(f"Archived {display.display}.")
     if json_output:
         echo_json({"node_id": display.hex, "archived_at": schema.utc_timestamp(now)})
+
+
+db.add_command(db_renumber)

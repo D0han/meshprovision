@@ -348,3 +348,55 @@ def test_a_failed_replace_leaves_no_temp_file(
 
     assert [p.name for p in memo.path.parent.iterdir()] == [memo.path.name]
     assert _memo(tmp_path).region_for(_B) is None
+
+
+def test_move_refiles_the_entry_under_the_new_id_keeping_when_it_was_found(
+    tmp_path: Path,
+) -> None:
+    now = [_NOW]
+    memo = _memo(tmp_path, now)
+    memo.remember(_A, "Zachód")
+    memo.remember(_C, "PL")
+    now[0] += 100
+
+    assert memo.move(_A, _B) == "Zachód"
+
+    later = _memo(tmp_path, now)
+    assert (later.region_for(_A), later.region_for(_B), later.region_for(_C)) == (
+        None,
+        "Zachód",
+        "PL",
+    )
+    stored = json.loads(memo.path.read_text(encoding="utf-8"))["nodes"][_B.hex]
+    assert stored["stored_at"] == _NOW
+
+
+def test_move_without_an_entry_writes_nothing(tmp_path: Path) -> None:
+    memo = _memo(tmp_path)
+
+    assert memo.move(_A, _B) is None
+    assert not memo.path.exists()
+
+
+def test_move_keeps_a_newer_entry_the_new_id_already_has(tmp_path: Path) -> None:
+    now = [_NOW]
+    memo = _memo(tmp_path, now)
+    memo.remember(_A, "PL")
+    now[0] += 10
+    memo.remember(_B, "Zachód")
+
+    assert memo.move(_A, _B) == "Zachód"
+
+    later = _memo(tmp_path, now)
+    assert (later.region_for(_A), later.region_for(_B)) == (None, "Zachód")
+
+
+def test_move_replaces_an_older_entry_of_the_new_id(tmp_path: Path) -> None:
+    now = [_NOW]
+    memo = _memo(tmp_path, now)
+    memo.remember(_B, "PL")
+    now[0] += 10
+    memo.remember(_A, "Zachód")
+
+    assert memo.move(_A, _B) == "Zachód"
+    assert _memo(tmp_path, now).region_for(_B) == "Zachód"

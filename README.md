@@ -86,7 +86,7 @@ One console script, `mesh`, with ten subcommands/subcommand groups.
 | `mesh health` | Per-node health, importance and suggestions from lorastats packet reports, with a 30-day local history. |
 | `mesh network` | Region-wide views from lorastats raw packets: `keys` (network-wide key scan), `relays` (relays we depend on but don't own), `impact` (what depends on our nodes), `graph` (single points of failure). |
 | `mesh admin` | Admin-key custody: `bootstrap`, `import`, `list`. |
-| `mesh db` | Database integrity/backup: `verify`, `backup`, `restore`, `list`, `forget`. |
+| `mesh db` | Database integrity/backup: `verify`, `backup`, `restore`, `list`, `forget`, `renumber`. |
 | `mesh template` | `validate` a template file — no database or device needed. |
 
 The five commands you'll actually type most often:

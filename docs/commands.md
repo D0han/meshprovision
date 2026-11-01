@@ -1231,6 +1231,7 @@ mesh db restore --known-good
 mesh db list
 mesh db list --json
 mesh db forget deadbe01
+mesh db renumber deadbe01 3a7c19e2
 ```
 
 | Option | Meaning |
@@ -1240,7 +1241,8 @@ mesh db forget deadbe01
 | `--retention` (`backup`) | Number of backups to retain (default: 20) |
 | `--list` (`backup`) | List existing backups instead of creating one; also reports the known-good copy's timestamp, when one exists |
 | `--known-good` (`restore`) | Restore the known-good safety copy instead of naming a `BACKUP` path — mutually exclusive with it. Refused, before touching the database, when the copy's recorded provenance is not verified (see [Recovering from a bad hand-edit](database.md#recovering-from-a-bad-hand-edit)); a `BACKUP` path is never provenance-checked |
-| `-y`/`--yes` (`restore`, `forget`) | Assume yes to the confirmation |
+| `-y`/`--yes` (`restore`, `forget`, `renumber`) | Assume yes to the confirmation |
+| `--force` (`renumber`) | Move the row even when `NEW` is not the id derived from a key `OLD` is known to hold (the other guards still apply) |
 | `--json` | Emit JSON instead of human text |
 
 - `verify` layers cross-reference checks, a weak-key audit over every key
@@ -1291,6 +1293,32 @@ mesh db forget deadbe01
   count, unlike every other field on the row). There is currently no
   CLI command to un-archive a node; the hint on a refused command names
   the manual workaround (edit the `archived_at` cell by hand).
+- `renumber OLD NEW` moves a node's row to the id its firmware now
+  reports. Firmware >= 2.8 derives a node's id from its public key
+  (`crc32(public key)`, see
+  [Firmware 2.8 and beyond](firmware-compatibility.md)): a node upgraded
+  from 2.7 comes back under a new id on its first 2.8 boot, and a 2.8
+  node after every key change. Offline, under the write lock, after a
+  backup and a confirmation (`--yes` to skip it), it moves the `Nodes`
+  row (with `node id was !OLD until <date> (firmware 2.8 key-derived id)`
+  appended to `notes`), the `OLD_pub`/`OLD_priv`/`OLD_psk` key rows
+  (material, origin and timestamp kept) and every `authorized_admin_keys`
+  reference to them, on every row; then, after the save, the node's
+  pending-keypair file and its lorastats region memo entry. Its `mesh
+  health` history stays under `OLD` (a cache that refills). `NEW` must be
+  the id derived from `OLD`'s recorded public key (which no other node row
+  may hold), or from the pending keypair an interrupted `mesh provision`
+  left for `OLD`, unless `--force`. Always refused (exit code 4): `NEW`
+  equal to `OLD`, reserved (below 4, or `ffffffff`), already a row or
+  holding key rows or a pending keypair (never overwritten: provision the
+  device reporting `NEW` first); `OLD` archived. `OLD` without a row is
+  exit code 3, as for `forget`. Whenever `OLD`'s public key moved, it
+  reminds you to rename `OLD` in the template's `admin_nodes` too (the
+  template is not read). A region memo entry `NEW` already has that is
+  newer than `OLD`'s is kept.
+  `--json`: `old`, `new`, `keys`, `referencing` (the rows whose
+  references changed), `note`, `pending_keypair` (its new path or
+  `null`) and `region_memo` (the region moved or `null`).
 
 ## `mesh peers`
 
@@ -1381,7 +1409,7 @@ there is no separate override specific to this command.
 Exit code 2 (`CONFIG`) also covers command-line usage errors, which
 click reports with a `Usage:` line: an unknown option, a missing
 argument, or a node id that does not parse (`mesh status --node`,
-`mesh adopt --node-id`, `mesh db forget`).
+`mesh adopt --node-id`, `mesh db forget`, `mesh db renumber`).
 
 Exit code 4 (`DB`) also covers "another mesh command is running": a
 write command that could not acquire the database's write lock within

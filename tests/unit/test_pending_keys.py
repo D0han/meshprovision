@@ -13,6 +13,7 @@ import pytest
 
 from meshprovision.crypto.keys import KeyPair
 from meshprovision.db import pending_keys
+from meshprovision.errors import AtomicWriteError
 from meshprovision.nodeid import NodeId
 
 pytestmark = pytest.mark.unit
@@ -394,3 +395,48 @@ def test_older_spelling_is_left_to_the_database_that_owns_that_name(
     assert pending_keys.load_pending(link, _NODE) is None
     pending_keys.clear_pending(link, _NODE)
     assert theirs.exists()
+
+
+def test_move_pending_refiles_the_keypair_under_the_new_id_keeping_its_time(
+    tmp_path: Path, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    db_path = tmp_path / "nodes_db.ods"
+    kp = keypair_factory()
+    created = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    pending_keys.write_pending(db_path, _NODE, kp, now=created)
+
+    moved_to = pending_keys.move_pending(db_path, _NODE, _OTHER_NODE)
+
+    assert moved_to == pending_keys.pending_key_path(db_path, _OTHER_NODE)
+    assert pending_keys.load_pending(db_path, _NODE) is None
+    assert not pending_keys.pending_key_path(db_path, _NODE).exists()
+    loaded = pending_keys.load_pending(db_path, _OTHER_NODE)
+    assert loaded is not None
+    assert loaded.matches(public=kp.public, private=kp.private)
+    assert loaded.created_ts == created
+
+
+def test_move_pending_without_a_pending_keypair_does_nothing(tmp_path: Path) -> None:
+    db_path = tmp_path / "nodes_db.ods"
+
+    assert pending_keys.move_pending(db_path, _NODE, _OTHER_NODE) is None
+    assert pending_keys.load_pending(db_path, _OTHER_NODE) is None
+
+
+def test_move_pending_keeps_the_old_file_when_the_new_one_cannot_be_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, keypair_factory: Callable[[], KeyPair]
+) -> None:
+    db_path = tmp_path / "nodes_db.ods"
+    kp = keypair_factory()
+    pending_keys.write_pending(db_path, _NODE, kp, now=datetime.now(tz=UTC))
+
+    def _fail(*_args: object, **_kwargs: object) -> None:
+        raise AtomicWriteError("disk full", path="x")
+
+    monkeypatch.setattr(pending_keys, "write_bytes_atomic", _fail)
+
+    with pytest.raises(AtomicWriteError):
+        pending_keys.move_pending(db_path, _NODE, _OTHER_NODE)
+    loaded = pending_keys.load_pending(db_path, _NODE)
+    assert loaded is not None
+    assert loaded.matches(public=kp.public, private=kp.private)

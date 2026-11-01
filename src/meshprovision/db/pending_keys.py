@@ -45,6 +45,7 @@ __all__ = [
     "PendingKeypair",
     "clear_pending",
     "load_pending",
+    "move_pending",
     "pending_key_path",
     "write_pending",
 ]
@@ -262,6 +263,34 @@ def _parse_pending(path: Path, raw: bytes, node_id: NodeId) -> PendingKeypair | 
         created_ts=created_ts,
         path=path,
     )
+
+
+def move_pending(db_path: Path, old: NodeId, new: NodeId) -> Path | None:
+    """Re-file ``old``'s pending keypair under ``new`` (a node renumbered by firmware 2.8).
+
+    The new file is written first, then ``old``'s is cleared, so a failure
+    leaves the keypair where it was. Its ``created_ts`` is kept.
+
+    Args:
+        db_path: The database's own path.
+        old: The id the node had.
+        new: The id it has now.
+
+    Returns:
+        The new file's path, or ``None`` when ``old`` had no (usable)
+        pending keypair.
+
+    Raises:
+        AtomicWriteError: If the new file could not be written; ``old``'s
+            file is then left in place.
+    """
+    pending = load_pending(db_path, old)
+    if pending is None:
+        return None
+    keypair = KeyPair(private=pending.private, public=pending.public)
+    write_pending(db_path, new, keypair, now=pending.created_ts)
+    clear_pending(db_path, old)
+    return pending_key_path(db_path, new)
 
 
 def clear_pending(db_path: Path, node_id: NodeId) -> None:
