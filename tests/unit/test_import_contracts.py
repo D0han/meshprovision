@@ -127,6 +127,8 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("health/metrics.py", _PURE_HEALTH_FORBIDDEN),
     ("health/packets.py", _PURE_HEALTH_FORBIDDEN),
     ("health/rules.py", _PURE_HEALTH_FORBIDDEN),
+    ("network/buckets.py", _PURE_HEALTH_FORBIDDEN),
+    ("network/hourjson.py", _PURE_HEALTH_FORBIDDEN),
     ("network/rawpackets.py", _PURE_HEALTH_FORBIDDEN),
     (
         "provisioning/persist.py",

@@ -72,6 +72,7 @@ __all__ = [
     "NodeInfoSeen",
     "PositionPoint",
     "TelemetryPoint",
+    "answered_hours",
     "floor_hour",
     "merge",
     "prune",
@@ -320,6 +321,36 @@ def replace_from(history: NodeHistory, *, now: float) -> int | None:
     return floor_hour(min(history.fetched_at, now))
 
 
+def answered_hours(oldest: float | None, *, since: int | None, fetched_at: float) -> range:
+    """Return the hours a lorastats answer speaks for completely, silent ones included.
+
+    lorastats deletes its oldest rows first, so it holds every hour from
+    that of the oldest row it returned, and is assumed to hold every hour
+    that starts after ``fetched_at -``
+    :data:`ASSUMED_LORASTATS_RETENTION_SECONDS`; an older hour without a
+    row stays unknown. Without ``since`` (a first refresh) the hours start
+    only at that of the oldest row, and there are none without any: how
+    far back lorastats keeps rows it has none of is not known.
+
+    Args:
+        oldest: The time of the oldest row returned, or ``None`` when none was.
+        since: The start of the hour the request asked from, or ``None``
+            when it asked for everything.
+        fetched_at: When lorastats was asked, epoch seconds.
+
+    Returns:
+        The hour starts, from the first answered hour up to that of
+        ``fetched_at``.
+    """
+    first_heard = None if oldest is None else floor_hour(oldest)
+    if since is None:
+        first = floor_hour(fetched_at) + HOUR_SECONDS if first_heard is None else first_heard
+    else:
+        held = floor_hour(fetched_at - ASSUMED_LORASTATS_RETENTION_SECONDS) + HOUR_SECONDS
+        first = max(since, held if first_heard is None else min(held, first_heard))
+    return range(first, floor_hour(fetched_at) + 1, HOUR_SECONDS)
+
+
 def _top(counts: Mapping[_K, int], limit: int) -> Mapping[_K, int]:
     """Keep the ``limit`` largest counts (ties: the smaller key)."""
     ranked = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
@@ -428,13 +459,8 @@ def summarize(
         by_hour.setdefault(floor_hour(reception.time), []).append(reception)
     for packet in packets.values():
         by_hour.setdefault(floor_hour(packet.time), [])
-    oldest = floor_hour(min(r.time for r in returned)) if returned else None
-    if since is None:
-        first_silent = floor_hour(fetched_at) + HOUR_SECONDS if oldest is None else oldest
-    else:
-        held = floor_hour(fetched_at - ASSUMED_LORASTATS_RETENTION_SECONDS) + HOUR_SECONDS
-        first_silent = max(since, held if oldest is None else min(held, oldest))
-    for hour in range(first_silent, floor_hour(fetched_at) + 1, HOUR_SECONDS):
+    oldest = min((r.time for r in returned), default=None)
+    for hour in answered_hours(oldest, since=since, fetched_at=fetched_at):
         by_hour.setdefault(hour, [])
     own_byte = node.num & _BYTE_MASK
     return dataclasses.replace(
