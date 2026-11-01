@@ -824,15 +824,18 @@ keeps a 30-day store of each region's traffic in the cache directory.
 mesh network keys                     # key scan of our nodes' regions, last 30 days
 mesh network keys --region Zachód     # another region (repeatable)
 mesh network keys --no-fetch --json   # stored data only, no request at all
+mesh network relays                   # relays carrying our packets, last 24 h
+mesh network relays --all --days 7    # every relay of the region by share
 ```
 
 | Subcommand | What it shows |
 |---|---|
 | `keys` | Every public key the region's nodes advertise, and what is wrong with them |
+| `relays` | The relays carrying our packets that are not ours (`--all`: every relay), with how much we depend on each |
 
 | Option (every subcommand) | Meaning |
 |---|---|
-| `--days N` | Window of the stored data, 1 to 30 days (default: 30 for `keys`) |
+| `--days N` | Window of the stored data, 1 to 30 days (default: 30 for `keys`, 1 for the others) |
 | `--region R` | A lorastats region to look at (repeatable, at most 16); default: our nodes' regions |
 | `--no-fetch` | Ask nothing: use the stored data only (no `MESHPROVISION_CONTACT` needed) |
 | `--refresh` | Fetch even if fetched in the last 15 minutes (still at most once a minute per region); refused with `--no-fetch` |
@@ -935,6 +938,62 @@ cannot fix them, and a permanently failing exit code would only teach to
 ignore it. Only nodes on the default channel are visible (about half of a
 region's nodes in the sample this was designed on); the tool never contacts
 anyone.
+
+### `mesh network relays`
+
+Which relays carry our nodes' packets without being ours (`--limit N` rows
+per region, default 20; `--all` lists every relay of the region by its share
+of relayed traffic instead). Every reception names the node that transmitted
+it last only by the last byte of its id, shared by about one node in 256, so
+each byte is first **resolved**: its candidates are the nodes heard in the
+window whose id ends in it (senders, gateways, and lorastats' node list),
+never a `CLIENT_MUTE` node. A relay's rebroadcast comes from the same radio
+as its own packets, so each candidate is scored by *coverage* (the share of
+the byte's relayed receptions heard at gateways that hear the candidate
+directly) and *distance* (how far, per gateway, the relayed receptions' mean
+SNR and RSSI are from the candidate's own direct ones; only receptions with
+both values count):
+
+| Label | Rule |
+|---|---|
+| `high` | coverage at least 50 %, distance at most 4 dB, and every other candidate covers less than a third of that or is at least 4 dB farther |
+| `medium` | the only candidate, unless its distance (above 4 dB) contradicts it; or coverage at least 50 % with no rival above a third of it but no radio to compare; or a byte that would be ambiguous whose node was resolved `high` in the last week and is still a candidate (`medium (learned <date>)`) |
+| `ambiguous` | otherwise: the row names the candidates, never one node |
+| `unknown` | no candidate heard in the window |
+
+The thresholds were tuned on one region's day and err towards `ambiguous`.
+Per relay: **Ours via** (its share of our relayed receptions), **Our nodes**
+(how many of ours it relayed), **Sole 1st hop** (our nodes for which it was
+the only first hop: at least 90 % of at least 5 first-hop events, the node
+never heard directly by a gateway), **Region** (its share of the region's
+relayed receptions), **Gateways>=50%** (gateways with at least 20 relayed
+receptions that got at least half of them through it, and the largest such
+share), **Last seen** (lorastats' node list) and **Notes**, the gaps in what
+is known about it: not in lorastats' node list, no node info, or an id not
+derived from its key. A relay that is one of ours is never a row (see `mesh
+network impact`). Example (the end-to-end tests' region):
+
+```text
+Relays we depend on but don't own: PL, last 24 h (data as of 2026-11-01 01:19:46)
+20 of our packets, 10 of their receptions relayed; 153 relayed receptions in the region
+
+  Relay      Name                                       Role     Conf        Ours via   Our nodes   Sole 1st hop    Region    Gateways>=50%   Last seen             Notes
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  c0ffee61   Rtr                                        ROUTER   high           70.0%           1   d0000a01 Our1    69.9%   2 (max 100.0%)   2026-11-01 01:09:46   id not key-derived
+  0xe4       ambiguous (e10000e4, e20000e4, e30000e4)   -        ambiguous      30.0%           1   -                 7.2%    0 (max 30.6%)   -                     -
+
+Shares are of receptions at gateways, by last hop. Meshtastic floods: when a relay is gone, another node usually rebroadcasts instead. These numbers show who carries traffic now, not what breaks without it.
+```
+
+`--json` lists every row (no limit) with `byte`, `node`, `confidence`,
+`learned_at`, `candidates` (`node`, `coverage`, `distance_db`),
+`relayed_receptions`, `region_share`, `origins`, `our_receptions`,
+`our_share`, `our_origins`, `our_sole_first_hop`, `our_sole_path_packets`
+(our packets whose every reception it relayed last), `gateways_relying`,
+`max_gateway_share`, `gateways_hearing_directly`, `role`, `last_seen`,
+`last_boot` and `gaps`, per region with `relayed_receptions`, `our_packets`
+and `our_relayed_receptions`. Default window 1 day. Exit code `0` (3/7 as
+above).
 
 ## `mesh admin`
 

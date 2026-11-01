@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh network relays`: the relays that carry our nodes' packets but are not
+  ours, in the regions our nodes live in (or `--region`), over `--days`
+  (default 1). Each relay byte is resolved to a node by comparing the SNR and
+  RSSI its relayed receptions arrive with to each candidate's own direct
+  receptions, labelled `high`, `medium` (also when learned `high` within the
+  last week) or `ambiguous` (candidates named, never one node). Per relay: its
+  share of our relayed receptions, which of our nodes use it as their only
+  first hop, its share of the region's relayed traffic, the gateways relying
+  on it, its last-seen time and identity gaps. `--all` lists every relay of the
+  region, `--limit N` caps the rows, `--json` lists all.
 - `mesh network keys`: a network-wide key scan of the lorastats regions our
   nodes live in (or `--region`). Every public key a node advertises in its
   unencrypted node info is recorded as a 64-bit digest (never the key) with

@@ -349,37 +349,169 @@ def test_names_from_the_air_are_made_terminal_safe(
     assert "c3000003 \\x1b[2J" in result.stdout
 
 
-_MARKUP_NAMES = ("[/]", "[link=https://x]a[/link]")
+def _cells(out: str, first: str) -> list[str]:
+    """Split the table row starting with ``first`` into its cells."""
+    (line,) = [line for line in out.splitlines() if line.strip().startswith(first)]
+    return [cell for cell in line.strip().split("  ") if cell.strip()]
 
 
-def _hostile_rows(now: float) -> list[dict[str, object]]:
-    """The mini region, with two clones whose short names are rich markup."""
-    rows = mini.mini_region(now)
-    for number, name in zip((0xC3000003, 0xC4000004), _MARKUP_NAMES, strict=True):
-        port, payload = mini.node_info(number, mini.KEY_CLONE, short_name=name)
-        rows.append(
-            mini.row(
-                mini.packet(number, 990 + number % 7, port=port, payload=payload), time=now - 2000
-            )
-        )
-    return rows
+def test_relays_shows_the_relays_we_depend_on(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    db = _seed(seed_db)
+    before = db_fingerprint(db)
+
+    result, lorastats = _run(runner, env, ["relays", "--region", "PL"])
+
+    assert result.exit_code == 0, result.output
+    out = result.stdout
+    assert "Relays we depend on but don't own: PL, last 24 h (data as of " in out
+    assert "20 of our packets, 10 of their receptions relayed; 153 relayed receptions" in out
+    router = [cell.strip() for cell in _cells(out, mini.ROUTER)]
+    assert router[:4] == [mini.ROUTER, "Rtr", "ROUTER", "high"]
+    assert router[4:9] == ["70.0%", "1", f"{mini.OURS_ONE} Our1", "69.9%", "2 (max 100.0%)"]
+    assert router[-1] == "id not key-derived"
+    ambiguous = [cell.strip() for cell in _cells(out, "0xe4")]
+    assert ambiguous[:3] == ["0xe4", "ambiguous (e10000e4, e20000e4, e30000e4)", "-"]
+    assert mini.COLLIDER not in out
+    assert "Shares are of receptions at gateways, by last hop." in out
+    assert (len(lorastats.raw), len(lorastats.listed)) == (1, 1)
+    assert db_fingerprint(db) == before
 
 
-def _assert_plain(out: str) -> None:
-    assert "\x1b]8" not in out and "\x1b" not in out
-    for name in _MARKUP_NAMES:
-        assert name in out
-
-
-@pytest.mark.parametrize("view", ["keys"])
-def test_a_name_that_is_rich_markup_is_printed_as_text(
-    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], view: str
+def test_relays_all_lists_every_relay_but_ours_by_region_share(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:
     _seed(seed_db)
 
-    result, _ = _run(
-        runner, env, [view, "--region", "PL"], _Lorastats(rows=_hostile_rows(time.time()))
-    )
+    result, _ = _run(runner, env, ["relays", "--region", "PL", "--all"])
 
     assert result.exit_code == 0, result.output
-    _assert_plain(result.stdout)
+    out = result.stdout
+    assert "Relays by share of relayed traffic: PL" in out
+    order = [line.split()[0] for line in out.splitlines() if line.startswith("  ") and line.split()]
+    assert order[1:] == [mini.ROUTER, "0xe4", mini.COLLIDER]
+    assert mini.OURS_RELAY not in out
+    collider = [cell.strip() for cell in _cells(out, mini.COLLIDER)]
+    assert collider[3] == "high"
+
+
+def test_relays_limit_and_a_mute_node_are_respected(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+
+    result, _ = _run(runner, env, ["relays", "--region", "PL", "--all", "--limit", "1"])
+
+    assert result.exit_code == 0, result.output
+    assert "2 more (--limit)." in result.stdout
+    assert mini.MUTE not in result.stdout
+
+
+def test_relays_json_carries_every_row_and_field(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+
+    result, _ = _run(runner, env, ["relays", "--region", "PL", "--json", "--limit", "1"])
+
+    assert result.exit_code == 0, result.output
+    document = json.loads(result.stdout)
+    assert sorted(document) == ["days", "exit_code", "generated_at", "refresh", "regions"]
+    (region,) = document["regions"]
+    assert (
+        region["relayed_receptions"],
+        region["our_packets"],
+        region["our_relayed_receptions"],
+    ) == (153, 20, 10)
+    router, ambiguous = region["relays"]
+    assert router == {
+        "byte": 0x61,
+        "node": mini.ROUTER,
+        "confidence": "high",
+        "learned_at": None,
+        "candidates": [
+            {
+                "node": mini.ROUTER,
+                "coverage": 1.0,
+                "distance_db": router["candidates"][0]["distance_db"],
+            }
+        ],
+        "relayed_receptions": 107,
+        "region_share": 0.6993,
+        "origins": 3,
+        "our_receptions": 7,
+        "our_share": 0.7,
+        "our_origins": [mini.OURS_ONE],
+        "our_sole_first_hop": [mini.OURS_ONE],
+        "our_sole_path_packets": 7,
+        "gateways_relying": 2,
+        "max_gateway_share": 1.0,
+        "gateways_hearing_directly": 2,
+        "role": "ROUTER",
+        "last_seen": router["last_seen"],
+        "last_boot": None,
+        "gaps": ["id not key-derived"],
+    }
+    assert router["candidates"][0]["distance_db"] < 4
+    assert router["last_seen"].endswith("Z")
+    assert (ambiguous["byte"], ambiguous["node"], ambiguous["confidence"]) == (
+        0xE4,
+        None,
+        "ambiguous",
+    )
+    assert [c["node"] for c in ambiguous["candidates"]] == list(mini.AMBIGUOUS)
+
+
+_MARKUP_NAMES = ("[/]", "[link=https://x]a[/link]")
+
+
+def _hostile_rows(now: float, name: str) -> list[dict[str, object]]:
+    """The mini region, with the router and a third clone named ``name`` (rich markup)."""
+    rows = mini.mini_region(now)
+    for number, key in ((0xC3000003, mini.KEY_CLONE), (int(mini.ROUTER, 16), mini.KEY_ROUTER)):
+        port, payload = mini.node_info(number, key, short_name=name, role=2)
+        built = mini.packet(number, 4242, port=port, payload=payload)
+        rows.append(mini.row(built, gateway=mini.G1, time=now - 1000))
+    return rows
+
+
+@pytest.mark.parametrize("name", _MARKUP_NAMES)
+@pytest.mark.parametrize("view", [["keys"], ["relays"]])
+def test_a_name_that_is_rich_markup_is_printed_as_text(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    view: list[str],
+    name: str,
+) -> None:
+    _seed(seed_db)
+    source = _Lorastats(rows=_hostile_rows(time.time(), name))
+
+    result, _ = _run(runner, env, [*view, "--region", "PL"], source)
+
+    assert result.exit_code == 0, result.output
+    assert "\x1b" not in result.stdout
+    assert name in result.stdout
+
+
+def test_a_learned_relay_is_stamped_with_its_datas_time_not_renewed_offline(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    _run(runner, env, ["relays", "--region", "PL"])
+    directory = Path(env["MESHPROVISION_CACHE_DIR"]) / NETWORK_DIRNAME / region_dirname("PL")
+    fetched_at = json.loads((directory / "state.json").read_text(encoding="utf-8"))["fetched_at"]
+    learned = json.loads((directory / "relays.json").read_text(encoding="utf-8"))["relays"]
+    assert {byte: entry[1] for byte, entry in learned.items()} == {
+        str(0x61): fetched_at,
+        str(0x03): fetched_at,
+        str(0xBC): fetched_at,
+    }
+    _age_the_store(env, 3600)
+    before = (directory / "relays.json").read_bytes()
+
+    result, _ = _run(runner, env, ["relays", "--region", "PL", "--no-fetch"])
+
+    assert result.exit_code == 0, result.output
+    assert (directory / "relays.json").read_bytes() == before

@@ -13,7 +13,7 @@ stores in the cache directory.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
 
 import click
 
@@ -23,6 +23,7 @@ from meshprovision.errors import SettingsError
 from meshprovision.network import render
 from meshprovision.network.report import (
     DEFAULT_KEYS_DAYS,
+    DEFAULT_TRAFFIC_DAYS,
     MAX_DAYS,
     NetworkOptions,
     NetworkReport,
@@ -32,9 +33,15 @@ from meshprovision.network.report import (
 if TYPE_CHECKING:
     from meshprovision.cli.common import CliContext
 
-__all__ = ["network"]
+__all__ = ["DEFAULT_RELAY_ROWS", "MAX_RELAY_ROWS", "network"]
 
 _F = TypeVar("_F", bound=Callable[..., object])
+
+DEFAULT_RELAY_ROWS: Final[int] = 20
+"""Relays shown per region by default."""
+
+MAX_RELAY_ROWS: Final[int] = 255
+"""The most relays ``--limit`` allows (there are at most 255 relay bytes)."""
 
 
 @click.group(name="network", cls=MeshGroup, context_settings=CONTEXT_SETTINGS)
@@ -162,5 +169,68 @@ def keys(
     else:
         render.render_keys_console(report, console=ctx.out)
     code = report.exit_code(crypto=report.keys_critical)
+    if code:
+        raise SystemExit(code)
+
+
+@network.command(name="relays", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
+@_common_options(DEFAULT_TRAFFIC_DAYS)
+@click.option(
+    "--all",
+    "everything",
+    is_flag=True,
+    default=False,
+    help="Every relay of the region by its share of relayed traffic, not only those carrying ours.",
+)
+@click.option(
+    "--limit",
+    type=click.IntRange(1, MAX_RELAY_ROWS),
+    default=DEFAULT_RELAY_ROWS,
+    show_default=True,
+    help="The most relays shown per region (--json lists all).",
+)
+@pass_cli
+@handle_cli_errors
+def relays(
+    ctx: CliContext,
+    *,
+    days: int,
+    regions: tuple[str, ...],
+    no_fetch: bool,
+    refresh: bool,
+    json_output: bool,
+    everything: bool,
+    limit: int,
+) -> None:
+    """List the relays that carry our nodes' packets but are not ours.
+
+    Each relay byte is attributed to a node with a confidence label
+    (high/medium) or shown as ambiguous with its candidates. For each:
+    the share of our relayed receptions it carried, which of our nodes
+    use it as their only first hop, its share of the region's relayed
+    traffic, the gateways that rely on it, and its health and identity
+    gaps. Shares are of receptions at gateways, by last hop.
+
+    Args:
+        ctx: The shared CLI context.
+        days: The window, from ``--days``.
+        regions: The regions, from ``--region``.
+        no_fetch: Ask nothing, from ``--no-fetch``.
+        refresh: Fetch within the 15-minute interval, from ``--refresh``.
+        json_output: Emit JSON, from ``--json``.
+        everything: Every relay, from ``--all``.
+        limit: The most rows per region, from ``--limit``.
+
+    Raises:
+        SystemExit: 3 when no region has any data, 7 when a request failed.
+    """
+    report = _collect(
+        ctx, days=days, regions=regions, no_fetch=no_fetch, refresh=refresh, traffic=True
+    )
+    if json_output:
+        click.echo(render.render_relays_json(report, everything=everything))
+    else:
+        render.render_relays_console(report, console=ctx.out, everything=everything, limit=limit)
+    code = report.exit_code()
     if code:
         raise SystemExit(code)

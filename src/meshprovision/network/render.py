@@ -15,9 +15,13 @@ from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
+from rich import box
+from rich.console import JustifyMethod, RenderableType
+from rich.table import Table
 from rich.text import Text
 
 from meshprovision.network.keys import FindingKind, KeyFinding, Severity, short_digest
+from meshprovision.network.relays import RelayRow, RelayTable, byte_label, relay_table
 from meshprovision.status import timefmt
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
@@ -26,11 +30,17 @@ if TYPE_CHECKING:
 
     from meshprovision.network.refresh import NetworkRefresh
     from meshprovision.network.report import NetworkReport, RegionReport
+    from meshprovision.network.resolve import Resolution
 
 __all__ = [
     "keys_to_json_dict",
+    "relays_of",
+    "relays_to_json_dict",
     "render_keys_console",
     "render_keys_json",
+    "render_relays_console",
+    "render_relays_json",
+    "text_cell",
 ]
 
 _SEVERITY_STYLES: Final[dict[Severity, str]] = {
@@ -297,3 +307,220 @@ def render_keys_json(report: NetworkReport) -> str:
         The JSON text.
     """
     return json_dumps_safe(keys_to_json_dict(report), indent=2)
+
+
+_PROXY_CAVEAT: Final[str] = (
+    "Shares are of receptions at gateways, by last hop. Meshtastic floods: when a relay is "
+    "gone, another node usually rebroadcasts instead. These numbers show who carries "
+    "traffic now, not what breaks without it."
+)
+
+
+def _percent(share: float | None) -> str:
+    """Render a share as a percentage, ``-`` when unknown."""
+    return "-" if share is None else f"{100 * share:.1f}%"
+
+
+def _confidence(resolution: Resolution) -> str:
+    """Render a resolution's label, with the date of a learned one."""
+    if resolution.learned_at is not None:
+        return f"{resolution.confidence.value} (learned {_time(resolution.learned_at)})"
+    return resolution.confidence.value
+
+
+def _relay_name(row: RelayRow, known: Mapping[str, str]) -> tuple[str, str]:
+    """Render a row's relay and name cells (an unattributed byte names its candidates)."""
+    resolution = row.resolution
+    node = resolution.node
+    if node is not None:
+        return node, known.get(node, "")
+    candidates = ", ".join(score.node for score in resolution.candidates)
+    return byte_label(resolution.byte), f"{resolution.confidence.value} ({candidates})"
+
+
+def text_cell(value: str) -> Text:
+    """Make a table cell plain, terminal-safe text: never rich markup (a name may be ``[/]``).
+
+    Args:
+        value: The cell's text.
+
+    Returns:
+        The cell.
+    """
+    return Text(terminal_safe(value))
+
+
+def _relay_table(table: RelayTable, known: Mapping[str, str], limit: int) -> Table:
+    """Build the relays table."""
+    grid = Table(box=box.SIMPLE_HEAVY, header_style="bold")
+    columns: tuple[tuple[str, JustifyMethod], ...] = (
+        ("Relay", "left"),
+        ("Name", "left"),
+        ("Role", "left"),
+        ("Conf", "left"),
+        ("Ours via", "right"),
+        ("Our nodes", "right"),
+        ("Sole 1st hop", "left"),
+        ("Region", "right"),
+        ("Gateways>=50%", "right"),
+        ("Last seen", "left"),
+        ("Notes", "left"),
+    )
+    for column, justify in columns:
+        grid.add_column(column, justify=justify)
+    for row in table.rows[:limit]:
+        relay, name = _relay_name(row, known)
+        cells = (
+            relay,
+            name or "-",
+            row.role or "-",
+            _confidence(row.resolution),
+            _percent(row.our_share) if row.our_receptions else "-",
+            str(len(row.our_origins)),
+            ", ".join(_label(node, known) for node in row.our_sole_first_hop) or "-",
+            _percent(row.region_share),
+            f"{row.gateways_relying} (max {_percent(row.max_gateway_share)})",
+            _time(row.last_seen),
+            "; ".join(row.gaps) or "-",
+        )
+        grid.add_row(*(text_cell(cell) for cell in cells))
+    return grid
+
+
+def _relays_lines(
+    report: NetworkReport, region: RegionReport, *, everything: bool, limit: int
+) -> Iterable[RenderableType]:
+    """Render one region's relay table."""
+    table = relays_of(report, region, everything=everything)
+    known = _names(report, region)
+    what = (
+        "Relays by share of relayed traffic" if everything else "Relays we depend on but don't own"
+    )
+    yield _data_line(report, region, what)
+    yield Text(
+        f"{table.our_packets} of our packets, {table.our_relayed} of their receptions relayed; "
+        f"{table.relayed} relayed receptions in the region"
+    )
+    if not table.rows:
+        yield Text("No relay carried any of our packets." if not everything else "No relay.")
+        return
+    yield _relay_table(table, known, limit)
+    if len(table.rows) > limit:
+        yield Text(f"{len(table.rows) - limit} more (--limit).", style="dim")
+
+
+def relays_of(report: NetworkReport, region: RegionReport, *, everything: bool) -> RelayTable:
+    """Build a region's relay table from a report.
+
+    Args:
+        report: The report.
+        region: The region.
+        everything: Every relay not ours (``--all``), else those carrying ours.
+
+    Returns:
+        The table.
+    """
+    return relay_table(
+        region.traffic,
+        region.resolutions,
+        [member.node for member in report.fleet],
+        nodes=region.nodes,
+        keys=region.keys.seen,
+        everything=everything,
+    )
+
+
+def render_relays_console(
+    report: NetworkReport, *, console: Console, everything: bool, limit: int
+) -> None:
+    """Print the relay table of every region.
+
+    Args:
+        report: The report.
+        console: Where to print.
+        everything: Every relay not ours (``--all``).
+        limit: The most rows per region.
+    """
+    for index, region in enumerate(report.regions):
+        if index:
+            console.print()
+        for item in _relays_lines(report, region, everything=everything, limit=limit):
+            console.print(item, markup=False, highlight=False)
+    console.print(Text(_PROXY_CAVEAT, style="dim"), markup=False, highlight=False)
+    for line in _refresh_lines(report.refresh):
+        console.print(line, markup=False, highlight=False)
+
+
+def _row_json(row: RelayRow) -> dict[str, object]:
+    """Render one relay row as JSON."""
+    resolution = row.resolution
+    return {
+        "byte": resolution.byte,
+        "node": resolution.node,
+        "confidence": resolution.confidence.value,
+        "learned_at": _iso(resolution.learned_at),
+        "candidates": [
+            {"node": c.node, "coverage": round(c.coverage, 4), "distance_db": c.distance}
+            for c in resolution.candidates
+        ],
+        "relayed_receptions": row.relayed,
+        "region_share": round(row.region_share, 4),
+        "origins": row.origins,
+        "our_receptions": row.our_receptions,
+        "our_share": None if row.our_share is None else round(row.our_share, 4),
+        "our_origins": list(row.our_origins),
+        "our_sole_first_hop": list(row.our_sole_first_hop),
+        "our_sole_path_packets": row.our_sole_path_packets,
+        "gateways_relying": row.gateways_relying,
+        "max_gateway_share": round(row.max_gateway_share, 4),
+        "gateways_hearing_directly": row.heard_directly_by,
+        "role": row.role,
+        "last_seen": _iso(row.last_seen),
+        "last_boot": _iso(row.last_boot),
+        "gaps": list(row.gaps),
+    }
+
+
+def relays_to_json_dict(report: NetworkReport, *, everything: bool) -> dict[str, object]:
+    """Render the relay tables as a JSON-serializable mapping (every row, no limit).
+
+    Args:
+        report: The report.
+        everything: Every relay not ours (``--all``).
+
+    Returns:
+        ``{"generated_at", "days", "regions": [...], "refresh", "exit_code"}``.
+    """
+    regions = []
+    for region in report.regions:
+        table = relays_of(report, region, everything=everything)
+        regions.append(
+            {
+                "region": region.region,
+                "data_as_of": _iso(region.fetched_at),
+                "relayed_receptions": table.relayed,
+                "our_packets": table.our_packets,
+                "our_relayed_receptions": table.our_relayed,
+                "relays": [_row_json(row) for row in table.rows],
+            }
+        )
+    return {
+        "generated_at": _iso(report.generated_at),
+        "days": report.days,
+        "regions": regions,
+        "refresh": _refresh_json(report.refresh),
+        "exit_code": report.exit_code(),
+    }
+
+
+def render_relays_json(report: NetworkReport, *, everything: bool) -> str:
+    """Render the relay tables as indented, terminal-safe JSON.
+
+    Args:
+        report: The report.
+        everything: Every relay not ours (``--all``).
+
+    Returns:
+        The JSON text.
+    """
+    return json_dumps_safe(relays_to_json_dict(report, everything=everything), indent=2)
