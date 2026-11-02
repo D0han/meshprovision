@@ -127,7 +127,35 @@ def generate_keypair() -> KeyPair:
         encoding=serialization.Encoding.Raw,
         format=serialization.PublicFormat.Raw,
     )
-    return KeyPair(private=SecretBytes(raw_private), public=raw_public)
+    return KeyPair(private=SecretBytes(_clamp_private_key(raw_private)), public=raw_public)
+
+
+def _clamp_private_key(raw: bytes) -> bytes:
+    """Return an X25519 private scalar clamped as RFC 7748 section 5 does.
+
+    Firmware >= 2.8.2 stores an imported private key clamped, so only a
+    clamped key reads back unchanged. Clamping never changes the public
+    key that RFC 7748 X25519 (and so ``cryptography``) derives. Private
+    because it takes and returns raw key bytes; callers get a
+    :class:`~meshprovision.crypto.redact.SecretBytes` from
+    :func:`generate_keypair`.
+
+    Args:
+        raw: The raw private scalar.
+
+    Returns:
+        A new 32-byte scalar with the low three bits of the first byte
+        cleared, the top bit of the last byte cleared and its second-highest
+        bit set.
+
+    Raises:
+        KeyMaterialError: If ``raw`` is not exactly
+            :data:`X25519_KEY_SIZE` bytes.
+    """
+    scalar = bytearray(_coerce_private_bytes(raw))
+    scalar[0] &= 0xF8
+    scalar[31] = (scalar[31] & 0x7F) | 0x40
+    return bytes(scalar)
 
 
 def _coerce_private_bytes(private: bytes | SecretBytes) -> bytes:

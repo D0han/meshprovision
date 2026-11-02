@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import base64
 import dataclasses
+import os
 
 import pytest
 
+from meshprovision.crypto import keys
 from meshprovision.crypto.keys import (
     B64_KEY_PREFIX,
     X25519_KEY_SIZE,
@@ -183,3 +185,27 @@ def test_keypair_repr_and_fingerprint_never_expose_the_private_key(
     rendered = repr(kp)
     assert kp.private.reveal_b64() not in rendered
     assert kp.public_b64 in rendered
+
+
+def test_clamp_private_key_sets_the_rfc7748_bits() -> None:
+    highest = keys._clamp_private_key(b"\xff" * X25519_KEY_SIZE)
+    lowest = keys._clamp_private_key(b"\x00" * X25519_KEY_SIZE)
+
+    assert (highest[0], highest[-1]) == (0xF8, 0x7F)
+    assert (lowest[0], lowest[-1]) == (0x00, 0x40)
+
+
+def test_clamp_private_key_never_changes_the_public_key() -> None:
+    for _ in range(32):
+        raw = os.urandom(X25519_KEY_SIZE)
+        clamped = keys._clamp_private_key(raw)
+
+        assert public_from_private(clamped) == public_from_private(raw)
+        assert keys._clamp_private_key(clamped) == clamped
+
+
+def test_generated_private_keys_are_clamped() -> None:
+    for _ in range(64):
+        private = generate_keypair().private.reveal()
+
+        assert keys._clamp_private_key(private) == private
