@@ -8,6 +8,7 @@ from collections.abc import Callable
 import pytest
 from meshtastic.protobuf import channel_pb2, config_pb2, localonly_pb2
 
+from meshprovision.crypto.keys import generate_keypair
 from meshprovision.errors import (
     EnumMappingError,
     PlanConflictError,
@@ -20,6 +21,7 @@ from meshprovision.provisioning.apply import (
     write_default_channel,
     write_section,
 )
+from meshprovision.provisioning.device_write import _firmware_keeps_rest_of_security
 from meshprovision.provisioning.plan import (
     FieldChange,
     SectionChange,
@@ -373,6 +375,118 @@ def test_write_section_security_keeps_admin_keys_the_plan_does_not_change() -> N
 
     assert tuple(iface.localNode.localConfig.security.admin_key) == held
     assert iface.localNode.localConfig.security.serial_enabled is False
+
+
+_NEW_PRIVATE_KEY = b"\x33" * 32
+
+
+def _security(**fields: object) -> config_pb2.Config.SecurityConfig:
+    return config_pb2.Config.SecurityConfig(**fields)
+
+
+@pytest.mark.parametrize(
+    ("sent", "expected"),
+    [
+        pytest.param(_security(private_key=_NEW_PRIVATE_KEY), True, id="bare-rotation"),
+        pytest.param(
+            _security(private_key=b"\x11" * 32), False, id="same-private-key-as-the-device"
+        ),
+        pytest.param(_security(private_key=b"\x33" * 31), False, id="short-private-key"),
+        pytest.param(
+            _security(private_key=_NEW_PRIVATE_KEY, admin_key=[b"\x44" * 32]),
+            False,
+            id="admin-key",
+        ),
+        pytest.param(_security(private_key=_NEW_PRIVATE_KEY, is_managed=True), False, id="managed"),
+        pytest.param(
+            _security(private_key=_NEW_PRIVATE_KEY, serial_enabled=True), False, id="serial-console"
+        ),
+        pytest.param(
+            _security(private_key=_NEW_PRIVATE_KEY, admin_channel_enabled=True),
+            False,
+            id="admin-channel",
+        ),
+        pytest.param(
+            _security(private_key=_NEW_PRIVATE_KEY, debug_log_api_enabled=True),
+            False,
+            id="debug-log",
+        ),
+        pytest.param(
+            _security(private_key=_NEW_PRIVATE_KEY, packet_signature_policy=1),
+            False,
+            id="signature-policy",
+        ),
+    ],
+)
+def test_firmware_keeps_rest_of_security_predicate(
+    sent: config_pb2.Config.SecurityConfig, expected: bool
+) -> None:
+    # Differs from every "sent" below in the serial console and debug log flags, so
+    # a clause that wrongly lets a case through is not hidden by "nothing else changed".
+    before = _security(private_key=b"\x11" * 32, serial_enabled=True, debug_log_api_enabled=True)
+
+    assert _firmware_keeps_rest_of_security(sent, before) is expected
+
+
+def _rotation_iface(*, serial_enabled: bool) -> FakeIfaceForApply:
+    iface = FakeIfaceForApply()
+    security = iface.localNode.localConfig.security
+    security.private_key = b"\x11" * 32
+    security.serial_enabled = serial_enabled
+    return iface
+
+
+_SERIAL_OFF = SectionChange(
+    section="security",
+    kind=detect.SectionKind.CONFIG,
+    changes=(FieldChange(section="security", field="serial_enabled", current=True, desired=False),),
+)
+
+
+def test_bare_rotation_shaped_security_write_is_sent_twice() -> None:
+    iface = _rotation_iface(serial_enabled=True)
+    keypair = generate_keypair()
+
+    write_section(
+        iface,  # type: ignore[arg-type]
+        _SERIAL_OFF,
+        key_plan=KeyPlan(regenerate=True),
+        keypair=keypair,
+    )
+
+    security = iface.localNode.localConfig.security
+    assert iface.localNode.written_sections == ["security", "security"]
+    assert bytes(security.private_key) == keypair.private.reveal()
+    assert security.serial_enabled is False
+
+
+def test_key_rotation_with_admin_keys_is_sent_once() -> None:
+    iface = _rotation_iface(serial_enabled=True)
+
+    write_section(
+        iface,  # type: ignore[arg-type]
+        _SERIAL_OFF,
+        key_plan=KeyPlan(
+            regenerate=True, change_admin_keys=True, desired_admin_keys=(b"\x44" * 32,)
+        ),
+        keypair=generate_keypair(),
+    )
+
+    assert iface.localNode.written_sections == ["security"]
+
+
+def test_key_only_rotation_with_nothing_else_changing_is_sent_once() -> None:
+    iface = _rotation_iface(serial_enabled=False)
+    change = SectionChange(section="security", kind=detect.SectionKind.CONFIG, changes=())
+
+    write_section(
+        iface,  # type: ignore[arg-type]
+        change,
+        key_plan=KeyPlan(regenerate=True),
+        keypair=generate_keypair(),
+    )
+
+    assert iface.localNode.written_sections == ["security"]
 
 
 def test_write_section_failed_write_restores_the_whole_staged_section() -> None:

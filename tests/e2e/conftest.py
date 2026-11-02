@@ -374,6 +374,7 @@ class FakeMeshInterface:
         fail_reads_after_write: bool = False,
         owner_write_echoed: bool = True,
         derive_id_from_key: bool = False,
+        keeps_rest_on_bare_key_rotation: bool = False,
     ) -> None:
         """Initialize a fake device at factory or custom naming defaults.
 
@@ -415,6 +416,11 @@ class FakeMeshInterface:
                 section with a public key renumbers the device to the id
                 derived from it, as firmware >= 2.8 does at the reboot
                 after a key write (``NodeDB::createNewIdentity``).
+            keeps_rest_on_bare_key_rotation: When ``True``, persisting a
+                ``security`` set that has the shape of firmware 2.8's
+                ``isBareKeypairRotation`` (a new private key, every other
+                field at its default) applies only the keys and keeps the
+                device's other security settings.
         """
         self.nid = NodeId.from_hex(node_id)
         self.drop_security_keys = drop_security_keys
@@ -423,6 +429,7 @@ class FakeMeshInterface:
         self.fail_reads_after_write = fail_reads_after_write
         self.owner_write_echoed = owner_write_echoed
         self.derive_id_from_key = derive_id_from_key
+        self.keeps_rest_on_bare_key_rotation = keeps_rest_on_bare_key_rotation
         self.closed = 0
 
         self.myInfo = SimpleNamespace(my_node_num=self.nid.num)
@@ -566,6 +573,31 @@ class _FakeConnectionNode:
             self.channels.append(staged)
         self._in_transaction = False
         self._pending_sections: set[str] = set()
+        self._security_sets: list[config_pb2.Config.SecurityConfig] = []
+
+    def _persist_security(self) -> None:
+        """Apply every security set sent since the last persist, as the firmware does.
+
+        Models AdminModule ``isBareKeypairRotation`` (firmware 2.8): a set with
+        a new 32-byte private key and every other field at its default keeps
+        the device's current settings and takes only the keys.
+        """
+        persisted = self._connection._device.localNode.localConfig.security
+        for sent in self._security_sets:
+            is_bare = (
+                len(sent.private_key) == 32
+                and bytes(sent.private_key) != bytes(persisted.private_key)
+                and not sent.admin_key
+                and not (sent.is_managed or sent.serial_enabled or sent.debug_log_api_enabled)
+                and not sent.admin_channel_enabled
+                and sent.packet_signature_policy == 0
+            )
+            if is_bare:
+                persisted.private_key = sent.private_key
+                persisted.public_key = sent.public_key
+            else:
+                persisted.CopyFrom(sent)
+        self._security_sets = []
 
     def _persist(self, section: str) -> None:
         """Copy this connection's staged ``section`` into the device's persisted config.
@@ -578,7 +610,10 @@ class _FakeConnectionNode:
         staged_root = self.localConfig if is_config else self.moduleConfig
         persisted_node = device.localNode
         persisted_root = persisted_node.localConfig if is_config else persisted_node.moduleConfig
-        getattr(persisted_root, section).CopyFrom(getattr(staged_root, section))
+        if device.keeps_rest_on_bare_key_rotation and section == "security":
+            self._persist_security()
+        else:
+            getattr(persisted_root, section).CopyFrom(getattr(staged_root, section))
 
         if device.drop_security_keys and section == "security":
             # Simulate firmware issue #7449: a freshly *persisted* key is
@@ -646,6 +681,11 @@ class _FakeConnectionNode:
         # failure, if any -- exactly what a real writeConfig() call does
         # before this fake decides whether to buffer or persist anything.
         device.localNode.writeConfig(section)
+
+        if device.keeps_rest_on_bare_key_rotation and section == "security":
+            sent = config_pb2.Config.SecurityConfig()
+            sent.CopyFrom(self.localConfig.security)
+            self._security_sets.append(sent)
 
         if self._in_transaction:
             self._pending_sections.add(section)

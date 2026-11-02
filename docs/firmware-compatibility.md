@@ -104,6 +104,17 @@ tried on a device.**
   number is no longer for this node and goes out over the radio.
   *Unverified:* how long that window is in practice. This is why the
   first region set stays refused.
+- *Verified:* since 2.8.0, a security write carrying a new private key
+  with no admin keys, serial console, debug log, lockdown or admin
+  channel and the `COMPATIBLE` signing policy counts as a bare key
+  rotation: the firmware applies the keys and keeps the other security
+  settings it had. `mesh provision` writes the whole security config, so
+  when such a write also changes one of those settings (for example
+  `serial_enabled: false` on a factory device, or removing admin keys), it
+  sends the write a second time; the second one carries the key the device
+  now holds and is applied in full. *Unverified:* not tried on a device;
+  two security writes in one settings transaction are read from the
+  firmware code only.
 - *Verified (2.8.2):* the firmware clamps a stored private key (RFC 7748)
   before deriving its public key. A key that was not clamped (set by hand
   in an app or restored from a backup) therefore gets a new public key,

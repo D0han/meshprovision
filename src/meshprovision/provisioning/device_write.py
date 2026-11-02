@@ -200,6 +200,42 @@ def apply_field(message: Any, field: str, value: object) -> None:
     )
 
 
+def _firmware_keeps_rest_of_security(sent: Any, before: Any) -> bool:
+    """Tell whether firmware >= 2.8 would apply only the keys of this security write.
+
+    Mirrors AdminModule ``isBareKeypairRotation`` (firmware 2.8.0 to 2.8.2):
+    a set with a new private key and every other field at its default keeps
+    the device's other security settings. That only matters when the write
+    also changes one of them.
+
+    Args:
+        sent: The security message about to be written.
+        before: The device's security message before this write.
+
+    Returns:
+        ``True`` when ``sent`` has the shape of a bare key rotation and
+        differs from ``before`` in something besides the keys.
+    """
+    if len(sent.private_key) != 32 or bytes(sent.private_key) == bytes(before.private_key):
+        return False
+    if (
+        len(sent.admin_key) != 0
+        or sent.is_managed
+        or sent.serial_enabled
+        or sent.debug_log_api_enabled
+        or sent.admin_channel_enabled
+        or getattr(sent, "packet_signature_policy", 0) != 0
+    ):
+        return False
+    rest_sent, rest_before = type(sent)(), type(before)()
+    rest_sent.CopyFrom(sent)
+    rest_before.CopyFrom(before)
+    for message in (rest_sent, rest_before):
+        message.ClearField("private_key")
+        message.ClearField("public_key")
+    return bool(rest_sent != rest_before)
+
+
 def write_section(
     iface: MeshInterface,
     change: SectionChange,
@@ -227,6 +263,10 @@ def write_section(
         ProvisioningError: If the device write itself fails (including a
             ``SystemExit`` raised by ``meshtastic.util.our_exit()``,
             converted here rather than allowed to kill the process).
+
+    A security write that firmware 2.8 would take for a bare key rotation
+    (see :func:`_firmware_keeps_rest_of_security`) is sent twice, so the
+    second send applies the settings changed alongside the keys.
 
     On any failure the section's in-memory message is restored to its
     pre-call state (a snapshot taken before any field is applied), so an
@@ -261,8 +301,14 @@ def write_section(
                 del msg.admin_key[:]
                 msg.admin_key.extend(key_plan.desired_admin_keys)
 
+        # Firmware 2.8 applies only the keys of a bare key rotation; the
+        # second set carries the key the device now holds, so it applies the rest.
+        resend = change.section == "security" and _firmware_keeps_rest_of_security(msg, snapshot)
         try:
             iface.localNode.writeConfig(change.section)
+            if resend:
+                _logger.info("Re-sent security: firmware keeps the rest of a bare key rotation")
+                iface.localNode.writeConfig(change.section)
         except (*DEVICE_EXCEPTIONS, *connection.device_io_errors()) as exc:
             raise ProvisioningError(
                 f"Failed to write config section {change.section!r}: {exc}"

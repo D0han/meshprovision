@@ -24,6 +24,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import AtomicWriteError, ExitCode
 from meshprovision.provisioning import apply as apply_mod
+from meshprovision.provisioning import device_write
 from tests.conftest import BASE64_KEY_RE, SIX_DIGIT_RE
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
@@ -2199,3 +2200,43 @@ def test_a_pending_keypair_named_after_a_symlinked_db_path_is_found_and_cleared(
     assert f"It stays at {older} only until this run" in second.stderr
     assert not older.exists()
     assert not current.exists()
+
+
+def test_factory_key_rotation_keeps_the_templated_security_settings(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bare-rotation-shaped security write verifies only because it is sent twice.
+
+    The fake models firmware 2.8's ``isBareKeypairRotation``: a security set
+    with a new key and every other field at its default keeps the device's
+    other settings, here ``serial_enabled: true``. Without the re-send the
+    templated ``serial_enabled: false`` is dropped and verification fails.
+    """
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(security={"serial_enabled": False}))
+
+    def _factory_device(node: str) -> FakeMeshInterface:
+        device = bus.use(
+            FakeMeshInterface(node, firmware_version="2.8.0", keeps_rest_on_bare_key_rotation=True)
+        )
+        device.localNode.localConfig.lora.region = 3
+        device.localNode.localConfig.security.serial_enabled = True
+        return device
+
+    with monkeypatch.context() as patched:
+        patched.setattr(device_write, "_firmware_keeps_rest_of_security", lambda *_: False)
+        dropped = _factory_device("deadbe01")
+        failed = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert failed.exit_code == int(ExitCode.PROVISIONING)
+    assert dropped.localNode.localConfig.security.serial_enabled is True
+
+    resent = _factory_device("deadbe02")
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert resent.localNode.localConfig.security.serial_enabled is False
+    assert resent.localNode.written_sections.count("security") == 2
