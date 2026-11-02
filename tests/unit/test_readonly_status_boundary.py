@@ -1,4 +1,4 @@
-"""The read-only guard: `mesh status` structurally cannot write the database."""
+"""The read-only guard: `mesh status`, `health` and `network` cannot write the database."""
 
 from __future__ import annotations
 
@@ -49,14 +49,19 @@ _REPORT_FORBIDDEN_MODULES = (
 )
 
 
-def test_cli_status_never_names_a_write_capable_symbol() -> None:
-    code = source_without_docstring(SRC / "cli" / "status.py")
+_COMMANDS = ("status", "health", "network")
+
+
+@pytest.mark.parametrize("command", _COMMANDS)
+def test_the_cli_module_never_names_a_write_capable_symbol(command: str) -> None:
+    code = source_without_docstring(SRC / "cli" / f"{command}.py")
     found = sorted(name for name in _CLI_STATUS_FORBIDDEN if name in code)
-    assert found == [], f"cli/status.py must not reference: {found}"
+    assert found == [], f"cli/{command}.py must not reference: {found}"
 
 
-def test_status_report_never_calls_a_write_operation() -> None:
-    tree = ast.parse((SRC / "status" / "report.py").read_text(encoding="utf-8"))
+@pytest.mark.parametrize("command", _COMMANDS)
+def test_the_report_never_calls_a_write_operation(command: str) -> None:
+    tree = ast.parse((SRC / command / "report.py").read_text(encoding="utf-8"))
     offenders = sorted(
         {
             node.attr
@@ -64,10 +69,11 @@ def test_status_report_never_calls_a_write_operation() -> None:
             if isinstance(node, ast.Attribute) and node.attr in _REPORT_FORBIDDEN_ATTRS
         }
     )
-    assert offenders == [], f"status/report.py must not call: {offenders}"
+    assert offenders == [], f"{command}/report.py must not call: {offenders}"
 
 
-def test_status_report_never_imports_a_write_capable_module() -> None:
+@pytest.mark.parametrize("command", _COMMANDS)
+def test_the_report_never_imports_a_write_capable_module(command: str) -> None:
     """Also catches ``from meshprovision.db import ods_write`` (module import).
 
     ``node.module`` alone is ``"meshprovision.db"`` for that form -- it
@@ -77,7 +83,7 @@ def test_status_report_never_imports_a_write_capable_module() -> None:
     name) and checked too, matching the module-qualified-import style
     this project actually uses for cross-module access.
     """
-    tree = ast.parse((SRC / "status" / "report.py").read_text(encoding="utf-8"))
+    tree = ast.parse((SRC / command / "report.py").read_text(encoding="utf-8"))
     offenders: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom) or node.module is None:
@@ -88,64 +94,4 @@ def test_status_report_never_imports_a_write_capable_module() -> None:
             full_name = f"{node.module}.{alias.name}"
             if full_name.startswith(_REPORT_FORBIDDEN_MODULES):
                 offenders.add(full_name)
-    assert sorted(offenders) == [], f"status/report.py must not import: {sorted(offenders)}"
-
-
-def test_cli_health_never_names_a_write_capable_symbol() -> None:
-    code = source_without_docstring(SRC / "cli" / "health.py")
-    found = sorted(name for name in _CLI_STATUS_FORBIDDEN if name in code)
-    assert found == [], f"cli/health.py must not reference: {found}"
-
-
-def test_health_report_never_calls_a_write_operation() -> None:
-    tree = ast.parse((SRC / "health" / "report.py").read_text(encoding="utf-8"))
-    offenders = sorted(
-        {
-            node.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute) and node.attr in _REPORT_FORBIDDEN_ATTRS
-        }
-    )
-    assert offenders == [], f"health/report.py must not call: {offenders}"
-
-
-def test_health_report_never_imports_a_write_capable_module() -> None:
-    tree = ast.parse((SRC / "health" / "report.py").read_text(encoding="utf-8"))
-    imported = {
-        f"{node.module}.{alias.name}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-        for alias in node.names
-    }
-    offenders = sorted(name for name in imported if name.startswith(_REPORT_FORBIDDEN_MODULES))
-    assert offenders == [], f"health/report.py must not import: {offenders}"
-
-
-def test_cli_network_never_names_a_write_capable_symbol() -> None:
-    code = source_without_docstring(SRC / "cli" / "network.py")
-    found = sorted(name for name in _CLI_STATUS_FORBIDDEN if name in code)
-    assert found == [], f"cli/network.py must not reference: {found}"
-
-
-def test_network_report_never_calls_a_write_operation() -> None:
-    tree = ast.parse((SRC / "network" / "report.py").read_text(encoding="utf-8"))
-    offenders = sorted(
-        {
-            node.attr
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute) and node.attr in _REPORT_FORBIDDEN_ATTRS
-        }
-    )
-    assert offenders == [], f"network/report.py must not call: {offenders}"
-
-
-def test_network_report_never_imports_a_write_capable_module() -> None:
-    tree = ast.parse((SRC / "network" / "report.py").read_text(encoding="utf-8"))
-    imported = {
-        f"{node.module}.{alias.name}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
-        for alias in node.names
-    }
-    offenders = sorted(name for name in imported if name.startswith(_REPORT_FORBIDDEN_MODULES))
-    assert offenders == [], f"network/report.py must not import: {offenders}"
+    assert sorted(offenders) == [], f"{command}/report.py must not import: {sorted(offenders)}"

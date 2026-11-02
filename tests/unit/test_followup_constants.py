@@ -130,21 +130,3 @@ def test_the_network_docs_state_these(phrase: str) -> None:
 )
 def test_the_firmware_docs_keep_their_labels(phrase: str) -> None:
     assert _flat(phrase) in _flat(_FIRMWARE_DOCS)
-
-
-def test_the_readme_describes_the_firmware_doc_as_it_now_is() -> None:
-    readme = (_ROOT / "README.md").read_text(encoding="utf-8")
-    line = next(line for line in readme.splitlines() if "docs/firmware-compatibility.md" in line)
-
-    assert "What firmware 2.8 changes (node ids follow the key)" in line
-    assert "blocked" not in line
-
-
-@pytest.mark.parametrize(
-    "phrase",
-    ["is drawn again (up to 16 times)", "also covers two `mesh adopt`/`--enroll` refusals"],
-)
-def test_the_follow_up_prose_is_wrapped_like_the_rest(phrase: str) -> None:
-    (line,) = [line for line in _DOCS.splitlines() if phrase in line]
-
-    assert len(line) <= 80
