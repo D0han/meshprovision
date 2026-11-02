@@ -17,9 +17,13 @@ field), the `TINY_FAST`/`TINY_SLOW`/`MEDIUM_TURBO` modem presets and the
 new amateur-band regions. The v2.8.1 schema adds four hardware models
 (`T_CONNECT_PRO`, `AXIOMETA_GENESIS_MINI`, `MAKERFABS_NOMAD_TERMINAL`,
 `THINKNODE_MX`), which meshprovision now names like any other; their
-chipset shows as unknown. meshprovision reads its region/role/hardware
-tables from the *installed* library's enums (`enums.py`), so these need no
-code of their own. Once a 2.8-compatible
+chipset shows as unknown. Firmware 2.8.2 (prerelease, 2026-11-01) speaks
+protobufs a little past v2.8.1 (submodule `8d0ed0c`): the only additions
+a device can report are hardware model `NODARA` (151) and serial mode
+`MODBUS`; no library release or commit carries them yet, so a NODARA
+board shows an empty model name with its raw number. meshprovision reads
+its region/role/hardware tables from the *installed* library's enums
+(`enums.py`), so these need no code of their own. Once a 2.8-compatible
 release lands on PyPI, the pin goes back to a normal version constraint
 (after the full test suite, which catches silent enum renames such as
 `SENSELORA_RP2040` -> `MAKERFABS_TRACKER`).
@@ -49,16 +53,23 @@ set or read `coding_rate`, so a value set earlier in the app survives
 `mesh provision`; reset it to 0 in the app if a node should use the
 preset's own rate.
 
+**Informational: meshtasticd admin keys.** On a Linux node running
+`meshtasticd` 2.8.2 or later whose host `config.yaml` lists admin keys,
+the daemon re-applies those keys after every security write, so the
+admin keys meshprovision writes read back as the host's and fail
+verification. Keep a node's admin keys in one place. Not verified on a
+device.
+
 ## Node identity: the node id follows the key
 
 Firmware 2.8 derives a node's id from its public key. This changes what
 "the same node" means for anything keyed by node id, the database
 included. What is known, and how sure:
 
-**Verified** means read in the firmware source at tags `v2.8.0.47db0e3`
-and `v2.8.1.8e6a88d` (and `develop` as of 2026-10-31); **unverified**
-means inferred, not read end to end. **Nothing here was tried on a
-device.**
+**Verified** means read in the firmware source at tags `v2.8.0.47db0e3`,
+`v2.8.1.8e6a88d` and `v2.8.2.4c89b69` (and `develop` as of 2026-10-31);
+**unverified** means inferred, not read end to end. **Nothing here was
+tried on a device.**
 
 - *Verified:* `NodeDB::createNewIdentity()` sets the node number to the
   CRC-32 of the public key whenever that differs from the current
@@ -86,10 +97,24 @@ device.**
   bytes). The firmware's CRC function itself was not read; zlib's matches
   the id of 27 of 307 keyed nodes of one real region, which chance would
   not produce.
-- *Unverified:* what happens to admin messages still being sent after a
-  renumber in the middle of a session (the library addresses local admin
-  messages to the number it last heard; 2.8.0 does not tell connected
-  clients about the new number).
+- *Verified:* after a renumber without a reboot (the first region set),
+  firmware 2.8.1 and later re-send `my_info` with the new number to every
+  connected client, and the `meshtastic` library adopts it. 2.8.0 does
+  not. Until that arrives, a message the client addresses to the old
+  number is no longer for this node and goes out over the radio.
+  *Unverified:* how long that window is in practice. This is why the
+  first region set stays refused.
+- *Verified (2.8.2):* the firmware clamps a stored private key (RFC 7748)
+  before deriving its public key. A key that was not clamped (set by hand
+  in an app or restored from a backup) therefore gets a new public key,
+  and a new node id, on the first 2.8.2 boot with a region set. Keys
+  `mesh provision` generates are always clamped and unaffected.
+  meshprovision cannot recognise such a move from the database alone: it
+  never records a private key whose public key it could not derive.
+- *Verified (2.8.2):* a packet heard over the radio that carries this
+  node's own number is dropped. Local admin messages from a connected
+  client are not affected; two devices holding the same key (a clone, same
+  derived id) now drop each other's traffic.
 
 What meshprovision does about it:
 

@@ -221,7 +221,20 @@ this project. `packet_signature_policy` is firmware 2.8's XEdDSA
 packet-signing policy control (`PACKET_SIGNATURE_POLICY_COMPATIBLE`,
 `_BALANCED`, or `_STRICT`) — not in any official `meshtastic` release yet;
 see the `meshtastic` dependency note in `CHANGELOG.md`. Omit it (or leave
-it unset) to leave the device's current value untouched. It is only
+it unset) to leave the device's current value untouched. What each value
+does depends on the firmware. From 2.8.2: `COMPATIBLE` (the default) does
+not sign and accepts unsigned packets; `BALANCED` signs broadcasts (and
+NodeInfo/position even when unicast) and accepts unsigned packets, but an
+unsigned NodeInfo cannot rename a node that has signed before; `STRICT`
+signs like `BALANCED` and drops unsigned packets except PKI direct
+messages, AES-CCM channels, acks/routing, traceroutes and key
+verification, and also drops a signed packet from a sender whose key it
+does not hold (other than a verifiable first-contact NodeInfo). On 2.8.0
+and 2.8.1 every node signs broadcasts whatever the setting, and
+`BALANCED` drops an unsigned broadcast from a node that has signed
+before. Firmware before 2.8 is understood to strip signatures when
+relaying (inferred from its schema, which has no signature field), so
+`BALANCED`/`STRICT` are for meshes without such relays. It is only
 written to a device reporting firmware 2.8 or newer: on older firmware (or
 an unknown firmware version) a change is skipped with a plan warning,
 since that firmware drops the field and the write could never be verified.

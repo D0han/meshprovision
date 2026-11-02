@@ -243,7 +243,7 @@ def _keeps_its_id(plan: ChangePlan, live: LiveConfig) -> bool:
     key from it when the region is first set (``CryptoEngine::ensurePkiKeys``)
     and keeps its id when that is already the key's derived one
     (``NodeDB::createNewIdentity``); both verified in the firmware source
-    at 2.8.0 and 2.8.1. A licensed device takes another path and is never
+    at 2.8.0, 2.8.1 and 2.8.2. A licensed device takes another path and is never
     trusted to, nor is a plan that writes a new key in the same run.
     """
     public, private = live.security.real_public_key, live.security.real_private_key

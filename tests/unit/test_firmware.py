@@ -14,6 +14,7 @@ pytestmark = pytest.mark.unit
     [
         pytest.param("2.8.0.47db0e3", True, id="2.8.0"),
         pytest.param("v2.8.1", True, id="v-prefix"),
+        pytest.param("2.8.2.4c89b69", True, id="2.8.2-with-hash"),
         pytest.param("3.0.0", True, id="later-major"),
         pytest.param("2.7.26.54e0d8d", False, id="2.7"),
         pytest.param("2.7.99", False, id="last-2.7"),

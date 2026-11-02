@@ -400,6 +400,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Firmware 2.8.2 checked against the firmware source: the node-identity
+  behaviour meshprovision relies on is unchanged; documented what changed
+  (signing policy meanings, key clamping, own-number drop, my_info re-send
+  since 2.8.1, meshtasticd host admin keys).
 - Updating an existing checkout: the pinned `meshtastic` commit keeps
   upstream's version string (2.7.11), so `pip install -e ".[dev]"` can
   leave the previous commit in place. Reinstall it with `pip install
