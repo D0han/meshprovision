@@ -49,10 +49,13 @@ from meshprovision.datasources.models import parse_iso8601
 from meshprovision.enums import hw_model_table, role_table
 from meshprovision.errors import NodeIdError
 from meshprovision.health.packets import FUTURE_SKEW_SECONDS
-from meshprovision.nodeid import NODE_ID_MAX, NodeId
+from meshprovision.nodeid import NODE_ID_MAX, NodeId, relay_byte
 from meshprovision.termsafe import terminal_safe
 
 __all__ = [
+    "MAX_RELAY_BYTE",
+    "MAX_SNR_DB",
+    "MIN_RSSI_DBM",
     "PUBLIC_KEY_BYTES",
     "RAW_DATA_MAX_CHARS",
     "AdvertisedKey",
@@ -69,10 +72,16 @@ RAW_DATA_MAX_CHARS: Final[int] = 1024
 PUBLIC_KEY_BYTES: Final[int] = 32
 """The length of a Meshtastic (X25519) public key."""
 
+MAX_RELAY_BYTE: Final[int] = 255
+"""The largest relay byte (the last byte of a node id)."""
+
+MAX_SNR_DB: Final[float] = 50.0
+"""The largest SNR magnitude believed, dB."""
+
+MIN_RSSI_DBM: Final[int] = -200
+"""The weakest RSSI believed, dBm."""
+
 _MAX_HOPS: Final[int] = 7
-_MAX_BYTE: Final[int] = 255
-_MAX_SNR_DB: Final[float] = 50.0
-_MIN_RSSI_DBM: Final[int] = -200
 _MAX_NAME_CHARS: Final[int] = 64
 
 
@@ -128,7 +137,7 @@ class RawReception:
             ``True`` when the relay byte is known and differs from the
             origin's last byte.
         """
-        return self.relay is not None and self.relay != self.origin.num & _MAX_BYTE
+        return self.relay is not None and self.relay != relay_byte(self.origin)
 
     @property
     def is_direct(self) -> bool:
@@ -142,7 +151,7 @@ class RawReception:
         """
         return (
             self.relay is not None
-            and self.relay == self.origin.num & _MAX_BYTE
+            and self.relay == relay_byte(self.origin)
             and self.hops_taken in (0, None)
         )
 
@@ -291,9 +300,9 @@ def _parse_row(
     origin = _node(getattr(packet, "from"))
     if origin is None or packet.id == 0:
         return None
-    rssi = packet.rx_rssi if _MIN_RSSI_DBM <= packet.rx_rssi < 0 else None
+    rssi = packet.rx_rssi if MIN_RSSI_DBM <= packet.rx_rssi < 0 else None
     snr = packet.rx_snr if math.isfinite(packet.rx_snr) else None
-    if snr is not None and (abs(snr) > _MAX_SNR_DB or (snr == 0 and rssi is None)):
+    if snr is not None and (abs(snr) > MAX_SNR_DB or (snr == 0 and rssi is None)):
         snr = None
     decoded = packet.WhichOneof("payload_variant") == "decoded"
     reception = RawReception(
@@ -301,7 +310,7 @@ def _parse_row(
         gateway=gateway,
         origin=origin,
         packet_id=packet.id,
-        relay=packet.relay_node if 0 < packet.relay_node <= _MAX_BYTE else None,
+        relay=packet.relay_node if 0 < packet.relay_node <= MAX_RELAY_BYTE else None,
         hop_start=packet.hop_start if 0 < packet.hop_start <= _MAX_HOPS else None,
         hop_limit=packet.hop_limit if packet.hop_limit <= _MAX_HOPS else None,
         snr=snr,

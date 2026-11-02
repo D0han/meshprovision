@@ -46,7 +46,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.datasources.lorastats import LORASTATS_MIN_TTL_SECONDS, validate_regions
-from meshprovision.datasources.lorastats_failures import is_outage
+from meshprovision.datasources.lorastats_failures import outage_error
 from meshprovision.errors import DataSourceError, SettingsError
 from meshprovision.health.history import floor_hour
 from meshprovision.health.packets import FUTURE_SKEW_SECONDS
@@ -261,18 +261,5 @@ class RegionRefresher:
 
 
 def _tripped(exc: DataSourceError, region: str) -> DataSourceError | None:
-    """Return the error to report instead of every later request, when lorastats is failing.
-
-    Args:
-        exc: The request's error.
-        region: The region it was for.
-
-    Returns:
-        A "not asked" error when ``exc`` means lorastats.pl is down or
-        refusing, else ``None``.
-    """
-    _logger.warning("lorastats region data for %s failed: %s", region, exc.message)
-    if not is_outage(exc):
-        return None
-    _logger.warning("lorastats is failing; not asking it about any other region in this refresh")
-    return DataSourceError(f"not asked: lorastats failed for {region} ({exc.message})")
+    """Return the error to report instead of every later request, when lorastats is failing."""
+    return outage_error(exc, region, asked="lorastats region data", others="region", logger=_logger)

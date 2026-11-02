@@ -34,12 +34,13 @@ from meshprovision.db.nodes import NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyType, ref_for
 from meshprovision.errors import DataSourceError, DbIntegrityError, ExitCode
+from meshprovision.health.history import DAY_SECONDS
 from meshprovision.network.buckets import Traffic, combine
 from meshprovision.network.keys import FleetKey, KeyScan, fleet_key, scan_keys
 from meshprovision.network.keystore import KeyStore
 from meshprovision.network.refresh import NetworkRefresh, RegionRefresher, select_regions
 from meshprovision.network.relays import gateway_relayed
-from meshprovision.network.resolve import Resolution, relay_candidates, resolve_relays
+from meshprovision.network.resolve import Resolution, resolve_window
 from meshprovision.network.store import NETWORK_DIRNAME, RegionStore
 from meshprovision.nodeid import NodeId
 from meshprovision.termsafe import terminal_safe
@@ -75,9 +76,6 @@ DEFAULT_TRAFFIC_DAYS: Final[int] = 1
 
 MAX_DAYS: Final[int] = 30
 """The longest window: the stores keep 30 days."""
-
-_DAY_SECONDS: Final[int] = 24 * 3600
-_MUTE_ROLE: Final[str] = "CLIENT_MUTE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -206,7 +204,7 @@ class NetworkReport:
     @property
     def start(self) -> float:
         """The window's start, epoch seconds."""
-        return self.generated_at - self.days * _DAY_SECONDS
+        return self.generated_at - self.days * DAY_SECONDS
 
     @property
     def keys_critical(self) -> bool:
@@ -311,7 +309,7 @@ def run_network(
             store, feed, keys=keystore, known_bad=known_bad, force=options.refresh
         )
         refresh = refresher.refresh(regions)
-    start = now - options.days * _DAY_SECONDS
+    start = now - options.days * DAY_SECONDS
     views = tuple(
         _region(region, store, keystore, fleet, refresh, start=start, traffic=options.traffic)
         for region in regions
@@ -405,9 +403,9 @@ def _region(
     if not traffic:
         return RegionReport(region, fetched_at, scan, nodes=nodes)
     combined = combine(store.load(region, start=start))
-    mute = {entry.node for entry in scan.seen if entry.role == _MUTE_ROLE}
-    candidates = relay_candidates(combined, nodes, start=start, mute=mute)
-    resolutions = resolve_relays(combined, candidates, learned=store.learned_relays(region))
+    resolutions = resolve_window(
+        combined, scan.seen, nodes=nodes, start=start, learned=store.learned_relays(region)
+    )
     if fetched_at is not None:
         store.remember_relays(region, resolutions, seen_at=fetched_at)
     return RegionReport(

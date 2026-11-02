@@ -286,7 +286,7 @@ def test_stored_impacts_on_any_failure_are_empty(
     def broken(*_args: object, **_kwargs: object) -> object:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(maintenance, "resolve_relays", broken)
+    monkeypatch.setattr(maintenance, "resolve_window", broken)
 
     assert _impacts(tmp_path, _NODE) == {}
 

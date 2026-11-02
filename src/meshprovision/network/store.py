@@ -49,7 +49,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.datasources.json_store import read_json, write_json
-from meshprovision.health.history import FUTURE_SKEW_SECONDS, HOUR_SECONDS, floor_hour
+from meshprovision.health.history import (
+    DAY_SECONDS,
+    FUTURE_SKEW_SECONDS,
+    floor_hour,
+)
 from meshprovision.network.buckets import NETWORK_RETENTION_SECONDS, RegionHour, merge, prune
 from meshprovision.network.hourjson import (
     hour_from_json,
@@ -59,6 +63,7 @@ from meshprovision.network.hourjson import (
     read_relay_byte,
 )
 from meshprovision.network.resolve import Confidence, LearnedRelay, Resolution
+from meshprovision.nodeid import relay_byte
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -98,9 +103,7 @@ LEARNED_RELAY_MAX_AGE_SECONDS: Final[float] = 7 * 24 * 3600.0
 _STATE_FILENAME: Final[str] = "state.json"
 _RELAYS_FILENAME: Final[str] = "relays.json"
 _RELAYS_MAX_BYTES: Final[int] = 256 * 1024
-_BYTE_MASK: Final[int] = 0xFF
 _STATE_MAX_BYTES: Final[int] = 64 * 1024
-_DAY_SECONDS: Final[int] = 24 * HOUR_SECONDS
 _DAY_FILE_RE: Final[re.Pattern[str]] = re.compile(r"^(\d{4}-\d{2}-\d{2})\.json\Z")
 _REGION_DIR_RE: Final[re.Pattern[str]] = re.compile(r"^r-[0-9a-f]{16}\Z")
 _WHAT: Final[str] = "network store"
@@ -220,7 +223,7 @@ class RegionStore:
             The stored hours within the retention, oldest first.
         """
         first = floor_hour(start)
-        days = [day for day, _ in self._day_files(region) if _day_start(day) + _DAY_SECONDS > first]
+        days = [day for day, _ in self._day_files(region) if _day_start(day) + DAY_SECONDS > first]
         hours = (bucket for day in days for bucket in self._read_day(region, day))
         return prune((b for b in hours if b.hour >= first), now=self._clock())
 
@@ -336,7 +339,7 @@ class RegionStore:
         parsed = (hour_from_json(item) for item in (raw if isinstance(raw, list) else []))
         start = _day_start(day)
         hours = {
-            b.hour: b for b in parsed if b is not None and start <= b.hour < start + _DAY_SECONDS
+            b.hour: b for b in parsed if b is not None and start <= b.hour < start + DAY_SECONDS
         }
         return tuple(hours[hour] for hour in sorted(hours))
 
@@ -353,7 +356,7 @@ class RegionStore:
         regions = self._region_files()
         cutoff = now - NETWORK_RETENTION_SECONDS
         for region in regions:
-            _delete_days(region, [day for day in region.days if day.start + _DAY_SECONDS <= cutoff])
+            _delete_days(region, [day for day in region.days if day.start + DAY_SECONDS <= cutoff])
             while region.days and sum(day.size for day in region.days) > REGION_MAX_BYTES:
                 _delete_days(region, region.days[:1])
         total = sum(day.size for region in regions for day in region.days)
@@ -393,7 +396,7 @@ def _learned(key: object, value: object) -> tuple[int, LearnedRelay] | None:
     if byte is None or not isinstance(value, list) or len(value) != 2:
         return None
     node, seen = read_hex_id(value[0]), read_number(value[1], 0, math.inf)
-    if node is None or seen is None or int(node, 16) & _BYTE_MASK != byte:
+    if node is None or seen is None or relay_byte(node) != byte:
         return None
     return byte, LearnedRelay(node, seen)
 

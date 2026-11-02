@@ -55,7 +55,7 @@ from meshprovision.health.history import (
     floor_hour,
 )
 from meshprovision.health.packets import PORT_POSITION, PORT_TELEMETRY
-from meshprovision.nodeid import NodeId
+from meshprovision.nodeid import NodeId, relay_byte
 
 __all__ = [
     "BATTERY_TREND_MIN_POINTS",
@@ -77,7 +77,6 @@ BATTERY_TREND_MIN_SPAN_HOURS: Final[float] = 12.0
 MAX_RELAYS_LISTED: Final[int] = 5
 """Most relay bytes listed per node (by receptions)."""
 
-_BYTE_MASK: Final[int] = 0xFF
 _POWERED: Final[int] = 100
 """A battery level above this means external power."""
 _SECONDS_PER_DAY: Final[float] = 86400.0
@@ -292,7 +291,7 @@ def _relays(
             byte=byte,
             receptions=count,
             share=count / relayed,
-            candidates=tuple(sorted(m for m in fleet if m != node and m.num & _BYTE_MASK == byte)),
+            candidates=tuple(sorted(m for m in fleet if m != node and relay_byte(m) == byte)),
         )
         for byte, count in ranked
     )

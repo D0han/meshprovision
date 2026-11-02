@@ -43,7 +43,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
 from meshprovision.datasources.lorastats import LORASTATS_MIN_TTL_SECONDS
-from meshprovision.datasources.lorastats_failures import is_outage
+from meshprovision.datasources.lorastats_failures import outage_error
 from meshprovision.errors import DataSourceError, NodeIdError
 from meshprovision.health.history import (
     HOUR_SECONDS,
@@ -299,22 +299,8 @@ class HealthRefresher:
 
 
 def _tripped(exc: DataSourceError, node: NodeId) -> DataSourceError | None:
-    """Tell whether a failed request means lorastats.pl should not be asked again now.
-
-    Args:
-        exc: The request's error.
-        node: The node it was for.
-
-    Returns:
-        The error to report for every later node (no request made) when
-        ``exc`` is a 429, a 5xx or a transport error, else ``None``.
-    """
-    down = is_outage(exc)
-    _logger.warning("lorastats packets for %s failed: %s", node.hex, exc.message)
-    if not down:
-        return None
-    _logger.warning("lorastats is failing; not asking it about any other node in this refresh")
-    return DataSourceError(f"not asked: lorastats failed for {node.hex} ({exc.message})")
+    """Tell whether a failed request means lorastats.pl should not be asked again now."""
+    return outage_error(exc, node.hex, asked="lorastats packets", others="node", logger=_logger)
 
 
 def _sender(row: Any) -> str | None:

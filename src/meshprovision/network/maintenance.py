@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Final
 from meshprovision.network.buckets import combine
 from meshprovision.network.impact import Level, NodeImpact, node_impact
 from meshprovision.network.keystore import KeyStore
-from meshprovision.network.resolve import relay_candidates, resolve_relays
+from meshprovision.network.resolve import resolve_window
 from meshprovision.network.store import RegionStore
 
 if TYPE_CHECKING:
@@ -58,8 +58,6 @@ MAINTENANCE_MAX_AGE_SECONDS: Final[float] = 48 * 3600.0
 
 MAINTENANCE_WINDOW_SECONDS: Final[float] = 24 * 3600.0
 """The window judged: this long up to the region's last fetch."""
-
-_MUTE_ROLE: Final[str] = "CLIENT_MUTE"
 
 _LEVEL_ORDER: Final[dict[Level, int]] = {Level.LOW: 0, Level.MEDIUM: 1, Level.HIGH: 2}
 
@@ -119,9 +117,9 @@ def _stored(nodes: tuple[NodeId, ...], directory: Path, now: float) -> dict[Node
             continue
         start = fetched_at - MAINTENANCE_WINDOW_SECONDS
         traffic = combine(store.load(region, start=start))
-        mute = {entry.node for entry in keys.load(region) if entry.role == _MUTE_ROLE}
-        candidates = relay_candidates(traffic, start=start, mute=mute)
-        resolutions = resolve_relays(traffic, candidates, learned=store.learned_relays(region))
+        resolutions = resolve_window(
+            traffic, keys.load(region), start=start, learned=store.learned_relays(region)
+        )
         for node in nodes:
             impact = node_impact(traffic, resolutions, node.hex)
             kept = best.get(node)

@@ -56,9 +56,12 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from meshprovision.nodeid import relay_byte
+
 if TYPE_CHECKING:
     from meshprovision.datasources.models import NodeObservation
     from meshprovision.network.buckets import Radio, Traffic
+    from meshprovision.network.keys import KeySeen
 
 __all__ = [
     "RESOLVE_COVERAGE_MARGIN",
@@ -73,6 +76,7 @@ __all__ = [
     "Resolution",
     "relay_candidates",
     "resolve_relays",
+    "resolve_window",
 ]
 
 RESOLVE_MIN_COVERAGE: Final[float] = 0.5
@@ -93,7 +97,6 @@ RESOLVE_MAX_GATEWAY_WEIGHT: Final[int] = 50
 RESOLVE_MIN_GATEWAY_RECEPTIONS: Final[int] = 2
 """The fewest measured relayed receptions at a gateway for it to count in the distance."""
 
-_MASK: Final[int] = 0xFF
 _MUTE_ROLE: Final[str] = "CLIENT_MUTE"
 
 
@@ -191,8 +194,34 @@ def relay_candidates(
     silent = {*mute, *(node.node_id.hex for node in listed if node.role == _MUTE_ROLE)}
     by_byte: defaultdict[int, list[str]] = defaultdict(list)
     for node in sorted(heard - silent):
-        by_byte[int(node, 16) & _MASK].append(node)
+        by_byte[relay_byte(node)].append(node)
     return MappingProxyType({byte: tuple(by_byte[byte]) for byte in sorted(by_byte)})
+
+
+def resolve_window(
+    traffic: Traffic,
+    seen: Iterable[KeySeen],
+    *,
+    start: float,
+    learned: Mapping[int, LearnedRelay],
+    nodes: Iterable[NodeObservation] = (),
+) -> Mapping[int, Resolution]:
+    """Resolve a window's relay bytes, never to a node that advertised ``CLIENT_MUTE``.
+
+    Args:
+        traffic: The window's traffic.
+        seen: The key sightings whose advertised roles count (see
+            :class:`~meshprovision.network.keys.KeySeen`).
+        start: The start of the window, epoch seconds.
+        learned: Byte -> the node an earlier run resolved it ``high`` to.
+        nodes: The region's node list, when it could be had.
+
+    Returns:
+        Byte -> its resolution (see :func:`resolve_relays`).
+    """
+    mute = {entry.node for entry in seen if entry.role == _MUTE_ROLE}
+    candidates = relay_candidates(traffic, nodes, start=start, mute=mute)
+    return resolve_relays(traffic, candidates, learned=learned)
 
 
 def resolve_relays(

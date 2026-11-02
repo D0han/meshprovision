@@ -37,6 +37,7 @@ from meshprovision.network.render_common import (
     refresh_lines,
     text_cell,
 )
+from meshprovision.nodeid import relay_byte
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -49,7 +50,7 @@ __all__ = ["impact_to_json_dict", "render_impact_console", "render_impact_json"]
 
 def _byte_cell(impact: NodeImpact, known: Mapping[str, str]) -> str:
     """Say what a node's relay byte resolves to."""
-    byte = byte_label(int(impact.node, 16) & 0xFF)
+    byte = byte_label(relay_byte(impact.node))
     resolution = impact.resolution
     if resolution is None:
         return f"{byte}: not seen as a relay"
@@ -200,7 +201,7 @@ def _impact_json(impact: NodeImpact) -> dict[str, object]:
 
     return {
         "node": impact.node,
-        "relay_byte": int(impact.node, 16) & 0xFF,
+        "relay_byte": relay_byte(impact.node),
         "relay_confidence": None if resolution is None else resolution.confidence.value,
         "relay_attributed_to": None if resolution is None else resolution.node,
         "carried": impact.carried,

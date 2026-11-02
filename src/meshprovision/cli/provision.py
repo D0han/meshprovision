@@ -632,8 +632,9 @@ def run_provision(
         opts=opts,
         pending_keypair_recovered=pending_matches,
     )
-    if persisted and pending_owner is not None:
-        # Named after the id the node had, when firmware 2.8 renumbered it.
+    if persisted and pending_owner not in (None, change_plan.node_id):
+        # Named after the id the node had, when firmware 2.8 renumbered it
+        # (apply_and_persist already cleared the one under the node's id).
         pending_keys.clear_pending(db.path, pending_owner)
 
     return ProvisionResult(

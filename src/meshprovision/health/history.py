@@ -50,10 +50,11 @@ from meshprovision.health.packets import (
     parse_position,
     parse_telemetry,
 )
-from meshprovision.nodeid import NodeId
+from meshprovision.nodeid import NodeId, relay_byte
 
 __all__ = [
     "ASSUMED_LORASTATS_RETENTION_SECONDS",
+    "DAY_SECONDS",
     "HISTORY_RETENTION_SECONDS",
     "HOUR_SECONDS",
     "MAX_BOOTS",
@@ -97,6 +98,8 @@ _K = TypeVar("_K", int, str)
 
 HOUR_SECONDS: Final[int] = 3600
 
+DAY_SECONDS: Final[int] = 24 * HOUR_SECONDS
+
 HISTORY_RETENTION_SECONDS: Final[float] = 30 * 24 * 3600
 """How long anything is kept: 30 days."""
 
@@ -137,7 +140,6 @@ MAX_BOOTS: Final[int] = 64
 MAX_GATEWAY_CHECKS: Final[int] = 720
 """Most gateway checks kept (the newest)."""
 
-_BYTE_MASK: Final[int] = 0xFF
 _EMPTY: Final[Mapping[int, int]] = MappingProxyType({})
 _EMPTY_STR: Final[Mapping[str, int]] = MappingProxyType({})
 _EMPTY_TIMES: Final[Mapping[str, float]] = MappingProxyType({})
@@ -462,7 +464,7 @@ def summarize(
     oldest = min((r.time for r in returned), default=None)
     for hour in answered_hours(oldest, since=since, fetched_at=fetched_at):
         by_hour.setdefault(hour, [])
-    own_byte = node.num & _BYTE_MASK
+    own_byte = relay_byte(node)
     return dataclasses.replace(
         _series(node, packets.values()),
         fetched_at=fetched_at,

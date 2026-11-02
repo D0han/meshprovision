@@ -38,6 +38,7 @@ __all__ = [
     "NodeIdLike",
     "is_reserved_id",
     "key_derived_id",
+    "relay_byte",
 ]
 
 NodeIdLike: TypeAlias = "str | int | NodeId"
@@ -57,6 +58,8 @@ RESERVED_NODE_NUMS_BELOW: Final[int] = 4
 
 KEY_DERIVED_ID_KEY_BYTES: Final[int] = 32
 """Length of the public key a node id is derived from (an X25519 key)."""
+
+_RELAY_BYTE_MASK: Final[int] = 0xFF
 
 _HEX_DIGITS: Final[frozenset[str]] = frozenset("0123456789abcdef")
 
@@ -416,3 +419,15 @@ def is_reserved_id(node: NodeId) -> bool:
         :data:`BROADCAST_NODE_NUM`.
     """
     return node.num < RESERVED_NODE_NUMS_BELOW or node.num == BROADCAST_NODE_NUM
+
+
+def relay_byte(node: NodeId | str) -> int:
+    """Return the last byte of a node's id: what a packet's ``relay_node`` names it by.
+
+    Args:
+        node: The node, or its hex id.
+
+    Returns:
+        The id's lowest 8 bits.
+    """
+    return (node.num if isinstance(node, NodeId) else int(node, 16)) & _RELAY_BYTE_MASK

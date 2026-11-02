@@ -52,6 +52,7 @@ from meshprovision.network.relays import (
     gateway_relayed,
 )
 from meshprovision.network.resolve import Confidence
+from meshprovision.nodeid import relay_byte
 
 if TYPE_CHECKING:
     from meshprovision.network.buckets import Traffic
@@ -85,8 +86,6 @@ ONLY_GATEWAY_SHARE: Final[float] = 0.5
 
 ONLY_GATEWAY_MIN_PACKETS: Final[int] = 5
 """The fewest packets of a dependant for its only-gateway share to be judged."""
-
-_MASK: Final[int] = 0xFF
 
 
 class Level(StrEnum):
@@ -253,7 +252,7 @@ def node_impact(
     Returns:
         Its impact.
     """
-    byte = int(node, 16) & _MASK
+    byte = relay_byte(node)
     resolution = resolutions.get(byte)
     via = [byte] if resolution is not None and resolution.node == node else []
     others = {n for n in _everyone(traffic) if n != node and (node not in ours or n not in ours)}

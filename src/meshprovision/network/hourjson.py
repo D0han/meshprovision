@@ -39,6 +39,7 @@ from meshprovision.network.buckets import (
     RegionHour,
     Traffic,
 )
+from meshprovision.network.rawpackets import MAX_RELAY_BYTE, MAX_SNR_DB, MIN_RSSI_DBM
 
 __all__ = [
     "hour_from_json",
@@ -53,9 +54,6 @@ _HEX_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{8}\Z")
 _BYTE_RE: Final[re.Pattern[str]] = re.compile(r"^[1-9][0-9]{0,2}\Z")
 _MAX_COUNT: Final[int] = 10**9
 _MAX_HOUR: Final[int] = 2**40
-_MAX_SNR_DB: Final[float] = 50.0
-_MIN_RSSI_DBM: Final[int] = -200
-_MAX_BYTE: Final[int] = 255
 _SOURCES: Final[frozenset[str]] = frozenset({EDGE_TRACEROUTE, EDGE_NEIGHBOR})
 
 
@@ -148,7 +146,7 @@ def read_relay_byte(key: object) -> int | None:
     """Read a relay byte key: a canonical decimal ``1..255``."""
     if not isinstance(key, str) or not _BYTE_RE.match(key):
         return None
-    return int(key) if int(key) <= _MAX_BYTE else None
+    return int(key) if int(key) <= MAX_RELAY_BYTE else None
 
 
 def _radio(value: object) -> Radio | None:
@@ -158,11 +156,11 @@ def _radio(value: object) -> Radio | None:
     receptions, measured = read_count(value[0]), read_count(value[1])
     if receptions is None or measured is None or measured > receptions:
         return None
-    snr = read_number(value[2], -_MAX_SNR_DB * measured, _MAX_SNR_DB * measured)
+    snr = read_number(value[2], -MAX_SNR_DB * measured, MAX_SNR_DB * measured)
     rssi = value[3]
     if snr is None or isinstance(rssi, bool) or not isinstance(rssi, int):
         return None
-    return Radio(receptions, measured, snr, rssi) if _MIN_RSSI_DBM * measured <= rssi <= 0 else None
+    return Radio(receptions, measured, snr, rssi) if MIN_RSSI_DBM * measured <= rssi <= 0 else None
 
 
 def _last_hop(value: object) -> LastHop | None:
