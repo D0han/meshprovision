@@ -30,7 +30,8 @@ from meshprovision.network import (
 pytestmark = pytest.mark.unit
 
 _MIB = 1024 * 1024
-_DOCS = (Path(__file__).resolve().parents[2] / "docs" / "commands.md").read_text(encoding="utf-8")
+_ROOT = Path(__file__).resolve().parents[2]
+_DOCS = (_ROOT / "docs" / "commands.md").read_text(encoding="utf-8")
 _NETWORK_DOCS = _DOCS[_DOCS.index("## `mesh network`") : _DOCS.index("## `mesh admin`")]
 _PROVISION_DOCS = _DOCS[_DOCS.index("## `mesh provision`") : _DOCS.index("## `mesh adopt`")]
 
@@ -136,12 +137,21 @@ def test_the_maintenance_warning_windows() -> None:
         "it carried 10 % of the region's relayed receptions; `medium` when it carried 3 %",
         "each kept from 2 observations",
         "senders with at least 20 first-hop events (5 for ours)",
-        "Only nodes with at least 20 receptions as a sender are counted as cut off",
+        "Only nodes with at least 20 receptions as an origin are counted as cut off",
         "(counted up to 4)",
+        "the newest 168 distinct hours it was heard in",
     ],
 )
 def test_the_network_docs_state_these_values(phrase: str) -> None:
     assert _flat(phrase) in _flat(_NETWORK_DOCS)
+
+
+def test_the_security_docs_state_how_long_key_evidence_lasts() -> None:
+    security = (_ROOT / "docs" / "security.md").read_text(encoding="utf-8")
+
+    assert "newest 168 distinct hours it was heard in (a week's worth), kept for 30 days" in (
+        _flat(security)
+    )
 
 
 def test_the_provision_docs_state_the_maintenance_windows() -> None:

@@ -8,6 +8,8 @@ Google-style docstring section or raw rST markup into ``--help``.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import click
 import pytest
 
@@ -216,3 +218,15 @@ class TestRealCommandSurface:
         assert isinstance(cli, MeshGroup)
         for name, cmd in self._iter_commands(cli, ctx):
             assert isinstance(cmd, MeshCommand), f"{name} was not built via MeshCommand/MeshGroup"
+
+
+def test_the_wheel_smoke_step_asks_every_command_for_its_help() -> None:
+    from meshprovision.cli.main import cli
+
+    workflow = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ci.yml"
+    if not workflow.exists():
+        pytest.skip("ci.yml is not part of the sdist")
+    text = workflow.read_text(encoding="utf-8")
+
+    missing = sorted(name for name in cli.commands if f"/bin/mesh {name} --help" not in text)
+    assert missing == []

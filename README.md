@@ -29,12 +29,20 @@ from [loranet.pl](https://loranet.pl) and [lorastats.pl](https://lorastats.pl).
   gone wrong is always recoverable via `mesh db restore --known-good`.
 - Strictly read-only network status reporting (`mesh status`), merging
   loranet.pl and lorastats.pl through a TTL disk cache.
+- Per-node health from lorastats.pl's packet reports (`mesh health`):
+  a verdict, an importance and configuration suggestions, from a local
+  30-day history.
+- Region-wide views of the mesh (`mesh network`): a key scan for clones
+  and weak or moved keys, the relays our nodes depend on, who depends on
+  a node, and a relay graph for single points of failure.
 
 ## Requirements
 
 - Python >= 3.11, < 3.15
-- `meshtastic >= 2.7.11` (already depends on `bleak`, so BLE needs no
-  extra package)
+- `meshtastic`, pinned to a commit of `meshtastic/python`'s `master`
+  branch (installing fetches it with `git` from GitHub; see
+  [Firmware 2.8](docs/firmware-compatibility.md)); it depends on `bleak`,
+  so BLE needs no extra package
 - Linux (developed and tested on Linux Mint)
 - A contact address for `MESHPROVISION_CONTACT` (mandatory — see
   [Configuration](docs/configuration.md))
@@ -131,7 +139,7 @@ pytest --cov --cov-report=term-missing --cov-fail-under=85
 
 A separate `package` job builds the sdist/wheel (`python -m build`),
 runs `twine check`, and smoke-tests the built wheel's console script
-against all six subcommand groups. Locally, `pre-commit install` plus
+against all ten subcommands. Locally, `pre-commit install` plus
 `pre-commit run --all-files` covers the same lint/type/secret checks
 before you push. Run `pre-commit` from the same virtualenv where you ran
 `pip install -e ".[dev]"` — the mypy and no-tracked-secrets hooks are

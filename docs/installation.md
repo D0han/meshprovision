@@ -5,8 +5,11 @@ Part of the meshprovision docs — see the [README](../README.md).
 ## Requirements
 
 - Python >= 3.11, < 3.15 (CI matrix: 3.11, 3.12, 3.13).
-- `meshtastic >= 2.7.11`, which already depends on `bleak`, so BLE needs
-  no extra package.
+- `meshtastic`, pinned to a commit of `meshtastic/python`'s `master`
+  branch (no PyPI release has the firmware 2.8 fields yet; see
+  [Firmware 2.8](firmware-compatibility.md)), so `pip` fetches it from
+  GitHub: installing needs `git` and access to github.com. It depends on
+  `bleak`, so BLE needs no extra package.
 - Linux is the tested platform (developed against Linux Mint). Serial
   access needs `dialout`/`plugdev` group membership; BLE needs BlueZ.
 - A contact address for `MESHPROVISION_CONTACT` — mandatory, see

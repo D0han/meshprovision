@@ -269,8 +269,9 @@ classified so as not to cry wolf:
 - **hand-over** (warning): otherwise, ids one after another -- a backup
   restored onto new hardware, a node re-flashed with its old key.
 
-The evidence is the hours each id was heard with the key, kept for 30 days,
-so a migration last week is still recognised. Only nodes on the default
+The evidence is when each id was first and last heard with the key and the
+newest 168 distinct hours it was heard in (a week's worth), kept for 30
+days, so a migration last week is still recognised. Only nodes on the default
 channel can be seen. Keys are stored and shown as digests only (a 64-bit
 SHA-256 prefix in `keys.json`, the usual 8-digit fingerprint on screen),
 never as key bytes. The scan reads what nodes broadcast in clear; findings
@@ -310,7 +311,7 @@ makes it exit `6`.
 | `data/nodes_db.ods` | IGNORED | Your real database — contains live private keys and BLE PINs |
 | `data/backups/` | IGNORED (except `.gitkeep`) | Timestamped database backups, plus the single `nodes_db.known-good.ods` safety copy and its `nodes_db.known-good.json` provenance sidecar (same directory, same `0700`/`0600` treatment, same ignore rule — see [Recovering from a bad hand-edit](database.md#recovering-from-a-bad-hand-edit)). This is the default location for the default `data/nodes_db.ods` path only — a non-default `--db-path`/`MESHPROVISION_DB_PATH` gets its own `backups/` directory next to *that* file, which is **not** necessarily covered by this repo's `.gitignore`. For a symlinked database path, both the directory and the file names follow the file the link points to |
 | `data/known_bad_keys.txt` | tracked | Public small-order X25519 points; no private material |
-| `.cache/` and the platform cache dir | IGNORED | HTTP TTL response cache |
+| `.cache/` and the platform cache dir | IGNORED | HTTP TTL response cache, plus the `mesh health` and `mesh network` histories (counts, key digests, no key bytes; see [Configuration](configuration.md)) |
 | A Meshtastic app `.cfg`/`.yaml`/node-db `.json` backup (for `mesh adopt --from-backup`) | never tracked; not covered by `.gitignore` since it can live anywhere | A `.cfg`/`.yaml` profile carries the node's **private key** and, when set, a channel PSK, both in clear — treat it exactly like `data/nodes_db.ods`. Keep it outside the repo, or under a path your own `.gitignore` already excludes |
 | `*.key`, `*.pem`, `secrets/`, `*.log`, `logs/`, `*.ods.bak` | IGNORED | Never commit |
 

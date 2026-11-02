@@ -46,7 +46,7 @@ Part of the meshprovision docs — see the [README](../README.md).
   `systemctl status bluetooth`, `bluetoothctl show`, `rfkill list
   bluetooth` (unblock with `rfkill unblock bluetooth`).
 - Scan independently of meshprovision: `bluetoothctl` then `scan on`.
-- `meshtastic >= 2.7.11` depends on `bleak` directly — no extra needed.
+- `meshtastic` depends on `bleak` directly — no extra needed.
 - Pairing uses the 6-digit fixed PIN stored in the `ble_pin` column of
   the `Nodes` sheet. To re-pair after a key change:
   `bluetoothctl remove <MAC>` then reconnect.
@@ -69,10 +69,17 @@ Part of the meshprovision docs — see the [README](../README.md).
   `sudo ufw status verbose`.
 - The node must have WiFi enabled and be on the same network/VLAN; client
   isolation on a guest SSID will silently block this.
-- Separately, `mesh status` needs outbound HTTPS to loranet.pl and
-  lorastats.pl, and will fail at startup with a clear message if
-  `MESHPROVISION_CONTACT` is unset. Do not work around a lorastats block
-  by retrying — that site bans IP addresses.
+- Separately, `mesh status`, `mesh health` and `mesh network` need
+  outbound HTTPS to loranet.pl and lorastats.pl, and fail at startup with
+  a clear message if `MESHPROVISION_CONTACT` is unset (`mesh health
+  --no-fetch` and `mesh network --no-fetch` ask nothing and need
+  neither). Do not work around a lorastats block by retrying — that site
+  bans IP addresses.
+- `not asked: lorastats failed for <node or region> (...)`: an earlier
+  request of the same `mesh health` or `mesh network` run (or of
+  `mesh status`'s history refresh) got a 5xx, a 429 or no answer at all,
+  so the rest were not asked, instead of each costing its retries. The
+  next run asks again.
 - `lorastats ... not requested: lorastats.pl rate-limited this client;
   retrying after Ns`: lorastats.pl answered HTTP 429 to an earlier run (or
   another `mesh` process), and every run using the same cache directory

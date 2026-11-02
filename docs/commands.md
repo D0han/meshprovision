@@ -1002,7 +1002,8 @@ old the stored data is); else `0`.
 
 Every node-info packet that travels unencrypted (the default channel)
 carries its sender's public key. Each refresh records, per node and key, a
-64-bit digest of the key (never the key), the hours it was heard, the node's
+64-bit digest of the key (never the key), when it was first and last heard
+and the newest 168 distinct hours it was heard in, the node's
 short name, hardware and role, whether its id is derived from the key
 (firmware 2.8 sets `node id = crc32(public key)`) and the [weak-key
 audit](security.md#cve-2025-52464-and-the-weak-key-audit)'s verdict, computed
@@ -1172,6 +1173,7 @@ Gateways getting >= 50% of their relayed receptions via it: 6a000072 (100.0%), 6
 Was the only first hop seen of: a1000011, a2000012
 Packets whose every reception it relayed last: 57
 Would no longer be seen by MQTT/lorastats without it: -
+Shares are of receptions at gateways, by last hop. Meshtastic floods: when a relay is gone, another node usually rebroadcasts instead. These numbers show who carries traffic now, not what breaks without it.
 ```
 
 These are shares of receptions at gateways, by last hop: Meshtastic floods,
@@ -1196,9 +1198,10 @@ failure. Its edges are undirected, between node ids, each with its evidence
 counted per source: `direct` (a sender and a gateway that heard it directly),
 `relayed` (a relay and a gateway that heard it as the last hop), `first_hop`
 (a sender and the relay that took its packet's first hop: receptions after
-exactly one hop) -- each kept from 2 observations -- and `traceroute` and
+exactly one hop) -- each kept from 2 observations -- and `traceroute`,
 `neighbor` (consecutive nodes of a traceroute, a node and a neighbour it
-reported) from one. A virtual node `MQTT` joins every gateway. Relayed
+reported) and `gateway` (a gateway and the virtual node `MQTT`, which joins
+every gateway) from one; `loranet_neighbor` is kept apart (below). Relayed
 receptions whose relay byte is ambiguous or unknown cannot be placed and are
 counted as left out.
 
@@ -1224,7 +1227,7 @@ Two measures, labelled and never merged into one score:
   never heard directly by a gateway -- "was the only first hop".
 - **Inferred: cut vertices toward MQTT** (the weak claim): nodes whose
   removal leaves others without any path to MQTT in the graph. Only nodes
-  with at least 20 receptions as a sender are counted as cut off: a node
+  with at least 20 receptions as an origin are counted as cut off: a node
   heard once or twice has one edge because it was barely observed, not
   because it has one neighbour.
 
