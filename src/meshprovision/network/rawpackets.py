@@ -86,7 +86,9 @@ class RawReception:
         origin: The node that sent the packet.
         packet_id: The packet id.
         relay: The last byte of the node that transmitted it last
-            (``relay_node``), or ``None`` when not given (older firmware).
+            (``relay_node``), or ``None`` when not given (older firmware)
+            or 0, which reads the same on the wire: a node whose id ends
+            in ``00`` is never seen relaying nor heard directly.
         hop_start: The hop limit the sender gave it, or ``None`` when not
             given (firmware before 2.3).
         hop_limit: The hop limit left when the gateway heard it.

@@ -75,7 +75,9 @@ def test_a_sole_first_hop_gives_a_note(tmp_path: Path) -> None:
     note = _note(tmp_path)
 
     assert note is not None
-    assert note.startswith("!deadbe01 carried 100.0% of PL's relayed traffic in the 24 h before ")
+    assert note.startswith(
+        "!deadbe01 carried 100.0% of PL's stored relayed traffic in the 24 h before "
+    )
     assert "; 1 node(s) used it as their only first hop; 1 node(s) and 1 gateway(s) got" in note
     assert note.endswith("Applying this plan reboots it. See: mesh network impact deadbe01")
 
@@ -113,7 +115,7 @@ def test_the_region_where_it_matters_most_is_named(tmp_path: Path) -> None:
     note = _note(tmp_path)
 
     assert note is not None
-    assert "of B's relayed traffic" in note
+    assert "of B's stored relayed traffic" in note
     assert "2 node(s) used it as their only first hop" in note
 
 
@@ -123,7 +125,7 @@ def test_between_two_high_regions_the_larger_share_wins(tmp_path: Path) -> None:
 
     note = _note(tmp_path)
 
-    assert note is not None and "of B's relayed traffic" in note
+    assert note is not None and "of B's stored relayed traffic" in note
 
 
 def test_a_medium_node_is_noted_without_a_sole_first_hop(tmp_path: Path) -> None:
@@ -171,7 +173,7 @@ def test_a_high_region_wins_over_a_medium_one_with_more_traffic(tmp_path: Path) 
 
     note = _note(tmp_path)
 
-    assert note is not None and "of B's relayed traffic" in note
+    assert note is not None and "of B's stored relayed traffic" in note
 
 
 def test_a_node_whose_own_node_info_says_client_mute_does_not_make_the_byte_ambiguous(

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+from meshprovision.crypto.keys import public_key_matches
 from meshprovision.db.pending_keys import find_pending_holding
 from meshprovision.db.schema import KeyType, is_canonical_node_owner
 from meshprovision.errors import NodeRenumberedError, PlanConflictError
@@ -200,7 +201,9 @@ def region_first_refusal(plan: ChangePlan, live: LiveConfig) -> PlanConflictErro
     creates the key, renumbering the node, as soon as one is first set
     (``AdminModule`` -> ``ensurePkiIdentity``): the rest of this run's
     writes would go to an id the device no longer has. An empty or
-    unparseable firmware version is treated as older firmware.
+    unparseable firmware version is treated as older firmware. A device
+    that already holds a key and the id derived from it keeps both (see
+    :func:`_keeps_its_id`), and is not refused.
 
     Args:
         plan: The plan about to be applied.
@@ -208,8 +211,8 @@ def region_first_refusal(plan: ChangePlan, live: LiveConfig) -> PlanConflictErro
 
     Returns:
         The refusal when the plan writes ``lora.region``, the device
-        reports :data:`UNSET_REGION` and its firmware is >= 2.8; else
-        ``None``.
+        reports :data:`UNSET_REGION`, its firmware is >= 2.8 and it would
+        not keep its id; else ``None``.
     """
     lora = plan.section("lora")
     change = next((c for c in lora.changes if c.field == "region"), None) if lora else None
@@ -217,6 +220,7 @@ def region_first_refusal(plan: ChangePlan, live: LiveConfig) -> PlanConflictErro
         change is None
         or str(live.value("lora", "region")) != UNSET_REGION
         or not derives_node_id_from_key(live.firmware_version)
+        or _keeps_its_id(plan, live)
     ):
         return None
     return PlanConflictError(
@@ -229,6 +233,27 @@ def region_first_refusal(plan: ChangePlan, live: LiveConfig) -> PlanConflictErro
             f"`meshtastic --set lora.region {change.desired}`), reconnect, then run "
             "`mesh provision` again."
         ),
+    )
+
+
+def _keeps_its_id(plan: ChangePlan, live: LiveConfig) -> bool:
+    """Tell whether a first region leaves a firmware 2.8 device's key, and so its id, alone.
+
+    An unlicensed device holding a private key only re-derives its public
+    key from it when the region is first set (``CryptoEngine::ensurePkiKeys``)
+    and keeps its id when that is already the key's derived one
+    (``NodeDB::createNewIdentity``); both verified in the firmware source
+    at 2.8.0 and 2.8.1. A licensed device takes another path and is never
+    trusted to, nor is a plan that writes a new key in the same run.
+    """
+    public, private = live.security.real_public_key, live.security.real_private_key
+    return (
+        not live.is_licensed
+        and not plan.key_plan.regenerate
+        and public is not None
+        and private is not None
+        and key_derived_id(public) == live.node_id
+        and public_key_matches(private, public)
     )
 
 

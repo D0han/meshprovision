@@ -63,7 +63,9 @@ device.**
   `--force-regenerate-key` writes one, so both end under a new id.
 - *Verified:* key generation waits while the LoRa region is `UNSET`.
   The moment a region is first set, an unlicensed node mints its key and
-  takes the derived id at once, without a reboot.
+  takes the derived id at once, without a reboot. One that already holds
+  a private key only re-derives its public key from it then, so its id
+  changes only if it is not already that key's derived id.
 - *Verified:* `set_owner` regenerates the key only when `is_licensed`
   toggles; `mesh provision` always writes back the device's own value, so
   its name writes never renumber a node.
@@ -93,11 +95,15 @@ What meshprovision does about it:
   keypair from an interrupted run it holds), is refused with the exact
   [`mesh db renumber OLD NEW`](commands.md#mesh-db) command to run first.
   [`mesh network keys`](commands.md#mesh-network-keys) reports such a move
-  as a `migration`.
+  as a `migration` when the old id was heard (in the 30 days stored)
+  before the new one; when it was not heard at all, the move looks exactly
+  like a clone and stays critical, naming that command.
 - **A first region set is refused.** `mesh provision` refuses a plan
   that would set the LoRa region of a 2.8 device whose region is still
   `UNSET`, before writing anything: set the region first (Meshtastic app,
   or `meshtastic --set lora.region <R>`), reconnect, and run it again.
+  Not refused: an unlicensed device already on the id derived from the
+  key pair it holds, when the plan writes no new key (it keeps that id).
   Licensed nodes take another path in the firmware at that moment, not
   traced; they are refused too. Older or unparseable firmware versions
   are not refused.

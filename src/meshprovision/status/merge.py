@@ -238,7 +238,9 @@ class MergedNode:
         last_boot: The most recent boot time any source reported.
         last_device_metrics: When the device-metrics fields above
             (battery, voltage, channel/air utilization, uptime) were
-            reported, or ``None`` when unknown.
+            reported, or ``None`` when unknown. Each field is picked on
+            its own (rule 3 of :func:`merge_observations`), so one the preferred
+            source left out comes from the next and can be of another time.
         last_seen: The most recent ``last_seen`` timestamp across every
             observation, or ``None`` if no observation reported one.
         last_seen_source: The source that supplied :attr:`last_seen`.

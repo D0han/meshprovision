@@ -63,7 +63,7 @@ def test_a_node_others_depend_on_is_warned_about_before_applying(
 
     assert result.exit_code == 0, result.output
     assert _WARNING in result.stderr
-    assert "of Zachód's relayed traffic in the 24 h before " in result.stderr
+    assert "of Zachód's stored relayed traffic in the 24 h before " in result.stderr
     assert "1 node(s) used it as their only first hop" in result.stderr
     assert f"Applying this plan reboots it. See: mesh network impact {_NODE}" in result.stderr
     assert _WARNING not in result.stdout

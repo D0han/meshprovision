@@ -12,8 +12,11 @@ records are kept for 30 days (:mod:`meshprovision.network.keystore`) and
 
 - *our key on another id* (critical) -- a node of ours' database public
   key advertised by another id; unless that id is the key's derived id
-  and our node was last heard before it first was: then our node moved
-  to its key-derived id (a migration, info, so the database can follow);
+  and our node was heard (in any stored sighting, not only the window's),
+  last before it first was: then our node moved to its key-derived id (a
+  migration, info, so the database can follow). Our node not heard at all
+  stays critical, the finding marked ``unheard`` (a move not yet followed
+  by the database looks exactly like a clone);
 - *our id, other key* -- a node of ours advertising a key that is not
   its database key: critical when the database key is derived from the
   id (a firmware 2.8 node cannot change its key and keep its id), else a
@@ -182,6 +185,9 @@ class KeyFinding:
         fleet: Whether one of our nodes is among them.
         checks: For a weak key, the audit's checks.
         last_heard: For a hand-over, when the old id(s) were last heard.
+        unheard: For our key on another id: that id is the key's derived
+            one and our node was not heard at all (a move to firmware 2.8
+            not yet followed by the database, or a clone).
     """
 
     kind: FindingKind
@@ -191,6 +197,7 @@ class KeyFinding:
     fleet: bool
     checks: tuple[str, ...] = ()
     last_heard: float | None = None
+    unheard: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,15 +339,16 @@ def scan_keys(seen: Iterable[KeySeen], fleet: Iterable[FleetKey], *, start: floa
     Returns:
         The scan.
     """
+    stored = tuple(seen)
     window = tuple(
         sorted(
-            (_within(entry, start) for entry in seen if entry.last >= start),
+            (_within(entry, start) for entry in stored if entry.last >= start),
             key=lambda entry: (entry.node, entry.first, entry.digest),
         )
     )
     ours = {key.node: key for key in fleet}
     findings = [
-        *_our_keys(window, ours),
+        *_our_keys(window, ours, stored),
         *_weak_keys(window, ours),
         *_shared_keys(window, ours),
         *_changed_keys(window, ours),
@@ -372,23 +380,39 @@ def _within(entry: KeySeen, start: float) -> KeySeen:
     )
 
 
-def _our_keys(window: tuple[KeySeen, ...], ours: Mapping[str, FleetKey]) -> list[KeyFinding]:
-    """Find our keys on other ids and our ids with other keys."""
+def _our_keys(
+    window: tuple[KeySeen, ...], ours: Mapping[str, FleetKey], stored: tuple[KeySeen, ...]
+) -> list[KeyFinding]:
+    """Find our keys on other ids and our ids with other keys.
+
+    Whether our key on its derived id is a migration is judged on every
+    stored sighting (not only the window's), so ``--days`` cannot change it.
+    """
+    unclipped = {(entry.node, entry.digest): entry for entry in stored}
     findings = []
     for mine in ours.values():
         if mine.digest is None:
             continue
         own = [entry for entry in window if entry.node == mine.node]
+        heard = [entry for entry in stored if entry.node == mine.node]
         for entry in window:
             if entry.digest == mine.digest and entry.node != mine.node:
-                kind, severity = (
-                    (FindingKind.MIGRATION, Severity.INFO)
-                    if _migrated_to(entry, own)
-                    else (FindingKind.OUR_KEY_ELSEWHERE, Severity.CRITICAL)
-                )
-                findings.append(
-                    KeyFinding(kind, severity, entry.digest, (mine.node, entry.node), fleet=True)
-                )
+                full = unclipped.get((entry.node, entry.digest), entry)
+                nodes = (mine.node, entry.node)
+                if _migrated_to(full, heard):
+                    finding = KeyFinding(
+                        FindingKind.MIGRATION, Severity.INFO, entry.digest, nodes, fleet=True
+                    )
+                else:
+                    finding = KeyFinding(
+                        FindingKind.OUR_KEY_ELSEWHERE,
+                        Severity.CRITICAL,
+                        entry.digest,
+                        nodes,
+                        fleet=True,
+                        unheard=entry.derived and not heard,
+                    )
+                findings.append(finding)
         rekeyed = min((e.first for e in own if e.digest == mine.digest), default=None)
         for entry in own:
             if entry.digest != mine.digest and (rekeyed is None or entry.last >= rekeyed):
@@ -402,8 +426,13 @@ def _our_keys(window: tuple[KeySeen, ...], ours: Mapping[str, FleetKey]) -> list
 
 
 def _migrated_to(entry: KeySeen, own: Collection[KeySeen]) -> bool:
-    """Tell whether ``entry`` is our node's key-derived new id, heard only after the old one."""
-    return entry.derived and all(old.last < entry.first for old in own)
+    """Tell whether ``entry`` is our node's key-derived new id, heard only after the old one.
+
+    Our node must have been heard (in any stored sighting): a clone of
+    our key on a firmware 2.8 device always has the derived id, so a
+    derived id alone proves nothing while our node is not heard.
+    """
+    return bool(own) and entry.derived and all(old.last < entry.first for old in own)
 
 
 def _weak_keys(window: tuple[KeySeen, ...], ours: Mapping[str, FleetKey]) -> list[KeyFinding]:

@@ -260,8 +260,11 @@ classified so as not to cry wolf:
   (`node id = crc32(public key)`, NodeDB `createNewIdentity()`), so a node
   upgraded to it appears under a new id with its old key. Exactly one id
   holding the key is derived from it, and every other one was last heard
-  before it first was. For one of our nodes, move its database row with
-  `mesh db renumber OLD NEW` (see
+  before it first was. For one of our nodes' database key, our node must
+  have been heard before (in the 30 days stored, whatever `--days`):
+  heard nowhere, its key on its derived id is critical, since a clone
+  looks the same, and the line names the command. For one of our nodes,
+  move its database row with `mesh db renumber OLD NEW` (see
   [Firmware 2.8 and beyond](firmware-compatibility.md#node-identity-the-node-id-follows-the-key)).
 - **hand-over** (warning): otherwise, ids one after another -- a backup
   restored onto new hardware, a node re-flashed with its old key.

@@ -242,12 +242,12 @@ def test_a_pending_keypair_of_an_archived_row_is_not_used(
 
 
 def _region_plan(
-    make_live: Callable[..., LiveConfig], *, region: str, firmware: str
+    make_live: Callable[..., LiveConfig], *, region: str, firmware: str, **live_fields: object
 ) -> tuple[ChangePlan, LiveConfig]:
     template = minimal_template()
     live = make_live(
         template,
-        security=make_security(empty=True),
+        **{"security": make_security(empty=True), **live_fields},
         firmware_version=firmware,
         section_overrides={"lora": {"region": region}},
     )
@@ -300,3 +300,55 @@ def test_a_plan_that_leaves_an_unset_region_alone_is_not_refused(
     )
 
     assert region_first_refusal(plan, live) is None
+
+
+def _keyed_region_plan(
+    make_live: Callable[..., LiveConfig],
+    keypair: KeyPair,
+    *,
+    node: NodeId | None = None,
+    regenerate: bool = False,
+    **live_fields: object,
+) -> tuple[ChangePlan, LiveConfig]:
+    """A first-region plan for a 2.8 device holding ``keypair``, by default on its derived id."""
+    plan, live = _region_plan(
+        make_live,
+        region=UNSET_REGION,
+        firmware="2.8.1",
+        security=make_security(keypair=keypair),
+        node_id=(node or key_derived_id(keypair.public)).hex,
+        **live_fields,
+    )
+    key_plan = dataclasses.replace(plan.key_plan, regenerate=regenerate)
+    return dataclasses.replace(plan, key_plan=key_plan), live
+
+
+def test_a_device_already_on_its_keys_derived_id_is_not_refused(
+    make_live: Callable[..., LiveConfig], keypair: KeyPair
+) -> None:
+    """Firmware 2.8 then re-derives the same public key and keeps the id."""
+    plan, live = _keyed_region_plan(make_live, keypair)
+
+    assert region_first_refusal(plan, live) is None
+
+
+@pytest.mark.parametrize(
+    "case", ["licensed", "new-key-written", "id-not-derived", "public-not-the-privates"]
+)
+def test_a_keyed_device_is_still_refused_unless_it_surely_keeps_its_id(
+    make_live: Callable[..., LiveConfig],
+    keypair: KeyPair,
+    keypair_factory: Callable[[], KeyPair],
+    case: str,
+) -> None:
+    if case == "licensed":
+        plan, live = _keyed_region_plan(make_live, keypair, is_licensed=True)
+    elif case == "new-key-written":
+        plan, live = _keyed_region_plan(make_live, keypair, regenerate=True)
+    elif case == "id-not-derived":
+        plan, live = _keyed_region_plan(make_live, keypair, node=_OLD)
+    else:
+        mixed = dataclasses.replace(keypair, private=keypair_factory().private)
+        plan, live = _keyed_region_plan(make_live, mixed)
+
+    assert region_first_refusal(plan, live) is not None

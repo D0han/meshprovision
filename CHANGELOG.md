@@ -85,14 +85,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the weak-key audit's verdict, and reported when it is one of our database
   keys on another id, another key on one of our ids, weak, shared by several
   ids (a clone heard at the same time, a hand-over, or a firmware 2.8 id
-  migration) or changed. Exit code 6 only for a critical finding involving
-  one of our nodes. `--days` (1-30, default 30), `--region`, `--no-fetch`,
-  `--refresh`, `--json`. The `mesh network` group fetches a region's raw
-  packets at most once every 15 minutes, from `since=` once fetched (about
-  0.6 MB per hour), and its node list at most hourly, and keeps hourly
-  counts for 30 days in `network/` in the cache directory (bounded, atomic,
-  owner-only). A fetch time stored while the clock was set ahead does not
-  void those intervals: the next fetch replaces it.
+  migration) or changed. Our key on its derived id counts as a migration
+  only when our node was heard before that id (in what is stored, the last
+  30 days, whatever `--days`); when our node was not heard at all it stays
+  critical, naming the `mesh db renumber` command in case it moved. Exit
+  code 6 only for a critical finding involving one of our nodes. `--days`
+  (1-30, default 30), `--region`, `--no-fetch`, `--refresh`, `--json`. The
+  `mesh network` group fetches a region's raw packets at most once every 15
+  minutes, from `since=` once fetched (about 0.6 MB per hour), and its node
+  list at most hourly, and keeps hourly counts for 30 days in `network/` in
+  the cache directory (bounded, atomic, owner-only). A fetch time stored
+  while the clock was set ahead does not void those intervals: the next
+  fetch replaces it.
 - `mesh status` marks a node that uplinks its own packets over MQTT with a
   trailing `@` after its Seen By counts (green within a day, dim up to 30
   days, none beyond); `--json` gains `self_uplink_seen`.
@@ -412,7 +416,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   firmware 2.8 creates the node's key and changes its node id the moment a
   region is first set, in the middle of the run's writes. Set the region
   first (Meshtastic app, or `meshtastic --set lora.region <R>`), reconnect,
-  and run it again. Older or unparseable firmware versions are unaffected.
+  and run it again. Older or unparseable firmware versions are unaffected,
+  and so is an unlicensed device that already holds a key pair and the id
+  derived from it, when the plan writes no new key (it keeps that id).
   `docs/firmware-compatibility.md` now records what firmware 2.8 does to
   node ids, each point labelled verified (read in the firmware source) or
   not, and that the `meshtastic` library is pinned to a commit.

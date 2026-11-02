@@ -79,11 +79,14 @@ checked against what [`mesh network`](#mesh-network) last stored: when, in
 the 24 hours before a region's last fetch (at most 48 hours ago), the
 node's [impact level](#mesh-network-impact) was `medium` or `high` -- every
 other node counting, ours included -- one warning goes to stderr, for
-example `warning: !deadbe01 carried 100.0% of Zachód's relayed traffic in
-the 24 h before 2026-11-01 01:30; 1 node(s) used it as their only first
-hop; 1 node(s) and 1 gateway(s) got at least half of their relayed
-receptions through it. Applying this plan reboots it. See: mesh network
-impact deadbe01`. It asks nothing (no request, no contact), changes
+example `warning: !deadbe01 carried 100.0% of Zachód's stored relayed
+traffic in the 24 h before 2026-11-01 01:30; 1 node(s) used it as their
+only first hop; 1 node(s) and 1 gateway(s) got at least half of their
+relayed receptions through it. Applying this plan reboots it. See: mesh
+network impact deadbe01`. It judges the stored traffic alone: the
+region's node list is not stored, so a relay byte can resolve differently
+than in `mesh network impact`, which asks for it (and has its own
+`--days`). It asks nothing (no request, no contact), changes
 nothing else (the prompt, `--yes` and the JSON on stdout stay as they
 are), says nothing on `--dry-run`, for an empty plan, without a recent
 store or when the node carries little, and any problem reading the store
@@ -183,7 +186,9 @@ node id the moment a region is first set, which would send the rest of
 the run's writes to an id the device no longer has. Set the region first
 (Meshtastic app, or `meshtastic --set lora.region <R>`), reconnect, and
 run `mesh provision` again. An older or unparseable firmware version is
-not refused. `mesh admin bootstrap` inherits this.
+not refused, nor an unlicensed device that already holds a key pair and
+the id derived from it when the plan writes no new key: setting its
+region keeps both. `mesh admin bootstrap` inherits this.
 
 A node that firmware >= 2.8 renumbered (it derives the node id from the
 public key, see [Firmware 2.8 and beyond](firmware-compatibility.md)) is
@@ -581,9 +586,11 @@ about in that run (see `mesh health`).
 - **Metrics** is how long ago the device last reported its metrics (loranet's
   `lastDeviceMetrics`); `Batt`, `Volt`, `ChUtil` and `AirTx` are as of that
   moment, which can be much older than `Last seen` (a node that is still
-  relayed by gateways keeps a fresh `Last seen`). A battery level of 0% or
-  less is shown as `-`: it is no reading (a node without a battery sensor
-  reports 0).
+  relayed by gateways keeps a fresh `Last seen`). Each reading comes from the
+  first source that has it, so one loranet left out is lorastats' and can be
+  of another time than `Metrics` says (its trend arrow too). A battery level
+  of 0% or less is shown as `-`: it is no reading (a node without a battery
+  sensor reports 0).
 - **Seen By** is `1d/7d/30d`: how many distinct MQTT gateway topics relayed the
   node within the last day, week and month (loranet's `seenBy`; its map-report
   topic `.../map/` is not a gateway and is not counted, nor is the node's own
@@ -1003,7 +1010,7 @@ while the key was in memory. The scan then reports, for the window:
 
 | Finding | Severity |
 |---|---|
-| *our key on another id*: one of our nodes' database public key advertised by another node | critical; `info` (a *migration*) when that node's id is the key's derived id and ours was last heard before it first was: our node moved to its firmware 2.8 id and the database should follow |
+| *our key on another id*: one of our nodes' database public key advertised by another node | critical; `info` (a *migration*) when that node's id is the key's derived id and ours was heard (in what is stored, the last 30 days, whatever `--days`), last before it first was: our node moved to its firmware 2.8 id and the database should follow. When ours was not heard at all it stays critical, and the line says it may be a move and names the `mesh db renumber OLD NEW` command |
 | *our id, other key*: one of our nodes advertising a key that is not its database key (not an old key last heard before the database key first was: a re-key) | critical when the database key is derived from the node id (a firmware 2.8 node cannot change its key and keep its id), else warning (database out of date, re-flashed, or a spoof) |
 | *weak key*: the audit's findings | the audit's severity |
 | *clone*: one key on several ids heard at the same time (a common hour with overlapping first-to-last sightings), or alternating between them | critical |
@@ -1040,8 +1047,10 @@ anyone.
 Which relays carry our nodes' packets without being ours (`--limit N` rows
 per region, default 20; `--all` lists every relay of the region by its share
 of relayed traffic instead). Every reception names the node that transmitted
-it last only by the last byte of its id, shared by about one node in 256, so
-each byte is first **resolved**: its candidates are the nodes heard in the
+it last only by the last byte of its id, shared by about one node in 256 (a
+byte of `0` reads as not given, which is what older firmware sends, so a node
+whose id ends in `00` is never seen relaying nor heard directly), so each
+byte is first **resolved**: its candidates are the nodes heard in the
 window whose id ends in it (senders, gateways, and lorastats' node list),
 never a `CLIENT_MUTE` node. A relay's rebroadcast comes from the same radio
 as its own packets, so each candidate is scored by *coverage* (the share of

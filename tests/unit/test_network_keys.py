@@ -10,6 +10,7 @@ import pytest
 from meshprovision.crypto.known_bad_keys import SMALL_ORDER_POINTS
 from meshprovision.crypto.redact import fingerprint
 from meshprovision.health.history import HOUR_SECONDS, floor_hour
+from meshprovision.network import render
 from meshprovision.network.keys import (
     FindingKind,
     FleetKey,
@@ -202,6 +203,39 @@ def test_our_key_on_its_derived_id_after_our_node_went_quiet_is_a_migration() ->
     assert _kinds(old, new, fleet=(FleetKey("a", _DIGEST),)) == [
         ("migration", "info", ("a", "b"), True)
     ]
+
+
+def test_our_key_on_its_derived_id_without_our_node_heard_is_critical() -> None:
+    new = _seen("b", _DIGEST, _H, derived=True)
+
+    scan = scan_keys((new,), (FleetKey("a", _DIGEST),), start=_START)
+
+    assert [(f.kind.value, f.severity.value, f.unheard) for f in scan.findings] == [
+        ("our-key-elsewhere", "critical", True)
+    ]
+    assert scan.fleet_critical
+
+
+def test_our_key_unheard_on_its_derived_id_names_the_renumber_command() -> None:
+    finding = KeyFinding(
+        FindingKind.OUR_KEY_ELSEWHERE, Severity.CRITICAL, _DIGEST, ("a", "b"), True, unheard=True
+    )
+
+    assert render._finding_text(finding, {}) == (
+        "a's database key is advertised by b, the id derived from it, while a was not heard: "
+        "if a moved to firmware 2.8, run `mesh db renumber a b`; otherwise it is a clone"
+    )
+
+
+@pytest.mark.parametrize("days", [7, 30])
+def test_a_migration_older_than_the_window_is_judged_on_every_stored_sighting(days: int) -> None:
+    old = _seen("a", _DIGEST, _H - 10 * 24 * HOUR_SECONDS)
+    new = _seen("b", _DIGEST, _H - 9 * 24 * HOUR_SECONDS, _H, derived=True)
+
+    scan = scan_keys((old, new), (FleetKey("a", _DIGEST),), start=NOW - days * 24 * 3600)
+
+    assert [(f.kind.value, f.severity.value) for f in scan.findings] == [("migration", "info")]
+    assert not scan.fleet_critical
 
 
 def test_our_key_on_its_derived_id_while_our_node_is_still_heard_is_critical() -> None:

@@ -90,6 +90,13 @@ def _finding_text(finding: KeyFinding, known: Mapping[str, str]) -> str:
         named.append(f"and {len(finding.nodes) - MAX_NAMED} more")
     listed = ", ".join(named)
     kind = finding.kind
+    if kind is FindingKind.OUR_KEY_ELSEWHERE and finding.unheard:
+        ours, other = finding.nodes[0], finding.nodes[1]
+        return (
+            f"{named[0]}'s database key is advertised by {named[1]}, the id derived from it, "
+            f"while {ours} was not heard: if {ours} moved to firmware 2.8, run "
+            f"`mesh db renumber {ours} {other}`; otherwise it is a clone"
+        )
     if kind is FindingKind.OUR_KEY_ELSEWHERE:
         return f"{named[0]}'s database key is advertised by {named[1]}"
     if kind is FindingKind.OUR_ID_OTHER_KEY:

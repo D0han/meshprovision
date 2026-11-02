@@ -9,6 +9,9 @@ rely on it, the operator should know before confirming.
   directory: no request, no contact needed;
 - **recent data only** -- per region, the 24 hours up to its last fetch,
   only when that fetch was at most :data:`MAINTENANCE_MAX_AGE_SECONDS` ago;
+  relay bytes are resolved from the stored traffic alone (the region's
+  node list is not stored), so ``mesh network impact``, which has it and
+  its own ``--days``, can judge a byte differently;
 - **only when it matters** -- the node's impact level (see
   :mod:`meshprovision.network.impact`) must be at least ``medium``; every
   other node counts as a dependant, ours included (rebooting the relay
@@ -175,8 +178,8 @@ def _sentence(
     """Describe the impact in one sentence, ending with where to look."""
     as_of = time.strftime("%Y-%m-%d %H:%M", time.localtime(fetched_at))
     parts = [
-        f"{node.display} carried {100 * impact.carried_share:.1f}% of {region}'s relayed "
-        f"traffic in the 24 h before {as_of}"
+        f"{node.display} carried {100 * impact.carried_share:.1f}% of {region}'s stored "
+        f"relayed traffic in the 24 h before {as_of}"
     ]
     if impact.sole_first_hop_for:
         parts.append(f"{len(impact.sole_first_hop_for)} node(s) used it as their only first hop")
