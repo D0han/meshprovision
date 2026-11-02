@@ -27,11 +27,15 @@ asks again.
 start of the hour of the previous refresh (the extra hour absorbs a
 misread Warsaw time around a DST change) and replaces that hour onwards
 (see :func:`~meshprovision.health.history.merge`), so nothing is counted
-twice. A failed request leaves the history as it was and is reported.
+twice. A failed request leaves the history as it was and is reported. A
+stored refresh time more than :data:`FUTURE_SKEW_SECONDS` ahead of the
+clock (one written while the clock was set ahead) counts as no refresh and
+is replaced by the next one, so it never voids the budget for long.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import time
 from collections.abc import Callable, Iterable, Mapping
@@ -273,7 +277,8 @@ class HealthRefresher:
             len(decoded),
             node.hex,
         )
-        return (lambda old: merge(old, new)), skipped_reports + skipped_decoded
+        skipped = skipped_reports + skipped_decoded
+        return (lambda old: merge(_without_future_fetch(old, now), new)), skipped
 
     def _gateway_check(
         self, node: NodeId, region: str, down: DataSourceError | None
@@ -321,6 +326,24 @@ def _sender(row: Any) -> str | None:
         return NodeId.from_hex(raw).hex
     except NodeIdError:
         return None
+
+
+def _without_future_fetch(history: NodeHistory, now: float) -> NodeHistory:
+    """Forget a stored refresh time ahead of the clock, which merging would otherwise keep.
+
+    Args:
+        history: The stored history.
+        now: The current time, epoch seconds.
+
+    Returns:
+        ``history`` without its ``fetched_at`` when that lies more than
+        :data:`FUTURE_SKEW_SECONDS` ahead of ``now`` (a clock that was set
+        ahead), else ``history`` unchanged.
+    """
+    fetched_at = history.fetched_at
+    if fetched_at is None or fetched_at <= now + FUTURE_SKEW_SECONDS:
+        return history
+    return dataclasses.replace(history, fetched_at=None)
 
 
 def _with_boot(boot: float) -> Callable[[NodeHistory], NodeHistory]:

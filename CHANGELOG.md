@@ -91,7 +91,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   packets at most once every 15 minutes, from `since=` once fetched (about
   0.6 MB per hour), and its node list at most hourly, and keeps hourly
   counts for 30 days in `network/` in the cache directory (bounded, atomic,
-  owner-only).
+  owner-only). A fetch time stored while the clock was set ahead does not
+  void those intervals: the next fetch replaces it.
 - `mesh status` marks a node that uplinks its own packets over MQTT with a
   trailing `@` after its Seen By counts (green within a day, dim up to 30
   days, none beyond); `--json` gains `self_uplink_seen`.
@@ -121,7 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counts, telemetry, positions, boots) is kept for 30 days in `health/` in the
   cache directory (bounded, atomic, owner-only). Per node and refresh: two
   lorastats requests (three with `NODE`), at most once every 10 minutes (once
-  a minute with `--refresh`), on top of what `mesh status` asks.
+  a minute with `--refresh`), on top of what `mesh status` asks. A refresh
+  time stored while the clock was set ahead does not void that interval: the
+  next refresh replaces it.
 - `MESHPROVISION_LORASTATS_REGIONS` (comma-separated) sets the lorastats
   regions `mesh status` queries; `--region` still overrides it.
 - Without either, `mesh status` asks the regions lorastats.pl names in its own

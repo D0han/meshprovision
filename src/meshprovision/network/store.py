@@ -243,7 +243,11 @@ class RegionStore:
             region: The region.
             hours: The refresh's hours (from
                 :func:`~meshprovision.network.buckets.summarize`).
-            fetched_at: When lorastats was asked, epoch seconds.
+            fetched_at: When lorastats was asked, epoch seconds. The newer
+                of it and the recorded fetch is recorded, unless the recorded
+                one lies more than :data:`FUTURE_SKEW_SECONDS` ahead of the
+                clock (written while the clock was set ahead): that one is
+                replaced, so it cannot void the request budget.
             skipped_rows: Rows of its answer that could not be used.
         """
         now = self._clock()
@@ -254,10 +258,12 @@ class RegionStore:
             merged = prune(merge(self._read_day(region, day), new), now=now)
             self._write_day(region, day, merged)
         previous = self.state(region).fetched_at
+        if previous is not None and previous <= now + FUTURE_SKEW_SECONDS:
+            fetched_at = max(previous, fetched_at)
         state = {
             "version": STORE_VERSION,
             "region": region,
-            "fetched_at": fetched_at if previous is None else max(previous, fetched_at),
+            "fetched_at": fetched_at,
             "skipped_rows": skipped_rows,
         }
         write_json(self.path_for(region) / _STATE_FILENAME, state, what=_WHAT)

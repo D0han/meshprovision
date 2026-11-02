@@ -128,6 +128,26 @@ def test_two_processes_updating_one_region_both_leave_their_hours(tmp_path: Path
     assert first.state(_REGION) == RegionState(fetched_at=NOW - 60, skipped_rows=1)
 
 
+@pytest.mark.parametrize(
+    ("recorded", "kept"),
+    [
+        pytest.param(NOW - 60, NOW, id="older"),
+        pytest.param(NOW + 300, NOW + 300, id="within-the-skew"),
+        pytest.param(NOW + 301, NOW, id="beyond-the-skew"),
+        pytest.param(NOW + 365 * _DAY, NOW, id="a-year-ahead"),
+    ],
+)
+def test_a_recorded_fetch_ahead_of_the_clock_is_replaced_not_kept(
+    tmp_path: Path, recorded: float, kept: float
+) -> None:
+    store = _store(tmp_path)
+    store.update(_REGION, [], fetched_at=recorded, skipped_rows=0)
+
+    store.update(_REGION, [], fetched_at=NOW, skipped_rows=0)
+
+    assert store.state(_REGION).fetched_at == kept
+
+
 def test_nothing_stored_reads_as_empty(tmp_path: Path) -> None:
     store = _store(tmp_path)
 

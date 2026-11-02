@@ -180,6 +180,21 @@ def test_a_fetch_stored_in_the_future_does_not_block_and_is_not_asked_from(
     assert feed.calls[0] == ("raw", "Zachód", floor_hour(NOW) - HOUR_SECONDS)
 
 
+def test_a_fetch_stored_a_year_ahead_is_replaced_so_the_interval_holds_again(
+    tmp_path: Path,
+) -> None:
+    refresher, feed, store, now = _setup(tmp_path)
+    store.update("Zachód", [], fetched_at=NOW + 365 * 24 * HOUR_SECONDS, skipped_rows=0)
+    refresher.refresh(["Zachód"])
+    feed.calls.clear()
+    now[0] = NOW + NETWORK_FORCED_REFRESH_INTERVAL_SECONDS
+
+    refresher.refresh(["Zachód"])
+
+    assert store.state("Zachód").fetched_at == NOW
+    assert feed.calls == [("nodes", "Zachód", None)]
+
+
 def test_a_fetch_just_inside_the_future_skew_counts(tmp_path: Path) -> None:
     refresher, feed, store, _ = _setup(tmp_path)
     store.update("Zachód", [], fetched_at=NOW + 300, skipped_rows=0)

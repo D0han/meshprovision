@@ -227,6 +227,23 @@ def test_a_refresh_time_in_the_future_does_not_block_refreshing(tmp_path: Path) 
     assert packets.calls[0][3] == floor_hour(_NOW) - SINCE_MARGIN_SECONDS
 
 
+@pytest.mark.parametrize("ahead", [301.0, 365 * 86400.0])
+def test_a_refresh_time_ahead_of_the_clock_is_replaced_so_the_interval_holds_again(
+    tmp_path: Path, ahead: float
+) -> None:
+    refresher, packets, store, now = _setup(tmp_path)
+    store.update(_NODE, lambda _old: NodeHistory(node=_NODE, fetched_at=_NOW + ahead))
+    refresher.refresh([(_NODE, "PL")])
+    packets.calls.clear()
+    now[0] = _NOW + 60
+    later = HealthRefresher(store, packets, clock=lambda: now[0])  # type: ignore[arg-type]
+
+    later.refresh([(_NODE, "PL")])
+
+    assert store.load(_NODE).fetched_at == _NOW
+    assert packets.calls == []
+
+
 @pytest.mark.parametrize(("back", "asked"), [(86400.0, True), (301.0, True), (300.0, False)])
 def test_a_gateway_check_from_the_future_does_not_block_checking(
     tmp_path: Path, back: float, asked: bool
