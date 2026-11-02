@@ -73,7 +73,11 @@ version: 1
 Numeric fields are checked against the firmware's own field range when
 the template loads (for example 0-4294967295 for the `*_secs`/`*_interval`
 settings); an out-of-range value is a template error, never a
-half-applied `mesh provision`.
+half-applied `mesh provision`. Two have a higher floor, because the
+firmware raises a lower value itself and the write could never be
+verified: `device.node_info_broadcast_secs` is at least 3600 and
+`neighbor_info.update_interval` at least 14400. Likewise
+`power.on_battery_shutdown_after_secs` is 0 (disabled) or at least 30.
 
 Followed by module options:
 

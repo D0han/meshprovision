@@ -346,6 +346,52 @@ def test_neighbor_info_section_fields() -> None:
     }
 
 
+@pytest.mark.parametrize("seconds", [0, 3599])
+def test_node_info_broadcast_secs_below_the_firmware_minimum_is_rejected(seconds: int) -> None:
+    with pytest.raises(TemplateValidationError, match="node_info_broadcast_secs"):
+        load_template_text(f"version: 1\ndevice:\n  node_info_broadcast_secs: {seconds}\n")
+
+
+def test_node_info_broadcast_secs_at_the_firmware_minimum_loads() -> None:
+    cfg = load_template_text("version: 1\ndevice:\n  node_info_broadcast_secs: 3600\n")
+
+    assert cfg.device is not None
+    assert cfg.device.node_info_broadcast_secs == 3600
+
+
+@pytest.mark.parametrize("seconds", [0, 14399])
+def test_neighbor_info_update_interval_below_the_firmware_minimum_is_rejected(
+    seconds: int,
+) -> None:
+    with pytest.raises(TemplateValidationError, match="update_interval"):
+        load_template_text(f"version: 1\nneighbor_info:\n  update_interval: {seconds}\n")
+
+
+def test_neighbor_info_update_interval_at_the_firmware_minimum_loads() -> None:
+    cfg = load_template_text("version: 1\nneighbor_info:\n  update_interval: 14400\n")
+
+    assert cfg.neighbor_info is not None
+    assert cfg.neighbor_info.update_interval == 14400
+
+
+@pytest.mark.parametrize("seconds", [1, 29])
+def test_on_battery_shutdown_after_secs_below_the_firmware_minimum_is_rejected(
+    seconds: int,
+) -> None:
+    with pytest.raises(TemplateValidationError, match="on_battery_shutdown_after_secs"):
+        load_template_text(f"version: 1\npower:\n  on_battery_shutdown_after_secs: {seconds}\n")
+
+
+def test_on_battery_shutdown_after_secs_disabled_or_at_the_minimum_loads() -> None:
+    for seconds in (0, 30):
+        cfg = load_template_text(
+            f"version: 1\npower:\n  on_battery_shutdown_after_secs: {seconds}\n"
+        )
+
+        assert cfg.power is not None
+        assert cfg.power.on_battery_shutdown_after_secs == seconds
+
+
 def test_default_channel_section_round_trip() -> None:
     section = DefaultChannelSection(position_precision=12, is_muted=True)
     dumped = section.model_dump()

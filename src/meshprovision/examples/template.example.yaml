@@ -119,7 +119,7 @@ telemetry:
 # a template-load error; set neighbor_info.enabled here instead.
 neighbor_info:
   enabled: true
-  update_interval: 14400
+  update_interval: 14400  # firmware minimum; lower values are reset to 21600
   transmit_over_lora: false
 
 security:

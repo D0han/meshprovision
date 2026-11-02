@@ -306,8 +306,7 @@ def test_the_health_json_carries_the_preset_and_the_online_count() -> None:
 _TEMPLATE = """
 device:
   role: {role}
-  node_info_broadcast_secs: {secs}
-lora:
+{interval}lora:
   region: EU_868
   use_preset: {use_preset}
   modem_preset: MEDIUM_FAST
@@ -319,10 +318,14 @@ def test_template_hints_without_a_template() -> None:
 
 
 def test_template_hints_take_the_interval_and_the_preset() -> None:
-    template = load_template_text(_TEMPLATE.format(role="CLIENT", secs=21600, use_preset="true"))
+    template = load_template_text(
+        _TEMPLATE.format(
+            role="CLIENT", interval="  node_info_broadcast_secs: 21600\n", use_preset="true"
+        )
+    )
     assert template_hints(template) == (timedelta(hours=6), "MEDIUM_FAST")
 
 
 def test_template_hints_without_use_preset_have_no_preset() -> None:
-    template = load_template_text(_TEMPLATE.format(role="TAK", secs=0, use_preset="false"))
+    template = load_template_text(_TEMPLATE.format(role="TAK", interval="", use_preset="false"))
     assert template_hints(template) == (timedelta(hours=24), None)

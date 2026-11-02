@@ -29,6 +29,9 @@ from meshprovision.enums import (
 from meshprovision.errors import EnumMappingError, TemplateValidationError
 
 __all__ = [
+    "NEIGHBOR_INFO_UPDATE_MIN_SECS",
+    "NODE_INFO_BROADCAST_MIN_SECS",
+    "ON_BATTERY_SHUTDOWN_MIN_SECS",
     "DefaultChannelSection",
     "DeviceSection",
     "LoraSection",
@@ -46,6 +49,15 @@ _KEY_MATERIAL_KEYS: Final[frozenset[str]] = frozenset(
 _POSITION_FIXED_KEYS: Final[frozenset[str]] = frozenset(
     {"fixed_latitude", "fixed_longitude", "fixed_altitude"}
 )
+
+NODE_INFO_BROADCAST_MIN_SECS: Final[int] = 3600
+"""Firmware's ``min_node_info_broadcast_secs``: AdminModule raises a lower value to this."""
+
+NEIGHBOR_INFO_UPDATE_MIN_SECS: Final[int] = 14400
+"""Firmware's ``min_neighbor_info_broadcast_secs``: a lower value is reset to its default."""
+
+ON_BATTERY_SHUTDOWN_MIN_SECS: Final[int] = 30
+"""Firmware's minimum for a non-zero ``on_battery_shutdown_after_secs``; lower is raised."""
 
 
 def _canonicalize_enum_field(value: object, *, table: EnumTable, field: str) -> object:
@@ -101,7 +113,9 @@ class DeviceSection(BaseModel):
         rebroadcast_mode: Rebroadcast mode name, validated and
             canonicalized against
             :func:`meshprovision.enums.rebroadcast_mode_table`.
-        node_info_broadcast_secs: Node-info broadcast interval, seconds.
+        node_info_broadcast_secs: Node-info broadcast interval, seconds; at
+            least 3600 (the firmware raises anything lower, so it could
+            never be verified).
         button_gpio: GPIO pin number for the user button, when overridden.
         buzzer_gpio: GPIO pin number for the buzzer, when overridden.
         double_tap_as_button_press: Whether an accelerometer double-tap
@@ -115,7 +129,7 @@ class DeviceSection(BaseModel):
 
     role: str = "CLIENT"
     rebroadcast_mode: str | None = None
-    node_info_broadcast_secs: int | None = Field(default=None, ge=0)
+    node_info_broadcast_secs: int | None = Field(default=None, ge=NODE_INFO_BROADCAST_MIN_SECS)
     button_gpio: int | None = Field(default=None, ge=0)
     buzzer_gpio: int | None = Field(default=None, ge=0)
     double_tap_as_button_press: bool | None = None
@@ -324,7 +338,8 @@ class PowerSection(BaseModel):
         is_power_saving: Whether the device sleeps aggressively between
             radio activity.
         on_battery_shutdown_after_secs: Seconds on battery power before
-            automatic shutdown.
+            automatic shutdown; 0 (disabled) or at least 30 (the firmware
+            raises 1-29 to 30, so it could never be verified).
         adc_multiplier_override: Battery-voltage ADC multiplier override.
         wait_bluetooth_secs: Seconds to keep Bluetooth active after boot.
         sds_secs: Super-deep-sleep duration, seconds.
@@ -342,6 +357,26 @@ class PowerSection(BaseModel):
     sds_secs: int | None = Field(default=None, ge=0)
     ls_secs: int | None = Field(default=None, ge=0)
     min_wake_secs: int | None = Field(default=None, ge=0)
+
+    @field_validator("on_battery_shutdown_after_secs")
+    @classmethod
+    def _reject_sub_minimum_shutdown(cls, value: int | None) -> int | None:
+        """Refuse a non-zero shutdown delay the firmware would raise.
+
+        Args:
+            value: The validated field value.
+
+        Returns:
+            ``value`` unchanged.
+
+        Raises:
+            ValueError: If ``value`` is between 1 and 29.
+        """
+        if value is not None and 0 < value < ON_BATTERY_SHUTDOWN_MIN_SECS:
+            raise ValueError(
+                f"Input should be 0 (disabled) or at least {ON_BATTERY_SHUTDOWN_MIN_SECS}"
+            )
+        return value
 
 
 class TelemetrySection(BaseModel):
@@ -407,14 +442,16 @@ class NeighborInfoSection(BaseModel):
         enabled: Whether the neighbor-info module is active. Supersedes
             listing ``"neighbor_info"`` in ``enabled_options``/
             ``disabled_options`` -- see ``TemplateConfig``'s consistency check.
-        update_interval: Neighbor-info broadcast interval, seconds.
+        update_interval: Neighbor-info broadcast interval, seconds; at
+            least 14400 (the firmware resets anything lower to its 21600
+            default).
         transmit_over_lora: Whether neighbor info is transmitted over LoRa.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool | None = None
-    update_interval: int | None = Field(default=None, ge=0)
+    update_interval: int | None = Field(default=None, ge=NEIGHBOR_INFO_UPDATE_MIN_SECS)
     transmit_over_lora: bool | None = None
 
 

@@ -403,7 +403,7 @@ packets, taken from the first of:
 |---|---|
 | `override` | `--expected-interval HOURS` (every reported node; combine with `--node`) |
 | `history` | the mean gap between the hours its [`mesh health`](#mesh-health) history heard it in (last 7 days; needs 3 heard hours; hours after the last heard one do not count, so an outage does not stretch its own interval) |
-| `template` | for a template-managed node: the template's `device.node_info_broadcast_secs` (raised to the firmware's minimum of 1 h; unset means the role default of the template's `device.role`) |
+| `template` | for a template-managed node: the template's `device.node_info_broadcast_secs` (at least 3600 s, the firmware's minimum; unset means the role default of the template's `device.role`) |
 | `role` | its role's node-info default: 3 h; 24 h for `TAK`/`TAK_TRACKER`; 48 h for `CLIENT_HIDDEN`/`REPEATER`, which send none |
 
 `E` is at most 48 h. Then

@@ -163,7 +163,7 @@ def template_interval(node_info_seconds: int | None, role: str | None) -> timede
 
     Args:
         node_info_seconds: The template's ``device.node_info_broadcast_secs``
-            (``None`` or 0: the device's default).
+            (``None``: the device's default).
         role: The template's ``device.role``.
 
     Returns:

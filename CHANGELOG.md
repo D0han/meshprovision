@@ -654,6 +654,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A template's `device.node_info_broadcast_secs` below 3600,
+  `neighbor_info.update_interval` below 14400 or
+  `power.on_battery_shutdown_after_secs` between 1 and 29 is refused at
+  load. The firmware raises the first to 3600, resets the second to 21600
+  and raises the third to 30 (2.7.26 through 2.8.2), so such a template was
+  written and then failed verification on every run. `mesh template
+  validate` now reports the field and its floor, and `mesh status` and
+  `mesh health` ignore such a template with a warning until it is fixed.
 - `mesh provision` of a FACTORY node, and `mesh provision
   --force-regenerate-key`, on firmware >= 2.8 ended FAILED with "database
   NOT updated": firmware 2.8 derives the node id from the public key
