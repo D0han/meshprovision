@@ -97,7 +97,7 @@ def test_a_first_refresh_asks_for_everything_and_stores_it(tmp_path: Path) -> No
     assert outcome == NetworkRefresh(
         refreshed=("Zachód",), nodes={"Zachód": (_NODE,)}, skipped_rows=1
     )
-    assert store.state("Zachód") == RegionState(fetched_at=NOW, skipped_rows=1)
+    assert store.state("Zachód") == RegionState(fetched_at=NOW)
     hours = store.load("Zachód", start=0)
     assert [bucket.hour for bucket in hours] == [floor_hour(T0), floor_hour(NOW)]
     assert hours[0].traffic.packets == {_O: 1}
@@ -173,7 +173,7 @@ def test_a_fetch_stored_in_the_future_does_not_block_and_is_not_asked_from(
     tmp_path: Path,
 ) -> None:
     refresher, feed, store, _ = _setup(tmp_path)
-    store.update("Zachód", [], fetched_at=NOW + 2 * HOUR_SECONDS, skipped_rows=0)
+    store.update("Zachód", [], fetched_at=NOW + 2 * HOUR_SECONDS)
 
     refresher.refresh(["Zachód"])
 
@@ -184,7 +184,7 @@ def test_a_fetch_stored_a_year_ahead_is_replaced_so_the_interval_holds_again(
     tmp_path: Path,
 ) -> None:
     refresher, feed, store, now = _setup(tmp_path)
-    store.update("Zachód", [], fetched_at=NOW + 365 * 24 * HOUR_SECONDS, skipped_rows=0)
+    store.update("Zachód", [], fetched_at=NOW + 365 * 24 * HOUR_SECONDS)
     refresher.refresh(["Zachód"])
     feed.calls.clear()
     now[0] = NOW + NETWORK_FORCED_REFRESH_INTERVAL_SECONDS
@@ -197,7 +197,7 @@ def test_a_fetch_stored_a_year_ahead_is_replaced_so_the_interval_holds_again(
 
 def test_a_fetch_just_inside_the_future_skew_counts(tmp_path: Path) -> None:
     refresher, feed, store, _ = _setup(tmp_path)
-    store.update("Zachód", [], fetched_at=NOW + 300, skipped_rows=0)
+    store.update("Zachód", [], fetched_at=NOW + 300)
 
     refresher.refresh(["Zachód"])
 

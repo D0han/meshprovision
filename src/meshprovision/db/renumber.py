@@ -40,8 +40,6 @@ from meshprovision.nodeid import NodeId, is_reserved_id, key_derived_id
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from meshprovision.db.node_record import NodeRecord
-
 __all__ = [
     "NOTE_SEPARATOR",
     "Renumbered",
@@ -130,7 +128,7 @@ def check_renumber(
     pending_public: bytes | None = None,
     new_has_pending: bool = False,
     force: bool = False,
-) -> NodeRecord:
+) -> None:
     """Check that ``old``'s row may move to ``new``, before anything is changed.
 
     Args:
@@ -145,9 +143,6 @@ def check_renumber(
         force: Skip the proof that ``new`` derives from a key ``old``
             holds; the other guards still apply.
 
-    Returns:
-        ``old``'s row.
-
     Raises:
         NodeNotFoundError: If ``old`` has no row.
         RenumberRefusedError: If ``new`` is ``old``, reserved, or taken (a
@@ -156,8 +151,7 @@ def check_renumber(
             derived from ``pending_public`` or from ``old``'s recorded
             public key (which no other node row may hold).
     """
-    record = nodes.get(old)
-    if record.is_archived:
+    if nodes.get(old).is_archived:
         _refuse(f"Node {old.display} was archived via `mesh db forget`.", old=old, new=new)
     check_new_id(nodes, keys, old=old, new=new)
     if new_has_pending:
@@ -172,7 +166,6 @@ def check_renumber(
         )
     if not force:
         _check_proof(keys, old=old, new=new, pending_public=pending_public)
-    return record
 
 
 def check_new_id(nodes: NodeRepository, keys: KeyRepository, *, old: NodeId, new: NodeId) -> None:

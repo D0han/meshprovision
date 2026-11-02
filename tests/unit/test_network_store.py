@@ -39,7 +39,7 @@ def _bucket(hour: int, packets: int = 1) -> RegionHour:
 
 
 def _update(store: RegionStore, *hours: RegionHour, region: str = _REGION) -> None:
-    store.update(region, hours, fetched_at=NOW, skipped_rows=2)
+    store.update(region, hours, fetched_at=NOW)
 
 
 def _day_file(store: RegionStore, day: str, region: str = _REGION) -> Path:
@@ -53,7 +53,7 @@ def test_hours_written_are_read_back_with_the_state(tmp_path: Path) -> None:
     _update(store, *hours)
 
     assert store.load(_REGION, start=_HOUR - _DAY) == hours
-    assert store.state(_REGION) == RegionState(fetched_at=NOW, skipped_rows=2)
+    assert store.state(_REGION) == RegionState(fetched_at=NOW)
 
 
 def test_one_file_per_utc_day_owner_only(tmp_path: Path) -> None:
@@ -118,14 +118,14 @@ def test_an_update_replaces_its_hours_and_keeps_the_others(tmp_path: Path) -> No
 def test_two_processes_updating_one_region_both_leave_their_hours(tmp_path: Path) -> None:
     first, second = _store(tmp_path), _store(tmp_path)
 
-    first.update(_REGION, [_bucket(_HOUR - HOUR_SECONDS)], fetched_at=NOW - 60, skipped_rows=0)
-    second.update(_REGION, [_bucket(_HOUR)], fetched_at=NOW - 120, skipped_rows=1)
+    first.update(_REGION, [_bucket(_HOUR - HOUR_SECONDS)], fetched_at=NOW - 60)
+    second.update(_REGION, [_bucket(_HOUR)], fetched_at=NOW - 120)
 
     assert first.load(_REGION, start=_HOUR - _DAY) == (
         _bucket(_HOUR - HOUR_SECONDS),
         _bucket(_HOUR),
     )
-    assert first.state(_REGION) == RegionState(fetched_at=NOW - 60, skipped_rows=1)
+    assert first.state(_REGION) == RegionState(fetched_at=NOW - 60)
 
 
 @pytest.mark.parametrize(
@@ -141,9 +141,9 @@ def test_a_recorded_fetch_ahead_of_the_clock_is_replaced_not_kept(
     tmp_path: Path, recorded: float, kept: float
 ) -> None:
     store = _store(tmp_path)
-    store.update(_REGION, [], fetched_at=recorded, skipped_rows=0)
+    store.update(_REGION, [], fetched_at=recorded)
 
-    store.update(_REGION, [], fetched_at=NOW, skipped_rows=0)
+    store.update(_REGION, [], fetched_at=NOW)
 
     assert store.state(_REGION).fetched_at == kept
 
@@ -231,7 +231,7 @@ def test_a_day_file_over_the_cap_is_not_read(
         ),
         pytest.param(
             {"version": STORE_VERSION, "region": _REGION, "fetched_at": NOW, "skipped_rows": 4},
-            RegionState(NOW, 4),
+            RegionState(NOW),
             id="good",
         ),
     ],

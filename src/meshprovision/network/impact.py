@@ -299,7 +299,7 @@ def _everyone(traffic: Traffic) -> set[str]:
     return {
         *traffic.packets,
         *traffic.last_hops,
-        *(gateway for gateway in gateway_relayed(traffic)),
+        *gateway_relayed(traffic),
         *(gateway for cells in traffic.only_gateway.values() for gateway in cells),
     }
 

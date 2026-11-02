@@ -60,9 +60,7 @@ def _seed(
         for n in range(noise)
     ]
     hours = summarize(parse_raw(rows, now=fetched_at), since=None, fetched_at=fetched_at)
-    RegionStore(directory, clock=lambda: fetched_at).update(
-        region, hours, fetched_at=fetched_at, skipped_rows=0
-    )
+    RegionStore(directory, clock=lambda: fetched_at).update(region, hours, fetched_at=fetched_at)
 
 
 def _note(directory: Path, now: float = NOW) -> str | None:

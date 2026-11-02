@@ -249,7 +249,7 @@ class RegionRefresher:
         asked = None if since is None else since - SINCE_MARGIN_SECONDS
         parsed = parse_raw(self._feed.raw(region, since=asked), now=now)
         hours = summarize(parsed, since=since, fetched_at=now)
-        self._store.update(region, hours, fetched_at=now, skipped_rows=parsed.skipped)
+        self._store.update(region, hours, fetched_at=now)
         self._keys.update(region, observe(parsed.keys, self._known_bad))
         _logger.info(
             "lorastats: %d reception(s) in %s, %d row(s) skipped",

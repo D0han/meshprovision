@@ -54,7 +54,6 @@ from meshprovision.network.buckets import NETWORK_RETENTION_SECONDS, RegionHour,
 from meshprovision.network.hourjson import (
     hour_from_json,
     hour_to_json,
-    read_count,
     read_hex_id,
     read_number,
     read_relay_byte,
@@ -114,11 +113,9 @@ class RegionState:
     Attributes:
         fetched_at: When lorastats was last asked about it, epoch seconds,
             or ``None`` when never (or the state is unreadable).
-        skipped_rows: Rows of that answer that could not be used.
     """
 
     fetched_at: float | None = None
-    skipped_rows: int = 0
 
 
 @dataclass(slots=True)
@@ -210,9 +207,7 @@ class RegionStore:
         document = read_json(path, max_bytes=_STATE_MAX_BYTES, what=_WHAT)
         if not _is_document(document, region):
             return RegionState()
-        fetched_at = read_number(document.get("fetched_at"), 0, math.inf)
-        skipped = read_count(document.get("skipped_rows"))
-        return RegionState(fetched_at=fetched_at, skipped_rows=skipped or 0)
+        return RegionState(fetched_at=read_number(document.get("fetched_at"), 0, math.inf))
 
     def load(self, region: str, *, start: float) -> tuple[RegionHour, ...]:
         """Read ``region``'s hours from the hour of ``start`` on.
@@ -235,7 +230,6 @@ class RegionStore:
         hours: Iterable[RegionHour],
         *,
         fetched_at: float,
-        skipped_rows: int,
     ) -> None:
         """Merge a refresh's hours into ``region``'s day files, record it, and sweep.
 
@@ -248,7 +242,6 @@ class RegionStore:
                 one lies more than :data:`FUTURE_SKEW_SECONDS` ahead of the
                 clock (written while the clock was set ahead): that one is
                 replaced, so it cannot void the request budget.
-            skipped_rows: Rows of its answer that could not be used.
         """
         now = self._clock()
         by_day: defaultdict[str, list[RegionHour]] = defaultdict(list)
@@ -264,7 +257,6 @@ class RegionStore:
             "version": STORE_VERSION,
             "region": region,
             "fetched_at": fetched_at,
-            "skipped_rows": skipped_rows,
         }
         write_json(self.path_for(region) / _STATE_FILENAME, state, what=_WHAT)
         self._sweep(now)

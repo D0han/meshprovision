@@ -258,7 +258,7 @@ def test_first_hops_and_gateways_of_our_node() -> None:
 
 
 def test_a_node_of_ours_without_a_path_is_said_so() -> None:
-    region = RegionReport("PL", NOW, None, KeyScan((), (), (), ()))
+    region = RegionReport("PL", NOW, KeyScan((), (), (), ()))
     report = NetworkReport(NOW, 1, (FleetNode(_OURS, "Our1", FleetKey(_OURS)),), (region,))
 
     (ours,) = graph_to_json_dict(report)["regions"][0]["ours"]  # type: ignore[index]
@@ -355,7 +355,7 @@ def _report_with_lists(neighbors: dict[str, tuple[ReportedNeighbor, ...]]) -> Ne
         relayed={0x61: {_G1: Radio(6)}},
         last_hops={_OURS: {0x61: LastHop(6, 6)}},
     )
-    region = RegionReport("PL", NOW, None, KeyScan((), (), (), ()), traffic, resolutions=_RES)
+    region = RegionReport("PL", NOW, KeyScan((), (), (), ()), traffic, resolutions=_RES)
     return NetworkReport(
         NOW,
         1,
@@ -388,7 +388,7 @@ def test_heard_ids_are_every_origin_gateway_and_resolved_relay() -> None:
         relayed={0x61: {_G2: Radio(3)}},
         last_hops={"b0000009": {0x61: LastHop(3)}},
     )
-    region = RegionReport("PL", NOW, None, KeyScan((), (), (), ()), traffic, resolutions=_RES)
+    region = RegionReport("PL", NOW, KeyScan((), (), (), ()), traffic, resolutions=_RES)
 
     assert heard_ids((region,)) == {NodeId.from_hex(n) for n in (_O, _G1, _G2, "b0000009", _R)}
 

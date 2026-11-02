@@ -47,9 +47,7 @@ def _seed_store(env: dict[str, str], *, relay: int = 0x01, fetched_ago: float = 
     ]
     hours = summarize(parse_raw(rows, now=fetched_at), since=None, fetched_at=fetched_at)
     directory = Path(env["MESHPROVISION_CACHE_DIR"]) / NETWORK_DIRNAME
-    RegionStore(directory, clock=lambda: fetched_at).update(
-        "Zachód", hours, fetched_at=fetched_at, skipped_rows=0
-    )
+    RegionStore(directory, clock=lambda: fetched_at).update("Zachód", hours, fetched_at=fetched_at)
     return directory
 
 

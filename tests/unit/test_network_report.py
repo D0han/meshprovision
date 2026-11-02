@@ -78,7 +78,7 @@ def _report(
     *fetched: float | None, failures: int = 0, critical_ours: bool = False
 ) -> NetworkReport:
     regions = tuple(
-        RegionReport(f"R{i}", when, None, _scan(critical_ours=critical_ours))
+        RegionReport(f"R{i}", when, _scan(critical_ours=critical_ours))
         for i, when in enumerate(fetched)
     )
     refresh = NetworkRefresh(failures=tuple(RegionFailure("R0", "down") for _ in range(failures)))
@@ -101,7 +101,7 @@ def test_exit_codes(report: NetworkReport, crypto: bool, code: int) -> None:
 
 
 def test_without_fetching_nothing_failed() -> None:
-    report = NetworkReport(NOW, 1, (), (RegionReport("R", NOW, None, _scan()),), None)
+    report = NetworkReport(NOW, 1, (), (RegionReport("R", NOW, _scan()),), None)
 
     assert report.exit_code() == 0
     assert report.start == NOW - 24 * 3600
@@ -117,14 +117,14 @@ def test_without_fetching_nothing_failed() -> None:
     ],
 )
 def test_a_loranet_failure_degrades_the_exit_code(loranet: LoranetView | None, code: int) -> None:
-    report = NetworkReport(NOW, 1, (), (RegionReport("R", NOW, None, _scan()),), None, loranet)
+    report = NetworkReport(NOW, 1, (), (RegionReport("R", NOW, _scan()),), None, loranet)
 
     assert report.exit_code() == code
 
 
 def test_no_data_still_beats_a_loranet_failure() -> None:
     report = NetworkReport(
-        NOW, 1, (), (RegionReport("R", None, None, _scan()),), None, LoranetView(True, error="x")
+        NOW, 1, (), (RegionReport("R", None, _scan()),), None, LoranetView(True, error="x")
     )
 
     assert report.exit_code() == 3
@@ -148,7 +148,6 @@ def test_loranet_is_asked_about_every_resolved_relay_node_of_every_region() -> N
     first = RegionReport(
         "A",
         NOW,
-        None,
         _scan(),
         resolutions={
             0x61: Resolution(0x61, Confidence.HIGH, "c0ffee61"),
@@ -156,7 +155,7 @@ def test_loranet_is_asked_about_every_resolved_relay_node_of_every_region() -> N
         },
     )
     second = RegionReport(
-        "B", NOW, None, _scan(), resolutions={1: Resolution(1, Confidence.MEDIUM, "aa000001")}
+        "B", NOW, _scan(), resolutions={1: Resolution(1, Confidence.MEDIUM, "aa000001")}
     )
 
     assert loranet_ids((first, second)) == {

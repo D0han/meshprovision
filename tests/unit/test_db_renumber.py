@@ -84,11 +84,9 @@ def test_append_note_separates_only_a_non_empty_cell(notes: str, expected: str) 
 def test_the_derived_id_of_the_recorded_key_passes(
     nodes: NodeRepository, keys: KeyRepository, keypair: KeyPair
 ) -> None:
-    seeded = _seed_node(nodes, keys, _OLD, keypair)
+    _seed_node(nodes, keys, _OLD, keypair)
 
-    record = check_renumber(nodes, keys, old=_OLD, new=key_derived_id(keypair.public))
-
-    assert record.node_id == seeded.node_id
+    check_renumber(nodes, keys, old=_OLD, new=key_derived_id(keypair.public))
 
 
 def test_the_same_id_is_refused(
@@ -156,7 +154,7 @@ def test_without_a_recorded_key_only_force_moves_the_row(
     assert "has no recorded public key" in error.message
     assert error.hint is not None
     assert "--force" in error.hint
-    assert check_renumber(nodes, keys, old=_OLD, new=_THIRD, force=True).node_id == _OLD.hex
+    check_renumber(nodes, keys, old=_OLD, new=_THIRD, force=True)
 
 
 def test_an_id_not_derived_from_the_recorded_key_is_refused_naming_the_derived_one(
@@ -192,9 +190,7 @@ def test_a_recorded_key_an_admin_alias_also_holds_still_proves_the_id(
         )
     )
 
-    record = check_renumber(nodes, keys, old=_OLD, new=key_derived_id(keypair.public))
-
-    assert record.node_id == _OLD.hex
+    check_renumber(nodes, keys, old=_OLD, new=key_derived_id(keypair.public))
 
 
 def test_a_pending_keypair_proves_the_id_it_derives(
@@ -207,9 +203,7 @@ def test_a_pending_keypair_proves_the_id_it_derives(
     _seed_node(nodes, keys, _OLD, keypair)
     new = key_derived_id(pending.public)
 
-    record = check_renumber(nodes, keys, old=_OLD, new=new, pending_public=pending.public)
-
-    assert record.node_id == _OLD.hex
+    check_renumber(nodes, keys, old=_OLD, new=new, pending_public=pending.public)
 
 
 def test_a_pending_keypair_deriving_another_id_still_needs_the_recorded_key(
@@ -222,10 +216,9 @@ def test_a_pending_keypair_deriving_another_id_still_needs_the_recorded_key(
     pending = keypair_factory()
 
     _refused(nodes, keys, _THIRD, pending_public=pending.public)
-    record = check_renumber(
+    check_renumber(
         nodes, keys, old=_OLD, new=key_derived_id(keypair.public), pending_public=pending.public
     )
-    assert record.node_id == _OLD.hex
 
 
 def _admin_referencing(nodes: NodeRepository, node: NodeId, refs: tuple[str, ...]) -> None:

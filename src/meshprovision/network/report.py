@@ -167,7 +167,6 @@ class RegionReport:
     Attributes:
         region: The region.
         fetched_at: When its data was last fetched (``None``: never).
-        first_hour: The oldest stored hour in the window, if any.
         keys: The key scan of the window.
         traffic: The window's traffic (empty when not loaded).
         nodes: The region's node list, when it could be had.
@@ -177,7 +176,6 @@ class RegionReport:
 
     region: str
     fetched_at: float | None
-    first_hour: int | None
     keys: KeyScan
     traffic: Traffic = field(default_factory=Traffic)
     nodes: tuple[NodeObservation, ...] = ()
@@ -405,9 +403,8 @@ def _region(
     fetched_at = store.state(region).fetched_at
     nodes = () if refresh is None else refresh.nodes.get(region, ())
     if not traffic:
-        return RegionReport(region, fetched_at, None, scan, nodes=nodes)
-    hours = store.load(region, start=start)
-    combined = combine(hours)
+        return RegionReport(region, fetched_at, scan, nodes=nodes)
+    combined = combine(store.load(region, start=start))
     mute = {entry.node for entry in scan.seen if entry.role == _MUTE_ROLE}
     candidates = relay_candidates(combined, nodes, start=start, mute=mute)
     resolutions = resolve_relays(combined, candidates, learned=store.learned_relays(region))
@@ -416,7 +413,6 @@ def _region(
     return RegionReport(
         region=region,
         fetched_at=fetched_at,
-        first_hour=hours[0].hour if hours else None,
         keys=scan,
         traffic=combined,
         nodes=nodes,

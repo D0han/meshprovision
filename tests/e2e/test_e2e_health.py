@@ -604,9 +604,7 @@ def _seed_network_store(env: dict[str, str], *, node: str = _A, fetched_ago: flo
     ]
     hours = summarize(parse_raw(rows, now=fetched_at), since=None, fetched_at=fetched_at)
     directory = Path(env["MESHPROVISION_CACHE_DIR"]) / NETWORK_DIRNAME
-    RegionStore(directory, clock=lambda: fetched_at).update(
-        "Zachód", hours, fetched_at=fetched_at, skipped_rows=0
-    )
+    RegionStore(directory, clock=lambda: fetched_at).update("Zachód", hours, fetched_at=fetched_at)
 
 
 def _importance(document: dict[str, Any], node: str) -> dict[str, Any]:

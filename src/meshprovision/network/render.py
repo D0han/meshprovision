@@ -241,7 +241,7 @@ def _relay_name(row: RelayRow, known: Mapping[str, str]) -> tuple[str, str]:
 
 
 def _duration(seconds: float) -> str:
-    """Render a duration compactly: ``65s``, ``12m``, ``5h``, ``10d``."""
+    """Render a duration compactly in its largest whole unit: ``45s``, ``12m``, ``5h``, ``10d``."""
     for unit, size in (("d", 86400), ("h", 3600), ("m", 60)):
         if seconds >= size:
             return f"{int(seconds // size)}{unit}"
