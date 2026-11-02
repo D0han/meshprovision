@@ -8,15 +8,18 @@ what's known, what's already fixed, and what's deliberately not guessed
 at.
 
 **The `meshtastic` library is pinned to a commit, not a release.** The
-newest PyPI release when this was checked (2026-10-02), 2.7.11, has no
-firmware 2.8 protobuf fields, so
-`pyproject.toml` pins `meshtastic` to commit `be36666` of
-`meshtastic/python`'s unreleased `master` branch. That commit carries the
-2.8 schema: `security.packet_signature_policy` (XEdDSA packet signing,
-a template field), the `TINY_FAST`/`TINY_SLOW`/`MEDIUM_TURBO` modem
-presets and the new amateur-band regions. meshprovision reads its
-region/role/hardware tables from the *installed* library's enums
-(`enums.py`), so these need no code of their own. Once a 2.8-compatible
+newest PyPI release when this was checked (2026-11-02), 2.7.11, has no
+firmware 2.8 protobuf fields, so `pyproject.toml` pins `meshtastic` to
+commit `0a18357` of `meshtastic/python`'s unreleased `master` branch
+(protobufs v2.8.1). That commit carries the 2.8 schema:
+`security.packet_signature_policy` (XEdDSA packet signing, a template
+field), the `TINY_FAST`/`TINY_SLOW`/`MEDIUM_TURBO` modem presets and the
+new amateur-band regions. The v2.8.1 schema adds four hardware models
+(`T_CONNECT_PRO`, `AXIOMETA_GENESIS_MINI`, `MAKERFABS_NOMAD_TERMINAL`,
+`THINKNODE_MX`), which meshprovision now names like any other; their
+chipset shows as unknown. meshprovision reads its region/role/hardware
+tables from the *installed* library's enums (`enums.py`), so these need no
+code of their own. Once a 2.8-compatible
 release lands on PyPI, the pin goes back to a normal version constraint
 (after the full test suite, which catches silent enum renames such as
 `SENSELORA_RP2040` -> `MAKERFABS_TRACKER`).
@@ -35,6 +38,16 @@ defaults — it applies whatever `lora.modem_preset` your template
 specifies — but if you're provisioning new nodes onto an existing US
 mesh, check your template names the preset your mesh actually uses
 rather than relying on the device's own factory default.
+
+**Informational: `lora.coding_rate` with a preset.** Verified in the
+firmware source at v2.8.2 (`RadioInterface.cpp`): a `coding_rate` of 5-8
+that is higher than the preset's raises the preset's coding rate even
+with `use_preset` on (nodes on the same preset still hear each other, at
+more airtime per packet). The 2.8.1 protobuf documentation says this holds
+since firmware 2.7.18 (unverified). meshprovision does not
+set or read `coding_rate`, so a value set earlier in the app survives
+`mesh provision`; reset it to 0 in the app if a node should use the
+preset's own rate.
 
 ## Node identity: the node id follows the key
 

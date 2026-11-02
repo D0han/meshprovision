@@ -371,11 +371,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-reconnecting run re-reads, so the change could otherwise never be
   confirmed and the node would never be recorded.
 - The `meshtastic` dependency now pins to a specific commit
-  (`be366660828b5a54469e703209a10aa954927791`) on `meshtastic/python`'s
+  (`0a1835760c2437314a2d3544bbdd8b6fead559bc`) on `meshtastic/python`'s
   unreleased `master` branch instead of the PyPI release (`>=2.7.11`,
   still the latest tagged release) -- the only way to get
   `Config.SecurityConfig.packet_signature_policy`, a firmware 2.8
-  protobuf field not in any tagged release yet. Re-evaluate once an
+  protobuf field not in any tagged release yet. The commit carries
+  protobufs v2.8.1, which name four more hardware models (T_CONNECT_PRO,
+  AXIOMETA_GENESIS_MINI, MAKERFABS_NOMAD_TERMINAL, THINKNODE_MX) in
+  `mesh adopt`, `mesh provision` and the database's hw_model list instead
+  of leaving them blank. Re-evaluate once an
   official 2.8-compatible release lands. The pinned protobuf knowing the
   field says nothing about the connected device's firmware: see the
   firmware gate on the template field below.
@@ -396,6 +400,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Updating an existing checkout: the pinned `meshtastic` commit keeps
+  upstream's version string (2.7.11), so `pip install -e ".[dev]"` can
+  leave the previous commit in place. Reinstall it with `pip install
+  --force-reinstall --no-deps "meshtastic @ git+https://github.com/meshtastic/python.git@0a1835760c2437314a2d3544bbdd8b6fead559bc"`
+  (see [Installation](docs/installation.md#updating)). A stale install
+  names the new hardware models as unknown, and cannot open a database
+  record that holds one.
 - `mesh health` importance also counts how much a node's region relies on
   it: when `mesh network` stored the region at most 48 hours ago and the
   node's impact level there is `medium` or `high`, the importance level is

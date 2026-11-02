@@ -24,12 +24,13 @@ classifiers = [
 ]
 dependencies = [
   # Pinned to a specific commit on meshtastic/python's unreleased master
-  # branch (not an official PyPI release -- 2.7.11 is still latest there)
+  # branch (not an official PyPI release -- 2.7.11 is still latest there):
+  # the tip carrying protobufs v2.8.1 (2026-10-03), originally pinned
   # specifically to get SecurityConfig.packet_signature_policy, a firmware
   # 2.8 protobuf field not in any tagged release yet. See
   # ~/.claude/projects/-home-claude-meshprovision/memory/firmware_28_compatibility.md
   # for why, and re-evaluate once an official 2.8-compatible release lands.
-  "meshtastic @ git+https://github.com/meshtastic/python.git@be366660828b5a54469e703209a10aa954927791",
+  "meshtastic @ git+https://github.com/meshtastic/python.git@0a1835760c2437314a2d3544bbdd8b6fead559bc",
   "cryptography",
   "pydantic>=2",
   "rich",

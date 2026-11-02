@@ -332,9 +332,9 @@ _FALLBACK_GPS_MODE: Final[dict[str, int]] = {
     "NOT_PRESENT": 2,
 }
 
-# Verified 2026-10-02 against installed meshtastic commit
-# be366660828b5a54469e703209a10aa954927791 (meshtastic/python's unreleased
-# master branch -- see pyproject.toml). Not yet in any tagged PyPI release.
+# Verified 2026-10-02 against meshtastic commit be366660 and unchanged at
+# 0a1835760c2437314a2d3544bbdd8b6fead559bc (2026-11-02), meshtastic/python's
+# unreleased master branch -- see pyproject.toml. Not yet in any tagged PyPI release.
 _FALLBACK_PACKET_SIGNATURE_POLICY: Final[dict[str, int]] = {
     "PACKET_SIGNATURE_POLICY_COMPATIBLE": 0,
     "PACKET_SIGNATURE_POLICY_BALANCED": 1,

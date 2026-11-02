@@ -48,6 +48,21 @@ Everything (`dev` + `ble`) in one shot:
 pip install -e ".[all]"
 ```
 
+## Updating
+
+`meshtastic` is pinned to a commit that keeps upstream's version string
+(2.7.11), so `git pull && pip install -e ".[dev]"` may leave the
+previous commit in an existing virtualenv. After a pull that changes the
+pin in `pyproject.toml`, reinstall it explicitly:
+
+```bash
+pip install --force-reinstall --no-deps "meshtastic @ git+https://github.com/meshtastic/python.git@0a1835760c2437314a2d3544bbdd8b6fead559bc"
+```
+
+With `pipx`, run the same command through
+`pipx runpip meshprovision install --force-reinstall --no-deps ...`. A
+stale library fails `tests/unit/test_pinned_meshtastic.py`.
+
 ## `pipx`
 
 ```bash
