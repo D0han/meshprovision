@@ -49,8 +49,9 @@ to that.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections import Counter, defaultdict, deque
-from collections.abc import Collection, Iterable, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
@@ -264,20 +265,6 @@ def _adjacency(edges: Iterable[Edge]) -> dict[str, set[str]]:
     return dict(adjacency)
 
 
-def _reachable(adjacency: Mapping[str, set[str]], *, without: str | None = None) -> set[str]:
-    """Return the nodes reachable from MQTT, optionally without one node."""
-    if MQTT not in adjacency:
-        return set()
-    seen = {MQTT}
-    queue = deque([MQTT])
-    while queue:
-        for neighbor in adjacency[queue.popleft()]:
-            if neighbor != without and neighbor not in seen:
-                seen.add(neighbor)
-                queue.append(neighbor)
-    return seen
-
-
 def _origin_receptions(traffic: Traffic) -> Counter[str]:
     """Count each origin's receptions (direct and relayed)."""
     counts: Counter[str] = Counter()
@@ -291,15 +278,63 @@ def _origin_receptions(traffic: Traffic) -> Counter[str]:
 def _cut_vertices(
     adjacency: Mapping[str, set[str]], observed: Counter[str]
 ) -> tuple[CutVertex, ...]:
-    """Find every node whose removal cuts a well-observed node off from MQTT."""
-    reachable = _reachable(adjacency)
+    """Find every node whose removal cuts a well-observed node off from MQTT.
+
+    One depth-first search from MQTT (Tarjan's articulation points, linear
+    in nodes and edges): removing a node cuts off exactly the subtrees of
+    its children that reach no node discovered before it, and each subtree
+    is a run of the discovery order.
+    """
+    if MQTT not in adjacency:
+        return ()
+    order, cut_off = _cut_subtrees(adjacency)
+    well = [i for i, node in enumerate(order) if observed[node] >= MIN_ORIGIN_RECEPTIONS]
     found = []
-    for node in sorted(reachable - {MQTT}):
-        lost = reachable - _reachable(adjacency, without=node) - {node}
-        kept = tuple(sorted(n for n in lost if observed[n] >= MIN_ORIGIN_RECEPTIONS))
+    for node, runs in cut_off.items():
+        kept = tuple(
+            sorted(
+                order[i]
+                for first, end in runs
+                for i in well[bisect_left(well, first) : bisect_left(well, end)]
+            )
+        )
         if kept:
             found.append(CutVertex(node, kept))
     return tuple(sorted(found, key=lambda cut: (-len(cut.cuts_off), cut.node)))
+
+
+def _cut_subtrees(
+    adjacency: Mapping[str, set[str]],
+) -> tuple[list[str], dict[str, list[tuple[int, int]]]]:
+    """Search depth-first from MQTT, iteratively, for what each node's removal cuts off.
+
+    Returns:
+        The nodes reachable from MQTT in discovery order, and each node but
+        MQTT whose removal cuts some off -> the ``[first, end)`` runs of that
+        order it cuts off.
+    """
+    order = [MQTT]
+    index = {MQTT: 0}
+    low = {MQTT: 0}
+    cut_off: defaultdict[str, list[tuple[int, int]]] = defaultdict(list)
+    stack: list[tuple[str, str | None, Iterator[str]]] = [(MQTT, None, iter(adjacency[MQTT]))]
+    while stack:
+        node, parent, neighbors = stack[-1]
+        for neighbor in neighbors:
+            if neighbor not in index:
+                index[neighbor] = low[neighbor] = len(order)
+                order.append(neighbor)
+                stack.append((neighbor, node, iter(adjacency[neighbor])))
+                break
+            # The parent counts too: harmless, as a cut is low >= the parent's index.
+            low[node] = min(low[node], index[neighbor])
+        else:
+            stack.pop()
+            if parent is not None:
+                low[parent] = min(low[parent], low[node])
+                if parent != MQTT and low[node] >= index[parent]:
+                    cut_off[parent].append((index[node], len(order)))
+    return order, dict(cut_off)
 
 
 def _disjoint_paths(adjacency: Mapping[str, set[str]], source: str) -> int:

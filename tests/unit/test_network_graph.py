@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import io
+import itertools
+import random
+from collections import Counter, deque
 
 import pytest
 from rich.console import Console
 
 from meshprovision.datasources.loranet import ReportedNeighbor
+from meshprovision.network import graph as graph_module
 from meshprovision.network.buckets import LastHop, Radio, Traffic
 from meshprovision.network.graph import (
     LORANET_NEIGHBOR,
+    MIN_ORIGIN_RECEPTIONS,
     MQTT,
     CutVertex,
     LoranetPaths,
@@ -98,6 +103,72 @@ def test_a_cut_vertex_is_reported_only_for_well_observed_nodes() -> None:
     )
     assert build_graph(_chain(20), _RES, ()).cut_vertices[1] == CutVertex(_R, (_O,))
     assert build_graph(_chain(19), _RES, ()).cut_vertices == (CutVertex(_GZ, (_OURS,)),)
+
+
+def _reachable(adjacency: dict[str, set[str]], *, without: str | None = None) -> set[str]:
+    """The nodes reachable from MQTT without one node: the reference's search."""
+    if MQTT not in adjacency:
+        return set()
+    seen = {MQTT}
+    queue = deque([MQTT])
+    while queue:
+        for neighbor in adjacency[queue.popleft()]:
+            if neighbor != without and neighbor not in seen:
+                seen.add(neighbor)
+                queue.append(neighbor)
+    return seen
+
+
+def _cut_vertices_by_removal(
+    adjacency: dict[str, set[str]], observed: Counter[str]
+) -> tuple[CutVertex, ...]:
+    """The reference: remove each node in turn and see who loses MQTT (quadratic)."""
+    reachable = _reachable(adjacency)
+    found = []
+    for node in sorted(reachable - {MQTT}):
+        lost = reachable - _reachable(adjacency, without=node) - {node}
+        kept = tuple(sorted(n for n in lost if observed[n] >= MIN_ORIGIN_RECEPTIONS))
+        if kept:
+            found.append(CutVertex(node, kept))
+    return tuple(sorted(found, key=lambda cut: (-len(cut.cuts_off), cut.node)))
+
+
+def _random_graph(rng: random.Random) -> tuple[dict[str, set[str]], Counter[str]]:
+    """A sparse random graph, MQTT joined to a few nodes (or absent), random observations."""
+    nodes = [f"{i:08x}" for i in range(rng.randint(0, 40))]
+    adjacency: dict[str, set[str]] = {}
+    pairs = [(rng.choice(nodes), rng.choice(nodes)) for _ in range(len(nodes) * rng.randint(0, 2))]
+    gateways = [(node, MQTT) for node in rng.sample(nodes, min(len(nodes), rng.randint(0, 3)))]
+    for a, b in [*pairs, *gateways]:
+        if a != b:
+            adjacency.setdefault(a, set()).add(b)
+            adjacency.setdefault(b, set()).add(a)
+    observed = Counter({node: rng.choice([0, 5, 19, 20, 50]) for node in nodes})
+    return adjacency, observed
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_cut_vertices_match_removing_each_node_in_turn(seed: int) -> None:
+    rng = random.Random(20261102 + seed)  # noqa: S311 -- deterministic property sweep, not crypto
+    for _ in range(60):
+        adjacency, observed = _random_graph(rng)
+
+        found = graph_module._cut_vertices(adjacency, observed)
+
+        assert found == _cut_vertices_by_removal(adjacency, observed)
+
+
+def test_cut_vertices_of_a_long_chain_need_no_recursion() -> None:
+    nodes = [f"{i:08x}" for i in range(5000)]
+    path = [MQTT, *nodes]
+    adjacency = {node: set() for node in path}
+    for a, b in itertools.pairwise(path):
+        adjacency[a].add(b)
+        adjacency[b].add(a)
+
+    found = graph_module._cut_vertices(adjacency, Counter({nodes[-1]: MIN_ORIGIN_RECEPTIONS}))
+
+    assert found == tuple(CutVertex(node, (nodes[-1],)) for node in nodes[:-1])
 
 
 def test_a_sole_first_hop_needs_twenty_events_for_others_and_five_for_ours() -> None:
