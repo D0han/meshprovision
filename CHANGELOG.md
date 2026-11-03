@@ -169,17 +169,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mesh peers`: gives the connected device every other active node of the
   database as a contact (with the public key the Keys sheet records) and
   marks it favorite, so routers and base stations always hold the whole
-  fleet. Dry run by default, `--apply` writes and verifies after a
-  reconnect, idempotent; a node the device holds under a different key is
-  reported, never overwritten. A node whose recorded key fails the weak-key
-  audit or is shared with another node is reported and never sent or
-  favorited (`weak_key` in `--json`); a run that leaves only such reported
-  nodes no longer says the peers are in sync. `--prune-archived` also
-  unfavorites nodes archived in the database (`mesh db forget`) that the
-  device still has favorited (`unfavorite` in `--json`); it never removes a
-  node from the device, and `sync_peers` never prunes. The template switch
-  `sync_peers` (on by default; set `false` to opt out) makes `mesh provision`
-  do the same as its last step; a failure there is a warning.
+  fleet. Dry run by default, `--apply` writes and verifies after a reconnect
+  (one that fails reports every node it tried to write unconfirmed, with the
+  `--json` report), idempotent; a node the device holds under a different
+  key is reported, never overwritten. A node whose recorded key fails the
+  weak-key audit or is shared with another node is reported and never sent
+  or favorited (`weak_key` in `--json`); a run that leaves only such
+  reported nodes no longer says the peers are in sync. `--prune-archived`
+  also unfavorites nodes archived in the database (`mesh db forget`) that
+  the device still has favorited (`unfavorite` in `--json`); it never
+  removes a node from the device, and `sync_peers` never prunes. The
+  template switch `sync_peers` (on by default; set `false` to opt out) makes
+  `mesh provision` do the same as its last step; a failure there is a
+  warning.
 - Single `mesh` console script (distribution `meshprovision`) with eight
   subcommands/subcommand groups: `init`, `provision`, `status`, `admin`,
   `db`, `adopt`, `template`, and `peers`.

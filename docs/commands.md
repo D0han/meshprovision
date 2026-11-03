@@ -1460,8 +1460,11 @@ whole fleet.
 
 Without `--apply` it only prints what is missing. With `--apply` it writes
 and then reconnects and re-reads the device, so a write the firmware
-silently dropped is reported (exit code 5), like `mesh provision`. It is
-idempotent: a second run finds nothing to do. The database is only read.
+silently dropped is reported (exit code 5), like `mesh provision`. If it
+cannot reconnect, every node it tried to write is reported `unconfirmed`
+(exit code 5, the `--json` report still printed); run it again to check.
+It is idempotent: a second run finds nothing to do. The database is only
+read.
 
 Three cases are reported and deliberately left alone: a node with no public
 key in the Keys sheet cannot be added as a contact (it is still favorited if

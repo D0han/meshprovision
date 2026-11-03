@@ -292,6 +292,62 @@ def test_a_rejected_write_is_reported_and_fails_the_run(
     assert document["unconfirmed"] == [f"!{B_HEX}"]
 
 
+def test_a_failed_reconnect_after_the_writes_keeps_the_report(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    bus.then(None)
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--json"], env)
+
+    assert result.exit_code == 5
+    assert int(NodeId.parse(B_HEX)) in device.known_nodes
+    assert "Sent 1 node change(s), but could not reconnect to confirm them" in result.stderr
+    assert "Re-run `mesh peers` to check." in result.stderr
+    assert "Peers synced" not in result.stderr
+    document = json.loads(result.stdout)
+    assert document["failed"] == []
+    assert document["unconfirmed"] == [f"!{B_HEX}"]
+
+
+def test_a_failed_reconnect_does_not_count_failed_writes_as_sent(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    device = bus.use(FakeMeshInterface(SELF_HEX))
+    device.fail_peer_writes = True
+    bus.then(None)
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--json"], env)
+
+    assert result.exit_code == 5
+    assert f"!{B_HEX}: simulated contact write failure" in result.stderr
+    assert "Sent 0 node change(s), but could not reconnect to confirm them" in result.stderr
+    assert json.loads(result.stdout)["unconfirmed"] == [f"!{B_HEX}"]
+
+
+def test_a_failed_reconnect_after_a_provision_peer_sync_is_a_warning(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    fleet: Path,
+    write_template: Callable[..., Path],
+) -> None:
+    device = bus.use(FakeMeshInterface("a1b2c3d4"))
+    bus.then(device, device, None)
+
+    result = invoke(
+        runner, ["provision", *PORT_ARGS, "--yes"], _with_sync_peers(env, write_template)
+    )
+
+    # Open, mid-plan refresh, final verify; every peers read-back attempt is refused.
+    assert bus.served[:3] == ["a1b2c3d4"] * 3
+    assert set(bus.served[3:]) == {None}
+    assert result.exit_code == 0
+    assert "could not reconnect to confirm them" in result.stderr
+    assert "Peer sync incomplete" in result.stderr
+    assert "Database updated" in result.stderr
+
+
 def test_json_output_names_nodes_but_carries_no_key_material(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
 ) -> None:

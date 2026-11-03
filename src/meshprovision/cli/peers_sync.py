@@ -15,7 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from meshprovision.errors import ExitCode, MeshprovisionError
+from meshprovision.errors import ConnectionBackendError, ExitCode, MeshprovisionError
 from meshprovision.nodeid import NodeId
 from meshprovision.provisioning import connection, detect, peers
 from meshprovision.provisioning.device_write import DEVICE_EXCEPTIONS
@@ -166,7 +166,9 @@ def run_peers(
 
     Returns:
         The report. Every problem that needs attention is also printed
-        through ``ctx``.
+        through ``ctx``. When the device cannot be reconnected to after
+        the writes, every planned node is reported unconfirmed (the count
+        of changes sent leaves out the writes that failed).
     """
     known_bad = ctx.known_bad_keys()
     own, plan, weak_reasons = _plan(db, session, known_bad=known_bad, prune_archived=prune_archived)
@@ -204,9 +206,21 @@ def run_peers(
     outcome = peers.apply_peers(session.interface.localNode, plan)
     for node_id, message in outcome.failures:
         ctx.error(f"{node_id.display}: {message}")
-    missing, still_favorited = _remaining_after(
-        db, session, known_bad=known_bad, prune_archived=prune_archived
-    )
+    try:
+        missing, still_favorited = _remaining_after(
+            db, session, known_bad=known_bad, prune_archived=prune_archived
+        )
+    except ConnectionBackendError as exc:
+        unconfirmed = (*(action.contact.node_id for action in plan.actions), *plan.unfavorite)
+        failed = {node_id for node_id, _ in outcome.failures}
+        sent = sum(1 for node_id in unconfirmed if node_id not in failed)
+        ctx.error(
+            f"Sent {sent} node change(s), but could not reconnect to confirm them ({exc}). "
+            "Re-run `mesh peers` to check."
+        )
+        return PeersReport(
+            own_node=own, plan=plan, applied=True, outcome=outcome, remaining=unconfirmed
+        )
     if missing:
         names = ", ".join(node_id.display for node_id in missing)
         ctx.error(f"Sent, but the device does not show {names} after reconnecting.")
