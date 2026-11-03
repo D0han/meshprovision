@@ -8,10 +8,13 @@ subcommand** — for example `mesh --no-cache status --json`, not
 `mesh status --no-cache`. Every command and subcommand supports
 `-h`/`--help`.
 
-**Output contract:** STDOUT carries machine-readable output only
-(`--json` documents, the `mesh status` table, and `--dry-run` change
-lines); logging, prompts, warnings, and errors all go to STDERR — so
-`mesh status --json | jq .` never needs filtering.
+**Output contract:** STDOUT carries only what a script reads: `--json`
+documents, the `mesh status`, `mesh health` and `mesh network` reports,
+`--dry-run` change lines and the `mesh db backups` listing. Logging,
+prompts, warnings and errors go to STDERR, and so does the human-readable
+result of `mesh init`, `mesh db list`, `mesh admin list`, `mesh db verify`
+and `mesh template validate` (with `--json`, their document goes to
+STDOUT). So `mesh status --json | jq .` never needs filtering.
 
 ## Global options
 
@@ -1518,6 +1521,13 @@ command's own real, non-degraded result. Uses whichever template path
 `--template-path`/`MESHPROVISION_TEMPLATE_PATH`/`.env` resolves to —
 there is no separate override specific to this command.
 
+`--json` prints `template_path`, `admin_nodes` (the refs, in order),
+`short_name_pattern`, `long_name_pattern` and `warnings`, a list of
+`{code, message, field}` objects for the template's non-fatal warnings
+(also printed to STDERR). A template that fails validation prints no
+document; the error goes to STDERR with a non-zero exit code (2 for most
+template errors, 5 for more than three `admin_nodes`).
+
 ## Exit codes
 
 | Code | Meaning |
@@ -1542,7 +1552,7 @@ argument, or a node id that does not parse (`mesh status --node`,
 Exit code 4 (`DB`) also covers "another mesh command is running": a
 write command that could not acquire the database's write lock within
 `MESHPROVISION_LOCK_TIMEOUT` raises `DatabaseLockedError`, distinct from
-the pre-existing `AtomicWriteError` raised on a filesystem failure
+the `AtomicWriteError` raised on a filesystem failure
 (read-only filesystem, missing parent) while creating the lock file
 itself — both share exit code 4, since the message text is the intended
 disambiguation channel between them, not the exit code.

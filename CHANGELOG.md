@@ -223,7 +223,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before reporting success.
 - `mesh db list`: offline counterpart to `mesh status` -- a plain dump of the
   `Nodes` sheet's own content, with no device connection or external data
-  source involved.
+  source involved. Like its table, "No nodes found." goes to STDERR.
 - `mesh template validate`: a sixth subcommand group. Validates the
   configured template file with no database or device needed, letting a
   template failure be the command's own real result rather than the
@@ -662,6 +662,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The hint shown when BLE is unavailable no longer points at the `[ble]`
+  extra, which installs nothing the `meshtastic` dependency does not
+  already pull in; it names `bleak` itself.
 - A key regeneration on firmware 2.8 (FACTORY or `--force-regenerate-key`)
   with no admin keys no longer loses the rest of the security settings
   written with it (`serial_enabled: false`, a removed admin key, a signing
@@ -1342,7 +1345,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`-`, `clean`, `warning`, or `compromised`, the last highlighted) in a
   new `Audit` column. This information was already computed and already
   present in `--json` output; only the default human-readable table
-  omitted it.
+  omitted it. With no admins it prints "No admins found." instead of an
+  empty table.
 - A live admin key revoked by the weak-key audit while `template.admin_nodes`
   is empty (the project's documented default template shape) no longer leaves
   `mesh provision` reporting the same `admin_keys` drift on every subsequent

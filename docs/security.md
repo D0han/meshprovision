@@ -9,10 +9,10 @@ new id.
 
 `X25519PrivateKey.generate()` from `cryptography` — exactly what the CVE
 advisory itself recommends (`openssl genpkey -algorithm x25519 -outform
-DER | tail -c32`). 32 raw bytes private + 32 public, stored base64 in the
-`Keys` sheet, matching the `base64:` convention the Meshtastic CLI uses in
-its own export format. Factory keys are treated as compromised and
-regenerated.
+DER | tail -c32`). 32 raw bytes private + 32 public, stored as bare
+base64 in the `Keys` sheet; a key read in also accepts the `base64:`
+prefix the Meshtastic CLI uses in its own export format. Factory keys are
+treated as compromised and regenerated.
 
 ## Write verification
 
@@ -85,8 +85,8 @@ strength of a command-line flag would let any device claiming an admin
 node's id silently take over the fleet's admin key.
 
 A legitimate rotation — a genuine key loss (firmware issue #7449) or a
-deliberate replacement — instead goes through an out-of-band, two-step
-flow:
+deliberate replacement — instead goes through an out-of-band,
+multi-step flow:
 
 1. **Bootstrap a replacement admin under a new ref**, add it to
    `admin_nodes`, and provision the fleet so every node authorizes it
@@ -164,8 +164,8 @@ your own `Keys` sheet — **not** this file.
 
 ### Duplicate (cloned) keys
 
-`mesh provision` now runs the cross-fleet duplicate check on every run,
-not only at `mesh db verify` time: the device's reported public key is
+`mesh provision` runs the cross-fleet duplicate check on every run, not
+only at `mesh db verify` time: the device's reported public key is
 compared against every *other* node's recorded `<hex>_pub` row (never
 this node's own row, and never a `mesh admin bootstrap --ref` label alias
 or a `mesh adopt`-minted `observed-*` ref — those are legitimate aliases
@@ -206,10 +206,10 @@ edit or a stale row cannot silently disable the check. Every other
 finding (blocklist, structural weakness, `duplicate`) still applies in
 full regardless.
 
-Before this check existed, a node on CVE-window firmware had its key
-regenerated — and was rebooted — on **every single** `mesh provision`
-run, forever, even for a key meshprovision itself had just generated the
-run before. A second, unchanged run now converges: no key regeneration,
+Without this check, a node on CVE-window firmware would have its key
+regenerated — and be rebooted — on **every single** `mesh provision`
+run, even for a key meshprovision itself had just generated the run
+before. With it, a second, unchanged run converges: no key regeneration,
 no reboot, no database write, once the key's `generated` origin is on
 file. A **legacy** node whose key predates the `origin` column, or whose
 key was `captured`/`imported` rather than `generated`, still regenerates

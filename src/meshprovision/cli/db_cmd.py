@@ -596,7 +596,7 @@ def db_list(ctx: CliContext, *, json_output: bool) -> None:
         return
 
     if not records:
-        ctx.print_out("No nodes found.")
+        ctx.info("No nodes found.")
         return
 
     table = Table(box=box.SIMPLE_HEAVY, header_style="bold")

@@ -24,9 +24,11 @@ from [loranet.pl](https://loranet.pl) and [lorastats.pl](https://lorastats.pl).
 - A hand-editable ODS node database with real spreadsheet features:
   OpenFormula formulas for every derived column, dropdown validation,
   a frozen header row, and a free-form `notes` column that's yours
-  alone — nothing in the project ever writes to it. A known-good safety
-  copy is refreshed on every successful read or write, so a hand-edit
-  gone wrong is always recoverable via `mesh db restore --known-good`.
+  alone, except that a node id change (`mesh db renumber`, or `mesh
+  provision` following a firmware 2.8 renumber) appends one line to it.
+  A known-good safety copy is refreshed on every successful read or
+  write, so a hand-edit gone wrong is always recoverable via `mesh db
+  restore --known-good`.
 - Strictly read-only network status reporting (`mesh status`), merging
   loranet.pl and lorastats.pl through a TTL disk cache.
 - Per-node health from lorastats.pl's packet reports (`mesh health`):

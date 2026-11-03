@@ -127,7 +127,7 @@ security:
   # private_key, public_key, or admin_key is refused outright. Admin
   # keys are derived from admin_nodes above plus the Keys sheet; each
   # node's own keypair is generated fresh by `mesh provision`.
-  is_managed: false # lockdown mode; requires 1-3 admin_nodes AND --allow-lockdown
+  is_managed: false # true is lockdown mode; requires 1-3 admin_nodes AND --allow-lockdown
   admin_channel_enabled: false # must stay false -- the legacy admin channel is never used
   # packet_signature_policy: PACKET_SIGNATURE_POLICY_COMPATIBLE # firmware 2.8's
   #   XEdDSA packet-signing policy (2.8.2: COMPATIBLE does not sign; see docs/configuration.md)

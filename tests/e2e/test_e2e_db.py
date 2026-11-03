@@ -596,7 +596,8 @@ def test_db_list_no_nodes_reports_none_found(
     result = invoke(runner, ["db", "list"], env)
 
     assert result.exit_code == 0
-    assert "No nodes found." in result.stdout
+    assert "No nodes found." in result.stderr
+    assert result.stdout == ""
 
 
 def test_db_list_never_connects_to_a_device_or_the_network(

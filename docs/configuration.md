@@ -186,6 +186,7 @@ except these, whose default is always applied: `device.role` (`CLIENT`),
 `lora.region` (`EU_868`), `lora.use_preset` (`true`), `lora.modem_preset`
 (`LONG_FAST`; an explicit `null` leaves it alone), `lora.hop_limit` (`3`),
 `lora.tx_enabled` (`true`) and `lora.override_duty_cycle` (`false`).
+[Every section field](#every-section-field) lists them all.
 
 ### Region: `EU_868`, not `PL`
 
@@ -213,7 +214,7 @@ security:
 
 Key material **never** goes in this file — a template containing
 `private_key`, `public_key`, or `admin_key` is refused outright.
-`is_managed: false` is lockdown mode; enabling it requires 1-3
+`is_managed: true` is lockdown mode; enabling it requires 1-3
 `admin_nodes` **and** `--allow-lockdown` on the command line, plus the
 safety gate described in [Security](security.md). `admin_channel_enabled`
 must stay `false` — the legacy admin channel is never used anywhere in
@@ -268,3 +269,112 @@ replace the device's channel with a near-empty one. Everything else,
 including `security`, is still applied and the node is recorded; the
 warning repeats on every run until the primary channel is enabled or
 `default_channel` is removed from the template.
+
+### Every section field
+
+Each section block takes the fields below and nothing else (an unknown
+field is a template error). A field left out is left at the device's
+current value, except where a default is given. Seconds fields and other
+counts take a whole number from 0 up to the firmware field's own maximum
+unless a range is given.
+
+#### `device`
+
+| Field | Value | Meaning |
+|---|---|---|
+| `role` | role name, default `CLIENT` | Device role |
+| `rebroadcast_mode` | rebroadcast mode name | Which packets the node relays |
+| `node_info_broadcast_secs` | seconds, at least 3600 | Node info broadcast interval |
+| `button_gpio` | GPIO number | User button pin override |
+| `buzzer_gpio` | GPIO number | Buzzer pin override |
+| `double_tap_as_button_press` | `true`/`false` | An accelerometer double tap counts as a button press |
+| `disable_triple_click` | `true`/`false` | Disables the triple-click gesture |
+| `led_heartbeat_disabled` | `true`/`false` | Disables the heartbeat LED |
+| `tzdef` | POSIX TZ string | Time zone |
+
+#### `lora`
+
+| Field | Value | Meaning |
+|---|---|---|
+| `region` | region name, default `EU_868` | LoRa region |
+| `use_preset` | `true`/`false`, default `true` | `modem_preset` sets the radio parameters |
+| `modem_preset` | preset name, default `LONG_FAST` | Modem preset; `null` leaves it alone |
+| `hop_limit` | 0-7, default 3 | Maximum hop count |
+| `tx_enabled` | `true`/`false`, default `true` | The radio may transmit |
+| `tx_power` | 0-30 dBm | Transmit power override |
+| `channel_num` | channel number | LoRa channel override |
+| `frequency_offset` | Hz | Frequency offset |
+| `override_duty_cycle` | `true`/`false`, default `false` | Overrides the regional duty-cycle limit |
+| `sx126x_rx_boosted_gain` | `true`/`false` | SX126x boosted receive gain |
+| `ignore_mqtt` | `true`/`false` | Ignores packets that came from MQTT |
+| `config_ok_to_mqtt` | `true`/`false` | Consents to this node's traffic being uplinked to MQTT |
+
+#### `position`
+
+| Field | Value | Meaning |
+|---|---|---|
+| `position_broadcast_secs` | seconds | Position broadcast interval |
+| `position_broadcast_smart_enabled` | `true`/`false` | Smart (distance and time gated) broadcasts |
+| `fixed_position` | `true`/`false` | The position is fixed, not from GPS; left out, a position fixed with `--setlat` stays fixed |
+| `gps_update_interval` | seconds | GPS fix interval |
+| `position_flags` | bit mask | Which fields a position broadcast carries |
+| `broadcast_smart_minimum_distance` | meters | Movement before a smart broadcast |
+| `broadcast_smart_minimum_interval_secs` | seconds | Minimum time between smart broadcasts |
+| `gps_mode` | GPS mode name | GPS enabled, disabled or not present |
+
+#### `power`
+
+| Field | Value | Meaning |
+|---|---|---|
+| `is_power_saving` | `true`/`false` | Sleeps between radio activity |
+| `on_battery_shutdown_after_secs` | seconds, 0 or at least 30 | Shutdown after this long on battery; 0 disables |
+| `adc_multiplier_override` | number | Battery voltage ADC multiplier |
+| `wait_bluetooth_secs` | seconds | Bluetooth stays on this long after boot |
+| `sds_secs` | seconds | Super-deep-sleep duration |
+| `ls_secs` | seconds | Light-sleep duration |
+| `min_wake_secs` | seconds | Minimum time awake after a wake event |
+
+#### `telemetry`
+
+| Field | Value | Meaning |
+|---|---|---|
+| `device_telemetry_enabled` | `true`/`false` | Device metrics are collected |
+| `device_update_interval` | seconds | Device metrics interval |
+| `environment_measurement_enabled` | `true`/`false` | An environment sensor is read |
+| `environment_update_interval` | seconds | Environment telemetry interval |
+| `environment_screen_enabled` | `true`/`false` | Environment readings on the screen |
+| `environment_display_fahrenheit` | `true`/`false` | The screen shows Fahrenheit |
+| `air_quality_enabled` | `true`/`false` | An air quality sensor is read |
+| `air_quality_interval` | seconds | Air quality telemetry interval |
+| `air_quality_screen_enabled` | `true`/`false` | Air quality readings on the screen |
+| `power_measurement_enabled` | `true`/`false` | A power sensor is read |
+| `power_update_interval` | seconds | Power telemetry interval |
+| `power_screen_enabled` | `true`/`false` | Power readings on the screen |
+| `health_measurement_enabled` | `true`/`false` | A health sensor is read |
+| `health_update_interval` | seconds | Health telemetry interval |
+| `health_screen_enabled` | `true`/`false` | Health readings on the screen |
+
+#### `neighbor_info`
+
+| Field | Value | Meaning |
+|---|---|---|
+| `enabled` | `true`/`false` | The neighbor info module runs |
+| `update_interval` | seconds, at least 14400 | Neighbor info broadcast interval |
+| `transmit_over_lora` | `true`/`false` | Neighbor info is sent over LoRa |
+
+#### `default_channel`
+
+| Field | Value | Meaning |
+|---|---|---|
+| `position_precision` | bits | Position precision shared on the primary channel; 0 shares none |
+| `is_muted` | `true`/`false` | The primary channel is muted |
+
+#### `security`
+
+| Field | Value | Meaning |
+|---|---|---|
+| `is_managed` | `true`/`false`, default `false` | Lockdown mode (see [Security block](#security-block)) |
+| `admin_channel_enabled` | `false`, the default | The legacy admin channel; must stay off |
+| `serial_enabled` | `true`/`false` | The serial console and API |
+| `debug_log_api_enabled` | `true`/`false` | Debug logging over the API |
+| `packet_signature_policy` | policy name | Firmware 2.8 packet signing (see [Security block](#security-block)) |

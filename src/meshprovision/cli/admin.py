@@ -614,6 +614,8 @@ def admin_list(ctx: CliContext, *, json_output: bool) -> None:
 
     if json_output:
         echo_json({"admins": [s.to_json_dict() for s in summaries]})
+    elif not summaries:
+        ctx.info("No admins found.")
     else:
         table = build_admin_table(summaries)
         ctx.err.print(table, markup=False, highlight=False)

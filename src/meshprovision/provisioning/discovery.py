@@ -72,7 +72,8 @@ MESHTASTIC_BLE_SERVICE_UUID: Final[str] = "6ba1b218-15a8-461f-9fa8-5dcae273eafd"
 """The BLE GATT service UUID advertised by Meshtastic devices."""
 
 BLE_UNAVAILABLE_HINT: Final[str] = (
-    "BLE support needs the 'bleak' package. Install it with: pip install 'meshprovision[ble]'"
+    "BLE support needs the 'bleak' package, which the meshtastic dependency normally "
+    "installs. Reinstall meshprovision, or install it with: pip install bleak"
 )
 """Actionable hint shown whenever BLE support is requested but unavailable."""
 

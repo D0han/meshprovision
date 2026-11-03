@@ -1485,6 +1485,18 @@ def test_admin_list_table_shows_the_weak_key_audit_result(
     assert not BASE64_KEY_RE.search(result.stderr)
 
 
+def test_admin_list_with_no_admins_says_so(
+    runner: CliRunner, env: dict[str, str], write_template: Callable[..., Path]
+) -> None:
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+
+    result = invoke(runner, ["admin", "list"], env)
+
+    assert result.exit_code == 0
+    assert "No admins found." in result.stderr
+    assert "Fingerprint" not in result.stderr
+
+
 def test_admin_list_with_unregistered_template_ref_exits_two(
     runner: CliRunner, env: dict[str, str], write_template: Callable[..., Path]
 ) -> None:

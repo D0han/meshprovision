@@ -5,17 +5,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
-from click.testing import CliRunner
 
 from meshprovision.cli import admin
-from meshprovision.cli.main import cli
 from meshprovision.crypto.weakkeys import AuditResult, WeakKeyCheck, WeakKeyFinding
 from meshprovision.errors import SettingsError, WeakKeySeverity
 from meshprovision.provisioning import admin_custody
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from pathlib import Path
+    pass
 
 pytestmark = pytest.mark.unit
 
@@ -78,29 +75,19 @@ def test_validate_admin_ref_accepts_a_ref_that_merely_contains_observed() -> Non
     admin._validate_admin_ref("pre-observed")
 
 
-def test_admin_list_table_column_order(
-    cli_env: dict[str, str], empty_ods: Path, write_template: Callable[..., Path]
-) -> None:
-    env = dict(cli_env)
-    env["MESHPROVISION_DB_PATH"] = str(empty_ods)
-    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=[]))
+def test_admin_list_table_column_order() -> None:
+    # An empty admin list prints "No admins found." instead, so the header is
+    # read off the table itself.
+    table = admin_custody.build_admin_table(())
 
-    result = CliRunner().invoke(cli, ["admin", "list"], env=env, catch_exceptions=False)
-
-    assert result.exit_code == 0
-    header = next(line for line in result.stderr.splitlines() if "Ref" in line)
-    assert header.split() == [
+    assert [str(column.header) for column in table.columns] == [
         "Ref",
         "Present",
         "Fingerprint",
-        "Private",
-        "held",
-        "In",
-        "template",
+        "Private held",
+        "In template",
         "Node",
         "Audit",
-        "Authorized",
-        "on",
-        "Pending",
-        "on",
+        "Authorized on",
+        "Pending on",
     ]

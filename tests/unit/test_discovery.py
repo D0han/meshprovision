@@ -388,3 +388,10 @@ def test_discover_ble_devices_raises_unsupported_transport_when_bleak_is_missing
     with pytest.raises(UnsupportedTransportError) as excinfo:
         discover_ble_devices()
     assert excinfo.value.transport == "ble"
+    assert excinfo.value.hint == discovery.BLE_UNAVAILABLE_HINT
+
+
+def test_the_ble_hint_names_the_package_not_the_no_op_extra() -> None:
+    # The [ble] extra installs nothing meshtastic does not already pull in.
+    assert "pip install bleak" in discovery.BLE_UNAVAILABLE_HINT
+    assert "[ble]" not in discovery.BLE_UNAVAILABLE_HINT

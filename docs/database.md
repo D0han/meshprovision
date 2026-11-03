@@ -22,7 +22,7 @@ LibreOffice, not a CSV dump.
 | `first_added_ts` | TIMESTAMP (ISO-8601 UTC, e.g. `2026-08-25T03:14:10Z`) | UTC timestamp this node was first added to the database |
 | `last_updated_ts` | TIMESTAMP | UTC timestamp this node's record was last updated |
 | `authorized_admin_keys` | KEY_REF_LIST (`;`-separated) | Semicolon-separated `key_ref` list of admin public keys authorized on this node's `security.adminKey`. Deliberately **not** a formula: it records what was actually written to the device — narrowed when a run revokes a live admin key it names, but never rebuilt from the device, so a live key that was never recorded stays unrecorded — which is not a function of any other cell on the row |
-| `notes` | TEXT | Free-form operator notes — yours alone. Nothing in meshprovision ever reads or writes this column; it exists purely so you have somewhere in the database itself to record whatever context matters to you (a node's physical location, why it's on a particular firmware, a reminder to revisit its key) |
+| `notes` | TEXT | Free-form operator notes — yours alone, except that a node id change (`mesh db renumber`, or `mesh provision` following a firmware 2.8 renumber) appends one line (`node id was !OLD until <date> ...`), and `mesh db list --json` prints the column. It exists so you have somewhere in the database itself to record whatever context matters to you (a node's physical location, why it's on a particular firmware, a reminder to revisit its key) |
 | `private_key_ref` | DERIVED, formula `=[.A{row}]&"_priv"` | Reference to this node's private key row in the `Keys` sheet |
 | `public_key_ref` | DERIVED, formula `=[.A{row}]&"_pub"` | Reference to this node's public key row in the `Keys` sheet |
 | `role` | ENUM (dropdown `mp_role`) | Device role, from the installed `Config.DeviceConfig.Role` protobuf enum |
@@ -30,7 +30,7 @@ LibreOffice, not a CSV dump.
 | `channel_psk_ref` | DERIVED, formula `=[.A{row}]&"_psk"` | Reference to this node's channel PSK row in the `Keys` sheet |
 | `ble_pin` | PIN, SECRET | 6-digit `bluetooth.fixed_pin`, stored as text so leading zeros survive; never logged or displayed |
 | `management` | ENUM (dropdown `mp_management`) | `template` (`mesh provision` enforces the template on this node) or `observed` (`mesh adopt` recorded this node's live state as-is, or a human typed the row in by hand; `mesh provision` refuses to touch it until `--enroll`). Empty reads back as `observed` — meshprovision itself never writes a blank cell here, so a blank one always means a hand-added row |
-| `unregistered_admin_keys` | BASE64_KEY_LIST (`;`-separated), SECRET | Legacy/hand-edit-only column: raw base64-encoded admin public keys (32 bytes each) observed live on this node's `security.adminKey` that couldn't be resolved to any `Keys` sheet ref. `mesh adopt` no longer writes into this column — every admin key it observes now gets a real `Keys` sheet row instead (see [`observed-*` rows](#observed--rows) below) — and drains it on any node it re-adopts. A value here is only ever a leftover from a database written before that change, and not yet re-adopted; `mesh db verify` and `mesh adopt` still check it against other nodes, warning (not the CVE-2025-52464 signature -- see [`observed-*` rows](#observed--rows)) when the same key is shared but has never been imported. Marked SECRET to match `key_value`'s treatment, even though an admin key is itself a public, not secret, value |
+| `unregistered_admin_keys` | BASE64_KEY_LIST (`;`-separated), SECRET | Legacy/hand-edit-only column: raw base64-encoded admin public keys (32 bytes each) observed live on this node's `security.adminKey` that couldn't be resolved to any `Keys` sheet ref. `mesh adopt` never writes into this column — every admin key it observes gets a real `Keys` sheet row instead (see [`observed-*` rows](#observed--rows) below) — and drains it on any node it re-adopts. A value here was typed in by hand or left by an older version of meshprovision, and the node has not been re-adopted since; `mesh db verify` and `mesh adopt` still check it against other nodes, warning (not the CVE-2025-52464 signature -- see [`observed-*` rows](#observed--rows)) when the same key is shared but has never been imported. Marked SECRET to match `key_value`'s treatment, even though an admin key is itself a public, not secret, value |
 | `archived_at` | TIMESTAMP | UTC timestamp this node was archived (soft-deleted) via `mesh db forget`, or empty if active. Excludes the node from `mesh status` and refuses `mesh provision`/`mesh admin bootstrap`/`mesh adopt`, but every other cell on the row is preserved |
 
 ## Keys sheet
@@ -62,7 +62,7 @@ belongs to yet:
 
 - A key that already resolves to a real ref (registered via `mesh admin
   import`/`mesh admin bootstrap`, or belonging to one of the fleet's own
-  already-adopted nodes) uses that ref, as before.
+  already-adopted nodes) uses that ref.
 - One that doesn't is filed under
   `owner_node_id = observed-<8 hex chars of its own sha256 fingerprint>`
   — content-addressed, so the *same* key observed on several devices
