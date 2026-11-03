@@ -695,7 +695,8 @@ def load_template_text(text: str, *, source: str = "<string>") -> TemplateConfig
     except ValidationError as exc:
         raise TemplateValidationError(format_validation_error(exc, source=source)) from exc
 
+    # Debug only: CliContext.load_template prints each warning to the operator.
     for warning in cfg.collect_warnings():
-        _logger.warning("%s", warning.message)
+        _logger.debug("%s", warning.message)
 
     return cfg

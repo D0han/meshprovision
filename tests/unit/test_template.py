@@ -870,14 +870,17 @@ def test_traffic_management_is_a_known_module_option() -> None:
     assert "unknown_option" not in {w.code for w in template.collect_warnings()}
 
 
-def test_load_template_text_logs_every_collected_warning(caplog: pytest.LogCaptureFixture) -> None:
-    caplog.set_level(logging.WARNING, logger="meshprovision.config.template")
+def test_load_template_text_logs_every_collected_warning_at_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.DEBUG, logger="meshprovision.config.template")
 
     cfg = load_template_text("version: 1\ndisabled_options: [not_a_real_module]\n")
 
-    messages = [r.getMessage() for r in caplog.records if r.name == "meshprovision.config.template"]
-    assert messages
-    assert messages == [w.message for w in cfg.collect_warnings()]
+    records = [r for r in caplog.records if r.name == "meshprovision.config.template"]
+    assert records
+    assert [r.getMessage() for r in records] == [w.message for w in cfg.collect_warnings()]
+    assert {r.levelno for r in records} == {logging.DEBUG}
 
 
 def test_an_empty_option_list_in_yaml_loads_as_no_options() -> None:
