@@ -188,8 +188,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mesh init`: creates whatever first-run artifacts (`.env`,
   `config/template.yaml`, `data/nodes_db.ods`) are still missing --
   prompts once for `MESHPROVISION_CONTACT`, the one setting with no
-  default, unless `--contact` is given; `--yes`/`--json` make it fully
-  scriptable. Only ever creates what is missing, so it is safe to re-run.
+  default, unless `--contact` is given (ignored with a warning when a
+  `.env` already exists); `--yes`/`--json` make it fully scriptable, and
+  `--json` has the same keys whether or not anything was missing. Only
+  ever creates what is missing, so it is safe to re-run.
   The database is always created empty (never copied from
   `data/nodes_db.example.ods`, which carries fake illustrative rows). Any
   `mesh` command run interactively now offers this same wizard whenever

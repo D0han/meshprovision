@@ -111,6 +111,7 @@ def test_json_lists_the_created_paths(runner: CliRunner, tmp_path: Path) -> None
     payload = json.loads(result.stdout)
     assert len(payload["created"]) == 3
     assert payload["declined"] == []
+    assert set(payload) == {"created", "present", "declined", "notes"}
 
 
 def test_non_interactive_without_a_contact_exits_five(runner: CliRunner, tmp_path: Path) -> None:
@@ -207,6 +208,8 @@ def test_already_complete_json_lists_only_present_paths(runner: CliRunner, tmp_p
     payload = json.loads(result.stdout)
     assert payload["created"] == []
     assert len(payload["present"]) == 3
+    assert payload["declined"] == []
+    assert payload["notes"] == []
 
 
 def test_a_contact_with_backslashes_is_written_so_it_reads_back_unchanged(
@@ -221,3 +224,32 @@ def test_a_contact_with_backslashes_is_written_so_it_reads_back_unchanged(
     loaded = dotenv.dotenv_values(tmp_path / ".env")
     assert loaded["MESHPROVISION_CONTACT"] == contact
     assert "MESHPROVISION_DB_PATH" not in loaded
+
+
+@pytest.mark.parametrize("missing", [None, "template"], ids=["complete", "template-missing"])
+def test_a_contact_given_with_an_existing_env_is_reported_ignored(
+    runner: CliRunner, tmp_path: Path, missing: str | None
+) -> None:
+    invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], _BARE_ENV)
+    if missing == "template":
+        (tmp_path / "config" / "template.yaml").unlink()
+    before = (tmp_path / ".env").read_text(encoding="utf-8")
+
+    result = invoke(runner, ["init", "--yes", "--contact", "someone-else@example.org"], _BARE_ENV)
+
+    assert result.exit_code == 0
+    assert "--contact ignored: .env already exists" in result.stderr
+    assert (tmp_path / ".env").read_text(encoding="utf-8") == before
+
+
+def test_created_paths_are_shown_relative_and_never_wrapped(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    deep = Path("a-directory-name-long-enough", "to-pass-the-console-width", "template.yaml")
+    env = {**_BARE_ENV, "COLUMNS": "30", "MESHPROVISION_TEMPLATE_PATH": str(tmp_path / deep)}
+
+    result = invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], env)
+
+    assert result.exit_code == 0
+    created = [line for line in result.stderr.splitlines() if line.startswith("Created ")]
+    assert created == [f"Created {Path('.env')}", f"Created {deep}", "Created data/nodes_db.ods"]

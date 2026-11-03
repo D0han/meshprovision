@@ -37,10 +37,11 @@ turns every prompt into an error — which is what makes `mesh` cron-safe.
 Creates whatever first-run artifacts (`.env`, `config/template.yaml`,
 `data/nodes_db.ods`) are still missing. Prompts for
 `MESHPROVISION_CONTACT` — the one value with no default — unless
-`--contact` is given. Only ever creates what is missing, so it is safe to
-re-run. The database is created empty via the same schema-writer `mesh db
-restore` uses, **never** copied from `data/nodes_db.example.ods`, which
-carries fake illustrative rows.
+`--contact` is given; with a `.env` already there, `--contact` is ignored
+with a warning (edit the file instead). Only ever creates what is missing,
+so it is safe to re-run. The database is created empty via the same
+schema-writer `mesh db restore` uses, **never** copied from
+`data/nodes_db.example.ods`, which carries fake illustrative rows.
 
 Any `mesh` command run interactively offers this same wizard whenever
 setup is incomplete, before the command it was actually asked to run gets
@@ -60,6 +61,10 @@ mesh init --json                               # machine-readable summary
 | `-y`, `--yes` | Create every missing file without asking |
 | `--contact` | Value for `MESHPROVISION_CONTACT`; skips the prompt |
 | `--json` | Emit JSON instead of human text |
+
+`--json` prints `created`, `present` and `declined` (lists of paths) and
+`notes` (a list of strings, for example a `.env` without a contact), the
+same four keys whether or not anything was missing.
 
 ## `mesh provision`
 

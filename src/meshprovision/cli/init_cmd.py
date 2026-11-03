@@ -17,6 +17,7 @@ Both funnel through :func:`run_setup`, the only place either prompts;
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 import click
@@ -40,8 +41,6 @@ from meshprovision.cli.setup import (
 from meshprovision.errors import SettingsError
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from meshprovision.cli.common import CliContext
 
 __all__ = [
@@ -97,6 +96,39 @@ class SetupOutcome:
             ``True`` if :attr:`created` is non-empty.
         """
         return bool(self.created)
+
+
+def _shown(path: Path) -> Path:
+    """Shorten a path for display, as the template and database paths already are.
+
+    Args:
+        path: A setup artifact's path.
+
+    Returns:
+        ``path`` relative to the working directory when it lies under it,
+        otherwise ``path`` unchanged.
+    """
+    try:
+        return path.relative_to(Path.cwd())
+    except ValueError:
+        return path
+
+
+def _outcome_json(outcome: SetupOutcome) -> dict[str, list[str]]:
+    """Render a setup outcome for ``--json``.
+
+    Args:
+        outcome: What :func:`run_setup` did.
+
+    Returns:
+        The same four lists whether or not anything was missing.
+    """
+    return {
+        "created": [str(p) for p in outcome.created],
+        "present": [str(p) for p in outcome.present],
+        "declined": [str(p) for p in outcome.declined],
+        "notes": list(outcome.notes),
+    }
 
 
 def _prompt_for_contact(ctx: CliContext) -> str:
@@ -194,7 +226,7 @@ def run_setup(
         cwd_hint = missing[0].path.parent
         ctx.info(f"No meshprovision setup found in {cwd_hint}.")
         for item in missing:
-            ctx.info(f"  {item.path}  (missing)")
+            ctx.info(f"  {_shown(item.path)}  (missing)", soft_wrap=True)
         if not ctx.confirm(f"Create the missing file(s) above in {cwd_hint}?", default=True):
             ctx.info("Skipped. Run `mesh init` any time to create them.")
             return SetupOutcome(
@@ -209,7 +241,7 @@ def run_setup(
     used_contact = contact
     env_created = False
     for item in missing:
-        if not banner and not ctx.confirm(f"Create {item.path}?", default=True):
+        if not banner and not ctx.confirm(f"Create {_shown(item.path)}?", default=True):
             declined.append(item.path)
             continue
         answer = _create_item(ctx, item, contact=used_contact)
@@ -217,7 +249,7 @@ def run_setup(
             used_contact = answer
             env_created = True
         created.append(item.path)
-        ctx.success(f"Created {item.path}")
+        ctx.success(f"Created {_shown(item.path)}", soft_wrap=True)
 
     if created:
         ctx.info("Next steps:")
@@ -285,21 +317,18 @@ def init(ctx: CliContext, *, yes: bool, contact: str | None, json_output: bool) 
     ctx = ctx.with_assume_yes(yes)
     status = inspect_setup(ctx.settings, env_file=ctx.env_file)
 
+    if contact is not None and status.env.present:
+        ctx.warn(
+            f"--contact ignored: {_shown(status.env.path)} already exists"
+            if status.env.path.is_file()
+            else "--contact ignored: MESHPROVISION_CONTACT is already set"
+        )
     if status.complete:
         ctx.info("Setup is already complete:")
         for item in status.items:
-            ctx.info(f"  {item.path}")
-        if json_output:
-            echo_json({"created": [], "present": [str(i.path) for i in status.items]})
-        return
+            ctx.info(f"  {_shown(item.path)}", soft_wrap=True)
 
+    # With nothing missing, run_setup only reports what is present.
     outcome = run_setup(ctx, status, contact=contact)
     if json_output:
-        echo_json(
-            {
-                "created": [str(p) for p in outcome.created],
-                "present": [str(p) for p in outcome.present],
-                "declined": [str(p) for p in outcome.declined],
-                "notes": list(outcome.notes),
-            }
-        )
+        echo_json(_outcome_json(outcome))

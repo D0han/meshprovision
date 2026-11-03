@@ -567,15 +567,22 @@ class CliContext:
         """
         return replace(self, settings=settings)
 
-    def info(self, message: str) -> None:
+    def info(self, message: str, *, soft_wrap: bool = False) -> None:
         """Print an informational message to stderr, unstyled.
 
         Args:
             message: The message to print. Passed through
                 :func:`~meshprovision.termsafe.terminal_safe` first --
                 this may echo a device- or datasource-reported string.
+            soft_wrap: Print it on one line, never wrapped at the
+                console width (for a line carrying a path).
         """
-        self.err.print(terminal_safe(message, allow_newlines=True), markup=False, highlight=False)
+        self.err.print(
+            terminal_safe(message, allow_newlines=True),
+            markup=False,
+            highlight=False,
+            soft_wrap=soft_wrap,
+        )
 
     def warn(self, message: str) -> None:
         """Print a warning message to stderr, prefixed and styled yellow.
@@ -607,19 +614,22 @@ class CliContext:
             highlight=False,
         )
 
-    def success(self, message: str) -> None:
+    def success(self, message: str, *, soft_wrap: bool = False) -> None:
         """Print a success message to stderr, styled green.
 
         Args:
             message: The message to print. Passed through
                 :func:`~meshprovision.termsafe.terminal_safe` first --
                 this may echo a device- or datasource-reported string.
+            soft_wrap: Print it on one line, never wrapped at the
+                console width (for a line carrying a path).
         """
         self.err.print(
             terminal_safe(message, allow_newlines=True),
             style="green",
             markup=False,
             highlight=False,
+            soft_wrap=soft_wrap,
         )
 
     def print_out(self, text: str) -> None:
