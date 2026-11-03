@@ -19,6 +19,7 @@ subclass.
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
@@ -43,6 +44,9 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
+
+_INTEGER_STRING_RE: Final[re.Pattern[str]] = re.compile(r"-?[0-9]+")
+"""An integer field's string value: ASCII digits, optionally negative."""
 
 DEVICE_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
     OSError,
@@ -183,7 +187,7 @@ def apply_field(message: Any, field: str, value: object) -> None:
         return
     if isinstance(value, str) and descriptor.type in int_field_types:
         stripped = value.strip()
-        if not (stripped.lstrip("-").isdigit()):
+        if _INTEGER_STRING_RE.fullmatch(stripped) is None:
             raise PlanConflictError(
                 f"Field {field!r} expects an integer, got {value!r}", field=field
             )

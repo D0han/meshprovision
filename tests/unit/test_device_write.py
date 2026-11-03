@@ -95,10 +95,20 @@ def test_apply_field_numeric_string_into_int_field() -> None:
     assert msg.hop_limit == 5
 
 
-def test_apply_field_bad_numeric_string_raises() -> None:
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("not-a-number", id="letters"),
+        pytest.param("--5", id="double-minus"),
+        pytest.param("\u00b2", id="superscript-two"),
+        pytest.param("\u0663", id="arabic-indic-three"),
+        pytest.param("-", id="minus-only"),
+    ],
+)
+def test_apply_field_bad_numeric_string_raises(value: str) -> None:
     msg = _local_config().lora
     with pytest.raises(PlanConflictError):
-        apply_field(msg, "hop_limit", "not-a-number")
+        apply_field(msg, "hop_limit", value)
 
 
 def test_apply_field_out_of_range_int_raises_plan_conflict_not_value_error() -> None:
