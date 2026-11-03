@@ -14,7 +14,7 @@ The three first-run artifacts, and how each is created:
   ``template.example.yaml`` verbatim; the template stays the one place
   ``mesh`` policy is authored, so nothing here edits its contents.
 - The node database -- deliberately **not** copied from
-  ``data/nodes_db.example.ods``, which ships 3 fake node rows and 4 fake
+  ``data/nodes_db.example.ods``, which ships 3 fake node rows and 3 fake
   key rows for illustration. Creating it is left to
   :meth:`~meshprovision.cli.common.CliContext.open_database`
   (``must_exist=False``), which already builds a schema-correct empty

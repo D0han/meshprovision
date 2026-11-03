@@ -25,7 +25,7 @@ repos:
         args: ["--markdown-linebreak-ext=md"]
         exclude: '\.ods$'
       - id: check-added-large-files
-        # The largest tracked binary is data/nodes_db.example.ods at ~6.4 KB.
+        # The largest tracked binary is data/nodes_db.example.ods at ~7.2 KB.
         # Nothing legitimate in this repo approaches 512 KB; the 12.7 MB
         # loranet.pl dump lives only in the gitignored HTTP cache.
         args: ["--maxkb=512"]

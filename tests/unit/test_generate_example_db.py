@@ -19,15 +19,19 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from meshprovision.crypto.known_bad_keys import load_known_bad_keys
 from meshprovision.db import ods
-from meshprovision.db.keys import KeyRecord
+from meshprovision.db.keys import KeyRecord, KeyRepository
+from meshprovision.db.nodes import NodeRepository
+from meshprovision.db.verify import verify_database
 
 if TYPE_CHECKING:
     from types import ModuleType
 
 pytestmark = pytest.mark.unit
 
-_SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "generate_example_db.py"
+_ROOT = Path(__file__).resolve().parents[2]
+_SCRIPT_PATH = _ROOT / "scripts" / "generate_example_db.py"
 
 
 def _load_script() -> ModuleType:
@@ -68,3 +72,23 @@ def test_generate_example_db_output_loads_with_every_key_origin_recorded(
     assert loaded.keys
     for row in loaded.keys:
         assert KeyRecord.from_row(row).origin is not None
+
+
+@pytest.mark.parametrize("shipped", [False, True], ids=["generated", "shipped"])
+def test_the_example_database_passes_db_verify(tmp_path: Path, shipped: bool) -> None:
+    """``mesh db verify`` on the example finds nothing worse than a warning."""
+    module = _load_script()
+    path = _ROOT / module.EXAMPLE_DB_PATH if shipped else module.generate(tmp_path / "ex.ods")
+    db = ods.OdsDatabase(path)
+    db.load(force=True)
+
+    report = verify_database(
+        path=path,
+        warnings=db.warnings,
+        nodes=NodeRepository(db),
+        keys=KeyRepository(db),
+        template=None,
+        known_bad=load_known_bad_keys(),
+    )
+
+    assert report.exit_code(strict=False) == 0, report.problems

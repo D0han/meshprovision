@@ -241,14 +241,15 @@ fake nodes:
 - `deadbe03` / `MT03` / "Meshtastic MT03" / `RAK4631` — deliberately
   provisioned with **zero** admin keys, to show that is a valid outcome.
 
-Keys: `deadbe01_pub`, `deadbe01_psk`, plus an `example-admin_pub` /
-`example-admin_priv` pair.
+Keys: `deadbe01_pub`, `deadbe01_psk` and `example-admin_pub`.
 
 Every key value is a 32-byte ASCII placeholder that spells out what it is
 (base64-decode any cell and you get `EXAMPLE-KEY-DO-NOT-USE-000000001`),
-so nobody can mistake it for live material — and every placeholder still
-passes the weak-key audit with zero findings, which the generator asserts
-on each run.
+so nobody can mistake it for live material. There is no private key: no
+readable placeholder derives another one's public key, which `mesh db
+verify` checks for every stored pair. `mesh db verify` on the example
+reports no errors (the weak-key audit included); a test holds both the
+shipped file and a freshly generated one to that.
 
 Regenerate it with:
 

@@ -20,10 +20,12 @@ not reflect a difference in the actual schema or data. Every key value is
 a 32-byte
 ASCII placeholder that spells out what it is (``b"EXAMPLE-KEY-DO-NOT-
 USE-..."``), so anyone who base64-decodes a cell immediately sees it is
-fake -- and every one of them passes
-:func:`meshprovision.crypto.weakkeys.audit_public_key` with zero
-findings, which this script asserts on every run so a future edit can
-never silently break that guarantee.
+fake -- and the file passes every ``mesh db verify`` check (the weak-key
+audit included) with no error, which
+``tests/unit/test_generate_example_db.py`` asserts so a future edit can
+never silently break that guarantee. There is deliberately no private
+admin key: ``mesh db verify`` checks that a stored private key derives
+its public key, which no pair of readable placeholders can do.
 
 Usage:
     python scripts/generate_example_db.py
@@ -78,7 +80,6 @@ EXAMPLE_TIMESTAMP: Final[datetime] = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 # anyone who base64-decodes a Keys.key_value cell sees immediately that it
 # is fake. None of these are real key material.
 _PLACEHOLDER_ADMIN_PUB: Final[bytes] = b"EXAMPLE-KEY-DO-NOT-USE-000000001"
-_PLACEHOLDER_ADMIN_PRIV: Final[bytes] = b"EXAMPLE-KEY-DO-NOT-USE-000000002"
 _PLACEHOLDER_NODE_PUB: Final[bytes] = b"EXAMPLE-KEY-DO-NOT-USE-000000003"
 _PLACEHOLDER_PSK: Final[bytes] = b"EXAMPLE-PSK-DO-NOT-USE-000000001"
 
@@ -97,7 +98,6 @@ def _check_placeholder_round_trips() -> None:
     """
     for raw in (
         _PLACEHOLDER_ADMIN_PUB,
-        _PLACEHOLDER_ADMIN_PRIV,
         _PLACEHOLDER_NODE_PUB,
         _PLACEHOLDER_PSK,
     ):
@@ -112,7 +112,7 @@ def build_records() -> tuple[tuple[NodeRecord, ...], tuple[KeyRecord, ...]]:
     """Build the deterministic, illustrative example ``Nodes``/``Keys`` rows.
 
     Returns:
-        ``(nodes, keys)``: 3 node records and 4 key records, all built
+        ``(nodes, keys)``: 3 node records and 3 key records, all built
         from fixed, obviously-fake data.
 
     Raises:
@@ -180,13 +180,6 @@ def build_records() -> tuple[tuple[NodeRecord, ...], tuple[KeyRecord, ...]]:
             "example-admin",
             KeyType.ADMIN_PUBLIC,
             _PLACEHOLDER_ADMIN_PUB,
-            origin=KeyOrigin.IMPORTED,
-            created_ts=EXAMPLE_TIMESTAMP,
-        ),
-        KeyRecord.from_material(
-            "example-admin",
-            KeyType.ADMIN_PRIVATE,
-            _PLACEHOLDER_ADMIN_PRIV,
             origin=KeyOrigin.IMPORTED,
             created_ts=EXAMPLE_TIMESTAMP,
         ),
