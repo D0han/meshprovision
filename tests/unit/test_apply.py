@@ -1420,6 +1420,33 @@ def _lora_then_security_plan(make_live: Callable[..., object]) -> ChangePlan:
     return dataclasses.replace(plan, sections=(lora_change, security_section))
 
 
+@pytest.mark.parametrize(
+    "make_plan",
+    [
+        pytest.param(_security_only_regenerate_plan, id="security-only"),
+        pytest.param(_lora_then_security_plan, id="deferred-security"),
+    ],
+)
+def test_apply_plan_passes_the_live_firmware_to_the_security_write(
+    make_live, make_plan: Callable[..., ChangePlan], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The firmware decides whether a bare-rotation-shaped security write is re-sent."""
+    plan = dataclasses.replace(make_plan(make_live), firmware_version="2.7.26.54e0d8d")
+    seen: dict[str, str] = {}
+    real_write_section = apply_module.write_section
+
+    def spy(iface: object, change: SectionChange, **kwargs: object) -> None:
+        seen[change.section] = str(kwargs["firmware_version"])
+        real_write_section(iface, change, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(apply_module, "write_section", spy)
+    session = _FakeSessionTracksRefresh(FakeIfaceForApply(), _reopen_same_device)
+
+    apply_plan(plan, session, keypair=generate_keypair())  # type: ignore[arg-type]
+
+    assert seen["security"] == "2.7.26.54e0d8d"
+
+
 def test_apply_plan_deferred_security_write_failure_is_marked_attempted(make_live) -> None:
     """A deferred security write that raises may have reached the device: it counts as attempted.
 

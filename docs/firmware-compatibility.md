@@ -111,10 +111,14 @@ tried on a device.**
   settings it had. `mesh provision` writes the whole security config, so
   when such a write also changes one of those settings (for example
   `serial_enabled: false` on a factory device, or removing admin keys), it
-  sends the write a second time; the second one carries the key the device
-  now holds and is applied in full. *Unverified:* not tried on a device;
-  two security writes in one settings transaction are read from the
-  firmware code only.
+  sends the write a second time on firmware 2.8 or a version it cannot
+  read; the second one carries the key the device now holds and is applied
+  in full. This assumes the node keeps its number between the two writes:
+  a security write that carries both keys derives no key when it is
+  handled, so the new id appears only at the reboot the write schedules
+  (firmware 2.8.0 `AdminModule.cpp`, the `set_config` security case, lines
+  1162-1213), and the second write is sent straight after the first.
+  *Unverified:* not tried on a device; read from the firmware code only.
 - *Verified (2.8.2):* the firmware clamps a stored private key (RFC 7748)
   before deriving its public key. A key that was not clamped (set by hand
   in an app or restored from a backup) therefore gets a new public key,

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final
 from meshprovision.crypto.keys import KeyPair
 from meshprovision.db.schema import BLE_PIN_LENGTH
 from meshprovision.errors import EnumMappingError, PlanConflictError, ProvisioningError
+from meshprovision.firmware import may_keep_rest_of_bare_key_rotation
 from meshprovision.provisioning import connection, detect
 from meshprovision.provisioning.plan import SectionChange
 from meshprovision.provisioning.plan_admin_keys import KeyPlan
@@ -242,6 +243,7 @@ def write_section(
     *,
     key_plan: KeyPlan | None = None,
     keypair: KeyPair | None = None,
+    firmware_version: str = "",
 ) -> None:
     """Write one config or module-config section to the device.
 
@@ -252,6 +254,10 @@ def write_section(
             ``change.section == "security"``.
         keypair: The freshly generated keypair, required when
             ``key_plan.regenerate`` is set.
+        firmware_version: The device's firmware version, which decides
+            whether a bare-key-rotation-shaped security write is sent
+            twice (see below). Empty or unparseable counts as firmware
+            2.8.
 
     Raises:
         PlanConflictError: If ``change.section`` is not a known config or
@@ -266,7 +272,8 @@ def write_section(
 
     A security write that firmware 2.8 would take for a bare key rotation
     (see :func:`_firmware_keeps_rest_of_security`) is sent twice, so the
-    second send applies the settings changed alongside the keys.
+    second send applies the settings changed alongside the keys. Older
+    firmware applies the first in full, so it gets one.
 
     On any failure the section's in-memory message is restored to its
     pre-call state (a snapshot taken before any field is applied), so an
@@ -303,7 +310,11 @@ def write_section(
 
         # Firmware 2.8 applies only the keys of a bare key rotation; the
         # second set carries the key the device now holds, so it applies the rest.
-        resend = change.section == "security" and _firmware_keeps_rest_of_security(msg, snapshot)
+        resend = (
+            change.section == "security"
+            and may_keep_rest_of_bare_key_rotation(firmware_version)
+            and _firmware_keeps_rest_of_security(msg, snapshot)
+        )
         try:
             iface.localNode.writeConfig(change.section)
             if resend:

@@ -664,7 +664,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   policy back to `COMPATIBLE`). Firmware 2.8 treats such a write as a bare
   key rotation and keeps its old settings, so the run failed verification
   and a revoked admin key stayed authorized until a re-run. The write is
-  now sent twice when that would happen.
+  now sent twice when that would happen, on firmware 2.8 or a version
+  that cannot be read.
 - A template's `device.node_info_broadcast_secs` below 3600,
   `neighbor_info.update_interval` below 14400 or
   `power.on_battery_shutdown_after_secs` between 1 and 29 is refused at

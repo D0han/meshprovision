@@ -460,6 +460,30 @@ def test_bare_rotation_shaped_security_write_is_sent_twice() -> None:
     assert security.serial_enabled is False
 
 
+@pytest.mark.parametrize(
+    ("firmware_version", "writes"),
+    [
+        pytest.param("2.8.0.47db0e3", 2, id="2.8.0"),
+        pytest.param("2.7.26.54e0d8d", 1, id="2.7"),
+        pytest.param("", 2, id="unknown"),
+    ],
+)
+def test_only_firmware_2_8_or_unknown_gets_the_second_security_write(
+    firmware_version: str, writes: int
+) -> None:
+    iface = _rotation_iface(serial_enabled=True)
+
+    write_section(
+        iface,  # type: ignore[arg-type]
+        _SERIAL_OFF,
+        key_plan=KeyPlan(regenerate=True),
+        keypair=generate_keypair(),
+        firmware_version=firmware_version,
+    )
+
+    assert iface.localNode.written_sections == ["security"] * writes
+
+
 def test_key_rotation_with_admin_keys_is_sent_once() -> None:
     iface = _rotation_iface(serial_enabled=True)
 

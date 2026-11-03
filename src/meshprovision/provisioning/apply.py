@@ -352,6 +352,7 @@ def _write_in_order(
     *,
     key_plan: KeyPlan,
     keypair: KeyPair | None,
+    firmware_version: str,
     stop_reason: str | None,
 ) -> tuple[list[WriteResult], list[str], str | None]:
     """Write ``changes`` in order, stopping at the first failure.
@@ -368,6 +369,8 @@ def _write_in_order(
         changes: The sections to write, in order.
         key_plan: The plan's key plan, passed to :func:`write_section`.
         keypair: The freshly generated keypair, if any.
+        firmware_version: The device's firmware version, passed to
+            :func:`write_section`.
         stop_reason: Why writing had already stopped before the first of
             ``changes`` (every one is then skipped), or ``None``.
 
@@ -389,7 +392,13 @@ def _write_in_order(
             if change.section == "default_channel":
                 write_default_channel(iface, change)
             else:
-                write_section(iface, change, key_plan=key_plan, keypair=keypair)
+                write_section(
+                    iface,
+                    change,
+                    key_plan=key_plan,
+                    keypair=keypair,
+                    firmware_version=firmware_version,
+                )
         except (PlanConflictError, EnumMappingError) as exc:
             # Pre-I/O failure: apply_field rejected the plan before any
             # device write was attempted, so this section was never even
@@ -851,6 +860,7 @@ def apply_plan(
             sections_to_write,
             key_plan=plan.key_plan,
             keypair=keypair,
+            firmware_version=plan.firmware_version,
             stop_reason=stop_reason,
         )
         results.extend(section_results)
@@ -958,6 +968,7 @@ def apply_plan(
                 deferred_changes,
                 key_plan=plan.key_plan,
                 keypair=keypair,
+                firmware_version=plan.firmware_version,
                 stop_reason=None,
             )
             results.extend(deferred_results)

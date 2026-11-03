@@ -13,12 +13,21 @@ from __future__ import annotations
 import re
 from typing import Final
 
-__all__ = ["KEY_DERIVED_ID_MIN_FIRMWARE", "derives_node_id_from_key", "parse_firmware_version"]
+__all__ = [
+    "BARE_KEY_ROTATION_MIN_FIRMWARE",
+    "KEY_DERIVED_ID_MIN_FIRMWARE",
+    "derives_node_id_from_key",
+    "may_keep_rest_of_bare_key_rotation",
+    "parse_firmware_version",
+]
 
 _FIRMWARE_VERSION_RE: Final[re.Pattern[str]] = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 
 KEY_DERIVED_ID_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
 """The first firmware that derives a node's id from its public key (``createNewIdentity``)."""
+
+BARE_KEY_ROTATION_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
+"""The first firmware that keeps the rest of a bare key rotation (``isBareKeypairRotation``)."""
 
 
 def parse_firmware_version(raw: str) -> tuple[int, int, int] | None:
@@ -56,3 +65,22 @@ def derives_node_id_from_key(raw: str) -> bool:
     """
     parsed = parse_firmware_version(raw)
     return parsed is not None and parsed >= KEY_DERIVED_ID_MIN_FIRMWARE
+
+
+def may_keep_rest_of_bare_key_rotation(raw: str) -> bool:
+    """Tell whether a firmware version may keep the rest of a bare key rotation.
+
+    Firmware >= 2.8 applies only the keys of a security write shaped like
+    a bare key rotation and keeps its other security settings. An empty
+    or unparseable version counts as such firmware: a needless second
+    write is harmless, a missing one drops settings.
+
+    Args:
+        raw: The raw firmware version string.
+
+    Returns:
+        ``False`` only for a parseable version below
+        :data:`BARE_KEY_ROTATION_MIN_FIRMWARE`.
+    """
+    parsed = parse_firmware_version(raw)
+    return parsed is None or parsed >= BARE_KEY_ROTATION_MIN_FIRMWARE
