@@ -365,21 +365,9 @@ def test_ble_backend_connect_wraps_every_device_io_error(
     three connect sites (serial, TCP, BLE) exclude it, and the only
     ``our_exit()`` reachable at connect is ``serial_interface``'s
     no-``devPath`` port-discovery path, which meshprovision never takes
-    (it always passes an explicit target). This id is a strict xfail,
-    not a skip, so a future regression that starts catching it here would
-    be caught, not silently ignored.
+    (it always passes an explicit target). The ``system_exit`` id asserts
+    that it propagates, so a change that starts catching it here fails.
     """
-    if request.node.callspec.params["device_io_error"] == "system_exit":
-        request.applymarker(
-            pytest.mark.xfail(
-                strict=True,
-                reason=(
-                    "connect deliberately does not catch SystemExit: no connect "
-                    "path with an explicit target calls our_exit"
-                ),
-            )
-        )
-
     import meshtastic.ble_interface as ble_mod
 
     exc = device_io_error()
@@ -390,6 +378,10 @@ def test_ble_backend_connect_wraps_every_device_io_error(
     monkeypatch.setattr(ble_mod.BLEInterface, "__init__", failing_init)
 
     backend = BLEBackend("AA:BB:CC:DD:EE:FF")
+    if request.node.callspec.params["device_io_error"] == "system_exit":
+        with pytest.raises(SystemExit):
+            backend.connect()
+        return
     with pytest.raises(ConnectionFailedError) as exc_info:
         backend.connect()
     assert exc_info.value.transport == "ble"

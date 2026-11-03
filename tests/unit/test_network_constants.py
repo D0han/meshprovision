@@ -1,12 +1,13 @@
 """The ``mesh network`` constants are the ones docs/commands.md and the module docs state.
 
 Each module's tunables are pinned to their documented values, and each
-value's wording in ``docs/commands.md`` is checked to be there, so that
-changing one without the other fails here.
+value, rendered from its constant, is checked to occur in the docs, so
+that changing one without the other fails here.
 """
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 _DOCS = (_ROOT / "docs" / "commands.md").read_text(encoding="utf-8")
 _NETWORK_DOCS = _DOCS[_DOCS.index("## `mesh network`") : _DOCS.index("## `mesh admin`")]
 _PROVISION_DOCS = _DOCS[_DOCS.index("## `mesh provision`") : _DOCS.index("## `mesh adopt`")]
+_SECURITY_DOCS = (_ROOT / "docs" / "security.md").read_text(encoding="utf-8")
 
 
 def _flat(text: str) -> str:
@@ -107,55 +109,171 @@ def test_the_maintenance_warning_windows() -> None:
     ) == (48 * 3600.0, 24 * 3600.0)
 
 
+def _mib(size: int) -> str:
+    return f"{size // _MIB} MiB"
+
+
+def _hours(seconds: float) -> str:
+    return f"{seconds / 3600:g} hours"
+
+
+def _percent(share: float) -> str:
+    return f"{share * 100:g} %"
+
+
+def _standalone(phrase: str, docs: str) -> int:
+    """Count the occurrences of ``phrase`` not inside a longer number or word."""
+    pattern = r"(?<![0-9A-Za-z.])" + re.escape(_flat(phrase)) + r"(?![0-9])"
+    return len(re.findall(pattern, _flat(docs)))
+
+
+_RELYING = _percent(relays.RELYING_SHARE)
+_SOLE = _percent(relays.SOLE_FIRST_HOP_SHARE)
+
+
 @pytest.mark.parametrize(
-    "phrase",
+    ("docs", "phrase"),
     [
-        "at most once every 15 minutes (once a minute with `--refresh`)",
-        "at most 48 MiB each",
-        "The node list is capped at 4 MiB",
-        "at least an hour",
-        "the region of most nodes first, at most 4",
-        (
-            "Bounds: 30 days; a day file at most 8 MiB, a region at most 64 MiB, "
-            "all regions at most 256 MiB"
+        pytest.param(
+            _NETWORK_DOCS,
+            f"at most once every {refresh.NETWORK_REFRESH_INTERVAL_SECONDS / 60:g} minutes",
+            id="refresh-interval",
         ),
-        (
-            "`--days N` | Window of the stored data, 1 to 30 days "
-            "(default: 30 for `keys`, 1 for the others)"
+        pytest.param(
+            _NETWORK_DOCS,
+            f"fetched fresh, at most {_mib(lorastats_region.REGION_RAW_MAX_BYTES)} each",
+            id="region-raw-max",
         ),
-        (
-            "coverage at least 50 %, distance at most 4 dB, and every other candidate "
-            "covers less than a third of that or is at least 4 dB farther"
+        pytest.param(
+            _NETWORK_DOCS,
+            f"The node list is capped at {_mib(lorastats_region.REGION_NODES_MAX_BYTES)}",
+            id="region-nodes-max",
         ),
-        "resolved `high` in the last week",
-        "at least 90 % of at least 5 first-hop events",
-        "gateways with at least 20 relayed receptions that got at least half of them through it",
-        "other nodes with at least 20 relayed receptions that got at least 50 % of them through it",
-        "other nodes with at least 20 first-hop events that went at least 90 % through it",
-        "other nodes with at least 5 packets of which at least half were uplinked by it alone",
-        "relies on it for 80 % or more",
-        "it carried 10 % of the region's relayed receptions; `medium` when it carried 3 %",
-        "each kept from 2 observations",
-        "senders with at least 20 first-hop events (5 for ours)",
-        "Only nodes with at least 20 receptions as an origin are counted as cut off",
-        "(counted up to 4)",
-        "the newest 168 distinct hours it was heard in",
+        pytest.param(
+            _NETWORK_DOCS,
+            f"most nodes first, at most {refresh.NETWORK_DEFAULT_MAX_REGIONS}",
+            id="max-regions",
+        ),
+        pytest.param(
+            _NETWORK_DOCS, f"Bounds: {buckets.NETWORK_RETENTION_DAYS} days", id="retention"
+        ),
+        pytest.param(
+            _NETWORK_DOCS, f"a day file at most {_mib(store.DAY_MAX_BYTES)}", id="day-max"
+        ),
+        pytest.param(
+            _NETWORK_DOCS, f"a region at most {_mib(store.REGION_MAX_BYTES)}", id="region-max"
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"all regions at most {_mib(store.STORE_MAX_TOTAL_BYTES)}",
+            id="store-max",
+        ),
+        pytest.param(_NETWORK_DOCS, f"1 to {report.MAX_DAYS} days", id="max-days"),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"default: {report.DEFAULT_KEYS_DAYS} for `keys`, "
+            f"{report.DEFAULT_TRAFFIC_DAYS} for the others",
+            id="default-days",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"`high` | coverage at least {_percent(resolve.RESOLVE_MIN_COVERAGE)}, "
+            f"distance at most {resolve.RESOLVE_MAX_DISTANCE_DB:g} dB",
+            id="resolve-high",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"its distance (above {resolve.RESOLVE_MAX_DISTANCE_DB:g} dB) contradicts it; "
+            f"or coverage at least {_percent(resolve.RESOLVE_MIN_COVERAGE)} with no rival",
+            id="resolve-medium",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"at least {resolve.RESOLVE_DISTANCE_MARGIN_DB:g} dB farther",
+            id="resolve-distance-margin",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"only first hop: at least {_SOLE} of at least "
+            f"{relays.SOLE_FIRST_HOP_MIN_EVENTS_OURS} first-hop events",
+            id="sole-first-hop-ours",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"other nodes with at least {relays.SOLE_FIRST_HOP_MIN_EVENTS} first-hop events "
+            f"that went at least {_SOLE} through it",
+            id="sole-first-hop-others",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"senders with at least {relays.SOLE_FIRST_HOP_MIN_EVENTS} first-hop events "
+            f"({relays.SOLE_FIRST_HOP_MIN_EVENTS_OURS} for ours) that went at least {_SOLE} "
+            "through one relay",
+            id="sole-first-hops-graph",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"Gateways>={relays.RELYING_SHARE * 100:g}%** (gateways with at least "
+            f"{relays.MIN_RELAYED} relayed receptions that got at least half",
+            id="gateways-relying",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"other nodes with at least {relays.MIN_RELAYED} relayed receptions that got at "
+            f"least {_RELYING} of them through it",
+            id="origins-relying",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"relies on it for {_percent(impact.HIGH_SHARE)} or more",
+            id="high-share",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"it carried {_percent(impact.HIGH_CARRIED)} of the region's relayed receptions; "
+            f"`medium` when it carried {_percent(impact.MEDIUM_CARRIED)}, or anyone relies on "
+            f"it for {_RELYING};",
+            id="impact-levels",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"rely on us for {_RELYING} and {_percent(impact.HIGH_SHARE)}",
+            id="fleet-relying",
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"at least {impact.ONLY_GATEWAY_MIN_PACKETS} packets of which at least half",
+            id="only-gateway-min-packets",
+        ),
+        pytest.param(
+            _NETWORK_DOCS, f"each kept from {graph.MIN_OBSERVED} observations", id="min-observed"
+        ),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"Only nodes with at least {graph.MIN_ORIGIN_RECEPTIONS} receptions as an origin",
+            id="min-origin-receptions",
+        ),
+        pytest.param(_NETWORK_DOCS, f"(counted up to {graph.MAX_PATHS})", id="max-paths"),
+        pytest.param(
+            _NETWORK_DOCS,
+            f"the newest {keys.MAX_KEY_HOURS} distinct hours it was heard in",
+            id="max-key-hours",
+        ),
+        pytest.param(
+            _SECURITY_DOCS,
+            f"newest {keys.MAX_KEY_HOURS} distinct hours it was heard in (a week's worth), "
+            f"kept for {buckets.NETWORK_RETENTION_DAYS} days",
+            id="security-key-evidence",
+        ),
+        pytest.param(
+            _PROVISION_DOCS,
+            f"in the {_hours(maintenance.MAINTENANCE_WINDOW_SECONDS)} before a region's last "
+            f"fetch (at most {_hours(maintenance.MAINTENANCE_MAX_AGE_SECONDS)} ago)",
+            id="maintenance-windows",
+        ),
     ],
 )
-def test_the_network_docs_state_these_values(phrase: str) -> None:
-    assert _flat(phrase) in _flat(_NETWORK_DOCS)
-
-
-def test_the_security_docs_state_how_long_key_evidence_lasts() -> None:
-    security = (_ROOT / "docs" / "security.md").read_text(encoding="utf-8")
-
-    assert "newest 168 distinct hours it was heard in (a week's worth), kept for 30 days" in (
-        _flat(security)
-    )
-
-
-def test_the_provision_docs_state_the_maintenance_windows() -> None:
-    text = _flat(_PROVISION_DOCS)
-
-    assert "in the 24 hours before a region's last fetch (at most 48 hours ago)" in text
-    assert "was `medium` or `high`" in text
+def test_the_docs_state_each_value(docs: str, phrase: str) -> None:
+    # Exactly once: a value inside a longer number, or repeated in another
+    # sentence, would let a change to this one go unnoticed.
+    assert _standalone(phrase, docs) == 1

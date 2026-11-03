@@ -33,7 +33,7 @@ _SECTIONS: tuple[tuple[str, type[BaseModel], tuple[str, str]], ...] = (
 
 
 def _message_class(module_name: str, dotted: str) -> Any:
-    module = pytest.importorskip(f"meshtastic.protobuf.{module_name}")
+    module = importlib.import_module(f"meshtastic.protobuf.{module_name}")
     message: Any = module
     for part in dotted.split("."):
         message = getattr(message, part)
@@ -54,7 +54,7 @@ def _bounded_template_fields() -> Iterator[tuple[str, list[str]]]:
     The second item lists where the template's bounds differ from the
     annotated ones (empty when they agree).
     """
-    field_metadata_pb2 = pytest.importorskip("meshtastic.protobuf.field_metadata_pb2")
+    field_metadata_pb2 = importlib.import_module("meshtastic.protobuf.field_metadata_pb2")
     extension = field_metadata_pb2.field_metadata
     for section, model, (module_name, dotted) in _SECTIONS:
         for descriptor in _message_class(module_name, dotted).DESCRIPTOR.fields:
