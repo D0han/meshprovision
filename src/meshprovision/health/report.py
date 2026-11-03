@@ -21,6 +21,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.datasources.lorastats_packets import LorastatsPackets
+from meshprovision.datasources.models import epoch_seconds
 from meshprovision.errors import ExitCode
 from meshprovision.health.history import NodeHistory
 from meshprovision.health.metrics import NodeMetrics, compute_metrics
@@ -193,11 +194,6 @@ class HealthReport:
         return int(ExitCode.OK)
 
 
-def _epoch(value: datetime | None) -> float | None:
-    """Return a timestamp as epoch seconds."""
-    return None if value is None else value.timestamp()
-
-
 def _role(node: MergedNode, history: NodeHistory) -> str | None:
     """Pick a node's role: the sources', else its node info's, else the database's.
 
@@ -219,9 +215,9 @@ def _context(node: MergedNode, role: str | None) -> NodeContext:
     """Gather what the rules know about a node beyond its history."""
     return NodeContext(
         role=role,
-        last_seen=_epoch(node.last_seen),
+        last_seen=epoch_seconds(node.last_seen),
         battery=node.battery_level,
-        battery_time=_epoch(node.last_device_metrics),
+        battery_time=epoch_seconds(node.last_device_metrics),
         stale_after=node.thresholds.stale_after.total_seconds(),
         offline_after=node.thresholds.offline_after.total_seconds(),
         expected_interval=node.cadence.interval.total_seconds(),

@@ -67,6 +67,7 @@ from meshtastic.protobuf import admin_pb2, mesh_pb2  # noqa: E402
 from meshprovision.cli.logging_setup import _LIBRARY_STAGES  # noqa: E402
 from meshprovision.crypto.keys import KeyPair, generate_keypair  # noqa: E402
 from meshprovision.db import ods_write  # noqa: E402
+from meshprovision.db.ods import OdsDatabase  # noqa: E402
 
 if TYPE_CHECKING:
     from meshtastic.node import Node
@@ -326,6 +327,21 @@ def empty_ods(tmp_path: Path) -> Path:
     path = tmp_path / "nodes_db.ods"
     ods_write.create_empty(path)
     return path
+
+
+def new_database(path: Path) -> OdsDatabase:
+    """Write a brand-new, empty ODS database and open a loaded session over it.
+
+    Args:
+        path: Path to create the ``.ods`` file at.
+
+    Returns:
+        The loaded :class:`~meshprovision.db.ods.OdsDatabase`.
+    """
+    ods_write.create_empty(path)
+    db = OdsDatabase(path)
+    db.load(force=True)
+    return db
 
 
 def rezip_ods(data: bytes, changes: Mapping[str, bytes | None]) -> bytes:

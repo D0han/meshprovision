@@ -335,13 +335,12 @@ def _stopped(
         security_attempted: Whether the ``security`` write was sent.
 
     Returns:
-        The :class:`ApplyOutcome`, with ``verified=True`` and no record.
+        The :class:`ApplyOutcome`, with no record.
     """
     return ApplyOutcome(
         node_id=plan.node_id,
         results=tuple(results),
         dry_run=False,
-        verified=True,
         security_attempted=security_attempted,
     )
 
@@ -783,7 +782,6 @@ def apply_plan(
             node_id=plan.node_id,
             results=(),
             dry_run=dry_run,
-            verified=False,
             record=None if dry_run else plan.to_record(),
         )
 
@@ -793,9 +791,7 @@ def apply_plan(
             skipped.append(WriteResult("owner", WriteStatus.SKIPPED, "dry run"))
         for change in plan.sections:
             skipped.append(WriteResult(change.section, WriteStatus.SKIPPED, "dry run"))
-        return ApplyOutcome(
-            node_id=plan.node_id, results=tuple(skipped), dry_run=True, verified=False
-        )
+        return ApplyOutcome(node_id=plan.node_id, results=tuple(skipped), dry_run=True)
 
     results: list[WriteResult] = []
     attempted: list[str] = []

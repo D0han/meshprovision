@@ -30,7 +30,7 @@ import re
 import time
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Final
+from typing import Final
 
 from serial.tools import list_ports
 from serial.tools.list_ports_common import ListPortInfo
@@ -118,18 +118,12 @@ class SerialPortInfo:
             ``"n/a"`` is normalized to ``""``).
         vid: USB vendor id, when the port is USB-backed.
         pid: USB product id, when the port is USB-backed.
-        manufacturer: USB manufacturer string, when available.
-        product: USB product string, when available.
-        serial_number: USB serial number string, when available.
     """
 
     device: str
     description: str = ""
     vid: int | None = None
     pid: int | None = None
-    manufacturer: str | None = None
-    product: str | None = None
-    serial_number: str | None = None
 
     @property
     def vid_pid(self) -> str | None:
@@ -264,9 +258,6 @@ def _to_serial_port_info(port: ListPortInfo) -> SerialPortInfo:
         description=_normalize_description(port.description),
         vid=port.vid,
         pid=port.pid,
-        manufacturer=port.manufacturer,
-        product=port.product,
-        serial_number=port.serial_number,
     )
 
 
@@ -325,12 +316,8 @@ def require_ble() -> None:
         )
 
 
-def discover_ble_devices(
-    *,
-    timeout: float = DEFAULT_BLE_SCAN_TIMEOUT,
-    service_uuid: str | None = MESHTASTIC_BLE_SERVICE_UUID,
-) -> tuple[BleDeviceInfo, ...]:
-    """Scan for nearby BLE devices.
+def discover_ble_devices(*, timeout: float = DEFAULT_BLE_SCAN_TIMEOUT) -> tuple[BleDeviceInfo, ...]:
+    """Scan for nearby BLE devices advertising the Meshtastic service.
 
     Note:
         This function calls ``asyncio.run`` internally and therefore must
@@ -338,14 +325,11 @@ def discover_ble_devices(
 
     Args:
         timeout: Scan duration, in seconds.
-        service_uuid: When given, only devices advertising this GATT
-            service UUID are returned (case-insensitive comparison).
-            Defaults to :data:`MESHTASTIC_BLE_SERVICE_UUID`. Pass
-            ``None`` to return every discovered device.
 
     Returns:
-        Discovered devices sorted by strongest signal first (devices with
-        an unknown RSSI sort last), then by address.
+        The devices advertising :data:`MESHTASTIC_BLE_SERVICE_UUID`
+        (compared case-insensitively), sorted by strongest signal first
+        (devices with an unknown RSSI sort last), then by address.
 
     Raises:
         UnsupportedTransportError: If ``bleak`` is not installed, or is
@@ -361,25 +345,26 @@ def discover_ble_devices(
             "BLE support is not available.", transport="ble", hint=BLE_UNAVAILABLE_HINT
         ) from exc
 
-    kwargs: dict[str, Any] = {"return_adv": True}
-    if service_uuid is not None:
-        kwargs["service_uuids"] = [service_uuid]
-
-    _logger.debug("BLE scan starting (timeout=%ss, service_uuid=%s).", timeout, service_uuid)
+    _logger.debug("BLE scan starting (timeout=%ss).", timeout)
     started = time.monotonic()
     try:
-        result = asyncio.run(bleak.BleakScanner.discover(timeout=timeout, **kwargs))
+        result = asyncio.run(
+            bleak.BleakScanner.discover(
+                timeout=timeout,
+                return_adv=True,
+                service_uuids=[MESHTASTIC_BLE_SERVICE_UUID],
+            )
+        )
     except (TimeoutError, BleakError, OSError, RuntimeError) as exc:
         raise ConnectionBackendError(f"BLE scan failed: {exc}", transport="ble") from exc
     elapsed = time.monotonic() - started
 
-    wanted_uuid = service_uuid.lower() if service_uuid is not None else None
+    wanted_uuid = MESHTASTIC_BLE_SERVICE_UUID.lower()
     devices: list[BleDeviceInfo] = []
     for device, adv in result.values():
-        if wanted_uuid is not None:
-            advertised = {uuid.lower() for uuid in (adv.service_uuids or ())}
-            if wanted_uuid not in advertised:
-                continue
+        advertised = {uuid.lower() for uuid in (adv.service_uuids or ())}
+        if wanted_uuid not in advertised:
+            continue
         devices.append(
             BleDeviceInfo(
                 address=device.address,
@@ -390,7 +375,7 @@ def discover_ble_devices(
 
     devices.sort(key=lambda d: (-(d.rssi if d.rssi is not None else -999), d.address))
     _logger.debug(
-        "BLE scan finished in %.1fs: %d raw device(s), %d matching service_uuid.",
+        "BLE scan finished in %.1fs: %d raw device(s), %d advertising the Meshtastic service.",
         elapsed,
         len(result),
         len(devices),

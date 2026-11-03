@@ -8,7 +8,7 @@ port enumeration) and the BLE scan path, which is exercised by monkeypatching
 from __future__ import annotations
 
 import builtins
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import bleak
@@ -281,7 +281,7 @@ class _FakeBleDevice:
 class _FakeAdv:
     rssi: int | None = None
     local_name: str | None = None
-    service_uuids: tuple[str, ...] = field(default_factory=tuple)
+    service_uuids: tuple[str, ...] = (discovery.MESHTASTIC_BLE_SERVICE_UUID,)
 
 
 def _fake_discover_returning(
@@ -307,7 +307,7 @@ def test_discover_ble_devices_sorts_by_strongest_signal_then_address(
     ]
     monkeypatch.setattr(bleak.BleakScanner, "discover", _fake_discover_returning(devices))
 
-    result = discover_ble_devices(service_uuid=None)
+    result = discover_ble_devices()
 
     assert [d.address for d in result] == [
         "AA:AA:AA:AA:AA:AA",
@@ -323,7 +323,7 @@ def test_discover_ble_devices_sorts_unknown_rssi_last(monkeypatch: pytest.Monkey
     ]
     monkeypatch.setattr(bleak.BleakScanner, "discover", _fake_discover_returning(devices))
 
-    result = discover_ble_devices(service_uuid=None)
+    result = discover_ble_devices()
 
     assert [d.address for d in result] == ["BB:BB:BB:BB:BB:BB", "AA:AA:AA:AA:AA:AA"]
 
@@ -332,11 +332,11 @@ def test_discover_ble_devices_passes_the_timeout_through(monkeypatch: pytest.Mon
     captured: dict[str, Any] = {}
     monkeypatch.setattr(bleak.BleakScanner, "discover", _fake_discover_returning([], captured))
 
-    discover_ble_devices(timeout=2.5, service_uuid=None)
+    discover_ble_devices(timeout=2.5)
     assert captured["timeout"] == 2.5
 
     captured.clear()
-    discover_ble_devices(service_uuid=None)
+    discover_ble_devices()
     assert captured["timeout"] == discovery.DEFAULT_BLE_SCAN_TIMEOUT
 
 
@@ -353,7 +353,7 @@ def test_discover_ble_devices_wraps_scan_failures_as_connection_backend_error(
     monkeypatch.setattr(bleak.BleakScanner, "discover", _fake_discover)
 
     with pytest.raises(ConnectionBackendError) as excinfo:
-        discover_ble_devices(service_uuid=None)
+        discover_ble_devices()
     assert excinfo.value.transport == "ble"
 
 

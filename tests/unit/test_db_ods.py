@@ -31,7 +31,7 @@ from meshprovision.errors import (
     DuplicateNodeError,
     SchemaError,
 )
-from tests.conftest import rezip_ods
+from tests.conftest import new_database, rezip_ods
 from tests.unit.conftest import edit_ods_cell, libreoffice_round_trip
 
 pytestmark = pytest.mark.unit
@@ -1033,16 +1033,9 @@ def test_ods_database_rows_bogus_sheet_raises(tmp_path: Path) -> None:
         db.rows("Bogus")
 
 
-def test_ods_database_create_existing_without_overwrite_raises(tmp_path: Path) -> None:
-    path = tmp_path / "db.ods"
-    ods.OdsDatabase.create(path)
-    with pytest.raises(SchemaError):
-        ods.OdsDatabase.create(path)
-
-
 def test_ods_database_save_no_op_when_not_dirty(tmp_path: Path) -> None:
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     mtime_before = path.stat().st_mtime_ns
     db.save()
     assert path.stat().st_mtime_ns == mtime_before
@@ -1059,7 +1052,7 @@ def test_ods_database_save_creates_one_timestamped_backup(
     """
     monkeypatch.chdir(tmp_path)
     path = Path("nodes_db.ods")
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
     assert db.dirty() is True
     db.save()
@@ -1073,22 +1066,6 @@ def test_ods_database_save_creates_one_timestamped_backup(
     known_good = known_good_info(path)
     assert known_good is not None
     assert known_good.path == backups_dir / f"{path.stem}.known-good{path.suffix}"
-
-
-def test_ods_database_create_overwrite_true_replaces_an_existing_file(tmp_path: Path) -> None:
-    """`overwrite=True` must actually succeed against an existing file, not just skip the raise.
-
-    The only existing `create()` test exercises the exists-without-overwrite
-    refusal; the overwrite=True success path itself was untested.
-    """
-    path = tmp_path / "db.ods"
-    first = ods.OdsDatabase.create(path)
-    first.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
-    first.save()
-
-    second = ods.OdsDatabase.create(path, overwrite=True)
-
-    assert second.rows("Nodes") == ()
 
 
 def test_ods_database_context_manager_unlocks_on_exit(tmp_path: Path) -> None:
@@ -1138,7 +1115,7 @@ def test_ods_database_save_raises_on_concurrent_external_edit(tmp_path: Path) ->
     clobbered -- and no backup is taken, since the write never happens.
     """
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
 
     external = ods_write.write_database(
@@ -1163,7 +1140,7 @@ def test_ods_database_save_raises_on_concurrent_external_edit(tmp_path: Path) ->
 def test_ods_database_save_succeeds_after_a_touch_only_external_change(tmp_path: Path) -> None:
     """A bare `touch` (same content, new mtime) between `load()` and `save()` is not a conflict."""
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
 
     stat_before = path.stat()
@@ -1188,7 +1165,7 @@ def test_ods_database_two_saves_in_one_session_both_succeed(tmp_path: Path) -> N
     conflict against the first save's own write.
     """
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
 
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
     db.save()
@@ -1215,7 +1192,7 @@ def test_ods_database_save_succeeds_after_identical_content_replace_with_new_ino
     for a genuine edit: the content hash still matches.
     """
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
 
     original_bytes = path.read_bytes()
@@ -1245,7 +1222,7 @@ def test_ods_database_save_refreshes_known_good_copy(tmp_path: Path) -> None:
     content this `save()` just wrote.
     """
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
     db.save()
 
@@ -1283,7 +1260,7 @@ def test_text_with_control_characters_saves_loadable_and_reads_back_stable(
     the write and the load side, so a second save and load change nothing.
     """
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     db.replace("Nodes", [NodeRecord(node_id="00000001", short_name="S", notes=notes).to_row()])
     db.save()
 
@@ -1302,7 +1279,7 @@ def test_text_with_control_characters_saves_loadable_and_reads_back_stable(
 def test_save_refuses_content_that_would_not_load_and_keeps_the_file(tmp_path: Path) -> None:
     """save() validates the serialized bytes before backing up or replacing anything."""
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
     db.save()
     good = path.read_bytes()
@@ -1327,7 +1304,7 @@ def test_ods_database_load_after_save_takes_known_good_fast_path(tmp_path: Path)
     copy's own mtime/inode untouched.
     """
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
     db.save()
 
@@ -1359,7 +1336,7 @@ def test_ods_database_save_succeeds_even_if_known_good_refresh_raises(
     actually produce.
     """
     path = tmp_path / "db.ods"
-    db = ods.OdsDatabase.create(path)
+    db = new_database(path)
     db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
 
     def raising_refresh(*args: Any, **kwargs: Any) -> None:
@@ -1760,7 +1737,7 @@ def test_load_database_stale_reader_does_not_revert_known_good_after_concurrent_
     without threads or sleeps.
     """
     path = tmp_path / "db.ods"
-    with ods.OdsDatabase.create(path) as db:
+    with new_database(path) as db:
         db.replace("Nodes", [NodeRecord(node_id="deadbe01").to_row()])
         db.save()
 

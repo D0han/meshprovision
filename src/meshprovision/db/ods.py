@@ -929,30 +929,3 @@ class OdsDatabase:
                 path=str(self._path),
                 hint="The database file is unchanged; please report this as a bug.",
             ) from exc
-
-    @classmethod
-    def create(
-        cls, path: Path, *, overwrite: bool = False, backup_dir: Path | None = None
-    ) -> OdsDatabase:
-        """Create a brand-new, empty ODS database and open a session over it.
-
-        Args:
-            path: Path to create the ``.ods`` file at.
-            overwrite: Whether to replace an existing file at ``path``.
-            backup_dir: Directory to store future backups under.
-
-        Returns:
-            A loaded :class:`OdsDatabase` session over the new, empty
-            database.
-
-        Raises:
-            SchemaError: If ``path`` already exists and ``overwrite`` is
-                false.
-            AtomicWriteError: If the write fails.
-        """
-        if path.exists() and not overwrite:
-            raise SchemaError(f"{path} already exists; pass overwrite=True to replace it")
-        ods_write.create_empty(path)
-        instance = cls(path, backup_dir=backup_dir)
-        instance.load(force=True)
-        return instance

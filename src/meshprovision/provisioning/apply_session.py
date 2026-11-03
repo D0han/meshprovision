@@ -132,9 +132,6 @@ class ApplyOutcome:
         results: Every :class:`WriteResult` produced, in execution order.
         dry_run: Whether this outcome came from a dry run (no device
             writes were attempted).
-        verified: Whether a verification pass was actually run (``False``
-            for a dry run or an empty plan, where there was nothing to
-            verify; ``True`` whenever a real device write was attempted).
         public_key_fingerprint: A redacted fingerprint of the public key
             confirmed on the device, when a key was written and verified.
         record: The :class:`~meshprovision.db.nodes.NodeRecord` to
@@ -157,7 +154,6 @@ class ApplyOutcome:
     node_id: NodeId
     results: tuple[WriteResult, ...]
     dry_run: bool = False
-    verified: bool = True
     public_key_fingerprint: str | None = None
     record: NodeRecord | None = None
     security_attempted: bool = False

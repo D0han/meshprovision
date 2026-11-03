@@ -16,7 +16,6 @@ from meshprovision.crypto import redact
 from meshprovision.crypto.keys import generate_keypair
 from meshprovision.db.keys import KeyRepository
 from meshprovision.db.nodes import NodeRepository
-from meshprovision.db.ods import OdsDatabase
 from meshprovision.db.schema import KeyOrigin
 from meshprovision.errors import (
     ConnectionBackendError,
@@ -44,7 +43,7 @@ from meshprovision.provisioning.plan import (
 )
 from meshprovision.provisioning.plan_admin_keys import KeyPlan
 from meshprovision.provisioning.plan_types import NameChange
-from tests.conftest import real_write_config_or_exit
+from tests.conftest import new_database, real_write_config_or_exit
 from tests.unit import apply_fakes
 from tests.unit.apply_fakes import (
     DEFAULT_NODE_NUM,
@@ -209,12 +208,11 @@ def test_apply_plan_success_confirmed_and_persist_result(tmp_path, make_live) ->
     outcome = apply_plan(plan, session, keypair=kp)
 
     assert outcome.dry_run is False
-    assert outcome.verified is True
     assert outcome.ok is True, outcome.describe()
     assert outcome.record is not None
 
     db_path = tmp_path / "db.ods"
-    db = OdsDatabase.create(db_path)
+    db = new_database(db_path)
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
     persisted = persist_result(
@@ -771,7 +769,6 @@ def test_apply_plan_reports_uncertain_when_the_post_commit_reconnect_fails(make_
     session = _FakeSessionRefreshFailsAfterFirstCall(iface)
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
-    assert outcome.verified is True
     assert outcome.ok is False
     verify_result = next(r for r in outcome.results if r.section == "<verify>")
     assert verify_result.status == WriteStatus.FAILED
@@ -1733,7 +1730,6 @@ def test_apply_plan_reports_uncertain_when_the_reconnect_fails(tmp_path, make_li
     outcome = apply_plan(plan, session, keypair=kp)
 
     assert outcome.dry_run is False
-    assert outcome.verified is True
     assert outcome.uncertain is True
     assert outcome.may_update_database is False
 
@@ -2497,7 +2493,6 @@ def test_verify_reports_uncertain_when_the_post_reconnect_read_fails(tmp_path, m
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
     assert outcome.dry_run is False
-    assert outcome.verified is True
     assert outcome.uncertain is True
     assert outcome.may_update_database is False
 
@@ -2521,7 +2516,6 @@ def test_verify_reports_uncertain_when_get_public_key_raises(tmp_path, make_live
     outcome = apply_plan(plan, session, keypair=kp)  # type: ignore[arg-type]
 
     assert outcome.dry_run is False
-    assert outcome.verified is True
     assert outcome.uncertain is True
     assert outcome.may_update_database is False
 
@@ -2532,7 +2526,7 @@ def test_verify_reports_uncertain_when_get_public_key_raises(tmp_path, make_live
     assert "could not read back the device state to verify" in verify_results[0].message
 
     db_path = tmp_path / "db.ods"
-    db = OdsDatabase.create(db_path)
+    db = new_database(db_path)
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
     mtime_before = db_path.stat().st_mtime_ns

@@ -42,6 +42,7 @@ __all__ = [
     "coerce_int",
     "coerce_str",
     "e7_to_degrees",
+    "epoch_seconds",
     "parse_epoch",
     "parse_iso8601",
 ]
@@ -353,6 +354,18 @@ def parse_epoch(value: object) -> datetime | None:
     except (OverflowError, OSError, ValueError):
         return None
     return _renderable_or_none(parsed)
+
+
+def epoch_seconds(value: datetime | None) -> float | None:
+    """Return a datetime as unix epoch seconds, the inverse of :func:`parse_epoch`.
+
+    Args:
+        value: A timezone-aware datetime, or ``None``.
+
+    Returns:
+        ``value.timestamp()``, or ``None`` for ``None``.
+    """
+    return None if value is None else value.timestamp()
 
 
 def parse_iso8601(value: object, *, assume_tz: tzinfo = LORASTATS_NAIVE_TZ) -> datetime | None:

@@ -282,9 +282,16 @@ class StatusReport:
             if node.availability is Availability.UNKNOWN and node.in_active_database
         )
 
-    @property
-    def degraded(self) -> bool:
-        """Whether this report represents a degraded run.
+    def exit_code(self, *, fail_on_offline: bool = True) -> int:
+        """Compute the process exit code the ``mesh status`` CLI should return.
+
+        A source failure, a source silently skipping an entry it could
+        not parse, or a source silently failing to coerce one field of
+        an otherwise-parsed entry, always degrades the exit code, since
+        a status report built from an incomplete or partially-dropped
+        source is not fully trustworthy either way. An offline node, or a
+        database node without a last-seen time (:attr:`unseen`), only
+        does so when ``fail_on_offline`` is true.
 
         No magnitude threshold on :attr:`skipped_entries`/
         :attr:`field_coercions`: even a single skipped entry or
@@ -300,26 +307,6 @@ class StatusReport:
         that wants to judge magnitude itself (a `--json` consumer, for
         example).
 
-        Returns:
-            ``True`` if :attr:`has_offline`, a database node is
-            :attr:`unseen`, any source failed, any source skipped an
-            entry it could not parse, or any source reported a field it
-            could not coerce.
-        """
-        return self._is_degraded(fail_on_offline=True)
-
-    def exit_code(self, *, fail_on_offline: bool = True) -> int:
-        """Compute the process exit code the ``mesh status`` CLI should return.
-
-        A source failure, a source silently skipping an entry it could
-        not parse, or a source silently failing to coerce one field of
-        an otherwise-parsed entry, always degrades the exit code, since
-        a status report built from an incomplete or partially-dropped
-        source is not fully trustworthy either way -- see
-        :attr:`degraded` for why this has no magnitude threshold. An
-        offline node, or a database node without a last-seen time
-        (:attr:`unseen`), only does so when ``fail_on_offline`` is true.
-
         Args:
             fail_on_offline: Whether an offline or unseen node should
                 count as degraded for this call.
@@ -333,7 +320,7 @@ class StatusReport:
         return int(ExitCode.OK)
 
     def _is_degraded(self, *, fail_on_offline: bool) -> bool:
-        """The one degraded-run rule behind :attr:`degraded` and :meth:`exit_code`.
+        """The degraded-run rule behind :meth:`exit_code`.
 
         Args:
             fail_on_offline: Whether an offline or unseen node counts as

@@ -24,6 +24,7 @@ from meshprovision.provisioning.apply_session import (
 )
 from meshprovision.provisioning.persist import persist_result
 from meshprovision.provisioning.plan import PlanInputs, build_plan
+from tests.conftest import new_database
 from tests.unit.apply_fakes import FakeIfaceForApply, fake_node_id, minimal_template
 from tests.unit.conftest import make_security
 
@@ -37,7 +38,7 @@ def test_persist_result_refuses_on_uncertain_outcome(tmp_path) -> None:
     )
 
     db_path = tmp_path / "db.ods"
-    db = OdsDatabase.create(db_path)
+    db = new_database(db_path)
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
 
@@ -64,14 +65,13 @@ def test_persist_result_refuses_when_may_update_database_is_false_with_a_record_
         node_id=fake_node_id(),
         results=(),
         dry_run=True,
-        verified=False,
         record=NodeRecord(node_id="deadbe01"),
     )
     assert outcome.record is not None
     assert outcome.may_update_database is False
 
     db_path = tmp_path / "db.ods"
-    db = OdsDatabase.create(db_path)
+    db = new_database(db_path)
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
 
@@ -100,7 +100,7 @@ def test_persist_result_reports_divergence_when_the_save_fails(
     outcome, kp = _confirmed_outcome(make_live)
 
     db_path = tmp_path / "db.ods"
-    db = OdsDatabase.create(db_path)
+    db = new_database(db_path)
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
 
@@ -130,7 +130,7 @@ def test_persist_result_converts_a_bare_oserror_from_the_save(
     outcome, kp = _confirmed_outcome(make_live)
 
     db_path = tmp_path / "db.ods"
-    db = OdsDatabase.create(db_path)
+    db = new_database(db_path)
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
 
@@ -154,7 +154,7 @@ def test_persist_result_omits_the_keypair_hint_when_no_key_was_generated(
     outcome, _ = _confirmed_outcome(make_live)
 
     db_path = tmp_path / "db.ods"
-    db = OdsDatabase.create(db_path)
+    db = new_database(db_path)
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
 
@@ -198,7 +198,7 @@ def _failed_save_hint(
     """Run persist_result into a failing save; return the hint and the session's keys."""
     outcome, kp = _confirmed_outcome(make_live)
     db_path = tmp_path / "db.ods"
-    db = OdsDatabase.create(db_path)
+    db = new_database(db_path)
     nodes = NodeRepository(db)
     keys = KeyRepository(db)
     if prior_management is not None:
@@ -337,14 +337,13 @@ def _renumbered_outcome(kp: KeyPair, *, record: NodeRecord) -> ApplyOutcome:
         node_id=new,
         results=(),
         dry_run=False,
-        verified=True,
         record=record.with_updates(node_id=new.hex),
         previous_node_id=fake_node_id(),
     )
 
 
 def _session(tmp_path) -> tuple[OdsDatabase, NodeRepository, KeyRepository]:
-    db = OdsDatabase.create(tmp_path / "db.ods")
+    db = new_database(tmp_path / "db.ods")
     return db, NodeRepository(db), KeyRepository(db)
 
 

@@ -712,7 +712,7 @@ def test_status_report_has_offline_degraded() -> None:
         now=NOW,
     )
     assert report.has_offline is True
-    assert report.degraded is True
+    assert report.exit_code() == 7
 
 
 def test_status_report_exit_code_with_and_without_fail_on_offline() -> None:
@@ -737,7 +737,6 @@ def test_a_database_node_no_source_has_seen_exits_seven() -> None:
     )
 
     assert (report.unseen, report.has_offline) == (1, False)
-    assert report.degraded is True
     assert report.exit_code(fail_on_offline=True) == 7
     assert report.exit_code(fail_on_offline=False) == 0
     assert report.summary() == (
@@ -819,7 +818,6 @@ def test_status_report_degraded_and_exit_code_with_skipped_entries() -> None:
         thresholds=Thresholds(),
         skipped_entries={"loranet": 12},
     )
-    assert report.degraded is True
     assert report.exit_code(fail_on_offline=False) != 0
 
 
@@ -854,7 +852,6 @@ def test_status_report_degraded_and_exit_code_with_field_coercions() -> None:
         thresholds=Thresholds(),
         field_coercions={"loranet": 5},
     )
-    assert report.degraded is True
     assert report.exit_code(fail_on_offline=False) != 0
 
 

@@ -45,11 +45,10 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from meshprovision.datasources.models import epoch_seconds
 from meshprovision.health.rules import BATTERY_WARN_PERCENT
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from meshprovision.datasources.models import NodeObservation
     from meshprovision.network.buckets import Traffic
     from meshprovision.network.keys import KeySeen
@@ -176,7 +175,7 @@ def device_health(observation: NodeObservation) -> DeviceHealth:
         uptime_seconds=uptime if uptime is not None and 0 <= uptime <= MAX_UPTIME_SECONDS else None,
         channel_utilization=_percent(observation.channel_utilization),
         air_util_tx=_percent(observation.air_util_tx),
-        metrics_at=_epoch(observation.last_device_metrics),
+        metrics_at=epoch_seconds(observation.last_device_metrics),
     )
 
 
@@ -511,8 +510,8 @@ def _identity(
     return (
         len(context.traffic.direct.get(node, {})),
         role or (None if seen is None else seen.role),
-        _epoch(None if listed is None else listed.last_seen),
-        _epoch(None if listed is None else listed.last_boot),
+        epoch_seconds(None if listed is None else listed.last_seen),
+        epoch_seconds(None if listed is None else listed.last_boot),
         tuple(gaps),
     )
 
@@ -522,8 +521,3 @@ def _device(node: str | None, context: _Context) -> DeviceHealth | None:
     if node is None or context.loranet is None or node not in context.loranet:
         return None
     return device_health(context.loranet[node])
-
-
-def _epoch(value: datetime | None) -> float | None:
-    """Return a datetime's epoch seconds, ``None`` for none."""
-    return None if value is None else value.timestamp()

@@ -229,7 +229,7 @@ def _firmware_keeps_rest_of_security(sent: Any, before: Any) -> bool:
         or sent.serial_enabled
         or sent.debug_log_api_enabled
         or sent.admin_channel_enabled
-        or getattr(sent, "packet_signature_policy", 0) != 0
+        or sent.packet_signature_policy != 0
     ):
         return False
     rest_sent, rest_before = type(sent)(), type(before)()
