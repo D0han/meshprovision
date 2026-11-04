@@ -298,8 +298,8 @@ unless a range is given.
 
 | Field | Value | Meaning |
 |---|---|---|
-| `role` | role name, default `CLIENT` | Device role |
-| `rebroadcast_mode` | rebroadcast mode name | Which packets the node relays |
+| `role` | role name, default `CLIENT`; not `ROUTER_CLIENT`, and `REPEATER` only on firmware before 2.7.11 (later firmware stores `CLIENT` in their place; `mesh provision` refuses to write it) | Device role |
+| `rebroadcast_mode` | rebroadcast mode name; not `NONE` with role `ROUTER`, `ROUTER_LATE` or `REPEATER` (the firmware relays `ALL` for them; for `ROUTER_LATE` from firmware 2.7.20) | Which packets the node relays |
 | `node_info_broadcast_secs` | seconds, at least 3600 | Node info broadcast interval |
 | `button_gpio` | GPIO number | User button pin override |
 | `buzzer_gpio` | GPIO number | Buzzer pin override |
@@ -312,7 +312,7 @@ unless a range is given.
 
 | Field | Value | Meaning |
 |---|---|---|
-| `region` | region name, default `EU_868` | LoRa region |
+| `region` | region name, default `EU_868`; not `UNSET` (the firmware switches the transmitter off) | LoRa region |
 | `use_preset` | `true`/`false`, default `true` | `modem_preset` sets the radio parameters |
 | `modem_preset` | preset name, default `LONG_FAST` | Modem preset; `null` leaves it alone |
 | `hop_limit` | 0-7, default 3 | Maximum hop count |
@@ -322,7 +322,7 @@ unless a range is given.
 | `frequency_offset` | Hz | Frequency offset |
 | `override_duty_cycle` | `true`/`false`, default `false` | Overrides the regional duty-cycle limit |
 | `sx126x_rx_boosted_gain` | `true`/`false` | SX126x boosted receive gain |
-| `ignore_mqtt` | `true`/`false` | Ignores packets that came from MQTT |
+| `ignore_mqtt` | `true`/`false` | Ignores packets that came from MQTT; a region change sets it to `true` when the new region has a duty-cycle limit, so `false` takes a second run (the plan warns: `region_change_sets_ignore_mqtt`) |
 | `config_ok_to_mqtt` | `true`/`false` | Consents to this node's traffic being uplinked to MQTT |
 
 #### `position`

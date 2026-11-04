@@ -900,3 +900,39 @@ def test_a_triplicated_option_is_named_once() -> None:
         load_template_text("version: 1\nenabled_options: [mqtt, mqtt, mqtt]\n")
 
     assert str(excinfo.value).count("mqtt") == 1
+
+
+def test_region_unset_is_refused_because_it_switches_the_transmitter_off() -> None:
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig(lora={"region": "unset"})
+
+    assert exc_info.value.field == "lora.region"
+    assert "tx_enabled false" in str(exc_info.value)
+
+
+def test_router_client_is_refused_as_a_role_the_firmware_replaces() -> None:
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig(device={"role": "ROUTER_CLIENT"})
+
+    assert exc_info.value.field == "device.role"
+    assert "stores CLIENT in its place" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("role", ["ROUTER", "ROUTER_LATE", "REPEATER"])
+def test_rebroadcast_none_is_refused_for_a_router_role(role: str) -> None:
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig(device={"role": role, "rebroadcast_mode": "NONE"})
+
+    assert exc_info.value.field == "device.rebroadcast_mode"
+
+
+@pytest.mark.parametrize(
+    "device",
+    [
+        pytest.param({"role": "CLIENT", "rebroadcast_mode": "NONE"}, id="client-none"),
+        pytest.param({"role": "ROUTER", "rebroadcast_mode": "ALL"}, id="router-all"),
+        pytest.param({"role": "REPEATER"}, id="repeater"),
+    ],
+)
+def test_other_roles_and_modes_still_load(device: dict[str, str]) -> None:
+    assert TemplateConfig(device=device).device.role == device["role"]

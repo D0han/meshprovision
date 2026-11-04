@@ -59,6 +59,14 @@ NEIGHBOR_INFO_UPDATE_MIN_SECS: Final[int] = 14400
 ON_BATTERY_SHUTDOWN_MIN_SECS: Final[int] = 30
 """Firmware's minimum for a non-zero ``on_battery_shutdown_after_secs``; lower is raised."""
 
+_REPLACED_ROLE: Final[str] = "ROUTER_CLIENT"
+"""The role every 2.7 and 2.8 firmware replaces with CLIENT on write (``AdminModule``)."""
+
+_RELAYING_ROLES: Final[frozenset[str]] = frozenset({"ROUTER", "ROUTER_LATE", "REPEATER"})
+"""The roles the firmware never lets relay nothing (``rebroadcast_mode: NONE`` becomes ``ALL``)."""
+
+_UNSET_REGION: Final[str] = "UNSET"
+
 
 def _canonicalize_enum_field(value: object, *, table: EnumTable, field: str) -> object:
     """Canonicalize a template enum field against its protobuf table.
@@ -147,8 +155,20 @@ class DeviceSection(BaseModel):
 
         Returns:
             The canonical protobuf enum name.
+
+        Raises:
+            TemplateValidationError: If the role is one the firmware
+                replaces on write (``ROUTER_CLIENT``), which could never be
+                verified.
         """
-        return _canonicalize_enum_field(value, table=role_table(), field="device.role")
+        role = _canonicalize_enum_field(value, table=role_table(), field="device.role")
+        if role == _REPLACED_ROLE:
+            raise TemplateValidationError(
+                f"device.role {role} is deprecated: the firmware stores CLIENT in its place.",
+                field="device.role",
+                hint="Use CLIENT, or ROUTER for a node that relays for others.",
+            )
+        return role
 
     @field_validator("rebroadcast_mode", mode="before")
     @classmethod
@@ -164,6 +184,32 @@ class DeviceSection(BaseModel):
         return _canonicalize_enum_field(
             value, table=rebroadcast_mode_table(), field="device.rebroadcast_mode"
         )
+
+    @model_validator(mode="after")
+    def _reject_silent_router(self) -> DeviceSection:
+        """Refuse ``rebroadcast_mode: NONE`` for a relaying role.
+
+        The firmware stores ``ALL`` in its place (``AdminModule`` set_config
+        device: for ``ROUTER`` at 2.7.2 through 2.8.3, ``ROUTER_LATE`` from
+        2.7.20, ``REPEATER`` on every firmware that still keeps that role,
+        up to 2.7.10), so the write could never be verified.
+
+        Returns:
+            This section, unchanged.
+
+        Raises:
+            TemplateValidationError: If ``role`` is ``ROUTER``,
+                ``ROUTER_LATE`` or ``REPEATER`` and ``rebroadcast_mode`` is
+                ``NONE``.
+        """
+        if self.rebroadcast_mode == "NONE" and self.role in _RELAYING_ROLES:
+            raise TemplateValidationError(
+                f"device.rebroadcast_mode NONE is not allowed with role {self.role}: the "
+                "firmware relays ALL for it.",
+                field="device.rebroadcast_mode",
+                hint="Leave rebroadcast_mode out, or pick another mode or role.",
+            )
+        return self
 
 
 class LoraSection(BaseModel):
@@ -221,8 +267,19 @@ class LoraSection(BaseModel):
 
         Returns:
             The canonical protobuf enum name.
+
+        Raises:
+            TemplateValidationError: If the region is ``UNSET``.
         """
-        return _canonicalize_enum_field(value, table=region_table(), field="lora.region")
+        region = _canonicalize_enum_field(value, table=region_table(), field="lora.region")
+        if region == _UNSET_REGION:
+            raise TemplateValidationError(
+                "lora.region UNSET switches the radio's transmitter off (the firmware sets "
+                "tx_enabled false when a region is unset).",
+                field="lora.region",
+                hint="Set the node's region, for example EU_868.",
+            )
+        return region
 
     @field_validator("modem_preset", mode="before")
     @classmethod

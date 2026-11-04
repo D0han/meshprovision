@@ -50,6 +50,7 @@ class PlanWarningCode(StrEnum):
     NODE_ID_CHANGES = "node_id_changes"
     INTERVAL_RAISED_AT_BOOT = "interval_raised_at_boot"
     SERIAL_API_DISABLED = "serial_api_disabled"
+    REGION_CHANGE_SETS_IGNORE_MQTT = "region_change_sets_ignore_mqtt"
 
 
 @dataclass(frozen=True, slots=True)

@@ -317,3 +317,19 @@ def test_a_serial_api_already_off_is_not_refused_over_serial(
 
     assert result.exit_code == 0
     assert "serial API" not in result.stderr
+
+
+def test_a_repeater_role_is_refused_before_any_write_where_the_firmware_replaces_it(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(device={"role": "REPEATER"}))
+    iface = bus.use(FakeMeshInterface("deadbe01", firmware_version="2.7.26.54e0d8d"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "device.role REPEATER" in result.stderr
+    assert iface.localNode.written_sections == []

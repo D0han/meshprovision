@@ -662,6 +662,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A template with `lora.region: UNSET`, `device.role: ROUTER_CLIENT`, or
+  `device.rebroadcast_mode: NONE` with role
+  `ROUTER`/`ROUTER_LATE`/`REPEATER` is refused at load: the firmware
+  switches the transmitter off for the first and stores `CLIENT` and `ALL`
+  in place of the others, so such a write failed verification on every
+  run. `mesh provision` also refuses to write role `REPEATER` (exit code
+  5, before anything is written) unless the device reports firmware older
+  than 2.7.11, which still keeps it. A region change whose new region has
+  a duty-cycle limit makes the firmware set `lora.ignore_mqtt`; the plan
+  now says so (`region_change_sets_ignore_mqtt`) when the template wants
+  `false`.
 - `mesh provision` and `mesh admin bootstrap` over a serial connection
   refuse a plan that sets `security.serial_enabled` to `false` (exit code
   5, before anything is written): the firmware stops serving its API over

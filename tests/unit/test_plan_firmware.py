@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision.config.template import TemplateConfig, load_template_text
+from meshprovision.errors import PlanConflictError
 from meshprovision.provisioning import detect, plan_firmware
 from meshprovision.provisioning.detect import LiveChannel
 from meshprovision.provisioning.plan import (
@@ -245,6 +246,10 @@ def test_the_boot_minimums() -> None:
     )
 
 
+def test_the_repeater_firmware_floor() -> None:
+    assert plan_firmware.REPEATER_REPLACED_MIN_FIRMWARE == (2, 7, 11)
+
+
 def _flat(text: str) -> str:
     return " ".join(text.split())
 
@@ -267,9 +272,71 @@ def _flat(text: str) -> str:
             f"{plan_firmware.SMART_MINIMUM_INTERVAL_FLOOR_SECS} s",
             id="smart-minimum",
         ),
+        pytest.param(
+            "`REPEATER` only on firmware before "
+            + ".".join(str(part) for part in plan_firmware.REPEATER_REPLACED_MIN_FIRMWARE),
+            id="repeater",
+        ),
     ],
 )
 def test_the_configuration_docs_state_each_boot_minimum(phrase: str) -> None:
     pattern = r"(?<![0-9A-Za-z.])" + re.escape(_flat(phrase)) + r"(?![0-9])"
 
     assert len(re.findall(pattern, _flat(_CONFIGURATION))) == 1
+
+
+@pytest.mark.parametrize(
+    ("firmware", "refused"),
+    [
+        pytest.param("2.7.10.94d4bdf", False, id="older"),
+        pytest.param("2.7.11.ee68575", True, id="first-replacing"),
+        pytest.param("2.8.2.4c89b69", True, id="newer"),
+        pytest.param("", True, id="unknown"),
+    ],
+)
+def test_a_repeater_role_is_refused_where_the_firmware_replaces_it(
+    firmware: str, refused: bool
+) -> None:
+    template = _template("device:\n  role: REPEATER\n")
+    live = live_config_from_template(
+        template, firmware_version=firmware, section_overrides={"device": {"role": "CLIENT"}}
+    )
+    inputs = PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED)
+
+    if refused:
+        with pytest.raises(PlanConflictError, match="store CLIENT in its place"):
+            build_plan(inputs)
+    else:
+        assert _change(build_plan(inputs), "device", "role").desired == "REPEATER"
+
+
+def test_a_repeater_role_already_on_the_device_is_not_written_and_not_refused() -> None:
+    template = _template("device:\n  role: REPEATER\n")
+    live = live_config_from_template(template, firmware_version="2.8.2")
+
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    assert plan.section("device") is None
+
+
+@pytest.mark.parametrize(
+    ("live_region", "ignore_mqtt", "warned"),
+    [
+        pytest.param("US", "false", True, id="region-change"),
+        pytest.param("EU_868", "false", False, id="same-region"),
+        pytest.param("US", "true", False, id="template-wants-true"),
+    ],
+)
+def test_a_region_change_warns_that_the_firmware_sets_ignore_mqtt(
+    live_region: str, ignore_mqtt: str, warned: bool
+) -> None:
+    template = _template(f"lora:\n  region: EU_868\n  ignore_mqtt: {ignore_mqtt}\n")
+
+    plan = _plan(template, sections={"lora": {"region": live_region, "ignore_mqtt": True}})
+
+    codes = [w.code for w in plan.warnings]
+    assert (PlanWarningCode.REGION_CHANGE_SETS_IGNORE_MQTT in codes) is warned
+    lora = plan.section("lora")
+    planned = {c.field for c in lora.changes} if lora is not None else set()
+    # The firmware sets true itself on this run; the next run writes false.
+    assert ("ignore_mqtt" in planned) is (live_region == "EU_868" and ignore_mqtt == "false")

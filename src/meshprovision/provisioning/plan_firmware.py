@@ -1,14 +1,17 @@
-"""Values the firmware stores in place of the planned ones.
+"""Values the firmware stores in place of the planned ones, and writes it refuses.
 
 Some template values are written as asked but held differently once the
-commit reboots the node: the firmware raises telemetry and position
-intervals to a minimum at every boot while the node is on a default
-channel (``NodeDB::NodeDB``). A plain verify would then report a mismatch
-on every run and the node would never converge. :func:`firmware_adjustments`
+plan is applied: the firmware raises telemetry and position intervals to
+a minimum at every boot while the node is on a default channel
+(``NodeDB::NodeDB``), and sets ``lora.ignore_mqtt`` when the region
+changes. A plain verify would then report a mismatch and, for the boot
+minimums, the node would never converge. :func:`firmware_adjustments`
 predicts each such value from the plan inputs alone, so
 :mod:`~meshprovision.provisioning.plan` can plan the template value, tell
 the operator, and let :mod:`~meshprovision.provisioning.readback` accept
-the firmware's value too. The template is never rewritten.
+the firmware's value too. The template is never rewritten. A role the
+firmware replaces on every write is refused instead
+(:func:`replaced_role_refusal`).
 
 Pure, like :mod:`~meshprovision.provisioning.plan`: no I/O, no device
 access, and nothing from ``meshtastic``. Firmware references are to
@@ -23,6 +26,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from meshprovision.errors import PlanConflictError
 from meshprovision.firmware import parse_firmware_version
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 
@@ -37,12 +41,14 @@ __all__ = [
     "POSITION_BROADCAST_FLOOR_ROUTER_SECS",
     "POSITION_BROADCAST_FLOOR_SECS",
     "PRESET_CHANNEL_NAMES",
+    "REPEATER_REPLACED_MIN_FIRMWARE",
     "SMART_MINIMUM_INTERVAL_FLOOR_SECS",
     "TELEMETRY_INTERVAL_FIELDS",
     "TELEMETRY_INTERVAL_FLOOR_ROUTER_SECS",
     "TELEMETRY_INTERVAL_FLOOR_SECS",
     "FirmwareAdjustment",
     "firmware_adjustments",
+    "replaced_role_refusal",
 ]
 
 TELEMETRY_INTERVAL_FLOOR_SECS: Final[int] = 30 * 60
@@ -65,6 +71,9 @@ BOOT_SLOT_CHECK_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
 
 BOOT_PRESET_CHECK_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 7, 20)
 """First firmware whose boot telemetry check needs the preset (``hasDefaultChannel``)."""
+
+REPEATER_REPLACED_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 7, 11)
+"""First firmware storing ``CLIENT`` for a ``REPEATER`` role (``AdminModule``; not at 2.7.10)."""
 
 BOOT_FLOOR_ROUTER_ROLES: Final[frozenset[str]] = frozenset({"ROUTER", "ROUTER_LATE"})
 """The roles ``IF_ROUTER`` (``Default.h``) gives the higher floors."""
@@ -268,6 +277,65 @@ def _boot_floor_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...
     return tuple(adjustments)
 
 
+def _region_change_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
+    """Return the ``lora.ignore_mqtt`` adjustment of a region change, if any.
+
+    ``AdminModule`` set_config lora sets ``ignore_mqtt`` when the new
+    region has a duty-cycle limit (EU_868 among them): on every region
+    change from 2.8.0, on the first region set before, overwriting what
+    this run sends. A template ``ignore_mqtt: false`` is set by the next
+    run, when the region no longer changes.
+    """
+    lora = inputs.template.lora
+    if lora.ignore_mqtt is not False or _keeps_region(inputs):
+        return ()
+    warning = PlanWarning(
+        PlanWarningCode.REGION_CHANGE_SETS_IGNORE_MQTT,
+        f"Changing lora.region to {lora.region} makes the firmware set lora.ignore_mqtt to "
+        "true when that region has a duty-cycle limit (EU_868 among them): run "
+        "`mesh provision` again afterwards to set the template's false.",
+        section="lora",
+        field="ignore_mqtt",
+    )
+    return (FirmwareAdjustment("lora", "ignore_mqtt", True, warning),)
+
+
+def _keeps_region(inputs: PlanInputs) -> bool:
+    """Tell whether the plan leaves the live LoRa region as it is."""
+    return str(inputs.live.value("lora", "region")) == inputs.template.lora.region
+
+
+def replaced_role_refusal(inputs: PlanInputs, *, writes_device: bool) -> PlanConflictError | None:
+    """Refuse writing a ``REPEATER`` role to firmware that stores ``CLIENT`` instead.
+
+    Every ``device`` write sends the role, and firmware
+    :data:`REPEATER_REPLACED_MIN_FIRMWARE` and later replace ``REPEATER``
+    on each one (``AdminModule`` set_config device, 2.7.11 through 2.8.3),
+    so the write could never be verified. An unparseable firmware version
+    is refused too: only a version known to be older keeps the role.
+
+    Args:
+        inputs: The plan inputs.
+        writes_device: Whether the plan writes the ``device`` section.
+
+    Returns:
+        The refusal, or ``None``.
+    """
+    if not writes_device or inputs.template.device.role != "REPEATER":
+        return None
+    version = parse_firmware_version(inputs.live.firmware_version)
+    if version is not None and version < REPEATER_REPLACED_MIN_FIRMWARE:
+        return None
+    floor = ".".join(str(part) for part in REPEATER_REPLACED_MIN_FIRMWARE)
+    return PlanConflictError(
+        f"device.role REPEATER: firmware {floor} and later store CLIENT in its place "
+        f"(this device reports {inputs.live.firmware_version or 'no firmware version'}), so "
+        "the write could never be verified.",
+        field="device.role",
+        hint="Use ROUTER, or CLIENT, for this node in the template.",
+    )
+
+
 def firmware_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
     """Predict every template value the node will hold differently after this plan.
 
@@ -277,5 +345,5 @@ def firmware_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
     Returns:
         The adjustments, sorted by section and field name.
     """
-    adjustments = _boot_floor_adjustments(inputs)
+    adjustments = (*_boot_floor_adjustments(inputs), *_region_change_adjustments(inputs))
     return tuple(sorted(adjustments, key=lambda a: (a.section, a.field)))

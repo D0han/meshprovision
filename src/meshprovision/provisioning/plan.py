@@ -65,7 +65,7 @@ from meshprovision.firmware import derives_node_id_from_key
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
-from meshprovision.provisioning.plan_firmware import firmware_adjustments
+from meshprovision.provisioning.plan_firmware import firmware_adjustments, replaced_role_refusal
 from meshprovision.provisioning.plan_security import (
     evaluate_lockdown,
     packet_signature_policy_warning,
@@ -541,6 +541,9 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
             ``security.is_managed`` but the safety gates are not
             satisfied (zero admin keys, no private counterpart on hand,
             or a key fails the weak-key audit).
+        PlanConflictError: If the plan would write role ``REPEATER`` to
+            firmware that replaces it (see
+            :func:`~meshprovision.provisioning.plan_firmware.replaced_role_refusal`).
     """
     live = inputs.live
     template = inputs.template
@@ -554,6 +557,11 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
 
     config_sections, config_warnings = _plan_config_sections(inputs, adjusted)
     warnings.extend(config_warnings)
+    role_refusal = replaced_role_refusal(
+        inputs, writes_device=any(s.section == "device" for s in config_sections)
+    )
+    if role_refusal is not None:
+        raise role_refusal
 
     module_sections, module_warnings = _plan_module_sections(inputs, adjusted)
     warnings.extend(module_warnings)
