@@ -662,6 +662,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `default_channel.position_precision` is refused above 32 at template
+  load, and a value above 15 on a primary channel anyone can decrypt (a
+  stock LongFast primary) no longer fails verification on every run:
+  firmware 2.8 keeps at most 15 bits there, so the plan warns
+  (`position_precision_capped`) and the verify accepts 15.
 - A `mesh provision` run that changes `device.role` no longer ends
   UNCERTAIN because the firmware reset this run's `is_unmessagable`,
   `rebroadcast_mode` or `node_info_broadcast_secs` to the new role's

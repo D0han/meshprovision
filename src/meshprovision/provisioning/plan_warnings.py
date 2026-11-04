@@ -52,6 +52,7 @@ class PlanWarningCode(StrEnum):
     SERIAL_API_DISABLED = "serial_api_disabled"
     REGION_CHANGE_SETS_IGNORE_MQTT = "region_change_sets_ignore_mqtt"
     ROLE_DEFAULTS_REWRITE = "role_defaults_rewrite"
+    POSITION_PRECISION_CAPPED = "position_precision_capped"
 
 
 @dataclass(frozen=True, slots=True)

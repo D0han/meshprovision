@@ -215,8 +215,8 @@ class LiveSecurity:
 class LiveChannel:
     """What the firmware's channel rules need to know about one channel slot.
 
-    No key material: the channel's PSK is reduced to the yes/no answer
-    the firmware itself asks of it.
+    No key material: the channel's PSK is reduced to the two yes/no
+    answers the firmware itself asks of it.
 
     Attributes:
         index: The channel's slot, 0-7.
@@ -225,12 +225,17 @@ class LiveChannel:
             (firmware ``Channels::isDefaultChannel``).
         position_precision: The channel's ``module_settings.position_precision``,
             0 when it has no module settings.
+        public_key: Whether anyone can decrypt the channel, as firmware
+            2.8's ``channelFileUsesPublicKey`` decides it: an enabled
+            channel with no PSK (a secondary takes the primary's answer),
+            a 1-byte PSK, or the default key's 16-byte family.
     """
 
     index: int
     name: str = ""
     default_key: bool = False
     position_precision: int = 0
+    public_key: bool = False
 
 
 @dataclass(frozen=True, slots=True)

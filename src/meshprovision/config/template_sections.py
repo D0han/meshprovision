@@ -29,6 +29,7 @@ from meshprovision.enums import (
 from meshprovision.errors import EnumMappingError, TemplateValidationError
 
 __all__ = [
+    "MAX_POSITION_PRECISION",
     "NEIGHBOR_INFO_UPDATE_MIN_SECS",
     "NODE_INFO_BROADCAST_MIN_SECS",
     "ON_BATTERY_SHUTDOWN_MIN_SECS",
@@ -58,6 +59,9 @@ NEIGHBOR_INFO_UPDATE_MIN_SECS: Final[int] = 14400
 
 ON_BATTERY_SHUTDOWN_MIN_SECS: Final[int] = 30
 """Firmware's minimum for a non-zero ``on_battery_shutdown_after_secs``; lower is raised."""
+
+MAX_POSITION_PRECISION: Final[int] = 32
+"""Most bits a position has (``latitude_i``/``longitude_i``): 32 means exact."""
 
 _REPLACED_ROLE: Final[str] = "ROUTER_CLIENT"
 """The role every 2.7 and 2.8 firmware replaces with CLIENT on write (``AdminModule``)."""
@@ -524,15 +528,15 @@ class DefaultChannelSection(BaseModel):
 
     Attributes:
         position_precision: Position precision shared in this channel's
-            broadcasts, in bits (0 disables position sharing on this
-            channel).
+            broadcasts, in bits, 0-32 (0 disables position sharing on this
+            channel, 32 shares it exactly).
         is_muted: Whether this channel's traffic is muted (received but not
             relayed/notified).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    position_precision: int | None = Field(default=None, ge=0)
+    position_precision: int | None = Field(default=None, ge=0, le=MAX_POSITION_PRECISION)
     is_muted: bool | None = None
 
 

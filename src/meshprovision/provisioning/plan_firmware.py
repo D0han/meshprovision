@@ -41,7 +41,9 @@ __all__ = [
     "MAX_INTERVAL_SECS",
     "POSITION_BROADCAST_FLOOR_ROUTER_SECS",
     "POSITION_BROADCAST_FLOOR_SECS",
+    "POSITION_PRECISION_CLAMP_MIN_FIRMWARE",
     "PRESET_CHANNEL_NAMES",
+    "PUBLIC_CHANNEL_MAX_POSITION_PRECISION",
     "REPEATER_REPLACED_MIN_FIRMWARE",
     "ROLE_DEFAULT_FIELDS",
     "SMART_MINIMUM_INTERVAL_FLOOR_SECS",
@@ -111,6 +113,12 @@ PRESET_CHANNEL_NAMES: Final[Mapping[str, str]] = MappingProxyType(
     }
 )
 """Each modem preset's channel name (``DisplayFormatters::getModemPresetDisplayName``)."""
+
+PUBLIC_CHANNEL_MAX_POSITION_PRECISION: Final[int] = 15
+"""``MAX_POSITION_PRECISION_PUBLIC_KEY`` (``PositionPrecision.h``): about 700 m."""
+
+POSITION_PRECISION_CLAMP_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
+"""First firmware that stores the public-channel precision cap (``handleSetChannel``)."""
 
 MAX_INTERVAL_SECS: Final[int] = 2**31 - 1
 """``MAX_INTERVAL`` (``Default.h``): ``INT32_MAX``, the firmware's "never"."""
@@ -354,6 +362,37 @@ def _boot_floor_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...
     return tuple(adjustments)
 
 
+def _precision_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
+    """Return the primary channel's capped position precision, if it is capped.
+
+    ``AdminModule::handleSetChannel`` (2.8.0 and 2.8.3; not at 2.7.26)
+    stores at most :data:`PUBLIC_CHANNEL_MAX_POSITION_PRECISION` for a
+    channel anyone can decrypt. Older firmware keeps the value, which the
+    verify accepts too; an unparseable version counts as 2.8.
+    """
+    desired = inputs.template.default_channel.position_precision
+    primary = next((c for c in inputs.live.channels if c.index == 0), None)
+    version = parse_firmware_version(inputs.live.firmware_version)
+    if (
+        desired is None
+        or desired <= PUBLIC_CHANNEL_MAX_POSITION_PRECISION
+        or primary is None
+        or not primary.public_key
+        or (version is not None and version < POSITION_PRECISION_CLAMP_MIN_FIRMWARE)
+    ):
+        return ()
+    cap = PUBLIC_CHANNEL_MAX_POSITION_PRECISION
+    warning = PlanWarning(
+        PlanWarningCode.POSITION_PRECISION_CAPPED,
+        f"default_channel.position_precision {desired} is above {cap}, the most firmware "
+        f"2.8 keeps on a channel anyone can decrypt: the node holds {cap}, and the verify "
+        "accepts that.",
+        section="default_channel",
+        field="position_precision",
+    )
+    return (FirmwareAdjustment("default_channel", "position_precision", cap, warning),)
+
+
 def _region_change_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
     """Return the ``lora.ignore_mqtt`` adjustment of a region change, if any.
 
@@ -481,5 +520,6 @@ def firmware_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
         *_boot_floor_adjustments(inputs),
         *_region_change_adjustments(inputs),
         *_role_change_adjustments(inputs),
+        *_precision_adjustments(inputs),
     )
     return tuple(sorted(adjustments, key=lambda a: (a.section, a.field)))

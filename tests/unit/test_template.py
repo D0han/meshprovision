@@ -403,7 +403,6 @@ def test_default_channel_section_round_trip() -> None:
     [
         ("device", "node_info_broadcast_secs", 2**32),
         ("telemetry", "device_update_interval", 2**32),
-        ("default_channel", "position_precision", 2**32),
         ("power", "sds_secs", 2**32),
         ("position", "position_flags", 10**400),
         ("lora", "frequency_offset", 1e40),
@@ -414,7 +413,6 @@ def test_default_channel_section_round_trip() -> None:
     ids=[
         "uint32-over",
         "module-uint32-over",
-        "channel-uint32-over",
         "power-uint32-over",
         "beyond-float",
         "float32-over",
@@ -936,3 +934,14 @@ def test_rebroadcast_none_is_refused_for_a_router_role(role: str) -> None:
 )
 def test_other_roles_and_modes_still_load(device: dict[str, str]) -> None:
     assert TemplateConfig(device=device).device.role == device["role"]
+
+
+@pytest.mark.parametrize(("precision", "loads"), [(32, True), (33, False)])
+def test_position_precision_is_at_most_32_bits(precision: int, loads: bool) -> None:
+    text = f"version: 1\ndefault_channel:\n  position_precision: {precision}\n"
+
+    if loads:
+        assert load_template_text(text).default_channel.position_precision == precision
+    else:
+        with pytest.raises(TemplateValidationError):
+            load_template_text(text)

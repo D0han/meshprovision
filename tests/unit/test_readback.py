@@ -100,6 +100,33 @@ def test_verify_plan_accepts_the_value_the_firmware_holds_instead(
         )
 
 
+@pytest.mark.parametrize(
+    ("read_back", "status"),
+    [
+        pytest.param(16, WriteStatus.CONFIRMED, id="template-value"),
+        pytest.param(15, WriteStatus.CONFIRMED, id="capped"),
+        pytest.param(12, WriteStatus.UNCONFIRMED, id="unchanged"),
+    ],
+)
+def test_verify_plan_accepts_the_capped_precision_of_a_public_primary(
+    make_live, read_back: int, status: WriteStatus
+) -> None:
+    template = load_template_text("version: 1\ndefault_channel:\n  position_precision: 16\n")
+    public = detect.LiveChannel(index=0, default_key=True, position_precision=12, public_key=True)
+    live = make_live(
+        template,
+        firmware_version="2.8.2",
+        default_channel_overrides={"position_precision": 12},
+        channels=(public,),
+    )
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    live_after = make_live(template, default_channel_overrides={"position_precision": read_back})
+    results = verify_plan(plan, live_after, keypair=None)
+
+    assert next(r for r in results if r.field == "position_precision").status == status
+
+
 def test_verify_plan_is_unmessagable_confirmed(make_live) -> None:
     template = _template().model_copy(update={"is_unmessagable": True})
     live = make_live(template, is_unmessagable=None, security=make_security(empty=True))

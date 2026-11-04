@@ -442,12 +442,13 @@ def _plan_bluetooth_section(inputs: PlanInputs) -> SectionChange | None:
 
 
 def _plan_default_channel_section(
-    inputs: PlanInputs,
+    inputs: PlanInputs, adjusted: Mapping[tuple[str, str], object]
 ) -> tuple[SectionChange | None, tuple[PlanWarning, ...]]:
     """Diff the primary channel's module settings (position_precision/is_muted).
 
     Args:
         inputs: The plan inputs.
+        adjusted: See :func:`_diff_section`.
 
     Returns:
         ``(None, ())`` when nothing differs; otherwise a
@@ -478,16 +479,23 @@ def _plan_default_channel_section(
                 section="default_channel",
             ),
         )
-    changes = [
-        FieldChange(
-            section="default_channel",
-            field=name,
-            current=live.default_channel.get(name),
-            desired=desired,
+    changes: list[FieldChange] = []
+    for name, desired in desired_fields.items():
+        current = live.default_channel.get(name)
+        firmware_value = adjusted.get(("default_channel", name))
+        if values_equal(current, desired) or (
+            firmware_value is not None and values_equal(current, firmware_value)
+        ):
+            continue
+        changes.append(
+            FieldChange(
+                section="default_channel",
+                field=name,
+                current=current,
+                desired=desired,
+                firmware_value=firmware_value,
+            )
         )
-        for name, desired in desired_fields.items()
-        if not values_equal(live.default_channel.get(name), desired)
-    ]
     if not changes:
         return None, ()
     section = SectionChange(
@@ -589,7 +597,9 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
 
     bluetooth_section = _plan_bluetooth_section(inputs)
 
-    default_channel_section, default_channel_warnings = _plan_default_channel_section(inputs)
+    default_channel_section, default_channel_warnings = _plan_default_channel_section(
+        inputs, adjusted
+    )
     warnings.extend(default_channel_warnings)
 
     admin_plan = plan_admin_key_material(inputs)

@@ -277,6 +277,11 @@ def _flat(text: str) -> str:
             + ".".join(str(part) for part in plan_firmware.REPEATER_REPLACED_MIN_FIRMWARE),
             id="repeater",
         ),
+        pytest.param(
+            f"keeps at most {plan_firmware.PUBLIC_CHANNEL_MAX_POSITION_PRECISION} bits "
+            "(about 700 m)",
+            id="public-precision",
+        ),
     ],
 )
 def test_the_configuration_docs_state_each_boot_minimum(phrase: str) -> None:
@@ -403,3 +408,70 @@ def test_a_role_change_to_router_accepts_the_firmwares_is_unmessagable(
     name = plan.name_change
     assert (name.desired_is_unmessagable, name.firmware_is_unmessagable) == (desired, firmware)
     assert name.is_unmessagable_changed is (live is None)
+
+
+_PUBLIC_PRIMARY = LiveChannel(index=0, default_key=True, position_precision=12, public_key=True)
+
+
+@pytest.mark.parametrize(
+    ("channel", "firmware", "capped"),
+    [
+        pytest.param(_PUBLIC_PRIMARY, "2.8.2.4c89b69", True, id="public-2.8"),
+        pytest.param(_PUBLIC_PRIMARY, "", True, id="public-unknown-firmware"),
+        pytest.param(_PUBLIC_PRIMARY, "2.7.26.54e0d8d", False, id="public-2.7"),
+        pytest.param(_PRIVATE_PRIMARY, "2.8.2.4c89b69", False, id="private"),
+    ],
+)
+def test_a_precise_position_on_a_public_primary_is_capped(
+    channel: LiveChannel, firmware: str, capped: bool
+) -> None:
+    template = _template("default_channel:\n  position_precision: 16\n")
+    live = live_config_from_template(
+        template,
+        firmware_version=firmware,
+        default_channel_overrides={"position_precision": 12},
+        channels=(channel,),
+    )
+
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    change = _change(plan, "default_channel", "position_precision")
+    assert change.firmware_value == (15 if capped else None)
+    codes = [w.code for w in plan.warnings]
+    assert (PlanWarningCode.POSITION_PRECISION_CAPPED in codes) is capped
+
+
+def test_a_precision_at_the_cap_is_kept_and_not_warned_about() -> None:
+    template = _template("default_channel:\n  position_precision: 15\n")
+    live = live_config_from_template(
+        template,
+        firmware_version="2.8.2",
+        default_channel_overrides={"position_precision": 12},
+        channels=(_PUBLIC_PRIMARY,),
+    )
+
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    assert _change(plan, "default_channel", "position_precision").firmware_value is None
+    assert PlanWarningCode.POSITION_PRECISION_CAPPED not in [w.code for w in plan.warnings]
+
+
+def test_a_public_primary_already_at_the_cap_needs_no_channel_write() -> None:
+    template = _template("default_channel:\n  position_precision: 16\n")
+    live = live_config_from_template(
+        template,
+        firmware_version="2.8.2",
+        default_channel_overrides={"position_precision": 15},
+        channels=(_PUBLIC_PRIMARY,),
+    )
+
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    assert plan.section("default_channel") is None
+
+
+def test_the_public_channel_precision_cap() -> None:
+    assert (
+        plan_firmware.PUBLIC_CHANNEL_MAX_POSITION_PRECISION,
+        plan_firmware.POSITION_PRECISION_CLAMP_MIN_FIRMWARE,
+    ) == (15, (2, 8, 0))

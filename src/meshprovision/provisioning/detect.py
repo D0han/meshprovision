@@ -102,6 +102,9 @@ FACTORY_LONG_NAME_PREFIX: Final[str] = "Meshtastic "
 DEFAULT_CHANNEL_KEY: Final[bytes] = b"\x01"
 """The 1-byte PSK that selects the firmware's well-known default key (``defaultpsk``)."""
 
+_DEFAULT_PSK: Final[bytes] = bytes.fromhex("d4f1bb3a20290759f0bcffabcf4e6901")
+"""The firmware's public ``defaultpsk`` (``Channels.h``), not a secret."""
+
 _FACTORY_SHORT_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{4}$")
 """Matches any 4-hex-digit short name -- the loose form of a factory default."""
 
@@ -243,8 +246,19 @@ def _read_channels(iface: MeshInterface) -> tuple[LiveChannel, ...]:
         default-channel checks look at every slot); ``()`` when the
         device reported no channels.
     """
+    from meshtastic.protobuf import channel_pb2
+
+    channels = tuple(iface.localNode.channels or ())
+    primary_public = next(
+        (
+            _uses_public_key(c, primary_public=True)
+            for c in channels
+            if c.role == channel_pb2.Channel.Role.PRIMARY
+        ),
+        True,
+    )
     summaries: list[LiveChannel] = []
-    for slot, channel in enumerate(iface.localNode.channels or ()):
+    for slot, channel in enumerate(channels):
         settings = channel.settings
         precision = (
             settings.module_settings.position_precision
@@ -257,9 +271,35 @@ def _read_channels(iface: MeshInterface) -> tuple[LiveChannel, ...]:
                 name=settings.name,
                 default_key=bytes(settings.psk) == DEFAULT_CHANNEL_KEY,
                 position_precision=int(precision),
+                public_key=_uses_public_key(channel, primary_public=primary_public),
             )
         )
     return tuple(summaries)
+
+
+def _uses_public_key(channel: Any, *, primary_public: bool) -> bool:
+    """Apply firmware 2.8's ``channelFileUsesPublicKey`` to one channel.
+
+    Args:
+        channel: A ``channel_pb2.Channel``.
+        primary_public: The primary channel's answer, which a secondary
+            channel without a PSK inherits (``True``, failing closed, when
+            there is no primary).
+
+    Returns:
+        ``False`` for a disabled channel or one with a private key;
+        ``True`` when its traffic is publicly decryptable.
+    """
+    from meshtastic.protobuf import channel_pb2
+
+    if channel.role == channel_pb2.Channel.Role.DISABLED or not channel.HasField("settings"):
+        return False
+    psk = bytes(channel.settings.psk)
+    if not psk:
+        return primary_public if channel.role == channel_pb2.Channel.Role.SECONDARY else True
+    if len(psk) == 1:
+        return True
+    return len(psk) == len(_DEFAULT_PSK) and psk[:-1] == _DEFAULT_PSK[:-1]
 
 
 def _has_enabled_field(msg: Any) -> bool:

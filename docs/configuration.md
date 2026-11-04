@@ -281,8 +281,13 @@ default_channel:
 Scoped to the primary (index-0) channel only — meshprovision has no
 secondary-channel provisioning story. `position_precision` is the GPS
 position precision (in bits) shared in this channel's broadcasts; `0`
-disables position sharing on the channel entirely. `is_muted` mutes the
-channel's traffic (received but not relayed/notified).
+disables position sharing on the channel entirely, and 32 shares it
+exactly. Firmware 2.8 keeps at most 15 bits (about 700 m) on a channel
+anyone can decrypt (no key, a 1-byte key, or the default key's family, as
+on a stock LongFast primary): a higher value is written as given, the plan
+warns (`position_precision_capped`), and the verify accepts 15. Firmware
+2.7 keeps the value. `is_muted` mutes the channel's traffic (received but
+not relayed/notified).
 
 Unlike every other block above, this one is **not** part of
 `config`/`module_config`: a device's channels live in a separate
@@ -396,7 +401,7 @@ unless a range is given.
 
 | Field | Value | Meaning |
 |---|---|---|
-| `position_precision` | bits | Position precision shared on the primary channel; 0 shares none |
+| `position_precision` | bits, 0-32 | Position precision shared on the primary channel; 0 shares none, 32 is exact; at most 15 is kept on a channel anyone can decrypt (firmware 2.8) |
 | `is_muted` | `true`/`false` | The primary channel is muted |
 
 #### `security`

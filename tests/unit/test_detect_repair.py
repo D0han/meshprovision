@@ -546,7 +546,9 @@ def test_read_live_config_summarizes_every_channel_without_its_key() -> None:
     live = detect.read_live_config(iface)  # type: ignore[arg-type]
 
     assert live.channels == (
-        detect.LiveChannel(index=0, name="", default_key=True, position_precision=13),
+        detect.LiveChannel(
+            index=0, name="", default_key=True, position_precision=13, public_key=True
+        ),
         detect.LiveChannel(index=1, name="ours", default_key=False, position_precision=0),
         detect.LiveChannel(index=2),
     )
@@ -563,6 +565,38 @@ def test_a_longer_key_that_starts_with_the_default_byte_is_not_the_default_key()
     live = detect.read_live_config(iface)  # type: ignore[arg-type]
 
     assert live.channels[0].default_key is False
+
+
+_DEFAULT_PSK = bytes.fromhex("d4f1bb3a20290759f0bcffabcf4e6901")
+
+
+@pytest.mark.parametrize(
+    ("primary_psk", "secondary_psk", "expected"),
+    [
+        pytest.param(b"", b"", (True, True), id="no-encryption-inherited"),
+        pytest.param(bytes(range(16)), b"", (False, False), id="private-inherited"),
+        pytest.param(bytes(range(16)), b"\x02", (False, True), id="short-alias"),
+        pytest.param(
+            bytes(range(16)), _DEFAULT_PSK[:-1] + b"\x07", (False, True), id="default-family"
+        ),
+        pytest.param(bytes(range(32)), bytes(range(1, 33)), (False, False), id="aes256"),
+    ],
+)
+def test_read_live_config_tells_which_channels_anyone_can_decrypt(
+    primary_psk: bytes, secondary_psk: bytes, expected: tuple[bool, bool]
+) -> None:
+    from meshtastic.protobuf import channel_pb2
+
+    iface = _FakeIface()
+    primary = channel_pb2.Channel(index=0, role=channel_pb2.Channel.Role.PRIMARY)
+    primary.settings.psk = primary_psk
+    secondary = channel_pb2.Channel(index=1, role=channel_pb2.Channel.Role.SECONDARY)
+    secondary.settings.psk = secondary_psk
+    iface.localNode.channels = [primary, secondary]
+
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+
+    assert tuple(c.public_key for c in live.channels) == expected
 
 
 # ---------------------------------------------------------------------------
