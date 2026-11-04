@@ -71,6 +71,7 @@ from meshprovision.provisioning.plan_security import (
     packet_signature_policy_warning,
     plan_node_keypair,
     plan_security_section,
+    switches_serial_api_off,
 )
 from meshprovision.provisioning.plan_types import (
     ChangePlan,
@@ -609,6 +610,16 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         warnings.append(policy_warning)
 
     security_section = plan_security_section(inputs, key_plan, lockdown)
+    if security_section is not None and switches_serial_api_off(security_section):
+        warnings.append(
+            PlanWarning(
+                PlanWarningCode.SERIAL_API_DISABLED,
+                "security.serial_enabled false switches off the serial (USB) API: from the "
+                "commit on, the node answers only over BLE or TCP, where enabled.",
+                section="security",
+                field="serial_enabled",
+            )
+        )
 
     if inputs.state is detect.NodeState.FOREIGN:
         warnings.append(

@@ -83,6 +83,7 @@ from meshprovision.provisioning.pipeline import (
     resolve_admin_keys,
     resolve_removed_admin_refs,
 )
+from meshprovision.provisioning.plan_security import switches_serial_api_off
 from meshprovision.provisioning.renumbered import (
     refuse_renumbered,
     region_first_refusal,
@@ -481,12 +482,51 @@ def _gather_plan_inputs(
     )
 
 
+def _serial_api_refusal(
+    change_plan: plan_mod.ChangePlan, transport: connection.Transport
+) -> PlanConflictError | None:
+    """Refuse a plan that switches off the serial API the run is connected over.
+
+    The firmware stops serving its API over serial as soon as
+    ``security.serial_enabled`` is false (see
+    :func:`~meshprovision.provisioning.plan_security.switches_serial_api_off`):
+    the verify reconnect, and every later ``mesh`` run over USB, would get
+    no answer. There is no override flag; BLE or TCP can make the change.
+
+    Args:
+        change_plan: The plan about to be applied.
+        transport: The transport this run is connected over.
+
+    Returns:
+        The refusal when the plan switches the serial API off over a
+        serial connection; else ``None``.
+    """
+    security = change_plan.section("security")
+    if (
+        transport is not connection.Transport.SERIAL
+        or security is None
+        or not switches_serial_api_off(security)
+    ):
+        return None
+    return PlanConflictError(
+        "security.serial_enabled false switches off the serial API this run is connected "
+        "over: the verify could not reconnect, and the node would stop answering over USB.",
+        field="security.serial_enabled",
+        hint=(
+            "Run `mesh provision` over BLE (--ble-address) or TCP (--host) to make this change, "
+            "or keep serial_enabled true in the template."
+        ),
+    )
+
+
 def run_provision(
     ctx: CliContext,
     session: apply.DeviceSession,
     db: DbSession,
     template: TemplateConfig,
     opts: ProvisionOptions,
+    *,
+    transport: connection.Transport,
 ) -> ProvisionResult:
     """Run the full provisioning pipeline against an already-open device session.
 
@@ -505,6 +545,8 @@ def run_provision(
         db: The already-open database session.
         template: The validated provisioning template.
         opts: The operator's provisioning flags.
+        transport: The transport ``session`` is connected over, for the
+            serial-API refusal.
 
     Returns:
         The full :class:`ProvisionResult`.
@@ -529,7 +571,8 @@ def run_provision(
         PlanConflictError: If the plan would set a firmware >= 2.8
             device's LoRa region for the first time (see
             :func:`~meshprovision.provisioning.renumbered.region_first_refusal`),
-            or regenerate a key with ``--no-reconnect``. Raised before
+            regenerate a key with ``--no-reconnect``, or switch off the
+            serial API over a serial ``transport``. Raised before
             anything is written, ``--dry-run`` included.
         click.Abort: If the operator declines the confirmation prompt.
     """
@@ -558,6 +601,10 @@ def run_provision(
     region_refusal = region_first_refusal(change_plan, live)
     if region_refusal is not None:
         raise region_refusal
+
+    serial_refusal = _serial_api_refusal(change_plan, transport)
+    if serial_refusal is not None:
+        raise serial_refusal
 
     if opts.admin_ref is not None and opts.admin_ref != change_plan.node_id.hex:
         existing_alias_pub = db.keys.find(schema.ref_for(opts.admin_ref, KeyType.ADMIN_PUBLIC))
@@ -733,7 +780,7 @@ def provision(
     with ctx.open_database(for_write=not dry_run) as db:
         backend = resolve_backend(ctx, transport_opts)
         with device_session(ctx, backend, no_reconnect=no_reconnect) as session:
-            result = run_provision(ctx, session, db, template, opts)
+            result = run_provision(ctx, session, db, template, opts, transport=backend.transport)
             if template.sync_peers and not dry_run and not result.exit_code:
                 sync_peers_after_provision(ctx, db, session)
 

@@ -49,6 +49,7 @@ class PlanWarningCode(StrEnum):
     PRIMARY_CHANNEL_UNAVAILABLE = "primary_channel_unavailable"
     NODE_ID_CHANGES = "node_id_changes"
     INTERVAL_RAISED_AT_BOOT = "interval_raised_at_boot"
+    SERIAL_API_DISABLED = "serial_api_disabled"
 
 
 @dataclass(frozen=True, slots=True)

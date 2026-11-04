@@ -39,6 +39,7 @@ __all__ = [
     "packet_signature_policy_warning",
     "plan_node_keypair",
     "plan_security_section",
+    "switches_serial_api_off",
 ]
 
 
@@ -394,4 +395,24 @@ def plan_security_section(
         kind=inputs.live.kind_of("security"),
         changes=tuple(changes),
         reboots_device=True,
+    )
+
+
+def switches_serial_api_off(security_section: SectionChange) -> bool:
+    """Tell whether a planned security write turns the serial API off.
+
+    The firmware serves its API over serial only while
+    ``security.serial_enabled`` is set (``SerialConsole::handleToRadio``,
+    the same at 2.7.2, 2.7.26, 2.8.2 and 2.8.3), and reads the live value, so the
+    serial link stops answering as soon as the write lands.
+
+    Args:
+        security_section: The plan's ``"security"`` section.
+
+    Returns:
+        ``True`` when it changes ``serial_enabled`` to ``False``.
+    """
+    return any(
+        change.field == "serial_enabled" and change.desired is False
+        for change in security_section.changes
     )

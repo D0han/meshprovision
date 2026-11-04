@@ -258,3 +258,62 @@ def test_write_failure_mid_plan_stops_and_never_writes_security(
     # expected, not a leak of this refused write.
     backups_dir = backups.backup_dir_for(db_path)
     assert not any(backups_dir.glob(f"{db_path.stem}-*{db_path.suffix}"))
+
+
+def _serial_api_on(iface: FakeMeshInterface) -> FakeMeshInterface:
+    iface.localNode.localConfig.security.serial_enabled = True
+    return iface
+
+
+@pytest.mark.parametrize("extra", [[], ["--dry-run"]], ids=["apply", "dry-run"])
+def test_switching_the_serial_api_off_over_serial_is_refused_before_any_write(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+    extra: list[str],
+) -> None:
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(security={"serial_enabled": False}))
+    db_path = Path(env["MESHPROVISION_DB_PATH"])
+    before = db_fingerprint(db_path)
+    iface = bus.use(_serial_api_on(FakeMeshInterface("deadbe01")))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", *extra], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "switches off the serial API this run is connected over" in result.stderr
+    assert iface.localNode.written_sections == []
+    assert iface.localNode.transaction_calls == []
+    assert iface.localNode.localConfig.security.serial_enabled is True
+    assert db_fingerprint(db_path) == before
+
+
+def test_switching_the_serial_api_off_over_tcp_is_applied_with_a_warning(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(security={"serial_enabled": False}))
+    iface = bus.use(_serial_api_on(FakeMeshInterface("deadbe01")))
+
+    result = invoke(runner, ["provision", "--host", "192.168.1.50", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "switches off the serial (USB) API" in result.stderr
+    assert iface.localNode.localConfig.security.serial_enabled is False
+
+
+def test_a_serial_api_already_off_is_not_refused_over_serial(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(security={"serial_enabled": False}))
+    bus.use(FakeMeshInterface("deadbe01"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--dry-run"], env)
+
+    assert result.exit_code == 0
+    assert "serial API" not in result.stderr

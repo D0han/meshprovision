@@ -198,6 +198,14 @@ not refused, nor an unlicensed device that already holds a key pair and
 the id derived from it when the plan writes no new key: setting its
 region keeps both. `mesh admin bootstrap` inherits this.
 
+A plan that sets `security.serial_enabled` to `false` is refused over a
+serial connection (exit code 5, before anything is written, `--dry-run`
+included): the firmware stops serving its API over serial the moment the
+write lands, so the verify could not reconnect and the node would no
+longer answer over USB. There is no override flag; run it over BLE or TCP
+instead, where the plan carries a `serial_api_disabled` warning. `mesh
+admin bootstrap` inherits this.
+
 A node that firmware >= 2.8 renumbered (it derives the node id from the
 public key, see [Firmware 2.8 and beyond](firmware-compatibility.md)) is
 refused before anything is written (exit code 5, `NodeRenumberedError`,

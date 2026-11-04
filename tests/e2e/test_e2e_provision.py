@@ -2246,6 +2246,7 @@ def test_factory_key_rotation_keeps_the_templated_security_settings(
     with a new key and every other field at its default keeps the device's
     other settings, here ``serial_enabled: true``. Without the re-send the
     templated ``serial_enabled: false`` is dropped and verification fails.
+    Over TCP: switching the serial API off over serial is refused.
     """
     env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(security={"serial_enabled": False}))
 
@@ -2260,13 +2261,13 @@ def test_factory_key_rotation_keeps_the_templated_security_settings(
     with monkeypatch.context() as patched:
         patched.setattr(device_write, "_firmware_keeps_rest_of_security", lambda *_: False)
         dropped = _factory_device("deadbe01")
-        failed = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+        failed = invoke(runner, ["provision", "--host", "192.168.1.50", "--yes"], env)
 
     assert failed.exit_code == int(ExitCode.PROVISIONING)
     assert dropped.localNode.localConfig.security.serial_enabled is True
 
     resent = _factory_device("deadbe02")
-    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    result = invoke(runner, ["provision", "--host", "192.168.1.50", "--yes"], env)
 
     assert result.exit_code == 0
     assert resent.localNode.localConfig.security.serial_enabled is False

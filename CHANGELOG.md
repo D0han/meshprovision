@@ -662,6 +662,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` and `mesh admin bootstrap` over a serial connection
+  refuse a plan that sets `security.serial_enabled` to `false` (exit code
+  5, before anything is written): the firmware stops serving its API over
+  serial as soon as the write lands, so the run ended UNCERTAIN and the
+  node could no longer be reached over USB. Over BLE or TCP the change is
+  made, with a `serial_api_disabled` plan warning.
 - `mesh provision` of a node on a default channel (a stock LongFast
   primary) with a telemetry interval below 1800 s or a position interval
   below 3600 s (the shipped example's `position_broadcast_secs: 900`) ended

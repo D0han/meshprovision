@@ -391,6 +391,6 @@ unless a range is given.
 |---|---|---|
 | `is_managed` | `true`/`false`, default `false` | Lockdown mode (see [Security block](#security-block)) |
 | `admin_channel_enabled` | `false`, the default | The legacy admin channel; must stay off |
-| `serial_enabled` | `true`/`false` | The serial console and API |
+| `serial_enabled` | `true`/`false` | The serial console and API; `false` is refused over a serial connection (see [`mesh provision`](commands.md#mesh-provision)) |
 | `debug_log_api_enabled` | `true`/`false` | Debug logging over the API |
 | `packet_signature_policy` | policy name | Firmware 2.8 packet signing (see [Security block](#security-block)) |

@@ -318,7 +318,7 @@ def admin_bootstrap(
 
         backend = resolve_backend(ctx, transport_opts)
         with device_session(ctx, backend, no_reconnect=no_reconnect) as session:
-            result = run_provision(ctx, session, db, template, opts)
+            result = run_provision(ctx, session, db, template, opts, transport=backend.transport)
 
         if result.persisted:
             new_ref = normalized_ref if normalized_ref is not None else result.node_id.hex
