@@ -28,6 +28,7 @@ __all__ = [
     "CONFIG_SECTIONS",
     "SECRET_FIELDS",
     "Detection",
+    "LiveChannel",
     "LiveConfig",
     "LiveSecurity",
     "NodeState",
@@ -211,6 +212,28 @@ class LiveSecurity:
 
 
 @dataclass(frozen=True, slots=True)
+class LiveChannel:
+    """What the firmware's channel rules need to know about one channel slot.
+
+    No key material: the channel's PSK is reduced to the yes/no answer
+    the firmware itself asks of it.
+
+    Attributes:
+        index: The channel's slot, 0-7.
+        name: The channel's name as stored (``""`` for the preset's name).
+        default_key: Whether the PSK is the 1-byte default key ``0x01``
+            (firmware ``Channels::isDefaultChannel``).
+        position_precision: The channel's ``module_settings.position_precision``,
+            0 when it has no module settings.
+    """
+
+    index: int
+    name: str = ""
+    default_key: bool = False
+    position_precision: int = 0
+
+
+@dataclass(frozen=True, slots=True)
 class LiveConfig:
     """The full live device state, normalized out of protobuf form.
 
@@ -292,6 +315,11 @@ class LiveConfig:
             and this is backed by a structurally different container
             (``iface.localNode.channels``, not
             ``LocalConfig``/``LocalModuleConfig``).
+        channels: One :class:`LiveChannel` per channel slot the device
+            reported, in slot order; ``()`` when none were read (a
+            backup-derived config). Feeds the firmware's default-channel
+            and public-key rules (see
+            :mod:`~meshprovision.provisioning.plan_firmware`).
 
     :attr:`sections` and :attr:`module_sections` hold some plaintext
     secrets (``network.wifi_psk``, ``mqtt.password``,
@@ -320,6 +348,7 @@ class LiveConfig:
     )
     module_enabled: Mapping[str, bool | None] = field(default_factory=lambda: MappingProxyType({}))
     default_channel: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
+    channels: tuple[LiveChannel, ...] = ()
 
     def section(self, name: str) -> Mapping[str, object]:
         r"""Look up one section's fields, trying config then module config.
@@ -399,7 +428,7 @@ class LiveConfig:
             f"sections={_redacted_sections(self.sections)!r}, "
             f"module_sections={_redacted_sections(self.module_sections)!r}, "
             f"module_enabled={dict(self.module_enabled)!r}, "
-            f"default_channel={dict(self.default_channel)!r})"
+            f"default_channel={dict(self.default_channel)!r}, channels={self.channels!r})"
         )
 
 

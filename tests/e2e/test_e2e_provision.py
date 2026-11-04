@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
     from click.testing import CliRunner
 
-    from tests.e2e.conftest import DeviceBus
+    from tests.e2e.conftest import DeviceBus, FakeNode
 
 pytestmark = pytest.mark.e2e
 
@@ -139,6 +139,37 @@ def test_factory_provisioning_writes_default_channel_before_security(
     second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
     assert second.exit_code == 0
     assert "default_channel" not in iface.localNode.written_sections
+    assert "No changes needed." in second.stderr
+
+
+def _raise_position_interval_at_boot(node: FakeNode) -> None:
+    """Raise ``position_broadcast_secs`` to 3600 as firmware boot code does on a default channel."""
+    position = node.localConfig.position
+    if 0 < position.position_broadcast_secs < 3600:
+        position.position_broadcast_secs = 3600
+
+
+def test_a_position_interval_the_firmware_raises_at_boot_is_accepted_then_left_alone(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """On a default channel the verify accepts the boot minimum, and the next run plans nothing."""
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(
+        write_template(position={"position_broadcast_secs": 900})
+    )
+    iface = bus.use(FakeMeshInterface("deadbe01", at_boot=_raise_position_interval_at_boot))
+    iface.localNode.channels[0].settings.psk = b"\x01"
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "position.position_broadcast_secs 900 is below the firmware's minimum" in result.stderr
+    assert iface.localNode.localConfig.position.position_broadcast_secs == 3600
+
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert second.exit_code == 0
     assert "No changes needed." in second.stderr
 
 

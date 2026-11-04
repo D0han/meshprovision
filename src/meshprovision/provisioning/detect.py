@@ -59,6 +59,7 @@ from meshprovision.provisioning.detect_types import (
     CONFIG_SECTIONS,
     SECRET_FIELDS,
     Detection,
+    LiveChannel,
     LiveConfig,
     LiveSecurity,
     NodeState,
@@ -75,10 +76,12 @@ if TYPE_CHECKING:
 __all__ = [
     "CHANNEL_SECTIONS",
     "CONFIG_SECTIONS",
+    "DEFAULT_CHANNEL_KEY",
     "FACTORY_LONG_NAME_PREFIX",
     "MODULE_SECTIONS",
     "SECRET_FIELDS",
     "Detection",
+    "LiveChannel",
     "LiveConfig",
     "LiveSecurity",
     "NodeState",
@@ -95,6 +98,9 @@ _logger = logging.getLogger(__name__)
 
 FACTORY_LONG_NAME_PREFIX: Final[str] = "Meshtastic "
 """Prefix of the firmware's factory-default ``long_name``."""
+
+DEFAULT_CHANNEL_KEY: Final[bytes] = b"\x01"
+"""The 1-byte PSK that selects the firmware's well-known default key (``defaultpsk``)."""
 
 _FACTORY_SHORT_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{4}$")
 """Matches any 4-hex-digit short name -- the loose form of a factory default."""
@@ -228,6 +234,34 @@ def _read_default_channel(iface: MeshInterface) -> Mapping[str, object]:
     return MappingProxyType(_message_fields(channel.settings.module_settings))
 
 
+def _read_channels(iface: MeshInterface) -> tuple[LiveChannel, ...]:
+    """Summarize every channel slot the device reported, without its key.
+
+    Returns:
+        One :class:`LiveChannel` per entry of ``iface.localNode.channels``,
+        in slot order, whatever its role (the firmware's boot-time
+        default-channel checks look at every slot); ``()`` when the
+        device reported no channels.
+    """
+    summaries: list[LiveChannel] = []
+    for slot, channel in enumerate(iface.localNode.channels or ()):
+        settings = channel.settings
+        precision = (
+            settings.module_settings.position_precision
+            if settings.HasField("module_settings")
+            else 0
+        )
+        summaries.append(
+            LiveChannel(
+                index=slot,
+                name=settings.name,
+                default_key=bytes(settings.psk) == DEFAULT_CHANNEL_KEY,
+                position_precision=int(precision),
+            )
+        )
+    return tuple(summaries)
+
+
 def _has_enabled_field(msg: Any) -> bool:
     """Check whether a module-config message declares an ``enabled`` field.
 
@@ -255,6 +289,7 @@ def live_config_from_protobufs(
     role_raw: str | None = None,
     firmware_version: str = "",
     default_channel: Mapping[str, object] = MappingProxyType({}),
+    channels: tuple[LiveChannel, ...] = (),
 ) -> LiveConfig:
     """Build a :class:`LiveConfig` from already-read protobuf config messages.
 
@@ -279,6 +314,8 @@ def live_config_from_protobufs(
             ``hw_model``/``firmware_version`` are resolved by the caller
             and threaded in) -- this function stays a pure "protobufs in,
             :class:`LiveConfig` out" transform.
+        channels: See :attr:`LiveConfig.channels`, read by the caller the
+            same way.
 
     Returns:
         The normalized, immutable :class:`LiveConfig`. Every mapping
@@ -327,6 +364,7 @@ def live_config_from_protobufs(
         module_sections=MappingProxyType(module_sections),
         module_enabled=MappingProxyType(module_enabled),
         default_channel=MappingProxyType(dict(default_channel)),
+        channels=channels,
     )
 
 
@@ -433,6 +471,7 @@ def read_live_config(iface: MeshInterface) -> LiveConfig:
             hw_model_raw=hw_model_raw,
             firmware_version=firmware_version,
             default_channel=default_channel,
+            channels=_read_channels(iface),
         )
         _logger.debug(
             "Read live config from %s: hw_model=%s (raw=%s) firmware=%s",

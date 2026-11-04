@@ -48,6 +48,7 @@ class PlanWarningCode(StrEnum):
     FIELD_UNSUPPORTED_BY_FIRMWARE = "field_unsupported_by_firmware"
     PRIMARY_CHANNEL_UNAVAILABLE = "primary_channel_unavailable"
     NODE_ID_CHANGES = "node_id_changes"
+    INTERVAL_RAISED_AT_BOOT = "interval_raised_at_boot"
 
 
 @dataclass(frozen=True, slots=True)

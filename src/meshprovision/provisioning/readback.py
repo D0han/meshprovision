@@ -432,6 +432,18 @@ def verify_plan(
                         change.section, WriteStatus.CONFIRMED, "confirmed", field=field_change.field
                     )
                 )
+            elif field_change.firmware_value is not None and values_equal(
+                actual, field_change.firmware_value
+            ):
+                results.append(
+                    WriteResult(
+                        change.section,
+                        WriteStatus.CONFIRMED,
+                        f"confirmed: the firmware holds {field_change.firmware_value} in place "
+                        f"of {field_change.desired}, as the plan warned",
+                        field=field_change.field,
+                    )
+                )
             else:
                 results.append(
                     WriteResult(

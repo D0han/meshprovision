@@ -1,0 +1,275 @@
+"""Tests for meshprovision.provisioning.plan_firmware and how the plan uses it."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from meshprovision.config.template import TemplateConfig, load_template_text
+from meshprovision.provisioning import detect, plan_firmware
+from meshprovision.provisioning.detect import LiveChannel
+from meshprovision.provisioning.plan import (
+    ChangePlan,
+    FieldChange,
+    PlanInputs,
+    PlanWarningCode,
+    build_plan,
+)
+from tests.unit.conftest import live_config_from_template, make_security
+
+pytestmark = pytest.mark.unit
+
+_ROOT = Path(__file__).resolve().parents[2]
+_CONFIGURATION = (_ROOT / "docs" / "configuration.md").read_text(encoding="utf-8")
+_EXAMPLE = (_ROOT / "src" / "meshprovision" / "examples" / "template.example.yaml").read_text(
+    encoding="utf-8"
+)
+
+_DEFAULT_PRIMARY = LiveChannel(index=0, default_key=True, position_precision=12)
+"""A stock LongFast primary: the default key, no name, sharing a position."""
+
+_PRIVATE_PRIMARY = LiveChannel(index=0, name="ours", position_precision=12)
+
+_FIRMWARE_2_8 = "2.8.3.51ac6ea"
+
+
+def _template(body: str) -> TemplateConfig:
+    return load_template_text("version: 1\n" + body)
+
+
+def _plan(
+    template: TemplateConfig,
+    *,
+    channels: tuple[LiveChannel, ...] = (_DEFAULT_PRIMARY,),
+    sections: dict[str, dict[str, object]] | None = None,
+    firmware: str = _FIRMWARE_2_8,
+) -> ChangePlan:
+    live = live_config_from_template(
+        template,
+        firmware_version=firmware,
+        security=make_security(),
+        section_overrides=sections,
+        channels=channels,
+    )
+    return build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+
+def _boot_warnings(plan: ChangePlan) -> list[tuple[str | None, str | None]]:
+    return [
+        (w.section, w.field)
+        for w in plan.warnings
+        if w.code == PlanWarningCode.INTERVAL_RAISED_AT_BOOT
+    ]
+
+
+def _change(plan: ChangePlan, section: str, field: str) -> FieldChange:
+    change = plan.section(section)
+    assert change is not None
+    return next(c for c in change.changes if c.field == field)
+
+
+def test_a_low_position_interval_on_a_default_channel_plans_the_template_value() -> None:
+    template = _template("position:\n  position_broadcast_secs: 900\n")
+
+    plan = _plan(template, sections={"position": {"position_broadcast_secs": 7200}})
+
+    change = _change(plan, "position", "position_broadcast_secs")
+    assert (change.desired, change.firmware_value) == (900, 3600)
+    assert _boot_warnings(plan) == [("position", "position_broadcast_secs")]
+    assert "position.position_broadcast_secs: 7200 -> 900 (the firmware holds 3600)" in (
+        plan.describe()
+    )
+    assert change.to_json_dict()["firmware_value"] == 3600
+
+
+def test_a_node_already_at_the_boot_minimum_needs_no_change_but_still_warns() -> None:
+    template = _template("position:\n  position_broadcast_secs: 900\n")
+
+    plan = _plan(template, sections={"position": {"position_broadcast_secs": 3600}})
+
+    assert plan.section("position") is None
+    assert _boot_warnings(plan) == [("position", "position_broadcast_secs")]
+
+
+def test_a_private_channel_raises_nothing() -> None:
+    template = _template("position:\n  position_broadcast_secs: 900\n")
+
+    plan = _plan(
+        template,
+        channels=(_PRIVATE_PRIMARY,),
+        sections={"position": {"position_broadcast_secs": 3600}},
+    )
+
+    change = _change(plan, "position", "position_broadcast_secs")
+    assert change.firmware_value is None
+    assert _boot_warnings(plan) == []
+
+
+def test_a_router_gets_the_router_minimums() -> None:
+    template = _template(
+        "device:\n  role: ROUTER\nposition:\n  position_broadcast_secs: 900\n"
+        "telemetry:\n  device_update_interval: 600\n"
+    )
+
+    adjustments = plan_firmware.firmware_adjustments(
+        PlanInputs(
+            live=live_config_from_template(template, channels=(_DEFAULT_PRIMARY,)),
+            template=template,
+        )
+    )
+
+    assert {(a.section, a.field): a.value for a in adjustments} == {
+        ("position", "position_broadcast_secs"): 43200,
+        ("telemetry", "device_update_interval"): 43200,
+    }
+
+
+def test_zero_is_the_firmware_default_and_is_never_raised() -> None:
+    template = _template(
+        "position:\n  position_broadcast_secs: 0\n  broadcast_smart_minimum_interval_secs: 0\n"
+        "telemetry:\n  device_update_interval: 0\n"
+    )
+
+    assert _boot_warnings(_plan(template)) == []
+
+
+def test_a_default_secondary_raises_telemetry_but_not_the_position_interval() -> None:
+    template = _template(
+        "position:\n  position_broadcast_secs: 900\ntelemetry:\n  environment_update_interval: 60\n"
+    )
+
+    plan = _plan(template, channels=(_PRIVATE_PRIMARY, LiveChannel(index=1, default_key=True)))
+
+    assert _boot_warnings(plan) == [("telemetry", "environment_update_interval")]
+
+
+def test_the_first_channel_sharing_a_position_decides_the_position_minimum() -> None:
+    template = _template("position:\n  broadcast_smart_minimum_interval_secs: 60\n")
+    unshared_primary = LiveChannel(index=0, name="ours")
+    shared_default = LiveChannel(index=1, default_key=True, position_precision=13)
+
+    plan = _plan(template, channels=(unshared_primary, shared_default))
+
+    assert _boot_warnings(plan) == [("position", "broadcast_smart_minimum_interval_secs")]
+
+
+def test_a_primary_sharing_no_position_before_or_after_raises_no_position_minimum() -> None:
+    template = _template(
+        "position:\n  position_broadcast_secs: 900\ndefault_channel:\n  position_precision: 0\n"
+    )
+
+    plan = _plan(template, channels=(LiveChannel(index=0, default_key=True),))
+
+    assert _boot_warnings(plan) == []
+
+
+@pytest.mark.parametrize(
+    ("preset", "expected"),
+    [
+        pytest.param("LONG_FAST", [("telemetry", "device_update_interval")], id="its-preset"),
+        pytest.param("MEDIUM_FAST", [], id="another-preset"),
+    ],
+)
+def test_a_channel_named_after_a_preset_is_default_only_on_that_preset(
+    preset: str, expected: list[tuple[str, str]]
+) -> None:
+    template = _template(
+        f"lora:\n  modem_preset: {preset}\ntelemetry:\n  device_update_interval: 600\n"
+    )
+    named = LiveChannel(index=0, name="LongFast", default_key=True)
+
+    assert _boot_warnings(_plan(template, channels=(named,))) == expected
+
+
+@pytest.mark.parametrize(
+    ("lora", "firmware", "raised"),
+    [
+        pytest.param({"channel_num": 5}, _FIRMWARE_2_8, False, id="channel-num-2.8"),
+        pytest.param({"channel_num": 5}, "2.7.26.54e0d8d", True, id="channel-num-2.7"),
+        pytest.param({"channel_num": 5}, "", True, id="channel-num-unknown"),
+        pytest.param({"override_frequency": 869.5}, _FIRMWARE_2_8, False, id="override-2.8"),
+        pytest.param({"override_frequency": 869.5}, "2.7.26", False, id="override-2.7.26"),
+        pytest.param({"override_frequency": 869.5}, "2.7.19", True, id="override-2.7.19"),
+    ],
+)
+def test_the_telemetry_minimum_follows_each_firmwares_boot_check(
+    lora: dict[str, object], firmware: str, raised: bool
+) -> None:
+    template = _template("telemetry:\n  device_update_interval: 600\n")
+
+    warnings = _boot_warnings(_plan(template, sections={"lora": lora}, firmware=firmware))
+
+    assert warnings == ([("telemetry", "device_update_interval")] if raised else [])
+
+
+def test_a_primary_that_stops_sharing_after_the_commit_still_counts_as_sharing() -> None:
+    template = _template(
+        "position:\n  position_broadcast_secs: 900\ndefault_channel:\n  position_precision: 0\n"
+    )
+    live = live_config_from_template(
+        template,
+        firmware_version=_FIRMWARE_2_8,
+        section_overrides={"position": {"position_broadcast_secs": 7200}},
+        default_channel_overrides={"position_precision": 12},
+        channels=(_DEFAULT_PRIMARY,),
+    )
+
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    assert _change(plan, "position", "position_broadcast_secs").firmware_value == 3600
+
+
+def test_the_example_template_is_above_every_boot_minimum() -> None:
+    template = load_template_text(_EXAMPLE)
+
+    assert _boot_warnings(_plan(template)) == []
+
+
+def test_the_boot_check_firmware_floors() -> None:
+    assert (
+        plan_firmware.BOOT_SLOT_CHECK_MIN_FIRMWARE,
+        plan_firmware.BOOT_PRESET_CHECK_MIN_FIRMWARE,
+    ) == ((2, 8, 0), (2, 7, 20))
+
+
+def test_the_boot_minimums() -> None:
+    assert (1800, 43200, 3600, 43200, 300, frozenset({"ROUTER", "ROUTER_LATE"})) == (
+        plan_firmware.TELEMETRY_INTERVAL_FLOOR_SECS,
+        plan_firmware.TELEMETRY_INTERVAL_FLOOR_ROUTER_SECS,
+        plan_firmware.POSITION_BROADCAST_FLOOR_SECS,
+        plan_firmware.POSITION_BROADCAST_FLOOR_ROUTER_SECS,
+        plan_firmware.SMART_MINIMUM_INTERVAL_FLOOR_SECS,
+        plan_firmware.BOOT_FLOOR_ROUTER_ROLES,
+    )
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        pytest.param(
+            f"telemetry interval below {plan_firmware.TELEMETRY_INTERVAL_FLOOR_SECS} s "
+            f"({plan_firmware.TELEMETRY_INTERVAL_FLOOR_ROUTER_SECS} s",
+            id="telemetry",
+        ),
+        pytest.param(
+            f"`position_broadcast_secs` below {plan_firmware.POSITION_BROADCAST_FLOOR_SECS} s "
+            f"({plan_firmware.POSITION_BROADCAST_FLOOR_ROUTER_SECS} s",
+            id="position",
+        ),
+        pytest.param(
+            f"`broadcast_smart_minimum_interval_secs` below "
+            f"{plan_firmware.SMART_MINIMUM_INTERVAL_FLOOR_SECS} s",
+            id="smart-minimum",
+        ),
+    ],
+)
+def test_the_configuration_docs_state_each_boot_minimum(phrase: str) -> None:
+    pattern = r"(?<![0-9A-Za-z.])" + re.escape(_flat(phrase)) + r"(?![0-9])"
+
+    assert len(re.findall(pattern, _flat(_CONFIGURATION))) == 1

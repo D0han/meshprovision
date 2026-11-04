@@ -79,6 +79,22 @@ verified: `device.node_info_broadcast_secs` is at least 3600 and
 `neighbor_info.update_interval` at least 14400. Likewise
 `power.on_battery_shutdown_after_secs` is 0 (disabled) or at least 30.
 
+On a default channel (the default key on the preset's own channel name,
+as a stock LongFast node has) the firmware also raises some intervals,
+at every boot: a telemetry interval below 1800 s (43200 s for `ROUTER`
+and `ROUTER_LATE`) while any channel is a default one on the preset's
+frequency slot (firmware 2.8; 2.7 checks no frequency slot at boot), and,
+while the first channel that shares a position is a default one, `position_broadcast_secs` below 3600 s (43200 s for those
+two roles) and `broadcast_smart_minimum_interval_secs` below 300 s. 0
+means the firmware's default and is never raised. Such a value is still
+written as given, since it holds on any other channel: the plan warns
+(`interval_raised_at_boot`), the verify after the commit's reboot
+accepts the raised value, and the next run plans no change for it. Read
+in the firmware source (the position minimums since 2.7.18, the router
+values since 2.7.21; older firmware raises only the telemetry intervals,
+to 1800 s, and the verify accepts the template value too); not tried on
+a device.
+
 Followed by module options:
 
 ```yaml

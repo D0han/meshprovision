@@ -531,6 +531,40 @@ def test_read_live_config_default_channel_disabled_is_empty() -> None:
     assert dict(live.default_channel) == {}
 
 
+def test_read_live_config_summarizes_every_channel_without_its_key() -> None:
+    from meshtastic.protobuf import channel_pb2
+
+    iface = _FakeIface()
+    primary = channel_pb2.Channel(index=0, role=channel_pb2.Channel.Role.PRIMARY)
+    primary.settings.psk = b"\x01"
+    primary.settings.module_settings.position_precision = 13
+    secondary = channel_pb2.Channel(index=1, role=channel_pb2.Channel.Role.SECONDARY)
+    secondary.settings.name = "ours"
+    secondary.settings.psk = bytes(range(32))
+    iface.localNode.channels = [primary, secondary, channel_pb2.Channel(index=2)]
+
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+
+    assert live.channels == (
+        detect.LiveChannel(index=0, name="", default_key=True, position_precision=13),
+        detect.LiveChannel(index=1, name="ours", default_key=False, position_precision=0),
+        detect.LiveChannel(index=2),
+    )
+
+
+def test_a_longer_key_that_starts_with_the_default_byte_is_not_the_default_key() -> None:
+    from meshtastic.protobuf import channel_pb2
+
+    iface = _FakeIface()
+    primary = channel_pb2.Channel(index=0, role=channel_pb2.Channel.Role.PRIMARY)
+    primary.settings.psk = b"\x01" + bytes(15)
+    iface.localNode.channels = [primary]
+
+    live = detect.read_live_config(iface)  # type: ignore[arg-type]
+
+    assert live.channels[0].default_key is False
+
+
 # ---------------------------------------------------------------------------
 # read_node_id -- parity with read_live_config(...).node_id (E3).
 # ---------------------------------------------------------------------------

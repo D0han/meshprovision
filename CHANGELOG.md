@@ -662,6 +662,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` of a node on a default channel (a stock LongFast
+  primary) with a telemetry interval below 1800 s or a position interval
+  below 3600 s (the shipped example's `position_broadcast_secs: 900`) ended
+  UNCERTAIN (exit code 5) on every run: the firmware raises such a value to
+  its minimum at every boot, so the verify after the commit's reboot read
+  back another value and the node never converged. The value is still
+  written as given; the plan warns (`interval_raised_at_boot`), the verify
+  accepts the raised value, and the next run plans no change. The example
+  template now sets 3600. `--json` plan changes gain `firmware_value`
+  (null unless the firmware is expected to hold another value).
 - The hint shown when BLE is unavailable no longer points at the `[ble]`
   extra, which installs nothing the `meshtastic` dependency does not
   already pull in; it names `bleak` itself.

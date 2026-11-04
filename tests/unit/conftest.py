@@ -35,7 +35,7 @@ from meshprovision.db.keys import KeyRepository
 from meshprovision.db.nodes import NodeRecord, NodeRepository
 from meshprovision.db.ods import OdsDatabase
 from meshprovision.provisioning import detect
-from meshprovision.provisioning.detect import LiveConfig, LiveSecurity
+from meshprovision.provisioning.detect import LiveChannel, LiveConfig, LiveSecurity
 from meshprovision.provisioning.plan import ChangePlan, PlanInputs, build_plan
 from meshprovision.provisioning.plan_admin_keys import ResolvedAdminKey
 
@@ -58,6 +58,7 @@ def live_config_from_template(
     module_enabled_overrides: Mapping[str, bool | None] | None = None,
     default_channel_overrides: Mapping[str, object] | None = None,
     primary_channel_enabled: bool = True,
+    channels: tuple[LiveChannel, ...] = (),
 ) -> LiveConfig:
     """Build a :class:`LiveConfig` that is already correct against ``template``.
 
@@ -90,6 +91,8 @@ def live_config_from_template(
             enabled primary channel (absent or ``DISABLED``): the live
             ``default_channel`` is then ``{}``, and
             ``default_channel_overrides`` is ignored.
+        channels: The channel summaries the firmware's channel rules read
+            (see :attr:`LiveConfig.channels`); none by default.
 
     Returns:
         The constructed, immutable :class:`LiveConfig`.
@@ -152,6 +155,7 @@ def live_config_from_template(
         module_sections=frozen_module_sections,
         module_enabled=frozen_module_enabled,
         default_channel=frozen_default_channel,
+        channels=channels,
     )
 
 

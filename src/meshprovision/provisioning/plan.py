@@ -56,6 +56,8 @@ downstream of this module.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final
 
 from meshprovision.enums import MODULES_WITHOUT_ENABLED
@@ -63,6 +65,7 @@ from meshprovision.firmware import derives_node_id_from_key
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
+from meshprovision.provisioning.plan_firmware import firmware_adjustments
 from meshprovision.provisioning.plan_security import (
     evaluate_lockdown,
     packet_signature_policy_warning,
@@ -122,6 +125,8 @@ which stops writing at the first section that fails, so nothing after it
 (``security`` or otherwise) is ever sent."""
 
 _REBOOT_LORA_FIELDS: Final[frozenset[str]] = frozenset({"region", "modem_preset"})
+
+_NO_ADJUSTMENTS: Final[Mapping[tuple[str, str], object]] = MappingProxyType({})
 
 
 def _db_name_or_live(db_name: str, live_name: str) -> str:
@@ -217,7 +222,10 @@ def _name_warnings(name_change: NameChange) -> tuple[PlanWarning, ...]:
 
 
 def _diff_section(
-    section_name: str, model: Any, live: detect.LiveConfig
+    section_name: str,
+    model: Any,
+    live: detect.LiveConfig,
+    adjusted: Mapping[tuple[str, str], object] = _NO_ADJUSTMENTS,
 ) -> tuple[FieldChange, ...]:
     """Diff one template section model against the live device state.
 
@@ -227,33 +235,44 @@ def _diff_section(
         model: The template's pydantic section model (for example
             ``template.device``).
         live: The device's live configuration.
+        adjusted: ``{(section, field): value}`` the firmware holds in place
+            of the template value (see
+            :func:`~meshprovision.provisioning.plan_firmware.firmware_adjustments`).
 
     Returns:
-        One :class:`FieldChange` per field whose template value differs
-        from the live value, in the model's own field-declaration order.
+        One :class:`FieldChange` per field whose live value is neither the
+        template value nor the firmware's adjusted one, in the model's own
+        field-declaration order, carrying the adjusted value as
+        :attr:`~FieldChange.firmware_value`.
     """
     changes: list[FieldChange] = []
     for field_name, desired_value in model.model_dump(exclude_none=True).items():
         current_value = live.value(section_name, field_name)
-        if not values_equal(current_value, desired_value):
-            changes.append(
-                FieldChange(
-                    section=section_name,
-                    field=field_name,
-                    current=current_value,
-                    desired=desired_value,
-                )
+        firmware_value = adjusted.get((section_name, field_name))
+        if values_equal(current_value, desired_value) or (
+            firmware_value is not None and values_equal(current_value, firmware_value)
+        ):
+            continue
+        changes.append(
+            FieldChange(
+                section=section_name,
+                field=field_name,
+                current=current_value,
+                desired=desired_value,
+                firmware_value=firmware_value,
             )
+        )
     return tuple(changes)
 
 
 def _plan_config_sections(
-    inputs: PlanInputs,
+    inputs: PlanInputs, adjusted: Mapping[tuple[str, str], object]
 ) -> tuple[tuple[SectionChange, ...], tuple[PlanWarning, ...]]:
     """Diff the ``device``/``position``/``power``/``lora`` sections (step 2).
 
     Args:
         inputs: The plan inputs.
+        adjusted: See :func:`_diff_section`.
 
     Returns:
         The non-empty sections, in :data:`SECTION_ORDER` order, plus a
@@ -271,7 +290,7 @@ def _plan_config_sections(
         ("power", template.power),
         ("lora", template.lora),
     ):
-        changes = _diff_section(section_name, model, live)
+        changes = _diff_section(section_name, model, live, adjusted)
         if not changes:
             continue
         reboots = section_name == "lora" and any(c.field in _REBOOT_LORA_FIELDS for c in changes)
@@ -296,12 +315,13 @@ def _plan_config_sections(
 
 
 def _plan_module_sections(
-    inputs: PlanInputs,
+    inputs: PlanInputs, adjusted: Mapping[tuple[str, str], object]
 ) -> tuple[tuple[SectionChange, ...], tuple[PlanWarning, ...]]:
     """Diff the module-option toggles, telemetry, and neighbor_info fields (steps 3-4).
 
     Args:
         inputs: The plan inputs.
+        adjusted: See :func:`_diff_section`.
 
     Returns:
         The non-empty module sections, sorted by name, plus any
@@ -346,7 +366,7 @@ def _plan_module_sections(
                 ),
             )
 
-    telemetry_changes = _diff_section("telemetry", template.telemetry, live)
+    telemetry_changes = _diff_section("telemetry", template.telemetry, live, adjusted)
     if telemetry_changes:
         module_changes["telemetry"] = SectionChange(
             section="telemetry", kind=live.kind_of("telemetry"), changes=telemetry_changes
@@ -528,11 +548,15 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
     name_change = _plan_name_change(inputs)
     warnings.extend(_name_warnings(name_change))
 
-    config_sections, config_warnings = _plan_config_sections(inputs)
+    adjustments = firmware_adjustments(inputs)
+    adjusted = {(a.section, a.field): a.value for a in adjustments}
+
+    config_sections, config_warnings = _plan_config_sections(inputs, adjusted)
     warnings.extend(config_warnings)
 
-    module_sections, module_warnings = _plan_module_sections(inputs)
+    module_sections, module_warnings = _plan_module_sections(inputs, adjusted)
     warnings.extend(module_warnings)
+    warnings.extend(a.warning for a in adjustments)
 
     bluetooth_section = _plan_bluetooth_section(inputs)
 

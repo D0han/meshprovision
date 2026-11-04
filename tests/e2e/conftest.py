@@ -375,6 +375,7 @@ class FakeMeshInterface:
         owner_write_echoed: bool = True,
         derive_id_from_key: bool = False,
         keeps_rest_on_bare_key_rotation: bool = False,
+        at_boot: Callable[[FakeNode], None] | None = None,
     ) -> None:
         """Initialize a fake device at factory or custom naming defaults.
 
@@ -421,6 +422,9 @@ class FakeMeshInterface:
                 ``isBareKeypairRotation`` (a new private key, every other
                 field at its default) applies only the keys and keeps the
                 device's other security settings.
+            at_boot: Called with the device's persisted node after each
+                settings commit, standing in for the firmware's boot code
+                that runs after the commit's reboot.
         """
         self.nid = NodeId.from_hex(node_id)
         self.drop_security_keys = drop_security_keys
@@ -430,6 +434,7 @@ class FakeMeshInterface:
         self.owner_write_echoed = owner_write_echoed
         self.derive_id_from_key = derive_id_from_key
         self.keeps_rest_on_bare_key_rotation = keeps_rest_on_bare_key_rotation
+        self.at_boot = at_boot
         self.closed = 0
 
         self.myInfo = SimpleNamespace(my_node_num=self.nid.num)
@@ -655,6 +660,9 @@ class _FakeConnectionNode:
             self._persist(section)
         self._pending_sections = set()
         self._in_transaction = False
+        device = self._connection._device
+        if device.at_boot is not None:
+            device.at_boot(device.localNode)
 
     def writeConfig(self, section: str) -> None:  # noqa: N802 -- matches Node's own spelling
         """Push this connection's staged ``section`` to the device, if it accepts it.

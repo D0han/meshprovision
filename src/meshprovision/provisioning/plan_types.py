@@ -103,6 +103,10 @@ class FieldChange:
             common case), ``"forced"`` (unconditional, independent of
             the template -- ``security.admin_channel_enabled``),
             ``"weak_key"``, ``"regenerate"``, or ``"adopt"``.
+        firmware_value: The value the firmware is expected to hold in
+            place of :attr:`desired` once the plan is applied (see
+            :mod:`~meshprovision.provisioning.plan_firmware`), which the
+            verify accepts as well; ``None`` when it keeps :attr:`desired`.
     """
 
     section: str
@@ -111,27 +115,35 @@ class FieldChange:
     desired: object
     secret: bool = False
     reason: str = "template"
+    firmware_value: object = None
 
     def describe(self) -> str:
         """Render this change as one redaction-safe, human-readable string.
 
         Returns:
             ``"<redacted> -> <redacted>"`` when :attr:`secret`; otherwise
-            ``f"{current} -> {desired}"``.
+            ``f"{current} -> {desired}"``, followed by
+            ``" (the firmware holds {firmware_value})"`` when set.
         """
         if self.secret:
             return "<redacted> -> <redacted>"
+        if self.firmware_value is not None:
+            return f"{self.current} -> {self.desired} (the firmware holds {self.firmware_value})"
         return f"{self.current} -> {self.desired}"
 
     def to_json_dict(self) -> dict[str, object]:
         """Render this change as a JSON-safe, redaction-safe dict.
 
         Returns:
-            A dict with ``current``/``desired`` replaced by the literal
-            string ``"<redacted>"`` when :attr:`secret`.
+            A dict with ``current``/``desired`` (and a set
+            ``firmware_value``) replaced by the literal string
+            ``"<redacted>"`` when :attr:`secret`.
         """
         current: object = "<redacted>" if self.secret else self.current
         desired: object = "<redacted>" if self.secret else self.desired
+        firmware_value: object = (
+            "<redacted>" if self.secret and self.firmware_value is not None else self.firmware_value
+        )
         return {
             "section": self.section,
             "field": self.field,
@@ -139,6 +151,7 @@ class FieldChange:
             "desired": desired,
             "secret": self.secret,
             "reason": self.reason,
+            "firmware_value": firmware_value,
         }
 
     def __repr__(self) -> str:
@@ -153,12 +166,12 @@ class FieldChange:
             return (
                 f"FieldChange(section={self.section!r}, field={self.field!r}, "
                 f"current=<redacted>, desired=<redacted>, secret=True, "
-                f"reason={self.reason!r})"
+                f"reason={self.reason!r}, firmware_value=<redacted>)"
             )
         return (
             f"FieldChange(section={self.section!r}, field={self.field!r}, "
             f"current={self.current!r}, desired={self.desired!r}, secret=False, "
-            f"reason={self.reason!r})"
+            f"reason={self.reason!r}, firmware_value={self.firmware_value!r})"
         )
 
 

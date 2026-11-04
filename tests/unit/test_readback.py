@@ -67,6 +67,39 @@ def test_verify_plan_mismatch_unconfirmed_with_expected_actual(make_live) -> Non
     assert role_result.actual == "CLIENT"
 
 
+@pytest.mark.parametrize(
+    ("read_back", "status"),
+    [
+        pytest.param(900, WriteStatus.CONFIRMED, id="template-value"),
+        pytest.param(3600, WriteStatus.CONFIRMED, id="firmware-value"),
+        pytest.param(1800, WriteStatus.UNCONFIRMED, id="anything-else"),
+    ],
+)
+def test_verify_plan_accepts_the_value_the_firmware_holds_instead(
+    make_live, read_back: int, status: WriteStatus
+) -> None:
+    template = load_template_text("version: 1\nposition:\n  position_broadcast_secs: 900\n")
+    default_primary = detect.LiveChannel(index=0, default_key=True, position_precision=12)
+    live = make_live(
+        template,
+        section_overrides={"position": {"position_broadcast_secs": 7200}},
+        channels=(default_primary,),
+    )
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    live_after = make_live(
+        template, section_overrides={"position": {"position_broadcast_secs": read_back}}
+    )
+    results = verify_plan(plan, live_after, keypair=None)
+
+    result = next(r for r in results if r.field == "position_broadcast_secs")
+    assert result.status == status
+    if read_back == 3600:
+        assert result.message == (
+            "confirmed: the firmware holds 3600 in place of 900, as the plan warned"
+        )
+
+
 def test_verify_plan_is_unmessagable_confirmed(make_live) -> None:
     template = _template().model_copy(update={"is_unmessagable": True})
     live = make_live(template, is_unmessagable=None, security=make_security(empty=True))

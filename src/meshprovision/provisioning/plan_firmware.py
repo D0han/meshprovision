@@ -1,0 +1,281 @@
+"""Values the firmware stores in place of the planned ones.
+
+Some template values are written as asked but held differently once the
+commit reboots the node: the firmware raises telemetry and position
+intervals to a minimum at every boot while the node is on a default
+channel (``NodeDB::NodeDB``). A plain verify would then report a mismatch
+on every run and the node would never converge. :func:`firmware_adjustments`
+predicts each such value from the plan inputs alone, so
+:mod:`~meshprovision.provisioning.plan` can plan the template value, tell
+the operator, and let :mod:`~meshprovision.provisioning.readback` accept
+the firmware's value too. The template is never rewritten.
+
+Pure, like :mod:`~meshprovision.provisioning.plan`: no I/O, no device
+access, and nothing from ``meshtastic``. Firmware references are to
+``meshtastic/firmware`` 2.8.3 (``master`` at 51ac6ea) unless a version is
+named; nothing here was tried on a device.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Final
+
+from meshprovision.firmware import parse_firmware_version
+from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
+
+if TYPE_CHECKING:
+    from meshprovision.provisioning.detect_types import LiveChannel
+    from meshprovision.provisioning.plan_types import PlanInputs
+
+__all__ = [
+    "BOOT_FLOOR_ROUTER_ROLES",
+    "BOOT_PRESET_CHECK_MIN_FIRMWARE",
+    "BOOT_SLOT_CHECK_MIN_FIRMWARE",
+    "POSITION_BROADCAST_FLOOR_ROUTER_SECS",
+    "POSITION_BROADCAST_FLOOR_SECS",
+    "PRESET_CHANNEL_NAMES",
+    "SMART_MINIMUM_INTERVAL_FLOOR_SECS",
+    "TELEMETRY_INTERVAL_FIELDS",
+    "TELEMETRY_INTERVAL_FLOOR_ROUTER_SECS",
+    "TELEMETRY_INTERVAL_FLOOR_SECS",
+    "FirmwareAdjustment",
+    "firmware_adjustments",
+]
+
+TELEMETRY_INTERVAL_FLOOR_SECS: Final[int] = 30 * 60
+"""``min_default_telemetry_interval_secs`` for every role but the routers (``Default.h``)."""
+
+TELEMETRY_INTERVAL_FLOOR_ROUTER_SECS: Final[int] = 12 * 3600
+"""``min_default_telemetry_interval_secs`` for :data:`BOOT_FLOOR_ROUTER_ROLES` (2.7.21+)."""
+
+POSITION_BROADCAST_FLOOR_SECS: Final[int] = 3600
+"""``min_default_broadcast_interval_secs`` for every role but the routers (2.7.18+)."""
+
+POSITION_BROADCAST_FLOOR_ROUTER_SECS: Final[int] = 12 * 3600
+"""``min_default_broadcast_interval_secs`` for :data:`BOOT_FLOOR_ROUTER_ROLES` (2.7.21+)."""
+
+SMART_MINIMUM_INTERVAL_FLOOR_SECS: Final[int] = 5 * 60
+"""``min_default_broadcast_smart_minimum_interval_secs`` (2.7.18+)."""
+
+BOOT_SLOT_CHECK_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
+"""First firmware whose boot telemetry check sees the frequency slot (``loadFromDisk``)."""
+
+BOOT_PRESET_CHECK_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 7, 20)
+"""First firmware whose boot telemetry check needs the preset (``hasDefaultChannel``)."""
+
+BOOT_FLOOR_ROUTER_ROLES: Final[frozenset[str]] = frozenset({"ROUTER", "ROUTER_LATE"})
+"""The roles ``IF_ROUTER`` (``Default.h``) gives the higher floors."""
+
+TELEMETRY_INTERVAL_FIELDS: Final[tuple[str, ...]] = (
+    "device_update_interval",
+    "environment_update_interval",
+    "air_quality_interval",
+    "power_update_interval",
+    "health_update_interval",
+)
+"""The telemetry intervals ``NodeDB::NodeDB`` raises on a default channel."""
+
+PRESET_CHANNEL_NAMES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "SHORT_TURBO": "ShortTurbo",
+        "SHORT_SLOW": "ShortSlow",
+        "SHORT_FAST": "ShortFast",
+        "MEDIUM_SLOW": "MediumSlow",
+        "MEDIUM_FAST": "MediumFast",
+        "MEDIUM_TURBO": "MediumTurbo",
+        "LONG_SLOW": "LongSlow",
+        "LONG_FAST": "LongFast",
+        "LONG_TURBO": "LongTurbo",
+        "LONG_MODERATE": "LongMod",
+        "LITE_FAST": "LiteFast",
+        "LITE_SLOW": "LiteSlow",
+        "NARROW_FAST": "NarrowFast",
+        "NARROW_SLOW": "NarrowSlow",
+        "TINY_FAST": "TinyFast",
+        "TINY_SLOW": "TinySlow",
+    }
+)
+"""Each modem preset's channel name (``DisplayFormatters::getModemPresetDisplayName``)."""
+
+_NO_PRESET_NAME: Final[str] = "Custom"
+"""The channel name the firmware uses when ``use_preset`` is off."""
+
+_UNKNOWN_PRESET_NAME: Final[str] = "Invalid"
+"""The name the firmware gives a preset it has no name for."""
+
+
+@dataclass(frozen=True, slots=True)
+class FirmwareAdjustment:
+    """One planned field the firmware will hold at another value.
+
+    Attributes:
+        section: The template section, for example ``"position"``.
+        field: The field within it.
+        value: What the firmware stores in place of the template value.
+        warning: The plan warning that tells the operator so.
+    """
+
+    section: str
+    field: str
+    value: object
+    warning: PlanWarning
+
+
+def _preset_channel_name(inputs: PlanInputs) -> str:
+    """Return the channel name the firmware compares a default channel's name with.
+
+    Args:
+        inputs: The plan inputs; the template's ``lora`` values win over
+            the live ones, as they will once the plan is applied.
+
+    Returns:
+        The planned preset's name, ``"Custom"`` without a preset.
+    """
+    lora = inputs.template.lora
+    if not lora.use_preset:
+        return _NO_PRESET_NAME
+    preset = lora.modem_preset or inputs.live.value("lora", "modem_preset")
+    return PRESET_CHANNEL_NAMES.get(str(preset), _UNKNOWN_PRESET_NAME)
+
+
+def _is_default_channel(channel: LiveChannel, preset_name: str) -> bool:
+    """Apply ``Channels::isDefaultChannel``: the default key and the preset's name.
+
+    An empty name stands for the preset's name (``Channels::getName``).
+    """
+    return channel.default_key and (channel.name or preset_name) == preset_name
+
+
+def _planned_precision(inputs: PlanInputs, channel: LiveChannel) -> int:
+    """Return a channel's position precision once ``default_channel`` is written.
+
+    Args:
+        inputs: The plan inputs.
+        channel: The channel.
+
+    Returns:
+        The template's ``default_channel.position_precision`` for an
+        enabled primary channel (index 0) when the template sets one,
+        else the channel's own.
+    """
+    desired = inputs.template.default_channel.position_precision
+    if channel.index == 0 and desired is not None and inputs.live.default_channel:
+        return desired
+    return channel.position_precision
+
+
+def _telemetry_floor_applies(inputs: PlanInputs, preset_name: str) -> bool:
+    """Tell whether the boot-time telemetry check sees a default channel.
+
+    From 2.8.0 ``NodeDB::loadFromDisk`` runs ``RadioInterface::clampConfigLora``
+    before the check, so ``Channels::hasDefaultChannel`` needs the preset,
+    no ``override_frequency`` and the preset's frequency slot (``channel_num``
+    0 is taken as that slot; a non-zero one the firmware would count too is
+    not recognised). At 2.7.20 to 2.7.26 the slot is not computed yet at
+    boot (its initial value is "default"), so ``channel_num`` does not
+    matter; before 2.7.20 the check is ``isDefaultChannel`` on the primary
+    alone, with no preset or frequency condition. An unparseable version
+    ignores ``channel_num``: predicting a floor the firmware does not apply
+    only adds a value the verify also accepts.
+    """
+    live = inputs.live
+    lora = inputs.template.lora
+    if not any(_is_default_channel(c, preset_name) for c in live.channels):
+        return False
+    version = parse_firmware_version(live.firmware_version)
+    if version is not None and version < BOOT_PRESET_CHECK_MIN_FIRMWARE:
+        return True
+    if not lora.use_preset or live.value("lora", "override_frequency"):
+        return False
+    if version is None or version < BOOT_SLOT_CHECK_MIN_FIRMWARE:
+        return True
+    channel_num = (
+        lora.channel_num if lora.channel_num is not None else live.value("lora", "channel_num")
+    )
+    return not channel_num
+
+
+def _boot_floors(inputs: PlanInputs) -> dict[tuple[str, str], int]:
+    """Return the minimum the firmware raises each interval to at boot.
+
+    ``NodeDB::NodeDB`` (read in the source at 2.7.26, 2.8.0, 2.8.2 and
+    2.8.3): the telemetry intervals while a channel is a default channel
+    (see :func:`_telemetry_floor_applies`), the position intervals while
+    the first channel that shares a position is a default channel. A
+    channel counts as sharing when its live or its planned precision is
+    non-zero: ``default_channel`` may be written after the commit's reboot.
+
+    Args:
+        inputs: The plan inputs, as the node will be after this plan.
+
+    Returns:
+        ``{(section, field): floor}``; empty when no floor applies.
+    """
+    live = inputs.live
+    preset_name = _preset_channel_name(inputs)
+    router = inputs.template.device.role in BOOT_FLOOR_ROUTER_ROLES
+    floors: dict[tuple[str, str], int] = {}
+
+    if _telemetry_floor_applies(inputs, preset_name):
+        telemetry_floor = (
+            TELEMETRY_INTERVAL_FLOOR_ROUTER_SECS if router else TELEMETRY_INTERVAL_FLOOR_SECS
+        )
+        floors.update(
+            dict.fromkeys(
+                (("telemetry", name) for name in TELEMETRY_INTERVAL_FIELDS), telemetry_floor
+            )
+        )
+
+    sharing = next(
+        (c for c in live.channels if c.position_precision or _planned_precision(inputs, c)),
+        None,
+    )
+    if sharing is not None and _is_default_channel(sharing, preset_name):
+        floors[("position", "position_broadcast_secs")] = (
+            POSITION_BROADCAST_FLOOR_ROUTER_SECS if router else POSITION_BROADCAST_FLOOR_SECS
+        )
+        floors[("position", "broadcast_smart_minimum_interval_secs")] = (
+            SMART_MINIMUM_INTERVAL_FLOOR_SECS
+        )
+    return floors
+
+
+def _boot_floor_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
+    """Return an adjustment per template interval below its boot floor.
+
+    0 is never raised (it means "the firmware's default",
+    ``Default::getConfiguredOrMinimumValue``).
+    """
+    template = inputs.template
+    models = {"telemetry": template.telemetry, "position": template.position}
+    adjustments: list[FirmwareAdjustment] = []
+    for (section, field), floor in _boot_floors(inputs).items():
+        desired = getattr(models[section], field)
+        if desired is None or not 0 < desired < floor:
+            continue
+        warning = PlanWarning(
+            PlanWarningCode.INTERVAL_RAISED_AT_BOOT,
+            f"{section}.{field} {desired} is below the firmware's minimum of {floor} s on a "
+            f"default channel: the node holds {floor} after every boot, and the verify "
+            f"accepts that. Set 0 or at least {floor} in the template to clear this warning.",
+            section=section,
+            field=field,
+        )
+        adjustments.append(FirmwareAdjustment(section, field, floor, warning))
+    return tuple(adjustments)
+
+
+def firmware_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
+    """Predict every template value the node will hold differently after this plan.
+
+    Args:
+        inputs: The plan inputs.
+
+    Returns:
+        The adjustments, sorted by section and field name.
+    """
+    adjustments = _boot_floor_adjustments(inputs)
+    return tuple(sorted(adjustments, key=lambda a: (a.section, a.field)))
