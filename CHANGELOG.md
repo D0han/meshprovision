@@ -662,6 +662,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The plan printout says "Applying this plan reboots the device." for
+  every plan the settings commit applies (the commit always reboots), not
+  only for a region, preset or security change; a plan that only writes
+  `default_channel` applies without a reboot and no longer claims one, nor
+  gets the maintenance warning (`--json`'s per-section `reboots_device` is
+  unchanged). The `region_change_reboots` warning now says what a region
+  or preset change does (the radio moves to other frequencies), and
+  `default_channel_reboot_unknown` that the channel write applies without
+  a reboot (read in the firmware source, not tried on a device); the codes
+  stay. A failed settings commit now says to power-cycle the device and
+  run `mesh provision` again. The docs no longer say the config is re-read
+  after each section write: it is re-read once, after the commit's reboot,
+  and the device has no rollback; they also ask to disconnect other
+  clients, which share the firmware's one settings transaction.
 - `default_channel.position_precision` is refused above 32 at template
   load, and a value above 15 on a primary channel anyone can decrypt (a
   stock LongFast primary) no longer fails verification on every run:

@@ -16,9 +16,10 @@ treated as compromised and regenerated.
 
 ## Write verification
 
-Every config write is re-read and compared to intent; key writes are
-verified by reading the public key back off the device (firmware issue
-#7449). An unconfirmed write leaves the ODS untouched and exits non-zero.
+After the settings transaction commits and the device reboots, every config
+write is re-read and compared to intent; key writes are verified by reading
+the public key back off the device (firmware issue #7449). An unconfirmed
+write leaves the ODS untouched and exits non-zero.
 
 ## The admin-key model
 

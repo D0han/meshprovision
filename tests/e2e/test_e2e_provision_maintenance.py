@@ -17,6 +17,8 @@ from tests.e2e.conftest import FakeMeshInterface, invoke
 from tests.unit.network_fixtures import packet, row
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from click.testing import CliRunner
 
     from tests.e2e.conftest import DeviceBus
@@ -158,6 +160,28 @@ def test_an_already_provisioned_node_with_nothing_to_apply_gets_no_warning(
     again = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
 
     assert again.exit_code == 0, again.output
+    assert _WARNING not in again.stderr
+
+
+def test_a_plan_that_only_writes_the_primary_channel_gets_no_warning(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """A channel write applies without a reboot, so there is no outage to warn about."""
+    bus.use(FakeMeshInterface(_NODE))
+    first = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+    assert first.exit_code == 0, first.output
+    _seed_store(env)
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(
+        write_template(default_channel={"position_precision": 13})
+    )
+
+    again = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert again.exit_code == 0, again.output
+    assert "default_channel.position_precision: 12 -> 13" in again.output
     assert _WARNING not in again.stderr
 
 

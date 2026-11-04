@@ -96,7 +96,8 @@ region's node list is not stored, so a relay byte can resolve differently
 than in `mesh network impact`, which asks for it (and has its own
 `--days`). It asks nothing (no request, no contact), changes
 nothing else (the prompt, `--yes` and the JSON on stdout stay as they
-are), says nothing on `--dry-run`, for an empty plan, without a recent
+are), says nothing on `--dry-run`, for an empty plan or one that only
+writes `default_channel` (which applies without a reboot), without a recent
 store or when the node carries little, and any problem reading the store
 just leaves it out. `mesh admin bootstrap` runs the same pipeline and
 gives the same warning. When the plan writes a new node key and the
@@ -229,14 +230,24 @@ this too. Nothing is written to the device or the database. See
 ["Rotating an admin node's key"](security.md#rotating-an-admin-nodes-key)
 for the out-of-band procedure a genuine rotation requires.
 
-**Transactional guarantee:** after each `writeConfig(section)` the config
-is re-read and compared to intent; key writes are additionally verified
-by reading the public key back off the device. Any unconfirmed write
-marks the node `UNCERTAIN`, leaves the ODS **unchanged**, logs a warning,
-and exits non-zero. A run that stops early lists every section it never
-sent as "Not written". If committing the settings transaction fails,
-each section already sent is reported `unconfirmed` (the device may or
-may not have saved it) and is not re-read. Whenever a `security`
+**Transactional guarantee:** the writes go in one settings transaction;
+after it commits and the device reboots, the run reconnects, re-reads the
+config once and compares every section it sent to intent (a reconnect
+between the commit and a deferred `security` write checks only the node's
+identity); key writes are additionally verified by reading the public key
+back off the device. There is no rollback on the device: a write that
+landed stays. Any unconfirmed write marks the node `UNCERTAIN`, leaves the
+ODS **unchanged**, logs a warning, and exits non-zero. A run that stops
+early lists every section it never sent as "Not written". If committing
+the settings transaction fails, each section already sent is reported
+`unconfirmed` (the device may or may not have saved it) and is not
+re-read: the writes may sit only in the device's memory, where a power
+loss drops them, yet a re-run would read them as current and plan
+nothing. Power-cycle the device (this discards any unsaved settings),
+then run `mesh provision` again. Disconnect other clients, such as the
+phone app, while provisioning: the firmware has one settings
+transaction for every client, so their writes would be committed with
+ours. Whenever a `security`
 section that sets `is_managed` was sent but never confirmed, the run
 warns that the node may now be locked to its admin keys.
 

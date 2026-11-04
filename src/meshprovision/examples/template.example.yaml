@@ -101,9 +101,9 @@ power:
 # The primary (index-0) channel's module settings. Scoped to the primary
 # channel only -- meshprovision has no secondary-channel provisioning
 # story. Written through a different device mechanism than every other
-# section above (a channel write, not a config/module-config write), and
-# its reboot behavior has not been verified against real firmware --
-# `mesh provision --dry-run` surfaces a warning for this section.
+# section above (a channel write, not a config/module-config write). It
+# applies without a reboot (read in the firmware source, not tried on a
+# device); `mesh provision --dry-run` says so in a warning.
 default_channel:
   position_precision: 12 # bits; 0 disables position sharing on this channel
   is_muted: false

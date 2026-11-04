@@ -292,9 +292,10 @@ not relayed/notified).
 Unlike every other block above, this one is **not** part of
 `config`/`module_config`: a device's channels live in a separate
 protobuf container and are written through a different device mechanism
-(a channel write, not a config write). Its reboot behavior has not been
-verified against real firmware, so `mesh provision --dry-run` surfaces an
-explicit warning whenever this section would be written.
+(a channel write, not a config write). It applies without a reboot (read
+in the firmware source at 2.7.26 and 2.8.3, not tried on a device), which
+`mesh provision --dry-run` states in a warning whenever this section would
+be written.
 
 If the device reports no primary channel, or reports it as disabled,
 `default_channel` is left out of the plan with a

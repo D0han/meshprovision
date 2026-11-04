@@ -642,11 +642,15 @@ def run_provision(
                 "This node is not in the database and does not look factory-default; "
                 "it may belong to someone else."
             )
-        note = maintenance_note(
-            change_plan.node_id,
-            ctx.settings.cache_dir / NETWORK_DIRNAME,
-            renumbers=change_plan.key_plan.regenerate
-            and derives_node_id_from_key(live.firmware_version),
+        note = (
+            maintenance_note(
+                change_plan.node_id,
+                ctx.settings.cache_dir / NETWORK_DIRNAME,
+                renumbers=change_plan.key_plan.regenerate
+                and derives_node_id_from_key(live.firmware_version),
+            )
+            if change_plan.reboots_device
+            else None
         )
         if note is not None:
             ctx.warn(note)

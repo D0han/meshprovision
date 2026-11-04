@@ -11,6 +11,7 @@ import dataclasses
 
 import pytest
 
+from meshprovision.config.template import load_template_text
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan import ChangePlan, PlanInputs, build_plan
@@ -131,3 +132,45 @@ def test_plan_to_json_dict_includes_detection_drifts_and_plan(make_live, templat
         {"kind": "name", "field": "short_name", "recorded": "MT00", "observed": "MT01"}
     ]
     assert document["plan"] == plan.to_json_dict()
+
+
+_REBOOT_LINE = "Applying this plan reboots the device."
+
+
+def _plan_from(make_live, keypair, body: str, **live_options: object) -> ChangePlan:
+    template = load_template_text("version: 1\n" + body)
+    live = make_live(template, security=make_security(keypair=keypair), **live_options)
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    return build_plan(
+        PlanInputs(
+            live=live,
+            template=template,
+            db_entry=record,
+            state=detect.NodeState.PROVISIONED,
+            db_public_key=keypair.public,
+        )
+    )
+
+
+def test_a_telemetry_only_plan_says_the_commit_reboots(make_live, keypair) -> None:
+    plan = _plan_from(
+        make_live,
+        keypair,
+        "telemetry:\n  device_update_interval: 3600\n",
+        section_overrides={"telemetry": {"device_update_interval": 7200}},
+    )
+
+    assert [s.section for s in plan.sections] == ["telemetry"]
+    assert _REBOOT_LINE in [line.text for line in describe_plan(plan)]
+
+
+def test_a_default_channel_only_plan_does_not_say_it_reboots(make_live, keypair) -> None:
+    plan = _plan_from(
+        make_live,
+        keypair,
+        "default_channel:\n  position_precision: 13\n",
+        default_channel_overrides={"position_precision": 12},
+    )
+
+    assert [s.section for s in plan.sections] == ["default_channel"]
+    assert _REBOOT_LINE not in [line.text for line in describe_plan(plan)]

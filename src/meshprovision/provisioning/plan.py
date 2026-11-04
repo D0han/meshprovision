@@ -294,8 +294,8 @@ def _plan_config_sections(
 
     Returns:
         The non-empty sections, in :data:`SECTION_ORDER` order, plus a
-        ``"region_change_reboots"`` warning when ``lora.region`` or
-        ``lora.modem_preset`` changed.
+        ``"region_change_reboots"`` warning (the code name predates the
+        wording) when ``lora.region`` or ``lora.modem_preset`` changed.
     """
     live = inputs.live
     template = inputs.template
@@ -316,7 +316,9 @@ def _plan_config_sections(
             warnings.append(
                 PlanWarning(
                     PlanWarningCode.REGION_CHANGE_REBOOTS,
-                    "Changing lora.region/modem_preset reboots the device.",
+                    "Changing lora.region/modem_preset moves the radio to other "
+                    "frequencies or modem settings: the node stops hearing nodes that "
+                    "keep the old ones.",
                     section="lora",
                 )
             )
@@ -454,9 +456,10 @@ def _plan_default_channel_section(
         ``(None, ())`` when nothing differs; otherwise a
         ``"default_channel"`` :class:`SectionChange` (kind
         :attr:`~meshprovision.provisioning.detect.SectionKind.CHANNEL`)
-        plus one warning -- writing this section has not been verified
-        against real firmware as reboot-free, so the operator is told
-        explicitly. When the template sets default_channel fields but the
+        plus one ``default_channel_reboot_unknown`` warning (the code name
+        predates the source check): the write applies without a reboot,
+        read in the firmware source but not tried on a device. When the
+        template sets default_channel fields but the
         device reports no enabled primary channel (``live.default_channel``
         is ``{}``, see
         :attr:`~meshprovision.provisioning.detect.LiveConfig.default_channel`),
@@ -503,8 +506,8 @@ def _plan_default_channel_section(
     )
     warning = PlanWarning(
         PlanWarningCode.DEFAULT_CHANNEL_REBOOT_UNKNOWN,
-        "Writing default_channel (the primary channel's module settings) has not been "
-        "verified against real firmware as reboot-free.",
+        "Writing default_channel (the primary channel's module settings) applies without "
+        "a reboot (read in the firmware source at 2.7.26 and 2.8.3; not tried on a device).",
         section="default_channel",
     )
     return section, (warning,)

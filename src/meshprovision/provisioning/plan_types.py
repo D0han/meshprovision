@@ -191,9 +191,12 @@ class SectionChange:
             includes in :attr:`ChangePlan.sections`, specifically for
             ``"security"`` when only key material (never represented as
             a :class:`FieldChange`) needs writing.
-        reboots_device: Whether writing this section reboots the device.
-            ``True`` for ``"lora"`` when ``region``/``modem_preset``
-            changed, and always for ``"security"``.
+        reboots_device: Whether this section's own write is a rebooting
+            one: always for ``"security"``, and for ``"lora"`` when
+            ``region``/``modem_preset`` changed (firmware 2.7 reboots for
+            those outside a settings transaction; 2.8 applies them live).
+            Shown in ``--json`` only: the settings commit reboots the
+            device anyway (see :attr:`ChangePlan.reboots_device`).
     """
 
     section: str
@@ -522,11 +525,20 @@ class ChangePlan:
     def reboots_device(self) -> bool:
         """Whether executing this plan reboots the device.
 
+        The settings commit always reboots (``AdminModule``
+        ``commit_edit_settings``, 2.7.2 through 2.8.3), and so does a
+        ``security`` write outside one; only a channel write (``set_channel``)
+        applies without a reboot.
+
         Returns:
-            ``True`` if any section in :attr:`sections` has
-            ``reboots_device`` set.
+            ``True`` unless the plan is empty or writes ``default_channel``
+            alone.
         """
-        return any(section.reboots_device for section in self.sections)
+        if self.is_empty:
+            return False
+        return not self.name_change.is_empty or any(
+            section.section != "default_channel" for section in self.sections
+        )
 
     def section(self, name: str) -> SectionChange | None:
         """Look up one section's change by name.

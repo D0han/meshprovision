@@ -98,6 +98,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_RECONNECT_ATTEMPTS",
     "DEFAULT_SETTLE_SECONDS",
+    "FAILED_COMMIT_HINT",
     "ApplyOutcome",
     "DeviceSession",
     "InPlaceSession",
@@ -113,6 +114,13 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
+
+FAILED_COMMIT_HINT: Final[str] = (
+    "power-cycle the device (this discards any unsaved settings), then run "
+    "`mesh provision` again: an uncommitted write may sit only in the device's memory, "
+    "where a re-run would read it as current and plan nothing"
+)
+"""What to do after a failed commit (``AdminModule`` defers every save until it)."""
 
 
 _VERIFY_READBACK_EXCEPTIONS: Final[tuple[type[BaseException], ...]] = (
@@ -652,10 +660,11 @@ def apply_plan(
     opened only when there is something to write in it -- a plan whose
     only sections are ``security``/``default_channel`` writes them
     directly, with no transaction at all. This mirrors the upstream
-    meshtastic CLI: an untransacted ``writeConfig`` implicitly saves and
-    reboots the device after *every* section, not only ones this project
-    models as ``reboots_device``, so wrapping these writes in one
-    transaction means only the commit reboots the device, once.
+    meshtastic CLI: an untransacted ``writeConfig`` implicitly saves and,
+    for most sections, reboots the device (firmware 2.8 applies a ``lora``
+    write and unchanged ``device``/``display``/``power`` reboot fields
+    live), so wrapping these writes in one transaction means only the
+    commit reboots the device, once.
     The transaction is committed exactly once, unconditionally, even when
     a section failed partway through (:attr:`SectionChange.reboots_device`
     plays no role in this any more -- it remains a plan-rendering/display
@@ -670,8 +679,9 @@ def apply_plan(
     post-commit reconnect+identity-check that otherwise exists solely to
     gate the deferred ``security`` write; no new reconnect is invented for
     ``default_channel``. This is the conservative choice given
-    ``writeChannel``'s reboot behavior is unverified against real
-    firmware: if it does trigger an unexpected reboot, every config/module
+    ``writeChannel`` applying without a reboot is read in the firmware
+    source only (``handleSetChannel``), never tried on a device: if it does
+    trigger an unexpected reboot, every config/module
     field has already safely landed (the transaction already committed),
     and the reboot is caught by the same reconnect+identity-check machinery
     ``security`` already relies on. When ``reads_back`` is ``False``
@@ -864,7 +874,7 @@ def apply_plan(
         body_finished = True
     finally:
         # Unconditional once opened, even when a section above failed
-        # partway through: an untransacted write saves (and reboots) after
+        # partway through: an untransacted write saves (and mostly reboots) after
         # every section, so a transaction left open would otherwise leave
         # whatever already reached the device un-persisted.
         if needs_transaction:
@@ -882,7 +892,7 @@ def apply_plan(
             WriteResult(
                 "<verify>",
                 WriteStatus.FAILED,
-                f"Could not commit the settings transaction: {commit_exc}",
+                f"Could not commit the settings transaction: {commit_exc}; {FAILED_COMMIT_HINT}",
             )
         )
         results.extend(_unconfirmed_after_failed_commit(plan, results, attempted))

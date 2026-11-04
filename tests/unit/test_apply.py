@@ -28,6 +28,7 @@ from meshprovision.provisioning import apply as apply_module
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.apply import (
     DEFAULT_SETTLE_SECONDS,
+    FAILED_COMMIT_HINT,
     InPlaceSession,
     WriteResult,
     WriteStatus,
@@ -2430,6 +2431,18 @@ def test_apply_plan_in_place_commit_failure_counts_security_as_attempted(
     assert "commit failed" in security.message
     assert "may or may not have saved it" in security.message
     assert not any(r.status is WriteStatus.CONFIRMED for r in outcome.results)
+
+
+def test_a_failed_commit_says_to_power_cycle_then_run_again(make_live) -> None:
+    plan = _name_only_plan(make_live, desired_short_name="MT01")
+    iface = FakeIfaceForApply()
+    iface.localNode.commit_error = OSError(errno.EIO, "simulated commit failure")
+
+    outcome = apply_plan(plan, InPlaceSession(iface), keypair=generate_keypair())  # type: ignore[arg-type]
+
+    failure = next(r for r in outcome.results if r.section == "<verify>")
+    assert failure.message.endswith(f"; {FAILED_COMMIT_HINT}")
+    assert "power-cycle the device" in FAILED_COMMIT_HINT
 
 
 class _BodyError(Exception):

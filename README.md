@@ -13,10 +13,11 @@ from [loranet.pl](https://loranet.pl) and [lorastats.pl](https://lorastats.pl).
   foreign nodes over Serial, BLE, or TCP, with drift detection and repair:
   a connected node's live configuration is diffed against the template and
   the database, and only what has actually drifted is rewritten.
-- Exact `--dry-run` plans and transactional writes — every config write is
-  re-read and compared to intent, and key writes are additionally
-  verified by reading the public key back off the device, before
-  anything is recorded.
+- Exact `--dry-run` plans and transactional writes — after the settings
+  transaction commits and the device reboots, the config is re-read and
+  compared to intent, and key writes are additionally verified by
+  reading the public key back off the device, before anything is
+  recorded (the device itself has no rollback).
 - X25519 key generation with `cryptography`, plus a layered
   CVE-2025-52464 weak-key audit run against every key already on file.
 - Admin-key custody for 0-3 inbound admin nodes, with bootstrap and
