@@ -51,6 +51,7 @@ class PlanWarningCode(StrEnum):
     INTERVAL_RAISED_AT_BOOT = "interval_raised_at_boot"
     SERIAL_API_DISABLED = "serial_api_disabled"
     REGION_CHANGE_SETS_IGNORE_MQTT = "region_change_sets_ignore_mqtt"
+    ROLE_DEFAULTS_REWRITE = "role_defaults_rewrite"
 
 
 @dataclass(frozen=True, slots=True)

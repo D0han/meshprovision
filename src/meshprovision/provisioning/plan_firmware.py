@@ -38,10 +38,12 @@ __all__ = [
     "BOOT_FLOOR_ROUTER_ROLES",
     "BOOT_PRESET_CHECK_MIN_FIRMWARE",
     "BOOT_SLOT_CHECK_MIN_FIRMWARE",
+    "MAX_INTERVAL_SECS",
     "POSITION_BROADCAST_FLOOR_ROUTER_SECS",
     "POSITION_BROADCAST_FLOOR_SECS",
     "PRESET_CHANNEL_NAMES",
     "REPEATER_REPLACED_MIN_FIRMWARE",
+    "ROLE_DEFAULT_FIELDS",
     "SMART_MINIMUM_INTERVAL_FLOOR_SECS",
     "TELEMETRY_INTERVAL_FIELDS",
     "TELEMETRY_INTERVAL_FLOOR_ROUTER_SECS",
@@ -49,6 +51,7 @@ __all__ = [
     "FirmwareAdjustment",
     "firmware_adjustments",
     "replaced_role_refusal",
+    "role_change_warning",
 ]
 
 TELEMETRY_INTERVAL_FLOOR_SECS: Final[int] = 30 * 60
@@ -109,6 +112,79 @@ PRESET_CHANNEL_NAMES: Final[Mapping[str, str]] = MappingProxyType(
 )
 """Each modem preset's channel name (``DisplayFormatters::getModemPresetDisplayName``)."""
 
+MAX_INTERVAL_SECS: Final[int] = 2**31 - 1
+"""``MAX_INTERVAL`` (``Default.h``): ``INT32_MAX``, the firmware's "never"."""
+
+ROLE_DEFAULT_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        "ROUTER": (
+            "device.rebroadcast_mode",
+            "is_unmessagable",
+            "the position, power, display, telemetry and neighbor_info intervals",
+        ),
+        "ROUTER_LATE": ("is_unmessagable", "telemetry.device_update_interval"),
+        "SENSOR": (
+            "is_unmessagable",
+            "telemetry.device_update_interval",
+            "telemetry.environment_measurement_enabled",
+            "telemetry.environment_update_interval",
+        ),
+        "TRACKER": ("is_unmessagable", "telemetry.device_update_interval"),
+        "LOST_AND_FOUND": (
+            "position.position_broadcast_smart_enabled",
+            "position.position_broadcast_secs",
+        ),
+        "TAK": (
+            "device.node_info_broadcast_secs",
+            "position.position_broadcast_smart_enabled",
+            "position.position_broadcast_secs",
+            "position.position_flags",
+            "telemetry.device_update_interval",
+        ),
+        "TAK_TRACKER": (
+            "is_unmessagable",
+            "device.node_info_broadcast_secs",
+            "the position broadcast settings",
+            "telemetry.device_update_interval",
+        ),
+        "CLIENT_HIDDEN": (
+            "device.rebroadcast_mode",
+            "device.node_info_broadcast_secs",
+            "position.position_broadcast_smart_enabled",
+            "position.position_broadcast_secs",
+            "neighbor_info.update_interval",
+            "the telemetry intervals",
+        ),
+    }
+)
+"""What ``NodeDB::installRoleDefaults`` resets when a role is newly set (2.7.26, 2.8.3)."""
+
+_ROLE_DEFAULT_VALUES: Final[Mapping[str, Mapping[tuple[str, str], object]]] = MappingProxyType(
+    {
+        "ROUTER": {
+            ("device", "rebroadcast_mode"): "CORE_PORTNUMS_ONLY",
+            ("owner", "is_unmessagable"): True,
+        },
+        "ROUTER_LATE": {("owner", "is_unmessagable"): True},
+        "SENSOR": {("owner", "is_unmessagable"): True},
+        "TRACKER": {("owner", "is_unmessagable"): True},
+        "TAK": {("device", "node_info_broadcast_secs"): 24 * 3600},
+        "TAK_TRACKER": {
+            ("owner", "is_unmessagable"): True,
+            ("device", "node_info_broadcast_secs"): 24 * 3600,
+        },
+        "CLIENT_HIDDEN": {
+            ("device", "rebroadcast_mode"): "LOCAL_ONLY",
+            ("device", "node_info_broadcast_secs"): MAX_INTERVAL_SECS,
+        },
+    }
+)
+"""The role defaults that overwrite what this run sends before or with the role.
+
+The owner write goes first and ``device`` carries the role, so these are
+the template values a role change can replace for good on its own run;
+sections written after ``device`` send the template's values again."""
+
 _NO_PRESET_NAME: Final[str] = "Custom"
 """The channel name the firmware uses when ``use_preset`` is off."""
 
@@ -124,13 +200,14 @@ class FirmwareAdjustment:
         section: The template section, for example ``"position"``.
         field: The field within it.
         value: What the firmware stores in place of the template value.
-        warning: The plan warning that tells the operator so.
+        warning: The plan warning that tells the operator so; ``None``
+            when :func:`role_change_warning` covers it.
     """
 
     section: str
     field: str
     value: object
-    warning: PlanWarning
+    warning: PlanWarning | None = None
 
 
 def _preset_channel_name(inputs: PlanInputs) -> str:
@@ -336,6 +413,61 @@ def replaced_role_refusal(inputs: PlanInputs, *, writes_device: bool) -> PlanCon
     )
 
 
+def _changes_role(inputs: PlanInputs) -> bool:
+    """Tell whether the plan sets a role the device does not have yet."""
+    return str(inputs.live.value("device", "role")) != inputs.template.device.role
+
+
+def _role_change_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
+    """Return the role defaults that replace this run's own template values.
+
+    ``AdminModule`` set_config device runs ``installRoleDefaults`` after
+    storing the device section whenever the role changes, overwriting the
+    owner's ``is_unmessagable`` written just before and the device fields
+    sent with the role. Only template-set fields are adjusted.
+    """
+    if not _changes_role(inputs):
+        return ()
+    template = inputs.template
+    values = {
+        ("device", "rebroadcast_mode"): template.device.rebroadcast_mode,
+        ("device", "node_info_broadcast_secs"): template.device.node_info_broadcast_secs,
+        ("owner", "is_unmessagable"): template.is_unmessagable,
+    }
+    defaults = _ROLE_DEFAULT_VALUES.get(template.device.role, {})
+    return tuple(
+        FirmwareAdjustment(section, field, value)
+        for (section, field), value in defaults.items()
+        if values[(section, field)] is not None and values[(section, field)] != value
+    )
+
+
+def role_change_warning(inputs: PlanInputs) -> PlanWarning | None:
+    """Warn that a role change makes the firmware reset settings to the role's defaults.
+
+    Args:
+        inputs: The plan inputs.
+
+    Returns:
+        A ``role_defaults_rewrite`` warning naming what the firmware resets
+        for the new role, when the plan changes the role to one that has
+        defaults (:data:`ROLE_DEFAULT_FIELDS`); else ``None``.
+    """
+    role = inputs.template.device.role
+    if not _changes_role(inputs) or role not in ROLE_DEFAULT_FIELDS:
+        return None
+    return PlanWarning(
+        PlanWarningCode.ROLE_DEFAULTS_REWRITE,
+        f"Changing device.role to {role} makes the firmware reset "
+        f"{', '.join(ROLE_DEFAULT_FIELDS[role])} to the role's defaults. Sections this run "
+        "writes after device keep the template's values, and the verify accepts the role's "
+        "own where the role replaced them; run `mesh provision` again afterwards to set "
+        "the template's values everywhere.",
+        section="device",
+        field="role",
+    )
+
+
 def firmware_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
     """Predict every template value the node will hold differently after this plan.
 
@@ -345,5 +477,9 @@ def firmware_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
     Returns:
         The adjustments, sorted by section and field name.
     """
-    adjustments = (*_boot_floor_adjustments(inputs), *_region_change_adjustments(inputs))
+    adjustments = (
+        *_boot_floor_adjustments(inputs),
+        *_region_change_adjustments(inputs),
+        *_role_change_adjustments(inputs),
+    )
     return tuple(sorted(adjustments, key=lambda a: (a.section, a.field)))

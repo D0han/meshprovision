@@ -95,6 +95,20 @@ values since 2.7.21; older firmware raises only the telemetry intervals,
 to 1800 s, and the verify accepts the template value too); not tried on
 a device.
 
+Changing `device.role` makes the firmware reset some settings to the new
+role's defaults as it stores the role (`installRoleDefaults`): for
+`ROUTER`, `rebroadcast_mode` becomes `CORE_PORTNUMS_ONLY`,
+`is_unmessagable` true, and the position, power, display, telemetry and
+neighbor info intervals their defaults; `ROUTER_LATE`, `SENSOR`,
+`TRACKER`, `TAK`, `TAK_TRACKER`, `LOST_AND_FOUND` and `CLIENT_HIDDEN` reset
+their own lists. The plan names them (`role_defaults_rewrite`). Sections
+written after `device` keep the template's values; for the template's
+`is_unmessagable` (written before) and `rebroadcast_mode` and
+`node_info_broadcast_secs` (written with the role) the verify accepts the
+role's value on that run. Run `mesh provision` once more afterwards: with
+the role in place, it sets the template's values wherever a default
+replaced them.
+
 Followed by module options:
 
 ```yaml

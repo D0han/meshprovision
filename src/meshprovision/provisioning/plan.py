@@ -65,7 +65,11 @@ from meshprovision.firmware import derives_node_id_from_key
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
-from meshprovision.provisioning.plan_firmware import firmware_adjustments, replaced_role_refusal
+from meshprovision.provisioning.plan_firmware import (
+    firmware_adjustments,
+    replaced_role_refusal,
+    role_change_warning,
+)
 from meshprovision.provisioning.plan_security import (
     evaluate_lockdown,
     packet_signature_policy_warning,
@@ -150,11 +154,14 @@ def _db_name_or_live(db_name: str, live_name: str) -> str:
     return db_name
 
 
-def _plan_name_change(inputs: PlanInputs) -> NameChange:
+def _plan_name_change(inputs: PlanInputs, adjusted: Mapping[tuple[str, str], object]) -> NameChange:
     """Resolve the desired ``short_name``/``long_name``/``is_unmessagable`` (step 1).
 
     Args:
         inputs: The plan inputs.
+        adjusted: See :func:`_diff_section`; its ``("owner",
+            "is_unmessagable")`` entry is what a role change makes the
+            firmware set.
 
     Returns:
         The :class:`NameChange`, computed from
@@ -163,8 +170,9 @@ def _plan_name_change(inputs: PlanInputs) -> NameChange:
         live name stripped of surrounding whitespace, else the live
         name. ``is_unmessagable`` is resolved from ``template.is_unmessagable``
         when set, else the live value (template-only -- no CLI override,
-        unlike the names). ``is_licensed`` is always echoed from the live
-        value, preserve-only.
+        unlike the names), else the live value when it already is what
+        the firmware sets in its place on this run. ``is_licensed`` is
+        always echoed from the live value, preserve-only.
     """
     live = inputs.live
     db_entry = inputs.db_entry
@@ -178,8 +186,14 @@ def _plan_name_change(inputs: PlanInputs) -> NameChange:
         desired_long = _db_name_or_live(db_entry.long_name if db_entry else "", live.long_name)
 
     template_is_unmessagable = inputs.template.is_unmessagable
+    firmware_is_unmessagable = adjusted.get(("owner", "is_unmessagable"))
+    already_as_firmware_sets = (
+        firmware_is_unmessagable is not None and live.is_unmessagable == firmware_is_unmessagable
+    )
     desired_is_unmessagable = (
-        template_is_unmessagable if template_is_unmessagable is not None else live.is_unmessagable
+        template_is_unmessagable
+        if template_is_unmessagable is not None and not already_as_firmware_sets
+        else live.is_unmessagable
     )
 
     return NameChange(
@@ -190,6 +204,9 @@ def _plan_name_change(inputs: PlanInputs) -> NameChange:
         current_is_unmessagable=live.is_unmessagable,
         desired_is_unmessagable=desired_is_unmessagable,
         desired_is_licensed=live.is_licensed,
+        firmware_is_unmessagable=(
+            firmware_is_unmessagable if isinstance(firmware_is_unmessagable, bool) else None
+        ),
     )
 
 
@@ -549,11 +566,11 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
     template = inputs.template
     warnings: list[PlanWarning] = []
 
-    name_change = _plan_name_change(inputs)
-    warnings.extend(_name_warnings(name_change))
-
     adjustments = firmware_adjustments(inputs)
     adjusted = {(a.section, a.field): a.value for a in adjustments}
+
+    name_change = _plan_name_change(inputs, adjusted)
+    warnings.extend(_name_warnings(name_change))
 
     config_sections, config_warnings = _plan_config_sections(inputs, adjusted)
     warnings.extend(config_warnings)
@@ -565,7 +582,10 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
 
     module_sections, module_warnings = _plan_module_sections(inputs, adjusted)
     warnings.extend(module_warnings)
-    warnings.extend(a.warning for a in adjustments)
+    warnings.extend(a.warning for a in adjustments if a.warning is not None)
+    role_warning = role_change_warning(inputs)
+    if role_warning is not None:
+        warnings.append(role_warning)
 
     bluetooth_section = _plan_bluetooth_section(inputs)
 

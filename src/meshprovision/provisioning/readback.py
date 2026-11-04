@@ -194,6 +194,15 @@ def _verify_is_unmessagable(
     desired = plan.name_change.desired_is_unmessagable
     if live_after.is_unmessagable == desired:
         return WriteResult("owner", WriteStatus.CONFIRMED, "confirmed", field="is_unmessagable")
+    firmware_value = plan.name_change.firmware_is_unmessagable
+    if firmware_value is not None and live_after.is_unmessagable == firmware_value:
+        return WriteResult(
+            "owner",
+            WriteStatus.CONFIRMED,
+            f"confirmed: the firmware holds {firmware_value} in place of {desired}, as the "
+            "plan warned",
+            field="is_unmessagable",
+        )
     if not read_back:
         return _not_read_back("is_unmessagable")
     return WriteResult(

@@ -662,6 +662,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `mesh provision` run that changes `device.role` no longer ends
+  UNCERTAIN because the firmware reset this run's `is_unmessagable`,
+  `rebroadcast_mode` or `node_info_broadcast_secs` to the new role's
+  defaults (`ROUTER` sets `CORE_PORTNUMS_ONLY` and `is_unmessagable`): the
+  verify accepts the role's value on that run, and the plan warns
+  (`role_defaults_rewrite`), naming what the firmware resets and asking
+  for a second run, which sets the template's values.
 - A template with `lora.region: UNSET`, `device.role: ROUTER_CLIENT`, or
   `device.rebroadcast_mode: NONE` with role
   `ROUTER`/`ROUTER_LATE`/`REPEATER` is refused at load: the firmware

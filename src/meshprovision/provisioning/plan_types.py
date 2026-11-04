@@ -236,6 +236,11 @@ class NameChange:
             resetting it (``Node.setOwner`` defaults ``is_licensed`` to
             ``False`` whenever ``long_name`` is set, which this
             project's owner-phase write always does).
+        firmware_is_unmessagable: The ``is_unmessagable`` the firmware
+            sets in place of :attr:`desired_is_unmessagable` when this
+            plan changes the role (see
+            :mod:`~meshprovision.provisioning.plan_firmware`), which the
+            verify accepts as well; ``None`` otherwise.
     """
 
     current_short_name: str
@@ -245,6 +250,7 @@ class NameChange:
     current_is_unmessagable: bool | None
     desired_is_unmessagable: bool | None
     desired_is_licensed: bool
+    firmware_is_unmessagable: bool | None = None
 
     @property
     def is_empty(self) -> bool:

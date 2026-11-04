@@ -340,3 +340,66 @@ def test_a_region_change_warns_that_the_firmware_sets_ignore_mqtt(
     planned = {c.field for c in lora.changes} if lora is not None else set()
     # The firmware sets true itself on this run; the next run writes false.
     assert ("ignore_mqtt" in planned) is (live_region == "EU_868" and ignore_mqtt == "false")
+
+
+def _role_warning(plan: ChangePlan) -> str | None:
+    return next(
+        (w.message for w in plan.warnings if w.code == PlanWarningCode.ROLE_DEFAULTS_REWRITE),
+        None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "named"),
+    [
+        pytest.param("ROUTER", ("device.rebroadcast_mode", "is_unmessagable"), id="router"),
+        pytest.param("CLIENT_HIDDEN", ("device.node_info_broadcast_secs",), id="client-hidden"),
+    ],
+)
+def test_a_role_change_warns_what_the_role_defaults_reset(role: str, named: tuple[str]) -> None:
+    template = _template(f"device:\n  role: {role}\n")
+
+    message = _role_warning(_plan(template, sections={"device": {"role": "CLIENT"}}))
+
+    assert message is not None
+    assert all(name in message for name in named)
+
+
+def test_no_role_change_no_role_warning() -> None:
+    assert _role_warning(_plan(_template("device:\n  role: ROUTER\n"))) is None
+
+
+def test_a_role_change_accepts_the_role_default_over_this_runs_device_fields() -> None:
+    template = _template("device:\n  role: ROUTER\n  rebroadcast_mode: ALL\n")
+
+    plan = _plan(
+        template, sections={"device": {"role": "CLIENT", "rebroadcast_mode": "LOCAL_ONLY"}}
+    )
+
+    change = _change(plan, "device", "rebroadcast_mode")
+    assert (change.desired, change.firmware_value) == ("ALL", "CORE_PORTNUMS_ONLY")
+    assert _change(plan, "device", "role").firmware_value is None
+
+
+@pytest.mark.parametrize(
+    ("live", "desired", "firmware"),
+    [
+        pytest.param(None, False, True, id="unreported"),
+        pytest.param(True, True, True, id="already-as-the-role-sets"),
+    ],
+)
+def test_a_role_change_to_router_accepts_the_firmwares_is_unmessagable(
+    live: bool | None, desired: bool, firmware: bool | None
+) -> None:
+    template = _template("is_unmessagable: false\ndevice:\n  role: ROUTER\n")
+    live_config = live_config_from_template(
+        template, is_unmessagable=live, section_overrides={"device": {"role": "CLIENT"}}
+    )
+
+    plan = build_plan(
+        PlanInputs(live=live_config, template=template, state=detect.NodeState.PROVISIONED)
+    )
+
+    name = plan.name_change
+    assert (name.desired_is_unmessagable, name.firmware_is_unmessagable) == (desired, firmware)
+    assert name.is_unmessagable_changed is (live is None)

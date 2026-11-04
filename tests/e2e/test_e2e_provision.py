@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
-from meshtastic.protobuf import channel_pb2
+from meshtastic.protobuf import channel_pb2, config_pb2
 
 from meshprovision.crypto import known_bad_keys, weakkeys
 from meshprovision.crypto.keys import KeyPair
@@ -171,6 +171,42 @@ def test_a_position_interval_the_firmware_raises_at_boot_is_accepted_then_left_a
     second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
     assert second.exit_code == 0
     assert "No changes needed." in second.stderr
+
+
+def test_a_role_change_accepts_the_role_defaults_then_the_next_run_restores_the_template(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    """The firmware's ROUTER defaults overwrite this run's values; the second run sets them."""
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(
+        write_template(device={"role": "ROUTER", "rebroadcast_mode": "ALL"}, is_unmessagable=False)
+    )
+    mode = config_pb2.Config.DeviceConfig.RebroadcastMode
+    installed: list[bool] = []
+
+    def _install_router_defaults_once(node: FakeNode) -> None:
+        device = node.localConfig.device
+        if device.role == config_pb2.Config.DeviceConfig.Role.ROUTER and not installed:
+            installed.append(True)
+            device.rebroadcast_mode = mode.CORE_PORTNUMS_ONLY
+            iface.user["isUnmessagable"] = True
+
+    iface = bus.use(FakeMeshInterface("deadbe01", at_boot=_install_router_defaults_once))
+    iface.localNode.localConfig.device.rebroadcast_mode = mode.LOCAL_ONLY
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0
+    assert "Changing device.role to ROUTER makes the firmware reset" in result.stderr
+    assert iface.localNode.localConfig.device.rebroadcast_mode == mode.CORE_PORTNUMS_ONLY
+
+    second = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert second.exit_code == 0
+    assert iface.localNode.localConfig.device.rebroadcast_mode == mode.ALL
+    assert iface.user["isUnmessagable"] is False
 
 
 _PRIMARY_CHANNEL_WARNING = "default_channel not changed: the device reports no enabled primary"
