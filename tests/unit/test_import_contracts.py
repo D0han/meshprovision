@@ -101,6 +101,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("provisioning/plan_types.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/plan_admin_keys.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/plan_security.py", _PURE_PLAN_FORBIDDEN),
+    ("provisioning/plan_firmware.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/discovery.py", ("meshtastic", "meshprovision.provisioning.connection")),
     ("config/settings.py", ("meshprovision.config.template",)),
     ("cli/help_format.py", ("meshprovision",)),
@@ -292,3 +293,23 @@ def test_every_cli_module_is_classified_as_a_command_or_a_helper() -> None:
     found = {path.stem for path in (PACKAGE / "cli").glob("*.py")}
     assert CLI_COMMAND_MODULES.isdisjoint(CLI_HELPER_MODULES)
     assert found == CLI_COMMAND_MODULES | CLI_HELPER_MODULES
+
+
+def test_build_plan_is_called_only_by_mesh_provisions_pipeline() -> None:
+    """``build_plan`` needs a complete local read: never a backup, partial or remote config.
+
+    Its key decisions assume every security field was read off the device
+    (a remote or backup view hides the private key), so a new caller must
+    be a deliberate choice that updates this test.
+    """
+    callers = sorted(
+        path.relative_to(PACKAGE).as_posix()
+        for path in PACKAGE.rglob("*.py")
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Name) and node.func.id == "build_plan")
+            or (isinstance(node.func, ast.Attribute) and node.func.attr == "build_plan")
+        )
+    )
+    assert callers == ["cli/provision.py"]

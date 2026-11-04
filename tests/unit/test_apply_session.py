@@ -211,3 +211,19 @@ def test_reconnecting_session_refresh_closes_the_existing_interface_first() -> N
 
     assert old_iface.closed is True
     assert result is new_iface
+
+
+def test_a_reconnect_waits_out_the_firmwares_reboot_delay() -> None:
+    """One settle before ``refresh()`` and one inside it must outlast the 7 s reboot delay.
+
+    A shorter wait would read the device's RAM before the reboot: values the
+    reboot then loses, and none of its boot-time minimums.
+    """
+    assert apply_session_module.FIRMWARE_REBOOT_DELAY_SECONDS == 7.0
+    assert ReconnectingSession.__dataclass_fields__["settle_seconds"].default == (
+        apply_session_module.DEFAULT_SETTLE_SECONDS
+    )
+    assert (
+        2 * apply_session_module.DEFAULT_SETTLE_SECONDS
+        > apply_session_module.FIRMWARE_REBOOT_DELAY_SECONDS
+    )

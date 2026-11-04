@@ -552,6 +552,11 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
 
     Pure: no I/O, no device access, no clock reads. See the module
     docstring for the full purity contract and the admin-key rule.
+    ``inputs.live`` must be a complete local read from
+    :func:`~meshprovision.provisioning.detect.read_live_config`, never a
+    backup, partial or remote view: the key decisions trust that every
+    security field was read (``tests/unit/test_import_contracts.py``
+    keeps the callers to ``mesh provision``'s pipeline).
 
     Args:
         inputs: Every already-resolved input this plan needs.
@@ -565,6 +570,9 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         AdminKeyRotationRefusedError: If this node's key would regenerate
             or be adopted while it backs an authorized admin key -- see
             :func:`plan_node_keypair`.
+        DetectionError: If the device reported no key material at all
+            although the database holds its key and its region is set --
+            see :func:`plan_node_keypair`.
         LockdownRefusedError: If the template opts into
             ``security.is_managed`` but the safety gates are not
             satisfied (zero admin keys, no private counterpart on hand,

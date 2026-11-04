@@ -7,6 +7,7 @@ import pytest
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.errors import (
     AdminKeyRotationRefusedError,
+    DetectionError,
     LockdownRefusedError,
 )
 from meshprovision.provisioning import detect
@@ -696,3 +697,36 @@ def test_packet_signature_policy_omitted_from_diff_when_template_leaves_it_none(
     security = plan.section("security")
     if security is not None:
         assert all(c.field != "packet_signature_policy" for c in security.changes)
+
+
+@pytest.mark.parametrize(
+    ("force", "region", "outcome"),
+    [
+        pytest.param(False, None, "refused", id="known-node-region-set"),
+        pytest.param(True, None, "forced", id="force-regenerate-key"),
+        pytest.param(False, "UNSET", "missing_key_material", id="factory-reset-region-unset"),
+    ],
+)
+def test_a_read_without_any_key_material_of_a_known_node_is_refused(
+    make_live, template, keypair, force: bool, region: str | None, outcome: str
+) -> None:
+    live = make_live(
+        template,
+        security=make_security(empty=True),
+        section_overrides={"lora": {"region": region}} if region else None,
+    )
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        db_public_key=keypair.public,
+        force_regenerate_key=force,
+    )
+
+    if outcome == "refused":
+        with pytest.raises(DetectionError, match="reported no key material"):
+            build_plan(inputs)
+    else:
+        assert build_plan(inputs).key_plan.regenerate_reason == outcome

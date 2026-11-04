@@ -662,6 +662,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` no longer gives a new key (renumbering it on firmware
+  2.8) to a database node that reports neither a public nor a private key
+  while its region is set, which is an incomplete read or a lockdown build
+  hiding its security settings: it refuses (exit code 5) and suggests a
+  reconnect, or `--force-regenerate-key`. A node whose region is unset
+  still gets one.
 - The plan printout says "Applying this plan reboots the device." for
   every plan the settings commit applies (the commit always reboots), not
   only for a region, preset or security change; a plan that only writes

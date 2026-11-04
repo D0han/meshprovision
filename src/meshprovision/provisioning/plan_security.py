@@ -20,7 +20,11 @@ from __future__ import annotations
 from types import MappingProxyType
 from typing import Final
 
-from meshprovision.errors import AdminKeyRotationRefusedError, LockdownRefusedError
+from meshprovision.errors import (
+    AdminKeyRotationRefusedError,
+    DetectionError,
+    LockdownRefusedError,
+)
 from meshprovision.firmware import parse_firmware_version
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan
@@ -51,6 +55,46 @@ lost and read-back keeps reporting the default -- see
 :func:`_firmware_supports_packet_signature_policy`."""
 
 
+_UNSET_REGION: Final[str] = "UNSET"
+
+
+def _refuse_a_read_without_key_material(inputs: PlanInputs) -> None:
+    """Refuse to regenerate on a read that holds neither key of a known node.
+
+    Stock firmware creates a node's keypair when its region is first set
+    and keeps it, so a node the database holds a key for, with a region,
+    that reports no public *and* no private key is an incomplete read, or
+    a lockdown build serving an unauthenticated client an empty security
+    section (``PhoneAPI``, ``MESHTASTIC_PHONEAPI_ACCESS_CONTROL``). A real
+    key loss (firmware #7449) reports another key, which is adopted. A
+    node whose region is unset (factory reset) has no key yet and is
+    regenerated as before; ``--force-regenerate-key`` never gets here.
+
+    Args:
+        inputs: The plan inputs.
+
+    Raises:
+        DetectionError: In the case above.
+    """
+    live = inputs.live
+    if (
+        inputs.db_public_key is None
+        or live.security.public_key
+        or live.security.private_key
+        or str(live.value("lora", "region")) == _UNSET_REGION
+    ):
+        return
+    raise DetectionError(
+        f"{live.node_id.display} reported no key material, though the database holds its key "
+        "and its region is set: the config read may be incomplete, or the device is a "
+        "lockdown build that hides its security settings.",
+        hint=(
+            "Reconnect and run `mesh provision` again; to give the node a new key anyway, "
+            "pass --force-regenerate-key."
+        ),
+    )
+
+
 def plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanWarning, ...]]:
     """Decide whether to regenerate the node keypair, or adopt the device's (step 7).
 
@@ -65,6 +109,9 @@ def plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanWa
         warning.
 
     Raises:
+        DetectionError: If the device reported no key material at all
+            although the database holds its key (see
+            :func:`_refuse_a_read_without_key_material`).
         AdminKeyRotationRefusedError: If the decision would regenerate or
             adopt this node's key while
             :attr:`~meshprovision.provisioning.plan_types.PlanInputs.node_key_admin_refs`
@@ -96,6 +143,7 @@ def plan_node_keypair(inputs: PlanInputs) -> tuple[bool, str, bool, tuple[PlanWa
             (),
         )
     elif not live_sec.has_public_key or not live_sec.has_private_key:
+        _refuse_a_read_without_key_material(inputs)
         regenerate, reason, adopt, warnings = True, "missing_key_material", False, ()
     elif inputs.node_key_compromised:
         regenerate, reason, adopt, warnings = (

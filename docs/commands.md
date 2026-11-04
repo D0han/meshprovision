@@ -207,6 +207,14 @@ longer answer over USB. There is no override flag; run it over BLE or TCP
 instead, where the plan carries a `serial_api_disabled` warning. `mesh
 admin bootstrap` inherits this.
 
+A node the database holds a key for that reports neither a public nor a
+private key while its region is set is refused (exit code 5, before
+anything is written) instead of given a new key: stock firmware keeps a
+node's key once its region is set, so this is an incomplete read or a
+lockdown build hiding its security settings. Reconnect and run it again,
+or pass `--force-regenerate-key` to give it a new key anyway. A node whose
+region is unset (factory reset) still gets a new key.
+
 A node that firmware >= 2.8 renumbered (it derives the node id from the
 public key, see [Firmware 2.8 and beyond](firmware-compatibility.md)) is
 refused before anything is written (exit code 5, `NodeRenumberedError`,

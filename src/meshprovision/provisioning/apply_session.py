@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 __all__ = [
     "DEFAULT_RECONNECT_ATTEMPTS",
     "DEFAULT_SETTLE_SECONDS",
+    "FIRMWARE_REBOOT_DELAY_SECONDS",
     "ApplyOutcome",
     "DeviceSession",
     "InPlaceSession",
@@ -56,7 +57,16 @@ __all__ = [
 ]
 
 DEFAULT_SETTLE_SECONDS: Final[float] = 5.0
-"""Pause, in seconds, after a reboot-triggering write before re-reading."""
+"""Pause, in seconds, after a reboot-triggering write before re-reading.
+
+Slept once before :meth:`ReconnectingSession.refresh` and once inside it,
+so a reconnect waits twice this: longer than
+:data:`FIRMWARE_REBOOT_DELAY_SECONDS`, or the verify could read the
+device's RAM before the reboot (and before its boot-time minimums)."""
+
+FIRMWARE_REBOOT_DELAY_SECONDS: Final[float] = 7.0
+"""``DEFAULT_REBOOT_SECONDS`` (``configuration.h``, 2.7.2 through 2.8.3): a
+rebooting save or the settings commit reboots the device this long later."""
 
 DEFAULT_RECONNECT_ATTEMPTS: Final[int] = 3
 """Default number of reconnect attempts :class:`ReconnectingSession` makes."""
