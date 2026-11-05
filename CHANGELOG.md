@@ -756,7 +756,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its minimum at every boot, so the verify after the commit's reboot read
   back another value and the node never converged. The value is still
   written as given; the plan warns (`interval_raised_at_boot`), the verify
-  accepts the raised value, and the next run plans no change. The example
+  accepts the raised value, and the next run plans no change. For a
+  device reporting older firmware the plan predicts only what that
+  firmware raises: no position interval before 2.7.18, 1800 s for the
+  router roles too before 2.7.21, and before 2.7.20 the telemetry
+  intervals only while the primary channel is a default one. The example
   template now sets 3600. `--json` plan changes gain `firmware_value`
   (null unless the firmware is expected to hold another value).
 - The hint shown when BLE is unavailable no longer points at the `[ble]`

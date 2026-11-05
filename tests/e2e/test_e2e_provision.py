@@ -159,7 +159,14 @@ def test_a_position_interval_the_firmware_raises_at_boot_is_accepted_then_left_a
     env["MESHPROVISION_TEMPLATE_PATH"] = str(
         write_template(position={"position_broadcast_secs": 900})
     )
-    iface = bus.use(FakeMeshInterface("deadbe01", at_boot=_raise_position_interval_at_boot))
+    # Firmware 2.7.18 and later raise the position interval at boot.
+    iface = bus.use(
+        FakeMeshInterface(
+            "deadbe01",
+            firmware_version="2.7.26.54e0d8d",
+            at_boot=_raise_position_interval_at_boot,
+        )
+    )
     iface.localNode.channels[0].settings.psk = b"\x01"
 
     result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)

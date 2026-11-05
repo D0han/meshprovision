@@ -82,6 +82,7 @@ def test_verify_plan_accepts_the_value_the_firmware_holds_instead(
     default_primary = detect.LiveChannel(index=0, default_key=True, position_precision=12)
     live = make_live(
         template,
+        firmware_version="2.7.26.54e0d8d",
         section_overrides={"position": {"position_broadcast_secs": 7200}},
         channels=(default_primary,),
     )

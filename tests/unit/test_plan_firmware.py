@@ -117,7 +117,9 @@ def test_a_router_gets_the_router_minimums() -> None:
 
     adjustments = plan_firmware.firmware_adjustments(
         PlanInputs(
-            live=live_config_from_template(template, channels=(_DEFAULT_PRIMARY,)),
+            live=live_config_from_template(
+                template, firmware_version=_FIRMWARE_2_8, channels=(_DEFAULT_PRIMARY,)
+            ),
             template=template,
         )
     )
@@ -126,6 +128,43 @@ def test_a_router_gets_the_router_minimums() -> None:
         ("position", "position_broadcast_secs"): 43200,
         ("telemetry", "device_update_interval"): 43200,
     }
+
+
+@pytest.mark.parametrize(
+    ("firmware", "floors"),
+    [
+        pytest.param("2.6.13.0561f2c", {"telemetry": 1800}, id="2.6"),
+        pytest.param("2.7.17.9058cce", {"telemetry": 1800}, id="2.7.17"),
+        pytest.param("2.7.18.fb3bf78", {"telemetry": 1800, "position": 3600}, id="2.7.18"),
+        pytest.param("2.7.20.6658ec2", {"telemetry": 1800, "position": 3600}, id="2.7.20"),
+        pytest.param("2.7.21.1370b23", {"telemetry": 43200, "position": 43200}, id="2.7.21"),
+    ],
+)
+def test_older_firmware_raises_fewer_intervals_at_boot(
+    firmware: str, floors: dict[str, int]
+) -> None:
+    template = _template(
+        "device:\n  role: ROUTER_LATE\nposition:\n  position_broadcast_secs: 900\n"
+        "telemetry:\n  device_update_interval: 600\n"
+    )
+    live = live_config_from_template(
+        template, firmware_version=firmware, channels=(_DEFAULT_PRIMARY,)
+    )
+
+    adjustments = plan_firmware.firmware_adjustments(PlanInputs(live=live, template=template))
+
+    assert {
+        a.section: a.value for a in adjustments if a.field.endswith(("_secs", "_interval"))
+    } == floors
+
+
+def test_older_firmware_checks_only_the_primary_for_the_telemetry_minimum() -> None:
+    template = _template("telemetry:\n  device_update_interval: 600\n")
+    channels = (_PRIVATE_PRIMARY, LiveChannel(index=1, default_key=True))
+
+    warnings = _boot_warnings(_plan(template, channels=channels, firmware="2.6.13.0561f2c"))
+
+    assert warnings == []
 
 
 def test_zero_is_the_firmware_default_and_is_never_raised() -> None:
@@ -233,7 +272,9 @@ def test_the_boot_check_firmware_floors() -> None:
     assert (
         plan_firmware.BOOT_SLOT_CHECK_MIN_FIRMWARE,
         plan_firmware.BOOT_PRESET_CHECK_MIN_FIRMWARE,
-    ) == ((2, 8, 0), (2, 7, 20))
+        plan_firmware.BOOT_POSITION_FLOOR_MIN_FIRMWARE,
+        plan_firmware.BOOT_ROUTER_FLOOR_MIN_FIRMWARE,
+    ) == ((2, 8, 0), (2, 7, 20), (2, 7, 18), (2, 7, 21))
 
 
 def test_the_boot_minimums() -> None:

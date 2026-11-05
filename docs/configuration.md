@@ -90,10 +90,11 @@ means the firmware's default and is never raised. Such a value is still
 written as given, since it holds on any other channel: the plan warns
 (`interval_raised_at_boot`), the verify after the commit's reboot
 accepts the raised value, and the next run plans no change for it. Read
-in the firmware source (the position minimums since 2.7.18, the router
+in the firmware source: the position minimums since 2.7.18, the router
 values since 2.7.21; older firmware raises only the telemetry intervals,
-to 1800 s, and the verify accepts the template value too); not tried on
-a device.
+to 1800 s for every role, and only while the primary channel is a
+default one, and the plan predicts just that for a device reporting such
+a version. Not tried on a device.
 
 Changing `device.role` makes the firmware reset some settings to the new
 role's defaults as it stores the role (`installRoleDefaults`): for

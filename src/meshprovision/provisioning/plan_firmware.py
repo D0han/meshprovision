@@ -40,7 +40,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BOOT_FLOOR_ROUTER_ROLES",
+    "BOOT_POSITION_FLOOR_MIN_FIRMWARE",
     "BOOT_PRESET_CHECK_MIN_FIRMWARE",
+    "BOOT_ROUTER_FLOOR_MIN_FIRMWARE",
     "BOOT_SLOT_CHECK_MIN_FIRMWARE",
     "CUSTOM_MODEM_FIELDS",
     "KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE",
@@ -82,6 +84,12 @@ POSITION_BROADCAST_FLOOR_ROUTER_SECS: Final[int] = 12 * 3600
 
 SMART_MINIMUM_INTERVAL_FLOOR_SECS: Final[int] = 5 * 60
 """``min_default_broadcast_smart_minimum_interval_secs`` (2.7.18+)."""
+
+BOOT_POSITION_FLOOR_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 7, 18)
+"""First firmware raising the position intervals at boot (not at 2.7.17)."""
+
+BOOT_ROUTER_FLOOR_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 7, 21)
+"""First firmware with the higher floors for :data:`BOOT_FLOOR_ROUTER_ROLES` (not at 2.7.20)."""
 
 BOOT_SLOT_CHECK_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
 """First firmware whose boot telemetry check sees the frequency slot (``loadFromDisk``)."""
@@ -372,9 +380,9 @@ def _telemetry_floor_applies(inputs: PlanInputs, preset_name: str) -> bool:
     not recognised). At 2.7.20 to 2.7.26 the slot is not computed yet at
     boot (its initial value is "default"), so ``channel_num`` does not
     matter; before 2.7.20 the check is ``isDefaultChannel`` on the primary
-    alone, with no preset or frequency condition. An unparseable version
-    ignores ``channel_num``: predicting a floor the firmware does not apply
-    only adds a value the verify also accepts.
+    (index 0) alone, with no preset or frequency condition (2.6.13, 2.7.18).
+    An unparseable version ignores ``channel_num``: predicting a floor the
+    firmware does not apply only adds a value the verify also accepts.
     """
     live = inputs.live
     lora = inputs.template.lora
@@ -382,7 +390,7 @@ def _telemetry_floor_applies(inputs: PlanInputs, preset_name: str) -> bool:
         return False
     version = parse_firmware_version(live.firmware_version)
     if version is not None and version < BOOT_PRESET_CHECK_MIN_FIRMWARE:
-        return True
+        return any(c.index == 0 and _is_default_channel(c, preset_name) for c in live.channels)
     if not lora.use_preset or live.value("lora", "override_frequency"):
         return False
     if version is None or version < BOOT_SLOT_CHECK_MIN_FIRMWARE:
@@ -402,6 +410,11 @@ def _boot_floors(inputs: PlanInputs) -> dict[tuple[str, str], int]:
     the first channel that shares a position is a default channel. A
     channel counts as sharing when its live or its planned precision is
     non-zero: ``default_channel`` may be written after the commit's reboot.
+    Older firmware (2.6.13, 2.7.2) raises the telemetry intervals alone,
+    to :data:`TELEMETRY_INTERVAL_FLOOR_SECS` for every role: the position
+    intervals from :data:`BOOT_POSITION_FLOOR_MIN_FIRMWARE`, the router
+    floors from :data:`BOOT_ROUTER_FLOOR_MIN_FIRMWARE`. An unparseable
+    version counts as the newest.
 
     Args:
         inputs: The plan inputs, as the node will be after this plan.
@@ -411,7 +424,10 @@ def _boot_floors(inputs: PlanInputs) -> dict[tuple[str, str], int]:
     """
     live = inputs.live
     preset_name = _preset_channel_name(inputs)
-    router = inputs.template.device.role in BOOT_FLOOR_ROUTER_ROLES
+    version = parse_firmware_version(live.firmware_version)
+    router = inputs.template.device.role in BOOT_FLOOR_ROUTER_ROLES and (
+        version is None or version >= BOOT_ROUTER_FLOOR_MIN_FIRMWARE
+    )
     floors: dict[tuple[str, str], int] = {}
 
     if _telemetry_floor_applies(inputs, preset_name):
@@ -424,6 +440,8 @@ def _boot_floors(inputs: PlanInputs) -> dict[tuple[str, str], int]:
             )
         )
 
+    if version is not None and version < BOOT_POSITION_FLOOR_MIN_FIRMWARE:
+        return floors
     sharing = next(
         (c for c in live.channels if c.position_precision or _planned_precision(inputs, c)),
         None,
