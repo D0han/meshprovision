@@ -723,7 +723,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`role_defaults_rewrite`), naming what the firmware resets (for `ROUTER`
   also the power section's sleep and wake intervals and the display's
   `screen_on_secs`; for `CLIENT_HIDDEN` `LOCAL_ONLY` and the firmware's
-  "never" for its intervals) and asking for a second run, which sets the
+  "never" for its intervals, 2147483647, or 4294967295 before firmware
+  2.7.0) and asking for a second run, which sets the
   template's values. A template with role `CLIENT_HIDDEN` loads with a
   warning (`role_never_announces`): such a node never sends the periodic
   node info broadcast, so other nodes may not learn its public key for a

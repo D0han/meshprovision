@@ -44,7 +44,9 @@ __all__ = [
     "BOOT_SLOT_CHECK_MIN_FIRMWARE",
     "CUSTOM_MODEM_FIELDS",
     "KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE",
+    "MAX_INTERVAL_MIN_FIRMWARE",
     "MAX_INTERVAL_SECS",
+    "OLD_MAX_INTERVAL_SECS",
     "POSITION_BROADCAST_FLOOR_ROUTER_SECS",
     "POSITION_BROADCAST_FLOOR_SECS",
     "POSITION_PRECISION_CLAMP_MIN_FIRMWARE",
@@ -141,6 +143,16 @@ POSITION_PRECISION_CLAMP_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
 MAX_INTERVAL_SECS: Final[int] = 2**31 - 1
 """``MAX_INTERVAL`` (``Default.h``): ``INT32_MAX``, the firmware's "never"."""
 
+OLD_MAX_INTERVAL_SECS: Final[int] = 2**32 - 1
+"""``UINT32_MAX``, the firmware's "never" before :data:`MAX_INTERVAL_MIN_FIRMWARE`."""
+
+MAX_INTERVAL_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 7, 0)
+"""First firmware storing :data:`MAX_INTERVAL_SECS` for "never" (``installRoleDefaults``).
+
+2.6.13 stores :data:`OLD_MAX_INTERVAL_SECS`, and so does the first 2.7.0
+build (195b7cc); the later one (705515a) and 2.7.1 on store
+:data:`MAX_INTERVAL_SECS`, which a 2.7.0 device is taken to do."""
+
 ROLE_DEFAULT_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
     {
         "ROUTER": (
@@ -232,7 +244,9 @@ _ROLE_DEFAULT_VALUES: Final[Mapping[str, Mapping[tuple[str, str], object]]] = Ma
 
 The owner write goes first and ``device`` carries the role, so these are
 the template values a role change can replace for good on its own run;
-sections written after ``device`` send the template's values again."""
+sections written after ``device`` send the template's values again.
+:data:`MAX_INTERVAL_SECS` stands for the firmware's "never", which is
+:data:`OLD_MAX_INTERVAL_SECS` before :data:`MAX_INTERVAL_MIN_FIRMWARE`."""
 
 REGION_POWER_LIMITS_DBM: Final[Mapping[str, int]] = MappingProxyType(
     {
@@ -685,6 +699,19 @@ def _changes_role(inputs: PlanInputs) -> bool:
     return str(inputs.live.value("device", "role")) != inputs.template.device.role
 
 
+def _never_secs(inputs: PlanInputs) -> int:
+    """Return the value the device's firmware stores for "never".
+
+    :data:`OLD_MAX_INTERVAL_SECS` for a parseable version below
+    :data:`MAX_INTERVAL_MIN_FIRMWARE` (seen in the firmware simulator at
+    2.6.13), else :data:`MAX_INTERVAL_SECS`.
+    """
+    version = parse_firmware_version(inputs.live.firmware_version)
+    if version is not None and version < MAX_INTERVAL_MIN_FIRMWARE:
+        return OLD_MAX_INTERVAL_SECS
+    return MAX_INTERVAL_SECS
+
+
 def _role_change_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
     """Return the role defaults that replace this run's own template values.
 
@@ -701,7 +728,11 @@ def _role_change_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ..
         ("device", "node_info_broadcast_secs"): template.device.node_info_broadcast_secs,
         ("owner", "is_unmessagable"): template.is_unmessagable,
     }
-    defaults = _ROLE_DEFAULT_VALUES.get(template.device.role, {})
+    never = _never_secs(inputs)
+    defaults = {
+        key: never if value == MAX_INTERVAL_SECS else value
+        for key, value in _ROLE_DEFAULT_VALUES.get(template.device.role, {}).items()
+    }
     return tuple(
         FirmwareAdjustment(section, field, value)
         for (section, field), value in defaults.items()

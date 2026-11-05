@@ -291,6 +291,11 @@ def _flat(text: str) -> str:
         ),
         pytest.param(f'"never" ({plan_firmware.MAX_INTERVAL_SECS} s)', id="never"),
         pytest.param(
+            f"{plan_firmware.OLD_MAX_INTERVAL_SECS} s before firmware "
+            + ".".join(str(part) for part in plan_firmware.MAX_INTERVAL_MIN_FIRMWARE),
+            id="old-never",
+        ),
+        pytest.param(
             f"({plan_firmware.REGION_POWER_LIMITS_DBM['EU_868']} dBm for `EU_868`)",
             id="eu-power-limit",
         ),
@@ -618,6 +623,36 @@ def test_a_repeater_role_change_where_the_firmware_keeps_it_accepts_the_role_def
     message = _role_warning(plan)
     assert message is not None
     assert "display.screen_on_secs" in message
+
+
+@pytest.mark.parametrize(
+    ("firmware", "never"),
+    [
+        pytest.param("2.6.13.0561f2c", 2**32 - 1, id="2.6"),
+        pytest.param("2.7.0.705515a", 2**31 - 1, id="2.7.0"),
+        pytest.param(_FIRMWARE_2_8, 2**31 - 1, id="2.8"),
+        pytest.param("", 2**31 - 1, id="unknown"),
+    ],
+)
+def test_a_hidden_role_change_accepts_each_firmwares_never(firmware: str, never: int) -> None:
+    template = _template("device:\n  role: CLIENT_HIDDEN\n  node_info_broadcast_secs: 21600\n")
+
+    plan = _plan(
+        template,
+        sections={"device": {"role": "CLIENT", "node_info_broadcast_secs": 10800}},
+        firmware=firmware,
+    )
+
+    change = _change(plan, "device", "node_info_broadcast_secs")
+    assert (change.desired, change.firmware_value) == (21600, never)
+
+
+def test_the_never_values_and_their_firmware_floor() -> None:
+    assert (
+        plan_firmware.MAX_INTERVAL_SECS,
+        plan_firmware.OLD_MAX_INTERVAL_SECS,
+        plan_firmware.MAX_INTERVAL_MIN_FIRMWARE,
+    ) == (2147483647, 4294967295, (2, 7, 0))
 
 
 _PUBLIC_PRIMARY = LiveChannel(index=0, default_key=True, position_precision=12, public_key=True)

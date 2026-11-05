@@ -106,11 +106,12 @@ and the paxcounter interval their defaults (power-saving builds also turn
 `is_power_saving` on); for `CLIENT_HIDDEN`, `rebroadcast_mode` becomes
 `LOCAL_ONLY` and the node info, position and neighbor info intervals and
 the telemetry device, environment, air quality and health intervals the
-firmware's "never" (2147483647 s); for `REPEATER` (on firmware before
-2.7.11, which keeps that role), `rebroadcast_mode` becomes
-`CORE_PORTNUMS_ONLY`, `is_unmessagable` true and the display's
-`screen_on_secs` 1; `ROUTER_LATE`, `SENSOR`, `TRACKER`, `TAK`,
-`TAK_TRACKER` and `LOST_AND_FOUND` reset their own lists. The
+firmware's "never" (2147483647 s), 4294967295 s before firmware 2.7.0;
+for `REPEATER` (on firmware before 2.7.11, which keeps that role),
+`rebroadcast_mode` becomes `CORE_PORTNUMS_ONLY`, `is_unmessagable` true
+and the display's `screen_on_secs` 1; `ROUTER_LATE`, `SENSOR`,
+`TRACKER`, `TAK`, `TAK_TRACKER` and `LOST_AND_FOUND` reset their own
+lists. The
 plan names them (`role_defaults_rewrite`). Sections written after
 `device` keep the template's values; for the template's
 `is_unmessagable` (written before) and `rebroadcast_mode` and
