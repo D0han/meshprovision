@@ -319,7 +319,7 @@ unless a range is given.
 | Field | Value | Meaning |
 |---|---|---|
 | `role` | role name, default `CLIENT`; not `ROUTER_CLIENT`, and `REPEATER` only on firmware before 2.7.11 (later firmware stores `CLIENT` in their place; `mesh provision` refuses to write it) | Device role |
-| `rebroadcast_mode` | rebroadcast mode name; not `NONE` with role `ROUTER`, `ROUTER_LATE` or `REPEATER` (the firmware relays `ALL` for them; for `ROUTER_LATE` from firmware 2.7.20) | Which packets the node relays |
+| `rebroadcast_mode` | rebroadcast mode name; not `NONE` with role `ROUTER`, `ROUTER_LATE` or `REPEATER` (the firmware relays `ALL` for them; for `ROUTER_LATE` from firmware 2.7.20), and `KNOWN_ONLY` only on firmware before 2.8.0 (later firmware then ignores every admin message from the connected client, so the node could no longer be configured over USB, BLE or TCP; `mesh provision` refuses to write it, and warns on older firmware) | Which packets the node relays |
 | `node_info_broadcast_secs` | seconds, at least 3600 | Node info broadcast interval |
 | `button_gpio` | GPIO number | User button pin override |
 | `buzzer_gpio` | GPIO number | Buzzer pin override |

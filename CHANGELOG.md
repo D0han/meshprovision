@@ -662,6 +662,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` refuses to write `device.rebroadcast_mode: KNOWN_ONLY`
+  (exit code 5, before anything is written) unless the device reports
+  firmware older than 2.8.0. In that mode firmware 2.8 drops every packet
+  from a sender it has no user record for, which includes the connected
+  client itself: the verify could not read the node back, and the node
+  could no longer be configured over USB, BLE or TCP. On older firmware, which still takes
+  the client's admin messages, the plan warns (`known_only_ignores_client`)
+  to change the mode before upgrading.
 - `mesh provision` no longer gives a new key (renumbering it on firmware
   2.8) to a database node that reports neither a public nor a private key
   while its region is set, which is an incomplete read or a lockdown build

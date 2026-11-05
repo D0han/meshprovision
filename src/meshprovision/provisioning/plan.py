@@ -67,6 +67,8 @@ from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
 from meshprovision.provisioning.plan_firmware import (
     firmware_adjustments,
+    known_only_warning,
+    local_admin_refusal,
     replaced_role_refusal,
     role_change_warning,
 )
@@ -579,7 +581,10 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
             or a key fails the weak-key audit).
         PlanConflictError: If the plan would write role ``REPEATER`` to
             firmware that replaces it (see
-            :func:`~meshprovision.provisioning.plan_firmware.replaced_role_refusal`).
+            :func:`~meshprovision.provisioning.plan_firmware.replaced_role_refusal`),
+            or ``rebroadcast_mode`` ``KNOWN_ONLY`` to firmware that then
+            ignores the connected client (see
+            :func:`~meshprovision.provisioning.plan_firmware.local_admin_refusal`).
     """
     live = inputs.live
     template = inputs.template
@@ -593,18 +598,20 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
 
     config_sections, config_warnings = _plan_config_sections(inputs, adjusted)
     warnings.extend(config_warnings)
-    role_refusal = replaced_role_refusal(
-        inputs, writes_device=any(s.section == "device" for s in config_sections)
-    )
-    if role_refusal is not None:
-        raise role_refusal
+    writes_device = any(s.section == "device" for s in config_sections)
+    for refusal in (
+        replaced_role_refusal(inputs, writes_device=writes_device),
+        local_admin_refusal(inputs, writes_device=writes_device),
+    ):
+        if refusal is not None:
+            raise refusal
 
     module_sections, module_warnings = _plan_module_sections(inputs, adjusted)
     warnings.extend(module_warnings)
     warnings.extend(a.warning for a in adjustments if a.warning is not None)
-    role_warning = role_change_warning(inputs)
-    if role_warning is not None:
-        warnings.append(role_warning)
+    warnings.extend(
+        w for w in (role_change_warning(inputs), known_only_warning(inputs)) if w is not None
+    )
 
     bluetooth_section = _plan_bluetooth_section(inputs)
 

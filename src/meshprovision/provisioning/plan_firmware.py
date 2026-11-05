@@ -11,7 +11,8 @@ predicts each such value from the plan inputs alone, so
 the operator, and let :mod:`~meshprovision.provisioning.readback` accept
 the firmware's value too. The template is never rewritten. A role the
 firmware replaces on every write is refused instead
-(:func:`replaced_role_refusal`).
+(:func:`replaced_role_refusal`), and so is a rebroadcast mode in which
+the firmware stops listening to this client (:func:`local_admin_refusal`).
 
 Pure, like :mod:`~meshprovision.provisioning.plan`: no I/O, no device
 access, and nothing from ``meshtastic``. Firmware references are to
@@ -38,6 +39,7 @@ __all__ = [
     "BOOT_FLOOR_ROUTER_ROLES",
     "BOOT_PRESET_CHECK_MIN_FIRMWARE",
     "BOOT_SLOT_CHECK_MIN_FIRMWARE",
+    "KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE",
     "MAX_INTERVAL_SECS",
     "POSITION_BROADCAST_FLOOR_ROUTER_SECS",
     "POSITION_BROADCAST_FLOOR_SECS",
@@ -52,6 +54,8 @@ __all__ = [
     "TELEMETRY_INTERVAL_FLOOR_SECS",
     "FirmwareAdjustment",
     "firmware_adjustments",
+    "known_only_warning",
+    "local_admin_refusal",
     "replaced_role_refusal",
     "role_change_warning",
 ]
@@ -79,6 +83,11 @@ BOOT_PRESET_CHECK_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 7, 20)
 
 REPEATER_REPLACED_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 7, 11)
 """First firmware storing ``CLIENT`` for a ``REPEATER`` role (``AdminModule``; not at 2.7.10)."""
+
+KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
+"""First firmware that ignores the connected client under ``KNOWN_ONLY`` (``Router``)."""
+
+_KNOWN_ONLY: Final[str] = "KNOWN_ONLY"
 
 BOOT_FLOOR_ROUTER_ROLES: Final[frozenset[str]] = frozenset({"ROUTER", "ROUTER_LATE"})
 """The roles ``IF_ROUTER`` (``Default.h``) gives the higher floors."""
@@ -449,6 +458,77 @@ def replaced_role_refusal(inputs: PlanInputs, *, writes_device: bool) -> PlanCon
         "the write could never be verified.",
         field="device.role",
         hint="Use ROUTER, or CLIENT, for this node in the template.",
+    )
+
+
+def local_admin_refusal(inputs: PlanInputs, *, writes_device: bool) -> PlanConflictError | None:
+    """Refuse writing ``rebroadcast_mode: KNOWN_ONLY`` to firmware that then ignores this client.
+
+    Under ``KNOWN_ONLY`` the firmware drops every packet whose sender has
+    no user record in its node database (``Router`` ``perhapsDecode``),
+    and what the connected client sends comes from node 0, which has
+    none. From :data:`KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE` on such a
+    packet is dropped whole (``dispatchReceived``, 2.8.0 through 2.8.3;
+    seen in the firmware simulator at 2.8.3): once the mode is stored, the
+    node takes no admin message over USB, BLE or TCP, so the verify could
+    not read the node back and no later run can undo it. 2.7.2 through
+    2.7.26 make the same check but still hand the client's packet to the
+    modules (the simulator at 2.6.13 and 2.7.26 still answers). An
+    unparseable firmware version is refused too.
+
+    Args:
+        inputs: The plan inputs.
+        writes_device: Whether the plan writes the ``device`` section.
+
+    Returns:
+        The refusal, or ``None``.
+    """
+    if not writes_device or inputs.template.device.rebroadcast_mode != _KNOWN_ONLY:
+        return None
+    version = parse_firmware_version(inputs.live.firmware_version)
+    if version is not None and version < KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE:
+        return None
+    floor = ".".join(str(part) for part in KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE)
+    return PlanConflictError(
+        f"device.rebroadcast_mode KNOWN_ONLY: firmware {floor} and later then ignore every "
+        "admin message from the connected client (this device reports "
+        f"{inputs.live.firmware_version or 'no firmware version'}), so the node could no "
+        "longer be configured or verified over USB, BLE or TCP.",
+        field="device.rebroadcast_mode",
+        hint="Use another rebroadcast_mode, such as LOCAL_ONLY, for this node in the template.",
+    )
+
+
+def known_only_warning(inputs: PlanInputs) -> PlanWarning | None:
+    """Warn that ``KNOWN_ONLY`` locks this client out once the firmware is upgraded.
+
+    Firmware older than :data:`KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE`
+    keeps taking admin messages in that mode; newer firmware does not
+    (see :func:`local_admin_refusal`).
+
+    Args:
+        inputs: The plan inputs.
+
+    Returns:
+        A ``known_only_ignores_client`` warning when the template sets
+        ``KNOWN_ONLY`` and the device reports an older, parseable firmware
+        version; else ``None``.
+    """
+    version = parse_firmware_version(inputs.live.firmware_version)
+    if (
+        inputs.template.device.rebroadcast_mode != _KNOWN_ONLY
+        or version is None
+        or version >= KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE
+    ):
+        return None
+    floor = ".".join(str(part) for part in KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE)
+    return PlanWarning(
+        PlanWarningCode.KNOWN_ONLY_IGNORES_CLIENT,
+        f"device.rebroadcast_mode KNOWN_ONLY: firmware {floor} and later ignore every admin "
+        "message from the connected client in this mode. Set another mode before upgrading "
+        "this node's firmware, or it can no longer be configured over USB, BLE or TCP.",
+        section="device",
+        field="rebroadcast_mode",
     )
 
 

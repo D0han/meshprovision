@@ -53,6 +53,7 @@ class PlanWarningCode(StrEnum):
     REGION_CHANGE_SETS_IGNORE_MQTT = "region_change_sets_ignore_mqtt"
     ROLE_DEFAULTS_REWRITE = "role_defaults_rewrite"
     POSITION_PRECISION_CAPPED = "position_precision_capped"
+    KNOWN_ONLY_IGNORES_CLIENT = "known_only_ignores_client"
 
 
 @dataclass(frozen=True, slots=True)

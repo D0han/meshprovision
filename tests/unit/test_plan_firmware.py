@@ -250,6 +250,10 @@ def test_the_repeater_firmware_floor() -> None:
     assert plan_firmware.REPEATER_REPLACED_MIN_FIRMWARE == (2, 7, 11)
 
 
+def test_the_known_only_firmware_floor() -> None:
+    assert plan_firmware.KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE == (2, 8, 0)
+
+
 def _flat(text: str) -> str:
     return " ".join(text.split())
 
@@ -276,6 +280,13 @@ def _flat(text: str) -> str:
             "`REPEATER` only on firmware before "
             + ".".join(str(part) for part in plan_firmware.REPEATER_REPLACED_MIN_FIRMWARE),
             id="repeater",
+        ),
+        pytest.param(
+            "`KNOWN_ONLY` only on firmware before "
+            + ".".join(
+                str(part) for part in plan_firmware.KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE
+            ),
+            id="known-only",
         ),
         pytest.param(
             f"keeps at most {plan_firmware.PUBLIC_CHANNEL_MAX_POSITION_PRECISION} bits "
@@ -322,6 +333,63 @@ def test_a_repeater_role_already_on_the_device_is_not_written_and_not_refused() 
     plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
 
     assert plan.section("device") is None
+
+
+def _known_only_warned(plan: ChangePlan) -> bool:
+    return PlanWarningCode.KNOWN_ONLY_IGNORES_CLIENT in [w.code for w in plan.warnings]
+
+
+@pytest.mark.parametrize(
+    ("firmware", "refused"),
+    [
+        pytest.param("2.7.26.54e0d8d", False, id="older"),
+        pytest.param("2.8.0.47db0e3", True, id="first-dropping"),
+        pytest.param("2.8.3.51ac6ea", True, id="newer"),
+        pytest.param("", True, id="unknown"),
+    ],
+)
+def test_a_known_only_mode_is_refused_where_the_firmware_ignores_the_client(
+    firmware: str, refused: bool
+) -> None:
+    template = _template("device:\n  rebroadcast_mode: KNOWN_ONLY\n")
+    live = live_config_from_template(
+        template,
+        firmware_version=firmware,
+        section_overrides={"device": {"rebroadcast_mode": "ALL"}},
+    )
+    inputs = PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED)
+
+    if refused:
+        with pytest.raises(PlanConflictError, match="KNOWN_ONLY") as exc_info:
+            build_plan(inputs)
+        assert exc_info.value.field == "device.rebroadcast_mode"
+    else:
+        plan = build_plan(inputs)
+        assert _change(plan, "device", "rebroadcast_mode").desired == "KNOWN_ONLY"
+        assert _known_only_warned(plan)
+
+
+def test_a_known_only_mode_already_on_older_firmware_is_not_written_but_warned() -> None:
+    template = _template("device:\n  rebroadcast_mode: KNOWN_ONLY\n")
+    live = live_config_from_template(template, firmware_version="2.7.26.54e0d8d")
+
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    assert plan.section("device") is None
+    assert _known_only_warned(plan)
+
+
+def test_another_rebroadcast_mode_gets_no_known_only_warning() -> None:
+    template = _template("device:\n  rebroadcast_mode: LOCAL_ONLY\n")
+    live = live_config_from_template(
+        template,
+        firmware_version="2.7.26.54e0d8d",
+        section_overrides={"device": {"rebroadcast_mode": "ALL"}},
+    )
+
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    assert not _known_only_warned(plan)
 
 
 @pytest.mark.parametrize(
