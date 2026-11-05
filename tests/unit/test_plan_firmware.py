@@ -321,8 +321,9 @@ def test_a_repeater_role_is_refused_where_the_firmware_replaces_it(
     inputs = PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED)
 
     if refused:
-        with pytest.raises(PlanConflictError, match="store CLIENT in its place"):
+        with pytest.raises(PlanConflictError, match=r"store_forward\.is_server") as exc_info:
             build_plan(inputs)
+        assert exc_info.value.field == "device.role"
     else:
         assert _change(build_plan(inputs), "device", "role").desired == "REPEATER"
 

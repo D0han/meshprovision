@@ -716,7 +716,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in place of the others, so such a write failed verification on every
   run. `mesh provision` also refuses to write role `REPEATER` (exit code
   5, before anything is written) unless the device reports firmware older
-  than 2.7.11, which still keeps it. A region change whose new region has
+  than 2.7.11, which still keeps it. Both messages say that the firmware
+  also turns `store_forward.is_server` on when it replaces either role
+  and store and forward is enabled. A region change whose new region has
   a duty-cycle limit makes the firmware set `lora.ignore_mqtt`; the plan
   now says so (`region_change_sets_ignore_mqtt`) when the template wants
   `false`.

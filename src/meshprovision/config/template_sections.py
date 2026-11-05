@@ -64,7 +64,9 @@ MAX_POSITION_PRECISION: Final[int] = 32
 """Most bits a position has (``latitude_i``/``longitude_i``): 32 means exact."""
 
 _REPLACED_ROLE: Final[str] = "ROUTER_CLIENT"
-"""The role every 2.7 and 2.8 firmware replaces with CLIENT on write (``AdminModule``)."""
+"""The role every 2.7 and 2.8 firmware replaces with CLIENT on write (``AdminModule``).
+
+It also makes a store-and-forward client a server as it does."""
 
 _RELAYING_ROLES: Final[frozenset[str]] = frozenset({"ROUTER", "ROUTER_LATE", "REPEATER"})
 """The roles the firmware never lets relay nothing (``rebroadcast_mode: NONE`` becomes ``ALL``)."""
@@ -168,7 +170,8 @@ class DeviceSection(BaseModel):
         role = _canonicalize_enum_field(value, table=role_table(), field="device.role")
         if role == _REPLACED_ROLE:
             raise TemplateValidationError(
-                f"device.role {role} is deprecated: the firmware stores CLIENT in its place.",
+                f"device.role {role} is deprecated: the firmware stores CLIENT in its place, "
+                "and turns store_forward.is_server on when store and forward is enabled.",
                 field="device.role",
                 hint="Use CLIENT, or ROUTER for a node that relays for others.",
             )

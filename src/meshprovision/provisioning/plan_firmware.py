@@ -451,7 +451,8 @@ def replaced_role_refusal(inputs: PlanInputs, *, writes_device: bool) -> PlanCon
     Every ``device`` write sends the role, and firmware
     :data:`REPEATER_REPLACED_MIN_FIRMWARE` and later replace ``REPEATER``
     on each one (``AdminModule`` set_config device, 2.7.11 through 2.8.3),
-    so the write could never be verified. An unparseable firmware version
+    making a store-and-forward client a server as they do, so the write
+    could never be verified. An unparseable firmware version
     is refused too: only a version known to be older keeps the role.
 
     Args:
@@ -468,7 +469,8 @@ def replaced_role_refusal(inputs: PlanInputs, *, writes_device: bool) -> PlanCon
         return None
     floor = ".".join(str(part) for part in REPEATER_REPLACED_MIN_FIRMWARE)
     return PlanConflictError(
-        f"device.role REPEATER: firmware {floor} and later store CLIENT in its place "
+        f"device.role REPEATER: firmware {floor} and later store CLIENT in its place, and "
+        "turn store_forward.is_server on when store and forward is enabled "
         f"(this device reports {inputs.live.firmware_version or 'no firmware version'}), so "
         "the write could never be verified.",
         field="device.role",

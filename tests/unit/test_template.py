@@ -923,6 +923,7 @@ def test_router_client_is_refused_as_a_role_the_firmware_replaces() -> None:
 
     assert exc_info.value.field == "device.role"
     assert "stores CLIENT in its place" in str(exc_info.value)
+    assert "store_forward.is_server" in str(exc_info.value)
 
 
 @pytest.mark.parametrize("role", ["ROUTER", "ROUTER_LATE", "REPEATER"])
