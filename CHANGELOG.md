@@ -662,6 +662,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` refuses a plan that switches `lora.use_preset` to
+  `false` on a node holding 0 for its bandwidth, spread factor or coding
+  rate, as a node on a preset does (exit code 5, before anything is
+  written). The template cannot set those, so the `lora` write sent the
+  node's 0s, which the firmware uses or replaces with a default of its
+  own: a `lora` section with bandwidth 0 crashed firmware 2.6 and 2.7 in
+  the simulator.
 - A template `lora.tx_power` above the region's limit (27 dBm for
   `EU_868`), or 0, no longer fails verification on every run: the firmware
   holds the region's limit in its place unless the owner is licensed, so

@@ -215,6 +215,16 @@ takes such a section without an error, and the node goes off the air or
 its own packets no longer go past its direct neighbours. That only
 happens when the device's read is incomplete; reconnect and run it again.
 
+A plan that writes `lora` with `lora.use_preset: false` is refused (exit
+code 5, before anything is written, `--dry-run` included) when the node
+holds 0 for its bandwidth, spread factor or coding rate, as a node on a
+preset does: the template cannot set them, so the write would hand the
+firmware a 0, which it uses or replaces with a default of its own (a
+`lora` section with bandwidth 0 crashed firmware 2.6 and 2.7 in the
+simulator). Set the node's own radio
+parameters in the Meshtastic app first, or keep `use_preset: true`. `mesh
+admin bootstrap` inherits this.
+
 A node the database holds a key for that reports neither a public nor a
 private key while its region is set is refused (exit code 5, before
 anything is written) instead of given a new key: stock firmware keeps a

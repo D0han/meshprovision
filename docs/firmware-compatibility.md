@@ -49,9 +49,10 @@ that is higher than the preset's raises the preset's coding rate even
 with `use_preset` on (nodes on the same preset still hear each other, at
 more airtime per packet). The 2.8.1 protobuf documentation says this holds
 since firmware 2.7.18 (unverified). meshprovision does not
-set or read `coding_rate`, so a value set earlier in the app survives
-`mesh provision`; reset it to 0 in the app if a node should use the
-preset's own rate.
+set `coding_rate` (it reads it only to refuse `lora.use_preset: false`
+on a node without its own radio parameters), so a value set earlier in
+the app survives `mesh provision`; reset it to 0 in the app if a node
+should use the preset's own rate.
 
 **Informational: meshtasticd admin keys.** On a Linux node running
 `meshtasticd` 2.8.2 or later whose host `config.yaml` lists admin keys,

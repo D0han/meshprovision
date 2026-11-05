@@ -66,6 +66,7 @@ from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
 from meshprovision.provisioning.plan_firmware import (
+    custom_modem_refusal,
     firmware_adjustments,
     known_only_warning,
     local_admin_refusal,
@@ -593,9 +594,12 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         PlanConflictError: If the plan would write role ``REPEATER`` to
             firmware that replaces it (see
             :func:`~meshprovision.provisioning.plan_firmware.replaced_role_refusal`),
-            or ``rebroadcast_mode`` ``KNOWN_ONLY`` to firmware that then
+            ``rebroadcast_mode`` ``KNOWN_ONLY`` to firmware that then
             ignores the connected client (see
-            :func:`~meshprovision.provisioning.plan_firmware.local_admin_refusal`).
+            :func:`~meshprovision.provisioning.plan_firmware.local_admin_refusal`),
+            or ``lora.use_preset`` false to a node holding a radio
+            parameter of 0 (see
+            :func:`~meshprovision.provisioning.plan_firmware.custom_modem_refusal`).
     """
     live = inputs.live
     template = inputs.template
@@ -610,9 +614,11 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
     config_sections, config_warnings = _plan_config_sections(inputs, adjusted)
     warnings.extend(config_warnings)
     writes_device = any(s.section == "device" for s in config_sections)
+    writes_lora = any(s.section == "lora" for s in config_sections)
     for refusal in (
         replaced_role_refusal(inputs, writes_device=writes_device),
         local_admin_refusal(inputs, writes_device=writes_device),
+        custom_modem_refusal(inputs, writes_lora=writes_lora),
     ):
         if refusal is not None:
             raise refusal

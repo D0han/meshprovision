@@ -353,3 +353,19 @@ def test_a_known_only_mode_is_refused_before_any_write_where_the_firmware_ignore
     assert result.exit_code == ExitCode.PROVISIONING
     assert "device.rebroadcast_mode KNOWN_ONLY" in result.stderr
     assert iface.localNode.written_sections == []
+
+
+def test_turning_the_preset_off_on_a_node_on_a_preset_is_refused_before_any_write(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    write_template: Callable[..., Path],
+) -> None:
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(lora={"use_preset": False}))
+    iface = bus.use(FakeMeshInterface("deadbe01", firmware_version="2.7.26.54e0d8d"))
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "lora.use_preset false" in result.stderr
+    assert iface.localNode.written_sections == []

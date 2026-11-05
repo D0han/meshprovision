@@ -342,6 +342,64 @@ def test_a_repeater_role_already_on_the_device_is_not_written_and_not_refused() 
     assert plan.section("device") is None
 
 
+_PRESET_MODEM = {"use_preset": True, "bandwidth": 0, "spread_factor": 0, "coding_rate": 0}
+"""A node on a preset: it holds 0 for each custom radio parameter."""
+
+_CUSTOM_MODEM = {"bandwidth": 125, "spread_factor": 11, "coding_rate": 5}
+
+
+@pytest.mark.parametrize(
+    ("lora", "firmware", "unset"),
+    [
+        pytest.param(
+            _PRESET_MODEM, _FIRMWARE_2_8, "bandwidth, spread_factor, coding_rate", id="2.8"
+        ),
+        pytest.param(
+            _PRESET_MODEM, "2.6.13.0561f2c", "bandwidth, spread_factor, coding_rate", id="2.6"
+        ),
+        pytest.param(
+            {**_PRESET_MODEM, **_CUSTOM_MODEM, "coding_rate": 0}, "", "coding_rate", id="one-unset"
+        ),
+    ],
+)
+def test_turning_the_preset_off_is_refused_on_a_node_with_no_radio_parameters(
+    lora: dict[str, object], firmware: str, unset: str
+) -> None:
+    template = _template("lora:\n  use_preset: false\n")
+
+    with pytest.raises(
+        PlanConflictError, match=rf"holds 0 \(or nothing\) for {unset}, "
+    ) as exc_info:
+        _plan(template, sections={"lora": lora}, firmware=firmware)
+
+    assert exc_info.value.field == "lora.use_preset"
+
+
+@pytest.mark.parametrize(
+    "lora",
+    [
+        pytest.param({**_CUSTOM_MODEM, "use_preset": True}, id="preset-on-custom-values"),
+        pytest.param({**_CUSTOM_MODEM, "use_preset": False, "hop_limit": 5}, id="already-custom"),
+    ],
+)
+def test_turning_the_preset_off_is_planned_on_a_node_with_its_own_radio_parameters(
+    lora: dict[str, object],
+) -> None:
+    template = _template("lora:\n  use_preset: false\n")
+
+    plan = _plan(template, sections={"lora": lora})
+
+    assert plan.section("lora") is not None
+
+
+def test_a_custom_modem_with_no_lora_write_is_not_refused() -> None:
+    template = _template("lora:\n  use_preset: false\n")
+
+    plan = _plan(template, sections={"lora": {**_PRESET_MODEM, "use_preset": False}})
+
+    assert plan.section("lora") is None
+
+
 def _known_only_warned(plan: ChangePlan) -> bool:
     return PlanWarningCode.KNOWN_ONLY_IGNORES_CLIENT in [w.code for w in plan.warnings]
 

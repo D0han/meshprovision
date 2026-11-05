@@ -12,8 +12,10 @@ each such value from the plan inputs alone, so
 the operator, and let :mod:`~meshprovision.provisioning.readback` accept
 the firmware's value too. The template is never rewritten. A role the
 firmware replaces on every write is refused instead
-(:func:`replaced_role_refusal`), and so is a rebroadcast mode in which
-the firmware stops listening to this client (:func:`local_admin_refusal`).
+(:func:`replaced_role_refusal`), and so are a rebroadcast mode in which
+the firmware stops listening to this client (:func:`local_admin_refusal`)
+and a custom modem the template cannot describe
+(:func:`custom_modem_refusal`).
 
 Pure, like :mod:`~meshprovision.provisioning.plan`: no I/O, no device
 access, and nothing from ``meshtastic``. Firmware references are to
@@ -40,6 +42,7 @@ __all__ = [
     "BOOT_FLOOR_ROUTER_ROLES",
     "BOOT_PRESET_CHECK_MIN_FIRMWARE",
     "BOOT_SLOT_CHECK_MIN_FIRMWARE",
+    "CUSTOM_MODEM_FIELDS",
     "KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE",
     "MAX_INTERVAL_SECS",
     "POSITION_BROADCAST_FLOOR_ROUTER_SECS",
@@ -55,6 +58,7 @@ __all__ = [
     "TELEMETRY_INTERVAL_FLOOR_ROUTER_SECS",
     "TELEMETRY_INTERVAL_FLOOR_SECS",
     "FirmwareAdjustment",
+    "custom_modem_refusal",
     "firmware_adjustments",
     "known_only_warning",
     "local_admin_refusal",
@@ -90,6 +94,9 @@ KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 
 """First firmware that ignores the connected client under ``KNOWN_ONLY`` (``Router``)."""
 
 _KNOWN_ONLY: Final[str] = "KNOWN_ONLY"
+
+CUSTOM_MODEM_FIELDS: Final[tuple[str, ...]] = ("bandwidth", "spread_factor", "coding_rate")
+"""The ``LoRaConfig`` radio parameters the firmware uses when ``use_preset`` is off."""
 
 BOOT_FLOOR_ROUTER_ROLES: Final[frozenset[str]] = frozenset({"ROUTER", "ROUTER_LATE"})
 """The roles ``IF_ROUTER`` (``Default.h``) gives the higher floors."""
@@ -593,6 +600,42 @@ def local_admin_refusal(inputs: PlanInputs, *, writes_device: bool) -> PlanConfl
         "longer be configured or verified over USB, BLE or TCP.",
         field="device.rebroadcast_mode",
         hint="Use another rebroadcast_mode, such as LOCAL_ONLY, for this node in the template.",
+    )
+
+
+def custom_modem_refusal(inputs: PlanInputs, *, writes_lora: bool) -> PlanConflictError | None:
+    """Refuse sending ``use_preset: false`` with a radio parameter of 0.
+
+    With ``use_preset`` off the firmware takes the radio parameters of
+    :data:`CUSTOM_MODEM_FIELDS` from the ``lora`` section, which the
+    template cannot set: a ``lora`` write sends the device's own, and a
+    node on a preset normally holds 0 for each. 0 is no usable value
+    (``RadioInterface::applyModemConfig``): in the firmware simulator a
+    ``lora`` section with bandwidth 0 crashed 2.6.13 and stopped 2.7.26,
+    and 2.8.3 replaced it. Refused on every firmware version.
+
+    Args:
+        inputs: The plan inputs.
+        writes_lora: Whether the plan writes the ``lora`` section.
+
+    Returns:
+        The refusal, or ``None``.
+    """
+    if not writes_lora or inputs.template.lora.use_preset:
+        return None
+    unset = [name for name in CUSTOM_MODEM_FIELDS if not inputs.live.value("lora", name)]
+    if not unset:
+        return None
+    return PlanConflictError(
+        "lora.use_preset false: the template cannot set the bandwidth, spread factor or "
+        f"coding rate, and this node holds 0 (or nothing) for {', '.join(unset)}, which the "
+        "firmware would use or replace with a default of its own, not settings you chose (a "
+        "lora section with bandwidth 0 crashed firmware 2.6 and 2.7 in the simulator).",
+        field="lora.use_preset",
+        hint=(
+            "Keep use_preset true in the template, or set this node's own radio parameters "
+            "in the Meshtastic app first."
+        ),
     )
 
 

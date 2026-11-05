@@ -345,7 +345,7 @@ unless a range is given.
 | Field | Value | Meaning |
 |---|---|---|
 | `region` | region name, default `EU_868`; not `UNSET` (the firmware switches the transmitter off) | LoRa region |
-| `use_preset` | `true`/`false`, default `true` | `modem_preset` sets the radio parameters |
+| `use_preset` | `true`/`false`, default `true`; `false` only on a node that already holds its own bandwidth, spread factor and coding rate (set them in the Meshtastic app): the template cannot set them, so `mesh provision` refuses to switch off the preset of a node that holds 0 for any of them | `modem_preset` sets the radio parameters |
 | `modem_preset` | preset name, default `LONG_FAST` | Modem preset; `null` leaves it alone |
 | `hop_limit` | 0-7, default 3 | Maximum hop count |
 | `tx_enabled` | `true`/`false`, default `true` | The radio may transmit |
