@@ -207,6 +207,14 @@ longer answer over USB. There is no override flag; run it over BLE or TCP
 instead, where the plan carries a `serial_api_disabled` warning. `mesh
 admin bootstrap` inherits this.
 
+A `lora` write sends the whole section, starting from the device's own
+read. It is refused before it is sent (the section fails, nothing after it
+is written) when it would carry region `UNSET`, `tx_enabled: false` or
+`hop_limit: 0` without the template asking for that value: the firmware
+takes such a section without an error, and the node goes off the air or
+its own packets no longer go past its direct neighbours. That only
+happens when the device's read is incomplete; reconnect and run it again.
+
 A node the database holds a key for that reports neither a public nor a
 private key while its region is set is refused (exit code 5, before
 anything is written) instead of given a new key: stock firmware keeps a

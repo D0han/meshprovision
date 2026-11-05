@@ -121,6 +121,27 @@ def test_reboots_device_on_region_or_modem_preset_change(
     assert any(w.code == "region_change_reboots" for w in plan.warnings)
 
 
+def test_a_lora_section_carries_the_template_values_the_writer_checks(make_live, template) -> None:
+    live = make_live(
+        template,
+        section_overrides={"lora": {"hop_limit": 5}},
+        security=make_security(empty=True),
+        short_name="be01",
+        long_name="Meshtastic be01",
+    )
+    plan = build_plan(
+        PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+    )
+
+    lora_section = plan.section("lora")
+    assert lora_section is not None
+    assert lora_section.template_values == (
+        ("tx_enabled", template.lora.tx_enabled),
+        ("hop_limit", template.lora.hop_limit),
+    )
+    assert all(not s.template_values for s in plan.sections if s.section != "lora")
+
+
 def test_non_reboot_lora_field_change_does_not_claim_reboot(make_live, template) -> None:
     """A lora field outside {region, modem_preset} must not spuriously reboot.
 

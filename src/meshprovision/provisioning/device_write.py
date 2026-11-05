@@ -241,6 +241,50 @@ def _firmware_keeps_rest_of_security(sent: Any, before: Any) -> bool:
     return bool(rest_sent != rest_before)
 
 
+_SILENT_LORA_VALUES: Final[tuple[tuple[str, object], ...]] = (
+    ("region", 0),
+    ("tx_enabled", False),
+    ("hop_limit", 0),
+)
+"""``LoRaConfig`` values that silence a node: region ``UNSET`` (the firmware
+then sets ``tx_enabled`` false, and the radio neither sends nor
+receives), no transmitter, or no hop for its own packets (they reach only
+its direct neighbours)."""
+
+
+def _refuse_silent_lora(msg: Any, change: SectionChange) -> None:
+    """Refuse sending a ``lora`` section that would silence the node unasked.
+
+    A ``lora`` write sends the whole section from the device's cached
+    read, and the firmware takes even an all-default one without an
+    error (seen in the firmware simulator at 2.8.3). A cache left at its
+    defaults would therefore switch the radio off. A value the template
+    sets (:attr:`~meshprovision.provisioning.plan_types.SectionChange.template_values`)
+    is sent as asked; region ``UNSET`` never is, since a template cannot
+    set it.
+
+    Args:
+        msg: The ``lora`` message about to be sent, with ``change`` applied.
+        change: The section's planned change.
+
+    Raises:
+        PlanConflictError: If ``msg`` holds a value from
+            :data:`_SILENT_LORA_VALUES` the template did not set.
+    """
+    asked = dict(change.template_values)
+    for field, silent in _SILENT_LORA_VALUES:
+        value = getattr(msg, field)
+        if value == silent and not (field in asked and asked[field] == value):
+            raise PlanConflictError(
+                f"Refusing to send lora with {field} {value!r}, which the template does not "
+                "set: it would take the node off the air or keep its own packets from "
+                "going past its direct neighbours. The device's cached lora section looks "
+                "incomplete.",
+                field=f"lora.{field}",
+                hint="Reconnect, then run `mesh provision` again.",
+            )
+
+
 def write_section(
     iface: MeshInterface,
     change: SectionChange,
@@ -265,8 +309,10 @@ def write_section(
 
     Raises:
         PlanConflictError: If ``change.section`` is not a known config or
-            module-config section name, or a field within it cannot be
-            applied.
+            module-config section name, a field within it cannot be
+            applied, or a ``lora`` section would silence the node with a
+            value the template does not set (see
+            :func:`_refuse_silent_lora`); before any device write.
         EnumMappingError: If a field within ``change`` is an enum field
             whose desired value does not name a known enum member --
             propagated straight from :func:`apply_field`.
@@ -298,6 +344,8 @@ def write_section(
     try:
         for field_change in change.changes:
             apply_field(msg, field_change.field, field_change.desired)
+        if change.section == "lora":
+            _refuse_silent_lora(msg, change)
 
         if change.section == "security" and key_plan is not None:
             if key_plan.regenerate:

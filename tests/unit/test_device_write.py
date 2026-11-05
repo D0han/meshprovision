@@ -14,7 +14,7 @@ from meshprovision.errors import (
     PlanConflictError,
     ProvisioningError,
 )
-from meshprovision.provisioning import detect
+from meshprovision.provisioning import detect, device_write, plan
 from meshprovision.provisioning.apply import (
     apply_field,
     generate_ble_pin,
@@ -541,6 +541,75 @@ def test_write_section_failed_write_restores_the_whole_staged_section() -> None:
         write_section(iface, change)  # type: ignore[arg-type]
 
     assert iface.localNode.localConfig.lora == pre_call
+
+
+def _lora_change(*template_values: tuple[str, object]) -> SectionChange:
+    return SectionChange(
+        section="lora",
+        kind=detect.SectionKind.CONFIG,
+        changes=(FieldChange(section="lora", field="tx_power", current=20, desired=27),),
+        template_values=template_values,
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "silent"),
+    [
+        pytest.param("region", 0, id="region-unset"),
+        pytest.param("tx_enabled", False, id="tx-disabled"),
+        pytest.param("hop_limit", 0, id="no-hops"),
+    ],
+)
+def test_write_section_refuses_a_lora_section_that_would_go_off_the_air_unasked(
+    field: str, silent: object
+) -> None:
+    iface = FakeIfaceForApply()
+    lora = iface.localNode.localConfig.lora
+    setattr(lora, field, silent)
+    pre_call = config_pb2.Config.LoRaConfig()
+    pre_call.CopyFrom(lora)
+
+    with pytest.raises(PlanConflictError, match="off the air") as exc_info:
+        write_section(iface, _lora_change(("tx_enabled", True), ("hop_limit", 3)))  # type: ignore[arg-type]
+
+    assert exc_info.value.field == f"lora.{field}"
+    assert iface.localNode.written_sections == []
+    assert iface.localNode.localConfig.lora == pre_call
+
+
+def test_the_plan_carries_every_silencing_lora_field_the_writer_checks() -> None:
+    checked = {field for field, _ in device_write._SILENT_LORA_VALUES} - {"region"}
+
+    assert checked == set(plan._SILENCING_LORA_FIELDS)
+
+
+def test_write_section_refuses_an_all_default_lora_cache() -> None:
+    iface = FakeIfaceForApply()
+    iface.localNode.localConfig.ClearField("lora")
+
+    with pytest.raises(PlanConflictError, match="off the air"):
+        write_section(iface, _lora_change(("tx_enabled", True), ("hop_limit", 3)))  # type: ignore[arg-type]
+
+    assert iface.localNode.written_sections == []
+
+
+@pytest.mark.parametrize(
+    ("field", "silent"),
+    [
+        pytest.param("tx_enabled", False, id="tx-disabled"),
+        pytest.param("hop_limit", 0, id="no-hops"),
+    ],
+)
+def test_write_section_sends_a_silencing_lora_value_the_template_sets(
+    field: str, silent: object
+) -> None:
+    iface = FakeIfaceForApply()
+    setattr(iface.localNode.localConfig.lora, field, silent)
+    asked = {"tx_enabled": True, "hop_limit": 3, field: silent}
+
+    write_section(iface, _lora_change(*asked.items()))  # type: ignore[arg-type]
+
+    assert iface.localNode.written_sections == ["lora"]
 
 
 def test_write_default_channel_failed_write_restores_non_default_settings() -> None:

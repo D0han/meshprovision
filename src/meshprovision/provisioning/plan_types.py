@@ -197,12 +197,18 @@ class SectionChange:
             those outside a settings transaction; 2.8 applies them live).
             Shown in ``--json`` only: the settings commit reboots the
             device anyway (see :attr:`ChangePlan.reboots_device`).
+        template_values: ``(field, value)`` pairs the template sets for
+            this section whether or not they change, for the fields
+            :func:`~meshprovision.provisioning.device_write.write_section`
+            checks before it sends the section (``lora``'s ``tx_enabled``
+            and ``hop_limit``); empty for every other section.
     """
 
     section: str
     kind: detect.SectionKind
     changes: tuple[FieldChange, ...]
     reboots_device: bool = False
+    template_values: tuple[tuple[str, object], ...] = ()
 
     @property
     def is_empty(self) -> bool:

@@ -133,6 +133,11 @@ which stops writing at the first section that fails, so nothing after it
 
 _REBOOT_LORA_FIELDS: Final[frozenset[str]] = frozenset({"region", "modem_preset"})
 
+_SILENCING_LORA_FIELDS: Final[tuple[str, ...]] = ("tx_enabled", "hop_limit")
+"""The ``lora`` fields whose template value every ``lora`` section carries (see
+:attr:`SectionChange.template_values`): a write must never silence the
+radio by sending a value the template did not ask for."""
+
 _NO_ADJUSTMENTS: Final[Mapping[tuple[str, str], object]] = MappingProxyType({})
 
 
@@ -324,12 +329,18 @@ def _plan_config_sections(
                     section="lora",
                 )
             )
+        template_values = (
+            tuple((name, getattr(model, name)) for name in _SILENCING_LORA_FIELDS)
+            if section_name == "lora"
+            else ()
+        )
         sections.append(
             SectionChange(
                 section=section_name,
                 kind=live.kind_of(section_name),
                 changes=changes,
                 reboots_device=reboots,
+                template_values=template_values,
             )
         )
 

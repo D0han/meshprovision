@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 from typing import Final, Self
 
-from meshtastic.protobuf import channel_pb2, localonly_pb2
+from meshtastic.protobuf import channel_pb2, config_pb2, localonly_pb2
 
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.nodeid import NodeId
@@ -26,9 +26,17 @@ def default_primary_channel() -> channel_pb2.Channel:
 
 class FakeLocalNode:
     def __init__(self, iface: FakeIfaceForApply) -> None:
-        """Start with default config, one bare primary channel, and empty call logs."""
+        """Start with default config on the air, one bare primary channel, and empty call logs.
+
+        ``lora`` holds what a device in service reports (EU_868, transmitter
+        on, 3 hops), not protobuf's all-zero default, which
+        ``write_section`` refuses to send.
+        """
         self._iface = iface
         self.localConfig = localonly_pb2.LocalConfig()
+        self.localConfig.lora.region = config_pb2.Config.LoRaConfig.RegionCode.EU_868
+        self.localConfig.lora.tx_enabled = True
+        self.localConfig.lora.hop_limit = 3
         self.moduleConfig = localonly_pb2.LocalModuleConfig()
         self.channels: list[channel_pb2.Channel] = [default_primary_channel()]
         self.written_sections: list[str] = []

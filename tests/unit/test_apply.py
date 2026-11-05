@@ -2172,6 +2172,7 @@ def test_apply_plan_in_place_no_contradictory_confirmed_after_a_failed_write(mak
     plan = dataclasses.replace(plan, sections=(lora_change,))
 
     iface = _FakeIfaceFailsOnSections(fail_sections=frozenset({"lora"}))
+    iface.localNode.localConfig.lora.region = 0  # UNSET, the change's `current`
     session = InPlaceSession(iface)  # type: ignore[arg-type]
     outcome = apply_plan(plan, session, keypair=kp)
 

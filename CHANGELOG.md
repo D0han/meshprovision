@@ -662,6 +662,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` no longer sends a `lora` section that would take the
+  node off the air (region `UNSET`, `tx_enabled: false`) or keep its own
+  packets from going past its direct neighbours (`hop_limit: 0`) with a
+  value the template does not ask for, as a `lora` write built on an
+  incomplete device read would: the firmware takes such a section without
+  an error. The section fails before it is sent, and nothing after
+  it is written.
 - `mesh provision` refuses to write `device.rebroadcast_mode: KNOWN_ONLY`
   (exit code 5, before anything is written) unless the device reports
   firmware older than 2.8.0. In that mode firmware 2.8 drops every packet
