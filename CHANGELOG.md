@@ -662,6 +662,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A template `lora.tx_power` above the region's limit (27 dBm for
+  `EU_868`), or 0, no longer fails verification on every run: the firmware
+  holds the region's limit in its place unless the owner is licensed, so
+  the plan warns (`tx_power_limited_by_region`), the verify accepts the
+  limit, and the next run plans no change.
 - `mesh provision` no longer sends a `lora` section that would take the
   node off the air (region `UNSET`, `tx_enabled: false`) or keep its own
   packets from going past its direct neighbours (`hop_limit: 0`) with a

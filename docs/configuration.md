@@ -349,7 +349,7 @@ unless a range is given.
 | `modem_preset` | preset name, default `LONG_FAST` | Modem preset; `null` leaves it alone |
 | `hop_limit` | 0-7, default 3 | Maximum hop count |
 | `tx_enabled` | `true`/`false`, default `true` | The radio may transmit |
-| `tx_power` | 0-30 dBm | Transmit power override |
+| `tx_power` | 0-30 dBm | Transmit power; 0 means the region's limit. The firmware holds at most that limit (27 dBm for `EU_868`) unless the owner is licensed, also when a region change lowers it, so a higher value (or 0) gets a plan warning (`tx_power_limited_by_region`) and the verify accepts the limit |
 | `channel_num` | channel number | LoRa channel override |
 | `frequency_offset` | Hz | Frequency offset |
 | `override_duty_cycle` | `true`/`false`, default `false` | Overrides the regional duty-cycle limit |

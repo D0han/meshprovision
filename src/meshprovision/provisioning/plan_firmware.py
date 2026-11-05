@@ -3,10 +3,11 @@
 Some template values are written as asked but held differently once the
 plan is applied: the firmware raises telemetry and position intervals to
 a minimum at every boot while the node is on a default channel
-(``NodeDB::NodeDB``), and sets ``lora.ignore_mqtt`` when the region
-changes. A plain verify would then report a mismatch and, for the boot
-minimums, the node would never converge. :func:`firmware_adjustments`
-predicts each such value from the plan inputs alone, so
+(``NodeDB::NodeDB``), sets ``lora.ignore_mqtt`` when the region
+changes, and holds ``lora.tx_power`` at most at the region's limit. A
+plain verify would then report a mismatch and, for the boot minimums,
+the node would never converge. :func:`firmware_adjustments` predicts
+each such value from the plan inputs alone, so
 :mod:`~meshprovision.provisioning.plan` can plan the template value, tell
 the operator, and let :mod:`~meshprovision.provisioning.readback` accept
 the firmware's value too. The template is never rewritten. A role the
@@ -46,6 +47,7 @@ __all__ = [
     "POSITION_PRECISION_CLAMP_MIN_FIRMWARE",
     "PRESET_CHANNEL_NAMES",
     "PUBLIC_CHANNEL_MAX_POSITION_PRECISION",
+    "REGION_POWER_LIMITS_DBM",
     "REPEATER_REPLACED_MIN_FIRMWARE",
     "ROLE_DEFAULT_FIELDS",
     "SMART_MINIMUM_INTERVAL_FLOOR_SECS",
@@ -216,6 +218,52 @@ _ROLE_DEFAULT_VALUES: Final[Mapping[str, Mapping[tuple[str, str], object]]] = Ma
 The owner write goes first and ``device`` carries the role, so these are
 the template values a role change can replace for good on its own run;
 sections written after ``device`` send the template's values again."""
+
+REGION_POWER_LIMITS_DBM: Final[Mapping[str, int]] = MappingProxyType(
+    {
+        "US": 30,
+        "EU_433": 10,
+        "EU_868": 27,
+        "EU_866": 27,
+        "EU_N_868": 27,
+        "CN": 19,
+        "JP": 13,
+        "ANZ": 30,
+        "ANZ_433": 14,
+        "RU": 20,
+        "KR": 23,
+        "TW": 27,
+        "IN": 30,
+        "NZ_865": 36,
+        "TH": 27,
+        "UA_433": 10,
+        "UA_868": 14,
+        "MY_433": 20,
+        "MY_919": 27,
+        "SG_923": 20,
+        "PH_433": 10,
+        "PH_868": 14,
+        "PH_915": 24,
+        "KZ_433": 10,
+        "KZ_863": 30,
+        "NP_865": 30,
+        "BR_902": 30,
+        "ITU1_2M": 30,
+        "ITU2_2M": 30,
+        "ITU3_2M": 30,
+        "ITU2_125CM": 30,
+        "ITU1_70CM": 30,
+        "ITU2_70CM": 30,
+        "ITU3_70CM": 30,
+        "LORA_24": 10,
+    }
+)
+"""Each region's ``power_limit``, in dBm (``RadioInterface.cpp`` ``RDEF``).
+
+The same at 2.7.26, 2.8.0 and 2.8.3 for every region those versions share
+(``UA_868`` exists up to 2.7.26; the ``EU_866``, ``EU_N_868``, ``PH_868``
+and ``ITU`` regions are 2.8's). 2.7.2 had 12 for ``EU_433`` and 16 for
+``TH``."""
 
 _NO_PRESET_NAME: Final[str] = "Custom"
 """The channel name the firmware uses when ``use_preset`` is off."""
@@ -440,6 +488,38 @@ def _region_change_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, 
     return (FirmwareAdjustment("lora", "ignore_mqtt", True, warning),)
 
 
+def _tx_power_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
+    """Return the ``lora.tx_power`` the firmware stores in place of the template's, if any.
+
+    ``RadioInterface::applyModemConfig`` (2.7.2 through 2.8.3) stores the
+    region's :data:`REGION_POWER_LIMITS_DBM` limit for a ``tx_power`` of 0
+    and, unless the owner is licensed, for one above that limit; a region
+    change applies it to a ``tx_power`` the template leaves alone too. A
+    region with no known limit predicts nothing.
+    """
+    lora = inputs.template.lora
+    limit = REGION_POWER_LIMITS_DBM.get(lora.region)
+    if (
+        lora.tx_power is None
+        or limit is None
+        or (lora.tx_power != 0 and (lora.tx_power <= limit or inputs.live.is_licensed))
+    ):
+        return ()
+    reason = (
+        "0 means the region's limit"
+        if lora.tx_power == 0
+        else f"{lora.tx_power} dBm is above the limit of {lora.region}"
+    )
+    warning = PlanWarning(
+        PlanWarningCode.TX_POWER_LIMITED_BY_REGION,
+        f"lora.tx_power {reason}: the node holds {limit} dBm, and the verify accepts that. "
+        f"Set at most {limit} in the template to clear this warning.",
+        section="lora",
+        field="tx_power",
+    )
+    return (FirmwareAdjustment("lora", "tx_power", limit, warning),)
+
+
 def _keeps_region(inputs: PlanInputs) -> bool:
     """Tell whether the plan leaves the live LoRa region as it is."""
     return str(inputs.live.value("lora", "region")) == inputs.template.lora.region
@@ -616,6 +696,7 @@ def firmware_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
     adjustments = (
         *_boot_floor_adjustments(inputs),
         *_region_change_adjustments(inputs),
+        *_tx_power_adjustments(inputs),
         *_role_change_adjustments(inputs),
         *_precision_adjustments(inputs),
     )

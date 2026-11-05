@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision.config.template import TemplateConfig, load_template_text
+from meshprovision.enums import region_table
 from meshprovision.errors import PlanConflictError
 from meshprovision.provisioning import detect, plan_firmware
 from meshprovision.provisioning.detect import LiveChannel
@@ -290,6 +291,10 @@ def _flat(text: str) -> str:
         ),
         pytest.param(f'"never" ({plan_firmware.MAX_INTERVAL_SECS} s)', id="never"),
         pytest.param(
+            f"({plan_firmware.REGION_POWER_LIMITS_DBM['EU_868']} dBm for `EU_868`)",
+            id="eu-power-limit",
+        ),
+        pytest.param(
             f"keeps at most {plan_firmware.PUBLIC_CHANNEL_MAX_POSITION_PRECISION} bits "
             "(about 700 m)",
             id="public-precision",
@@ -415,6 +420,52 @@ def test_a_region_change_warns_that_the_firmware_sets_ignore_mqtt(
     planned = {c.field for c in lora.changes} if lora is not None else set()
     # The firmware sets true itself on this run; the next run writes false.
     assert ("ignore_mqtt" in planned) is (live_region == "EU_868" and ignore_mqtt == "false")
+
+
+def _tx_power_plan(tx_power: int, *, region: str, live: int, licensed: bool = False) -> ChangePlan:
+    template = _template(f"lora:\n  region: {region}\n  tx_power: {tx_power}\n")
+    live_config = live_config_from_template(
+        template, is_licensed=licensed, section_overrides={"lora": {"tx_power": live}}
+    )
+    return build_plan(
+        PlanInputs(live=live_config, template=template, state=detect.NodeState.PROVISIONED)
+    )
+
+
+@pytest.mark.parametrize(
+    ("tx_power", "region", "licensed", "firmware_value"),
+    [
+        pytest.param(30, "EU_868", False, 27, id="above-the-limit"),
+        pytest.param(0, "EU_868", False, 27, id="zero-is-the-limit"),
+        pytest.param(0, "US", True, 30, id="zero-licensed"),
+        pytest.param(27, "EU_868", False, None, id="at-the-limit"),
+        pytest.param(30, "US", False, None, id="other-region"),
+        pytest.param(30, "EU_868", True, None, id="licensed"),
+    ],
+)
+def test_a_tx_power_the_region_does_not_allow_plans_the_limit_as_firmware_value(
+    tx_power: int, region: str, licensed: bool, firmware_value: int | None
+) -> None:
+    plan = _tx_power_plan(tx_power, region=region, live=20, licensed=licensed)
+
+    change = _change(plan, "lora", "tx_power")
+    assert (change.desired, change.firmware_value) == (tx_power, firmware_value)
+    warned = PlanWarningCode.TX_POWER_LIMITED_BY_REGION in [w.code for w in plan.warnings]
+    assert warned is (firmware_value is not None)
+
+
+def test_a_device_at_the_region_limit_plans_no_tx_power_change() -> None:
+    plan = _tx_power_plan(30, region="EU_868", live=27)
+
+    lora = plan.section("lora")
+    assert lora is None or all(c.field != "tx_power" for c in lora.changes)
+
+
+def test_every_region_power_limit_names_a_known_region() -> None:
+    known = set(region_table().names())
+
+    assert set(plan_firmware.REGION_POWER_LIMITS_DBM) <= known
+    assert plan_firmware.REGION_POWER_LIMITS_DBM["EU_868"] == 27
 
 
 def _role_warning(plan: ChangePlan) -> str | None:

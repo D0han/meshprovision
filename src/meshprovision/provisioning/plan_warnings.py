@@ -54,6 +54,7 @@ class PlanWarningCode(StrEnum):
     ROLE_DEFAULTS_REWRITE = "role_defaults_rewrite"
     POSITION_PRECISION_CAPPED = "position_precision_capped"
     KNOWN_ONLY_IGNORES_CLIENT = "known_only_ignores_client"
+    TX_POWER_LIMITED_BY_REGION = "tx_power_limited_by_region"
 
 
 @dataclass(frozen=True, slots=True)
