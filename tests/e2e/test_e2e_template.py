@@ -112,6 +112,18 @@ def test_a_template_warning_is_printed_once(
     assert result.stderr.count("'not_a_real_module' is not a known Meshtastic module option") == 1
 
 
+def test_template_validate_warns_that_a_hidden_node_never_announces_itself(
+    runner: CliRunner, env: dict[str, str], write_template: Callable[..., Path]
+) -> None:
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(device={"role": "CLIENT_HIDDEN"}))
+
+    result = invoke(runner, ["template", "validate"], env)
+
+    assert result.exit_code == 0
+    assert "CLIENT_HIDDEN" in result.stderr
+    assert "periodic node info broadcast" in result.stderr
+
+
 def test_template_validate_typo_in_modem_preset_exits_nonzero(
     runner: CliRunner, env: dict[str, str], write_template: Callable[..., Path]
 ) -> None:

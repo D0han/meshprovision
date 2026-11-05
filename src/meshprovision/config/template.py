@@ -104,6 +104,13 @@ still a real firmware module name) even though the list-toggle spelling
 by :class:`TemplateConfig`'s consistency check in favor of the dedicated
 ``neighbor_info`` section."""
 
+_HIDDEN_ROLE: Final[str] = "CLIENT_HIDDEN"
+"""The role that never sends the periodic node info broadcast.
+
+``NodeInfoModule::runOnce`` skips it (2.7.2 through 2.8.3); the node still
+sends its node info on other occasions (after an owner set, in reply to a
+request), so others may learn its key, but only late."""
+
 
 def _check_pattern_fits(spec: PatternSpec, pattern: str, *, limit: int, field: str) -> None:
     """Refuse a name pattern whose widest rendering overflows its firmware limit.
@@ -576,7 +583,8 @@ class TemplateConfig(BaseModel):
             A tuple of :class:`TemplateWarning`, in a fixed order:
             module-option warnings first (unknown, or without an on/off
             switch), then a capacity-below-floor warning (when not already
-            a hard error), then a long-name-near-limit warning.
+            a hard error), then a long-name-near-limit warning, then a
+            role-never-announces warning.
         """
         warnings = list(self._option_warnings())
 
@@ -602,6 +610,18 @@ class TemplateConfig(BaseModel):
                     f"{long_spec.widest_byte_length()} UTF-8 bytes, within 4 bytes "
                     f"of the {LONG_NAME_MAX_BYTES}-byte firmware limit.",
                     field="long_name_pattern",
+                )
+            )
+
+        if self.device.role == _HIDDEN_ROLE:
+            warnings.append(
+                TemplateWarning(
+                    "role_never_announces",
+                    f"device.role {_HIDDEN_ROLE} never sends the periodic node info "
+                    "broadcast, so other nodes may not learn its public key for a long "
+                    "time: direct messages to it and remote admin of it can fail until "
+                    "they do.",
+                    field="device.role",
                 )
             )
 

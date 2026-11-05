@@ -137,7 +137,17 @@ ROLE_DEFAULT_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
         "ROUTER": (
             "device.rebroadcast_mode",
             "is_unmessagable",
-            "the position, power, display, telemetry and neighbor_info intervals",
+            "position.gps_update_interval",
+            "position.position_broadcast_secs",
+            "power.ls_secs",
+            "power.min_wake_secs",
+            "power.sds_secs",
+            "power.wait_bluetooth_secs",
+            "display.screen_on_secs",
+            "the telemetry intervals",
+            "neighbor_info.update_interval",
+            "paxcounter.paxcounter_update_interval",
+            "on power-saving builds power.is_power_saving",
         ),
         "ROUTER_LATE": ("is_unmessagable", "telemetry.device_update_interval"),
         "SENSOR": (
@@ -165,16 +175,21 @@ ROLE_DEFAULT_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
             "telemetry.device_update_interval",
         ),
         "CLIENT_HIDDEN": (
-            "device.rebroadcast_mode",
+            "device.rebroadcast_mode (to LOCAL_ONLY)",
             "device.node_info_broadcast_secs",
             "position.position_broadcast_smart_enabled",
             "position.position_broadcast_secs",
             "neighbor_info.update_interval",
-            "the telemetry intervals",
+            "the telemetry device, environment, air quality and health intervals",
         ),
     }
 )
-"""What ``NodeDB::installRoleDefaults`` resets when a role is newly set (2.7.26, 2.8.3)."""
+"""What ``NodeDB::installRoleDefaults`` resets when a role is newly set (2.7.26, 2.8.3).
+
+``ROUTER`` runs ``initConfigIntervals`` and ``initModuleConfigIntervals``
+(the position, power and display intervals, every telemetry interval,
+``neighbor_info`` and ``paxcounter``); ``CLIENT_HIDDEN`` sets its intervals to
+:data:`MAX_INTERVAL_SECS`, the firmware's "never"."""
 
 _ROLE_DEFAULT_VALUES: Final[Mapping[str, Mapping[tuple[str, str], object]]] = MappingProxyType(
     {

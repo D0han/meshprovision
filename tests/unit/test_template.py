@@ -81,6 +81,15 @@ def test_long_name_near_limit_warns_but_loads() -> None:
     assert any(w.code == "long_name_near_limit" for w in warnings)
 
 
+@pytest.mark.parametrize(("role", "warned"), [("CLIENT_HIDDEN", True), ("CLIENT", False)])
+def test_a_hidden_role_warns_that_the_node_never_announces_itself(role: str, warned: bool) -> None:
+    cfg = load_template_text(f"version: 1\ndevice:\n  role: {role}\n")
+
+    codes = [w.code for w in cfg.collect_warnings()]
+
+    assert ("role_never_announces" in codes) is warned
+
+
 # ---------------------------------------------------------------------------
 # Namespace capacity, PatternSpec.
 # ---------------------------------------------------------------------------

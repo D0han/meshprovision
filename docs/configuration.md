@@ -98,16 +98,28 @@ a device.
 Changing `device.role` makes the firmware reset some settings to the new
 role's defaults as it stores the role (`installRoleDefaults`): for
 `ROUTER`, `rebroadcast_mode` becomes `CORE_PORTNUMS_ONLY`,
-`is_unmessagable` true, and the position, power, display, telemetry and
-neighbor info intervals their defaults; `ROUTER_LATE`, `SENSOR`,
-`TRACKER`, `TAK`, `TAK_TRACKER`, `LOST_AND_FOUND` and `CLIENT_HIDDEN` reset
-their own lists. The plan names them (`role_defaults_rewrite`). Sections
-written after `device` keep the template's values; for the template's
+`is_unmessagable` true, and `gps_update_interval`,
+`position_broadcast_secs`, the power section's `ls_secs`,
+`min_wake_secs`, `sds_secs` and `wait_bluetooth_secs`, the display's
+`screen_on_secs`, every telemetry interval, the neighbor info interval
+and the paxcounter interval their defaults (power-saving builds also turn
+`is_power_saving` on); for `CLIENT_HIDDEN`, `rebroadcast_mode` becomes
+`LOCAL_ONLY` and the node info, position and neighbor info intervals and
+the telemetry device, environment, air quality and health intervals the
+firmware's "never" (2147483647 s); `ROUTER_LATE`, `SENSOR`, `TRACKER`,
+`TAK`, `TAK_TRACKER` and `LOST_AND_FOUND` reset their own lists. The
+plan names them (`role_defaults_rewrite`). Sections written after
+`device` keep the template's values; for the template's
 `is_unmessagable` (written before) and `rebroadcast_mode` and
 `node_info_broadcast_secs` (written with the role) the verify accepts the
 role's value on that run. Run `mesh provision` once more afterwards: with
 the role in place, it sets the template's values wherever a default
 replaced them.
+
+A `CLIENT_HIDDEN` node never sends the periodic node info broadcast, so
+other nodes may not learn its public key for a long time: direct messages
+to it and remote admin of it can fail until they do. A template with that
+role loads with a warning (`role_never_announces`).
 
 Followed by module options:
 

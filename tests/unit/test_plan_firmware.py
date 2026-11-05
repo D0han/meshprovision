@@ -288,6 +288,7 @@ def _flat(text: str) -> str:
             ),
             id="known-only",
         ),
+        pytest.param(f'"never" ({plan_firmware.MAX_INTERVAL_SECS} s)', id="never"),
         pytest.param(
             f"keeps at most {plan_firmware.PUBLIC_CHANNEL_MAX_POSITION_PRECISION} bits "
             "(about 700 m)",
@@ -426,7 +427,17 @@ def _role_warning(plan: ChangePlan) -> str | None:
     ("role", "named"),
     [
         pytest.param("ROUTER", ("device.rebroadcast_mode", "is_unmessagable"), id="router"),
+        pytest.param(
+            "ROUTER",
+            ("power.ls_secs", "power.wait_bluetooth_secs", "display.screen_on_secs"),
+            id="router-power-display",
+        ),
         pytest.param("CLIENT_HIDDEN", ("device.node_info_broadcast_secs",), id="client-hidden"),
+        pytest.param(
+            "CLIENT_HIDDEN",
+            ("device.rebroadcast_mode (to LOCAL_ONLY)", "neighbor_info.update_interval"),
+            id="client-hidden-local-only",
+        ),
     ],
 )
 def test_a_role_change_warns_what_the_role_defaults_reset(role: str, named: tuple[str]) -> None:
