@@ -717,8 +717,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `mesh provision` run that changes `device.role` no longer ends
   UNCERTAIN because the firmware reset this run's `is_unmessagable`,
   `rebroadcast_mode` or `node_info_broadcast_secs` to the new role's
-  defaults (`ROUTER` sets `CORE_PORTNUMS_ONLY` and `is_unmessagable`): the
-  verify accepts the role's value on that run, and the plan warns
+  defaults (`ROUTER`, and `REPEATER` on firmware before 2.7.11, set
+  `CORE_PORTNUMS_ONLY` and `is_unmessagable`): the verify accepts the
+  role's value on that run, and the plan warns
   (`role_defaults_rewrite`), naming what the firmware resets (for `ROUTER`
   also the power section's sleep and wake intervals and the display's
   `screen_on_secs`; for `CLIENT_HIDDEN` `LOCAL_ONLY` and the firmware's

@@ -159,6 +159,7 @@ ROLE_DEFAULT_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
             "on power-saving builds power.is_power_saving",
         ),
         "ROUTER_LATE": ("is_unmessagable", "telemetry.device_update_interval"),
+        "REPEATER": ("device.rebroadcast_mode", "is_unmessagable", "display.screen_on_secs"),
         "SENSOR": (
             "is_unmessagable",
             "telemetry.device_update_interval",
@@ -198,7 +199,10 @@ ROLE_DEFAULT_FIELDS: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
 ``ROUTER`` runs ``initConfigIntervals`` and ``initModuleConfigIntervals``
 (the position, power and display intervals, every telemetry interval,
 ``neighbor_info`` and ``paxcounter``); ``CLIENT_HIDDEN`` sets its intervals to
-:data:`MAX_INTERVAL_SECS`, the firmware's "never"."""
+:data:`MAX_INTERVAL_SECS`, the firmware's "never". ``REPEATER``'s are those
+of 2.6.13 through 2.7.10, the firmware that keeps the role (see
+:func:`replaced_role_refusal`). 2.6.13 leaves ``telemetry.device_update_interval``
+alone for ``ROUTER_LATE``, ``SENSOR`` and ``TRACKER``."""
 
 _ROLE_DEFAULT_VALUES: Final[Mapping[str, Mapping[tuple[str, str], object]]] = MappingProxyType(
     {
@@ -207,6 +211,10 @@ _ROLE_DEFAULT_VALUES: Final[Mapping[str, Mapping[tuple[str, str], object]]] = Ma
             ("owner", "is_unmessagable"): True,
         },
         "ROUTER_LATE": {("owner", "is_unmessagable"): True},
+        "REPEATER": {
+            ("device", "rebroadcast_mode"): "CORE_PORTNUMS_ONLY",
+            ("owner", "is_unmessagable"): True,
+        },
         "SENSOR": {("owner", "is_unmessagable"): True},
         "TRACKER": {("owner", "is_unmessagable"): True},
         "TAK": {("device", "node_info_broadcast_secs"): 24 * 3600},

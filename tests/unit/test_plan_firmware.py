@@ -599,6 +599,27 @@ def test_a_role_change_to_router_accepts_the_firmwares_is_unmessagable(
     assert name.is_unmessagable_changed is (live is None)
 
 
+def test_a_repeater_role_change_where_the_firmware_keeps_it_accepts_the_role_defaults() -> None:
+    template = _template(
+        "is_unmessagable: false\ndevice:\n  role: REPEATER\n  rebroadcast_mode: ALL\n"
+    )
+    live = live_config_from_template(
+        template,
+        firmware_version="2.6.13.0561f2c",
+        is_unmessagable=None,
+        section_overrides={"device": {"role": "CLIENT", "rebroadcast_mode": "LOCAL_ONLY"}},
+    )
+
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    change = _change(plan, "device", "rebroadcast_mode")
+    assert (change.desired, change.firmware_value) == ("ALL", "CORE_PORTNUMS_ONLY")
+    assert plan.name_change.firmware_is_unmessagable is True
+    message = _role_warning(plan)
+    assert message is not None
+    assert "display.screen_on_secs" in message
+
+
 _PUBLIC_PRIMARY = LiveChannel(index=0, default_key=True, position_precision=12, public_key=True)
 
 
