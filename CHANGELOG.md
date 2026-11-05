@@ -662,6 +662,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A plan that writes a new node key (a FACTORY node,
+  `--force-regenerate-key`) to firmware older than 2.8 warns
+  (`peers_keep_old_key`) that the node id stays and that other nodes
+  holding the old key keep it, so their direct messages and remote admin
+  to the node fail, and names the expected remedy, not yet tried on a
+  device (`meshtastic --remove-node` on each, then `mesh peers`). `mesh
+  peers` says the same when the device holds a different key for a fleet
+  node.
 - `mesh provision` refuses a plan that switches `lora.use_preset` to
   `false` on a node holding 0 for its bandwidth, spread factor or coding
   rate, as a node on a preset does (exit code 5, before anything is

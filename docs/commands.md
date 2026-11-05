@@ -127,6 +127,18 @@ another row's or a key row's owner is drawn again (up to 16 times)
 before anything is sent. If the new id already has a row, nothing is
 saved (exit code 4).
 
+**Firmware before 2.8: other nodes keep the old key.** Older firmware
+keeps the node id when the key changes, and a node that already holds a
+public key for that id never replaces it from the node's announcements,
+so its direct messages and remote admin to the re-keyed node fail (seen
+in the firmware simulator at 2.6.13 and 2.7.26). A plan that writes a
+new node key to a device reporting a parseable firmware version below
+2.8 says so (warning code `peers_keep_old_key`) and names the expected
+remedy: on each node that knew the old key, run `meshtastic
+--remove-node '!ID'`, then `mesh peers`, which adds the node again with
+the key from the database. That remedy is read in the firmware source
+only; it has not been tried on a device or in the simulator.
+
 **Transport selection priority:** `--port` > `--ble-address`/`--ble-scan`
 > `--host` > auto (serial first; exactly one port is auto-used, zero
 ports offers BLE then a TCP host prompt, several ports prompts).
@@ -1525,8 +1537,11 @@ the device already holds it under a key that passes the same weak-key audit;
 otherwise it is reported like a weak key and not favorited); a node the device
 holds under a *different* public key is not overwritten — that is either a
 stale database or a spoofed identity, for you to decide (`mesh adopt` re-reads
-the device); and a node whose recorded public key fails the weak-key audit
-(the structural checks and known-bad-keys blocklist of `mesh db verify`) or is
+the device; when that node got a new key on firmware before 2.8, the device
+keeps the old one, and the message names the expected, untested remedy:
+remove the node from it with `meshtastic --remove-node` and run `mesh peers`
+again); and a node whose recorded public key fails the weak-key audit (the
+structural checks and known-bad-keys blocklist of `mesh db verify`) or is
 shared with another node is neither added nor favorited, because a favorite is
 never evicted — run `mesh db verify`, then re-key the node (`mesh provision
 --force-regenerate-key`). A run that leaves only such cases says so instead of

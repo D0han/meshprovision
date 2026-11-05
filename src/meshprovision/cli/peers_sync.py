@@ -177,7 +177,10 @@ def run_peers(
     for node_id in plan.key_mismatch:
         ctx.warn(
             f"{node_id.display}: the device holds a different public key than the database; "
-            "left alone. Verify which is right (`mesh adopt` re-reads the device)."
+            "left alone. Verify which is right (`mesh adopt` re-reads the device). If that "
+            "node got a new key on firmware < 2.8, this device keeps the old one; the expected "
+            f"remedy (untested) is `meshtastic --remove-node '{node_id.display}'` here, then "
+            "`mesh peers` again."
         )
     if plan.no_key:
         names = ", ".join(node_id.display for node_id in plan.no_key)

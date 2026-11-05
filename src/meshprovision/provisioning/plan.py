@@ -61,7 +61,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 from meshprovision.enums import MODULES_WITHOUT_ENABLED
-from meshprovision.firmware import derives_node_id_from_key
+from meshprovision.firmware import derives_node_id_from_key, parse_firmware_version
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
@@ -561,6 +561,35 @@ def _assemble_sections(
     return tuple(ordered)
 
 
+def _peers_keep_old_key_warning(node: str) -> PlanWarning:
+    """Warn that a new key on firmware older than 2.8 leaves other nodes with the old one.
+
+    Such firmware keeps the node id, and a node that already holds a
+    public key for an id never replaces it from a NodeInfo
+    (``NodeDB::updateUser``, "not updating"): its direct messages and
+    remote admin to the node fail (``NO_CHANNEL``, seen in the firmware
+    simulator at 2.6.13 and 2.7.26). The remedy named, removing the node
+    there (``removeNodeByNum``) and adding it back with ``mesh peers``,
+    is read in the source only, not yet tried on a device or in the
+    simulator. ``mesh peers`` reports such a node and leaves it alone.
+
+    Args:
+        node: The node's display id.
+
+    Returns:
+        A ``peers_keep_old_key`` warning.
+    """
+    return PlanWarning(
+        PlanWarningCode.PEERS_KEEP_OLD_KEY,
+        f"Applying this plan gives {node} a new key under the same node id (firmware < 2.8 "
+        "keeps the id). Other nodes that already hold its old key keep it, so their direct "
+        f"messages and remote admin to {node} fail. The expected remedy (untested): run "
+        f"`meshtastic --remove-node '{node}'` on each, then `mesh peers` there.",
+        section="security",
+        field="public_key",
+    )
+
+
 def build_plan(inputs: PlanInputs) -> ChangePlan:
     """Build an exact, deterministic :class:`ChangePlan` from resolved inputs.
 
@@ -666,6 +695,8 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
                 field="public_key",
             )
         )
+    elif regenerate and parse_firmware_version(live.firmware_version) is not None:
+        warnings.append(_peers_keep_old_key_warning(live.node_id.display))
 
     lockdown = evaluate_lockdown(inputs, admin_plan.desired)
     if lockdown.reason == LockdownReason.ALLOW_LOCKDOWN_NOT_SET:

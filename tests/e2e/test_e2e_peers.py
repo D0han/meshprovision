@@ -168,6 +168,7 @@ def test_a_different_key_on_the_device_is_reported_and_never_overwritten(
 
     assert result.exit_code == 0
     assert "different public key" in result.stderr
+    assert f"meshtastic --remove-node '!{B_HEX}'" in result.stderr
     assert device.peer_calls == []
     assert device.known_nodes[b_num]["user"]["publicKey"] == _b64(OTHER_KEY)  # type: ignore[index]
 

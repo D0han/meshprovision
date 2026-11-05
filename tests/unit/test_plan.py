@@ -1043,3 +1043,50 @@ def test_a_key_write_on_firmware_2_8_warns_that_the_node_id_changes(
             "derives it from the new key. The database follows it to the new id."
         )
         assert (warnings[0].section, warnings[0].field) == ("security", "public_key")
+
+
+@pytest.mark.parametrize(
+    ("firmware", "warned"),
+    [
+        pytest.param("2.6.13.0561f2c", True, id="2.6"),
+        pytest.param("2.7.26.54e0d8d", True, id="2.7"),
+        pytest.param("2.8.0.47db0e3", False, id="2.8"),
+        pytest.param("weird", False, id="unparseable"),
+    ],
+)
+def test_a_key_write_before_firmware_2_8_warns_that_other_nodes_keep_the_old_key(
+    make_live, template, firmware: str, warned: bool
+) -> None:
+    live = make_live(template, security=make_security(empty=True), firmware_version=firmware)
+    inputs = PlanInputs(live=live, template=template, db_entry=None, state=detect.NodeState.FACTORY)
+
+    plan = build_plan(inputs)
+
+    assert plan.key_plan.regenerate
+    warnings = [w for w in plan.warnings if w.code == PlanWarningCode.PEERS_KEEP_OLD_KEY]
+    assert bool(warnings) is warned
+    if warned:
+        node = live.node_id.display
+        assert f"`meshtastic --remove-node '{node}'`" in warnings[0].message
+        assert "same node id" in warnings[0].message
+
+
+def test_a_kept_key_before_firmware_2_8_gets_no_old_key_warning(
+    make_live, template, keypair
+) -> None:
+    live = make_live(
+        template, security=make_security(keypair=keypair), firmware_version="2.7.26.54e0d8d"
+    )
+    record = NodeRecord(node_id="deadbe01", short_name=live.short_name, long_name=live.long_name)
+    inputs = PlanInputs(
+        live=live,
+        template=template,
+        db_entry=record,
+        state=detect.NodeState.PROVISIONED,
+        db_public_key=keypair.public,
+    )
+
+    plan = build_plan(inputs)
+
+    assert not plan.key_plan.regenerate
+    assert PlanWarningCode.PEERS_KEEP_OLD_KEY not in [w.code for w in plan.warnings]
