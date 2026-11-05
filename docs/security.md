@@ -289,6 +289,11 @@ makes it exit `6`.
 - Tracebacks use a plain formatter, never rich's `show_locals=True`, so a
   crash cannot dump local variables holding key bytes into the log.
 - The 6-digit BLE PIN is treated as a secret like any other.
+- A TCP connection (`--host`) is not encrypted. The device reports its
+  whole security section to the connected client, private key included
+  (firmware 2.6 through 2.8), and a key write sends the new private key:
+  over TCP both cross the network in clear, as do every admin message
+  and the config reads. Use USB or BLE, or a network segment you trust.
 - `mesh adopt`'s `--show-admin-keys` is the one deliberate, narrow
   exception: it prints raw base64 public key material, and only for an
   admin key the device reports that isn't yet in the `Keys` sheet. It is
