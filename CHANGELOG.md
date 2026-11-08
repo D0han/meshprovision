@@ -662,6 +662,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A template with `lora.override_duty_cycle: true` in a region with a
+  duty-cycle limit (10 % in `EU_868`, 2.5 % in `EU_866` for all but
+  `ROUTER` and `ROUTER_LATE`) loads with a warning
+  (`duty_cycle_overridden`): the firmware then stops enforcing the limit,
+  and the node can transmit for longer than the region's rules allow.
 - `--json`'s per-section `reboots_device` for `lora` follows the device's
   firmware: before 2.8 a `lora` write alone reboots for a change of
   `use_preset`, `region`, `modem_preset`, `tx_power`, `frequency_offset`,

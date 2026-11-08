@@ -31,6 +31,7 @@ __all__ = [
     "RegionBand",
     "boot_uses_default_slot",
     "djb2",
+    "duty_cycle_limit",
     "frequency_slot_count",
     "preset_problem",
 ]
@@ -244,6 +245,9 @@ UNUSABLE_REGIONS: Final[Mapping[str, str]] = MappingProxyType(
 )
 """Regions no supported firmware runs, with the reason."""
 
+_OLD_REGION_DUTY_CYCLES: Final[Mapping[str, float]] = MappingProxyType({"UA_868": 1})
+"""The duty-cycle limit, in percent, of a region only firmware before 2.8 has."""
+
 _EU_SIBLINGS: Final[tuple[str, ...]] = ("EU_868", "EU_866", "EU_N_868")
 """The regions firmware 2.8 swaps between for a preset of another (``regionSwapForPreset``)."""
 
@@ -385,3 +389,25 @@ def boot_uses_default_slot(region: str, preset: str, channel_num: int) -> bool |
         return channel_num == band.override_slot
     name = PRESET_CHANNEL_NAMES.get(preset, UNKNOWN_PRESET_NAME)
     return channel_num - 1 == djb2(name) % slots
+
+
+def duty_cycle_limit(region: str) -> str | None:
+    """Return a region's duty-cycle limit as text, or ``None`` when it has none.
+
+    The firmware stops sending once its own transmissions over the last
+    hour pass that share, unless ``lora.override_duty_cycle`` is set
+    (``Router::send``, 2.6.13 through 2.8.3).
+
+    Args:
+        region: The region name.
+
+    Returns:
+        For example ``"10 %"``; ``EU_866``'s depends on the role.
+    """
+    band = REGION_BANDS.get(region)
+    limit = band.duty_cycle if band is not None else _OLD_REGION_DUTY_CYCLES.get(region)
+    if limit is None or limit >= 100:
+        return None
+    if region == "EU_866":
+        return f"{limit:g} % (10 % for ROUTER and ROUTER_LATE)"
+    return f"{limit:g} %"

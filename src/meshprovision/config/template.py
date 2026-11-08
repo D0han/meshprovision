@@ -68,7 +68,7 @@ from meshprovision.errors import (
     NamePatternError,
     TemplateValidationError,
 )
-from meshprovision.lora_regions import DEPRECATED_PRESETS
+from meshprovision.lora_regions import DEPRECATED_PRESETS, duty_cycle_limit
 from meshprovision.name_pattern import (
     BASE36_ALPHABET,
     DEFAULT_MIN_CAPACITY,
@@ -585,7 +585,8 @@ class TemplateConfig(BaseModel):
             module-option warnings first (unknown, or without an on/off
             switch), then a capacity-below-floor warning (when not already
             a hard error), then a long-name-near-limit warning, then a
-            role-never-announces warning, then a preset-deprecated warning.
+            role-never-announces warning, then a preset-deprecated warning,
+            then a duty-cycle-overridden warning.
         """
         warnings = list(self._option_warnings())
 
@@ -634,6 +635,18 @@ class TemplateConfig(BaseModel):
                     "preset_deprecated",
                     f"lora.modem_preset {preset} {deprecation}.",
                     field="lora.modem_preset",
+                )
+            )
+
+        limit = duty_cycle_limit(self.lora.region)
+        if self.lora.override_duty_cycle and limit is not None:
+            warnings.append(
+                TemplateWarning(
+                    "duty_cycle_overridden",
+                    f"lora.override_duty_cycle true makes the firmware stop enforcing "
+                    f"{self.lora.region}'s duty-cycle limit of {limit}: the node can then "
+                    "transmit for longer than the region's rules allow.",
+                    field="lora.override_duty_cycle",
                 )
             )
 

@@ -191,3 +191,37 @@ def test_the_default_slot_at_boot_is_the_preset_names(
     region: str, preset: str, channel_num: int, default: bool | None
 ) -> None:
     assert lora_regions.boot_uses_default_slot(region, preset, channel_num) is default
+
+
+@pytest.mark.parametrize(
+    ("region", "limit"),
+    [
+        ("EU_868", "10 %"),
+        ("EU_866", "2.5 % (10 % for ROUTER and ROUTER_LATE)"),
+        ("UA_868", "1 %"),
+        ("US", None),
+    ],
+)
+def test_the_duty_cycle_limit_of_a_region(region: str, limit: str | None) -> None:
+    assert lora_regions.duty_cycle_limit(region) == limit
+
+
+@pytest.mark.parametrize(
+    ("lora", "warned"),
+    [
+        ({"override_duty_cycle": True}, True),
+        ({"override_duty_cycle": False}, False),
+        ({"override_duty_cycle": True, "region": "US"}, False),
+    ],
+)
+def test_overriding_a_duty_cycle_limit_loads_with_a_warning(
+    lora: dict[str, object], warned: bool
+) -> None:
+    warnings = [
+        w for w in TemplateConfig(lora=lora).collect_warnings() if w.code == "duty_cycle_overridden"
+    ]
+
+    assert bool(warnings) is warned
+    if warned:
+        assert warnings[0].field == "lora.override_duty_cycle"
+        assert "EU_868's duty-cycle limit of 10 %" in warnings[0].message

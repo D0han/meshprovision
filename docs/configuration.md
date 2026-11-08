@@ -391,7 +391,7 @@ unless a range is given.
 | `tx_power` | 0-30 dBm | Transmit power; 0 means the region's limit. The firmware holds at most that limit (27 dBm for `EU_868`) unless the owner is licensed, also when a region change lowers it, so a higher value (or 0) gets a plan warning (`tx_power_limited_by_region`) and the verify accepts the limit |
 | `channel_num` | 0, or a slot from 1 to the preset's slot count in the region (`EU_868`: 1 for the 250 kHz presets, 2 for `LONG_MODERATE` and `LONG_SLOW`); `mesh provision` refuses a higher one on firmware 2.8 or an unknown version, which replaces it, and warns on older firmware, which keeps it but wraps it (`channel_num_wraps`) | Frequency slot; 0 lets the firmware pick it from the primary channel's name |
 | `frequency_offset` | Hz | Frequency offset |
-| `override_duty_cycle` | `true`/`false`, default `false` | Overrides the regional duty-cycle limit |
+| `override_duty_cycle` | `true`/`false`, default `false`; `true` in a region with a duty-cycle limit (10 % in `EU_868`) loads with a warning (`duty_cycle_overridden`): the firmware then stops enforcing the limit | Overrides the regional duty-cycle limit |
 | `sx126x_rx_boosted_gain` | `true`/`false` | SX126x boosted receive gain |
 | `ignore_mqtt` | `true`/`false` | Ignores packets that came from MQTT; a region change sets it to `true` when the new region has a duty-cycle limit, so `false` takes a second run (the plan warns: `region_change_sets_ignore_mqtt`) |
 | `config_ok_to_mqtt` | `true`/`false` | Consents to this node's traffic being uplinked to MQTT |
