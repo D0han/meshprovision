@@ -56,6 +56,7 @@ class PlanWarningCode(StrEnum):
     KNOWN_ONLY_IGNORES_CLIENT = "known_only_ignores_client"
     TX_POWER_LIMITED_BY_REGION = "tx_power_limited_by_region"
     PEERS_KEEP_OLD_KEY = "peers_keep_old_key"
+    CHANNEL_NUM_WRAPS = "channel_num_wraps"
 
 
 @dataclass(frozen=True, slots=True)

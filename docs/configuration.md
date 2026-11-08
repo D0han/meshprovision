@@ -264,6 +264,15 @@ from 2.6 on runs it. `LONG_SLOW` loads with a warning
 (`preset_deprecated`): the firmware has marked it deprecated since 2.7,
 but 2.6 through 2.8 still run it.
 
+`EU_868` (869.4-869.65 MHz) has room for one 250 kHz slot, at
+869.525 MHz, so every preset but `LONG_MODERATE` and `LONG_SLOW` has
+exactly one frequency slot there whatever the channel name. Those two
+are 125 kHz wide and have two slots, at 869.4625 and 869.5875 MHz:
+with `channel_num: 0` the firmware picks one from the primary channel's
+name (an unnamed primary takes slot 1 on `LONG_SLOW` and slot 2 on
+`LONG_MODERATE`), so renaming that channel can move the node to the
+other slot.
+
 ### Security block
 
 ```yaml
@@ -369,7 +378,7 @@ unless a range is given.
 | `hop_limit` | 0-7, default 3 | Maximum hop count |
 | `tx_enabled` | `true`/`false`, default `true` | The radio may transmit |
 | `tx_power` | 0-30 dBm | Transmit power; 0 means the region's limit. The firmware holds at most that limit (27 dBm for `EU_868`) unless the owner is licensed, also when a region change lowers it, so a higher value (or 0) gets a plan warning (`tx_power_limited_by_region`) and the verify accepts the limit |
-| `channel_num` | channel number | LoRa channel override |
+| `channel_num` | 0, or a slot from 1 to the preset's slot count in the region (`EU_868`: 1 for the 250 kHz presets, 2 for `LONG_MODERATE` and `LONG_SLOW`); `mesh provision` refuses a higher one on firmware 2.8 or an unknown version, which replaces it, and warns on older firmware, which keeps it but wraps it (`channel_num_wraps`) | Frequency slot; 0 lets the firmware pick it from the primary channel's name |
 | `frequency_offset` | Hz | Frequency offset |
 | `override_duty_cycle` | `true`/`false`, default `false` | Overrides the regional duty-cycle limit |
 | `sx126x_rx_boosted_gain` | `true`/`false` | SX126x boosted receive gain |

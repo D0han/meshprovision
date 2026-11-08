@@ -146,3 +146,30 @@ def test_long_slow_loads_with_a_deprecation_warning(lora: dict[str, object], war
     if warned:
         assert deprecated[0].field == "lora.modem_preset"
         assert "deprecated since firmware 2.7" in deprecated[0].message
+
+
+@pytest.mark.parametrize(
+    ("region", "preset", "on_2_8", "before_2_8"),
+    [
+        ("EU_868", "LONG_FAST", 1, 1),
+        ("EU_868", "SHORT_SLOW", 1, 1),
+        ("EU_868", "LONG_MODERATE", 2, 2),
+        ("EU_868", "LONG_SLOW", 2, 2),
+        ("EU_866", "LITE_FAST", 4, None),
+        ("EU_N_868", "NARROW_SLOW", 3, None),
+        ("US", "LONG_FAST", 104, 104),
+        ("KZ_433", "LONG_FAST", 7, 6),
+        ("LORA_24", "LONG_FAST", 103, 102),
+    ],
+)
+def test_the_frequency_slot_count_follows_each_firmware(
+    region: str, preset: str, on_2_8: int, before_2_8: int | None
+) -> None:
+    """2.8 rounds and pads (``frequencySlotCount``); 2.6 and 2.7 round down."""
+    assert lora_regions.frequency_slot_count(region, preset, firmware_2_8=True) == on_2_8
+    if before_2_8 is not None:
+        assert lora_regions.frequency_slot_count(region, preset, firmware_2_8=False) == (before_2_8)
+
+
+def test_a_region_without_a_plan_here_has_no_slot_count() -> None:
+    assert lora_regions.frequency_slot_count("UA_868", "LONG_FAST", firmware_2_8=False) is None

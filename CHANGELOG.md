@@ -662,6 +662,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` refuses a plan that writes a `lora.channel_num` above
+  the preset's frequency slot count in the region (exit code 5, before
+  anything is written) to firmware 2.8 or an unknown version, which stores
+  another slot (or drops the write when the region changes too), so the
+  verify reported a mismatch on every run; in `EU_868` the 250 kHz presets
+  have one slot and `LONG_MODERATE` and `LONG_SLOW` two. On older firmware,
+  which keeps the value but wraps it, the plan warns (`channel_num_wraps`).
 - `mesh provision` refuses a plan that writes `lora` (exit code 5, before
   anything is written) when the device's firmware cannot run the
   template's region or preset, or reports no parseable version. Firmware

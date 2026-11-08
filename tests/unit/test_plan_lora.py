@@ -148,3 +148,49 @@ def test_the_firmware_boundaries() -> None:
         "BR_902": (2, 7, 4),
     }
     assert dict(plan_lora.REGION_REMOVED_FIRMWARE) == {"UA_868": (2, 8, 0)}
+
+
+@pytest.mark.parametrize(
+    ("lora", "firmware"),
+    [
+        pytest.param("channel_num: 2", _FIRMWARE_2_8, id="long-fast-2-on-2.8"),
+        pytest.param("modem_preset: LONG_MODERATE\n  channel_num: 3", "", id="long-mod-3-unknown"),
+    ],
+)
+def test_a_channel_num_above_the_slot_count_is_refused_on_2_8(lora: str, firmware: str) -> None:
+    template = _template(f"lora:\n  {lora}\n")
+
+    with pytest.raises(PlanConflictError, match=r"frequency slot\(s\) in EU_868") as exc_info:
+        _plan(template, sections=_WRITES_LORA, firmware=firmware)
+
+    assert exc_info.value.field == "lora.channel_num"
+
+
+@pytest.mark.parametrize(
+    "lora",
+    [
+        pytest.param("channel_num: 1", id="long-fast-1"),
+        pytest.param("channel_num: 0", id="long-fast-0"),
+        pytest.param("modem_preset: LONG_SLOW\n  channel_num: 2", id="long-slow-2"),
+        pytest.param("use_preset: false\n  channel_num: 9", id="no-preset"),
+    ],
+)
+def test_a_channel_num_within_the_slot_count_is_planned(lora: str) -> None:
+    template = _template(f"lora:\n  {lora}\n")
+    custom = {"bandwidth": 125, "spread_factor": 11, "coding_rate": 5, "channel_num": 0}
+
+    plan = _plan(template, sections={"lora": custom})
+
+    assert not any(w.code == "channel_num_wraps" for w in plan.warnings)
+
+
+def test_a_channel_num_above_the_slot_count_wraps_before_2_8() -> None:
+    template = _template("lora:\n  channel_num: 3\n")
+
+    plan = _plan(template, sections=_WRITES_LORA, firmware="2.7.26.54e0d8d")
+
+    (warning,) = [w for w in plan.warnings if w.code == "channel_num_wraps"]
+    assert (warning.section, warning.field) == ("lora", "channel_num")
+    assert "above the 1 frequency slot(s) LONG_FAST has in EU_868" in warning.message
+    assert "uses slot 1" in warning.message
+    assert plan.section("lora") is not None

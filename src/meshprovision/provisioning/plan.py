@@ -73,7 +73,7 @@ from meshprovision.provisioning.plan_firmware import (
     replaced_role_refusal,
     role_change_warning,
 )
-from meshprovision.provisioning.plan_lora import lora_firmware_refusal
+from meshprovision.provisioning.plan_lora import channel_num_wrap_warning, lora_firmware_refusal
 from meshprovision.provisioning.plan_security import (
     evaluate_lockdown,
     packet_signature_policy_warning,
@@ -660,7 +660,13 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
     warnings.extend(module_warnings)
     warnings.extend(a.warning for a in adjustments if a.warning is not None)
     warnings.extend(
-        w for w in (role_change_warning(inputs), known_only_warning(inputs)) if w is not None
+        w
+        for w in (
+            role_change_warning(inputs),
+            known_only_warning(inputs),
+            channel_num_wrap_warning(inputs),
+        )
+        if w is not None
     )
 
     bluetooth_section = _plan_bluetooth_section(inputs)

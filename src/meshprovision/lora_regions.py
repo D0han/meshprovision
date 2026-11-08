@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+from fractions import Fraction
+from math import floor
 from types import MappingProxyType
 from typing import Final
 
@@ -26,6 +28,7 @@ __all__ = [
     "UNUSABLE_REGIONS",
     "RegionBand",
     "djb2",
+    "frequency_slot_count",
     "preset_problem",
 ]
 
@@ -165,6 +168,29 @@ firmware (see :data:`UNUSABLE_REGIONS`). ``EU_866``'s duty cycle is 10 %
 for ``ROUTER`` and ``ROUTER_LATE`` (``getEffectiveDutyCycle``), and ``TH``'s
 is 100 % at 2.6.13."""
 
+_PRESET_BANDWIDTH_HZ: Final[Mapping[str, tuple[int, int]]] = MappingProxyType(
+    {
+        "SHORT_TURBO": (500_000, 1_625_000),
+        "SHORT_FAST": (250_000, 812_500),
+        "SHORT_SLOW": (250_000, 812_500),
+        "MEDIUM_FAST": (250_000, 812_500),
+        "MEDIUM_SLOW": (250_000, 812_500),
+        "MEDIUM_TURBO": (500_000, 1_625_000),
+        "LONG_TURBO": (500_000, 1_625_000),
+        "LONG_MODERATE": (125_000, 406_250),
+        "LONG_SLOW": (125_000, 406_250),
+        "LITE_FAST": (125_000, 125_000),
+        "LITE_SLOW": (125_000, 125_000),
+        "NARROW_FAST": (62_500, 62_500),
+        "NARROW_SLOW": (62_500, 62_500),
+        "TINY_FAST": (15_600, 15_600),
+        "TINY_SLOW": (15_600, 15_600),
+    }
+)
+"""Each preset's bandwidth, in Hz, and on a 2.4 GHz region; any other runs ``LONG_FAST``'s."""
+
+_LONG_FAST_BANDWIDTH_HZ: Final[tuple[int, int]] = (250_000, 812_500)
+
 UNUSABLE_PRESETS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "VERY_LONG_SLOW": (
@@ -270,3 +296,32 @@ def preset_problem(region: str, preset: str) -> str | None:
         f"2.8 runs {band.default_preset} in its place, and older firmware cannot run it "
         "there either"
     )
+
+
+def frequency_slot_count(region: str, preset: str, *, firmware_2_8: bool) -> int | None:
+    """Return how many frequency slots ``preset`` has in ``region``.
+
+    ``channel_num`` 1 to this count picks a slot; 0 lets the firmware pick
+    one. Firmware 2.8 rounds the count and leaves room for the region's
+    spacing and padding (``RadioInterface::frequencySlotCount``); older
+    firmware rounds down, with neither (``applyModemConfig``, 2.6.13 and
+    2.7.26, whose regions all have the same band edges as 2.8's).
+
+    Args:
+        region: The region name.
+        preset: The preset name.
+        firmware_2_8: Whether to count as firmware 2.8 does.
+
+    Returns:
+        The count, or ``None`` for a region without a plan here.
+    """
+    band = REGION_BANDS.get(region)
+    if band is None:
+        return None
+    narrow, wide = _PRESET_BANDWIDTH_HZ.get(preset, _LONG_FAST_BANDWIDTH_HZ)
+    bandwidth = wide if band.wide else narrow
+    span = band.end_hz - band.start_hz
+    if not firmware_2_8:
+        return span // bandwidth
+    slots = Fraction(span + band.spacing_hz, band.spacing_hz + 2 * band.padding_hz + bandwidth)
+    return floor(slots + Fraction(1, 2))
