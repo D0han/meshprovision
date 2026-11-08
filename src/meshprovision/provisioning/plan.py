@@ -73,7 +73,11 @@ from meshprovision.provisioning.plan_firmware import (
     replaced_role_refusal,
     role_change_warning,
 )
-from meshprovision.provisioning.plan_lora import channel_num_wrap_warning, lora_firmware_refusal
+from meshprovision.provisioning.plan_lora import (
+    channel_num_wrap_warning,
+    lora_firmware_refusal,
+    radio_move_warning,
+)
 from meshprovision.provisioning.plan_security import (
     evaluate_lockdown,
     packet_signature_policy_warning,
@@ -303,8 +307,9 @@ def _plan_config_sections(
 
     Returns:
         The non-empty sections, in :data:`SECTION_ORDER` order, plus a
-        ``"region_change_reboots"`` warning (the code name predates the
-        wording) when ``lora.region`` or ``lora.modem_preset`` changed.
+        ``"region_change_reboots"`` warning when a ``lora`` change moves
+        the radio (see
+        :func:`~meshprovision.provisioning.plan_lora.radio_move_warning`).
     """
     live = inputs.live
     template = inputs.template
@@ -321,16 +326,9 @@ def _plan_config_sections(
         if not changes:
             continue
         reboots = section_name == "lora" and any(c.field in _REBOOT_LORA_FIELDS for c in changes)
-        if reboots:
-            warnings.append(
-                PlanWarning(
-                    PlanWarningCode.REGION_CHANGE_REBOOTS,
-                    "Changing lora.region/modem_preset moves the radio to other "
-                    "frequencies or modem settings: the node stops hearing nodes that "
-                    "keep the old ones.",
-                    section="lora",
-                )
-            )
+        moved = radio_move_warning(inputs, changes) if section_name == "lora" else None
+        if moved is not None:
+            warnings.append(moved)
         template_values = (
             tuple((name, getattr(model, name)) for name in _SILENCING_LORA_FIELDS)
             if section_name == "lora"

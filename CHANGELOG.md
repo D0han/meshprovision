@@ -662,6 +662,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The plan's `region_change_reboots` warning (the radio moves to other
+  frequencies or modem settings) also covers a change of `lora.use_preset`,
+  `lora.channel_num` (unless the preset has a single frequency slot in the
+  region) and `lora.frequency_offset`, and names the changed fields.
 - On firmware 2.8 the plan predicts the boot-time telemetry minimum of a
   default channel for every `lora.channel_num` the firmware counts as the
   preset's frequency slot, not only for 0: at boot 2.8 takes that slot

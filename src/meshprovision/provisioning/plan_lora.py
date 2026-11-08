@@ -5,7 +5,9 @@ The template validator already refuses a preset its region does not run
 firmware version: a region or preset older firmware has no plan or radio
 parameters for, or a ``channel_num`` firmware 2.8 replaces
 (:func:`lora_firmware_refusal`), and one older firmware wraps
-(:func:`channel_num_wrap_warning`).
+(:func:`channel_num_wrap_warning`). :func:`radio_move_warning` tells the
+operator that a ``lora`` change takes the node off its current frequency
+or modem settings.
 
 Pure, like :mod:`~meshprovision.provisioning.plan`: no I/O, no device
 access, and nothing from ``meshtastic``. The version boundaries were read
@@ -25,14 +27,16 @@ from meshprovision.lora_regions import frequency_slot_count
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 
 if TYPE_CHECKING:
-    from meshprovision.provisioning.plan_types import PlanInputs
+    from meshprovision.provisioning.plan_types import FieldChange, PlanInputs
 
 __all__ = [
     "PRESET_MIN_FIRMWARE",
+    "RADIO_MOVING_FIELDS",
     "REGION_MIN_FIRMWARE",
     "REGION_REMOVED_FIRMWARE",
     "channel_num_wrap_warning",
     "lora_firmware_refusal",
+    "radio_move_warning",
 ]
 
 _TWO_EIGHT: Final[tuple[int, int, int]] = (2, 8, 0)
@@ -88,6 +92,15 @@ REGION_REMOVED_FIRMWARE: Final[Mapping[str, tuple[int, int, int]]] = MappingProx
     {"UA_868": _TWO_EIGHT}
 )
 """The first firmware without a frequency plan for a region older ones have."""
+
+RADIO_MOVING_FIELDS: Final[tuple[str, ...]] = (
+    "region",
+    "modem_preset",
+    "use_preset",
+    "channel_num",
+    "frequency_offset",
+)
+"""The template ``lora`` fields whose change moves the radio (``applyModemConfig``)."""
 
 _PLANLESS_REGION_FREQUENCIES: Final[str] = "902-928 MHz"
 """Where firmware before 2.8 transmits with a region it has no plan for (``UNSET``'s row)."""
@@ -244,3 +257,36 @@ def lora_firmware_refusal(inputs: PlanInputs, *, writes_lora: bool) -> PlanConfl
             hint="Update this node's firmware first, or set another preset in the template.",
         )
     return _channel_num_problem(inputs, version)
+
+
+def radio_move_warning(inputs: PlanInputs, changes: tuple[FieldChange, ...]) -> PlanWarning | None:
+    """Warn that a ``lora`` change moves the radio off its frequency or modem settings.
+
+    A change of :data:`RADIO_MOVING_FIELDS` does, except a ``channel_num``
+    change alone where the preset has a single frequency slot in the
+    region (every 250 kHz preset in ``EU_868``).
+
+    Args:
+        inputs: The plan inputs.
+        changes: The ``lora`` section's field changes.
+
+    Returns:
+        A ``region_change_reboots`` warning (the code name predates the
+        wording) naming the changed fields, or ``None``.
+    """
+    moved = [c.field for c in changes if c.field in RADIO_MOVING_FIELDS]
+    if moved == ["channel_num"]:
+        lora = inputs.template.lora
+        preset = str(lora.modem_preset or inputs.live.value("lora", "modem_preset"))
+        version = parse_firmware_version(inputs.live.firmware_version)
+        firmware_2_8 = version is None or version >= _TWO_EIGHT
+        if frequency_slot_count(lora.region, preset, firmware_2_8=firmware_2_8) == 1:
+            return None
+    if not moved:
+        return None
+    return PlanWarning(
+        PlanWarningCode.REGION_CHANGE_REBOOTS,
+        f"Changing {', '.join(f'lora.{name}' for name in moved)} moves the radio to other "
+        "frequencies or modem settings: the node stops hearing nodes that keep the old ones.",
+        section="lora",
+    )

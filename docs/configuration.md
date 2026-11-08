@@ -277,6 +277,13 @@ name (an unnamed primary takes slot 1 on `LONG_SLOW` and slot 2 on
 `LONG_MODERATE`), so renaming that channel can move the node to the
 other slot.
 
+A plan that changes `region`, `modem_preset`, `use_preset`,
+`channel_num` or `frequency_offset` moves the radio to other frequencies
+or modem settings, and the node stops hearing nodes that keep the old
+ones: the plan warns (`region_change_reboots`, an older name), naming the
+fields, except for a `channel_num` change alone where the preset has a
+single slot in the region.
+
 ### Security block
 
 ```yaml
