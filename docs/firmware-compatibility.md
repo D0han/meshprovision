@@ -61,6 +61,55 @@ admin keys meshprovision writes read back as the host's and fail
 verification. Keep a node's admin keys in one place. Not verified on a
 device.
 
+## Modem presets and regions by firmware version
+
+Read in the firmware source (`RadioInterface.cpp`, `MeshRadio.h`,
+`config.pb.h`) at every release tag from 2.6.0 to 2.7.26 and at 2.8.0 and
+2.8.3; not tried on a device.
+
+| Preset | Radio parameters from | Before that |
+|---|---|---|
+| `LONG_FAST`, `LONG_SLOW`, `LONG_MODERATE`, `MEDIUM_FAST`, `MEDIUM_SLOW`, `SHORT_FAST`, `SHORT_SLOW`, `SHORT_TURBO` | 2.6.0 or earlier | |
+| `LONG_TURBO` | 2.7.17 | unknown preset |
+| `LITE_*`, `NARROW_*` | 2.8.0 | names only at 2.7.23 to 2.7.26 |
+| `TINY_*`, `MEDIUM_TURBO` | 2.8.0 | unknown preset |
+| `VERY_LONG_SLOW` | none from 2.6.0 on (deprecated in 2.5) | |
+
+A firmware with no radio parameters for a preset runs `LONG_FAST`'s and
+calls a primary channel without a name of its own "Invalid", so the node
+no longer hears the default LongFast channel. Firmware 2.8 also runs only
+a region's own presets (`EU_868`: `LONG_FAST`, `LONG_MODERATE`,
+`LONG_SLOW`, `MEDIUM_SLOW`, `MEDIUM_FAST`, `SHORT_SLOW`, `SHORT_FAST`):
+for another it runs the region's default, or, between `EU_868`, `EU_866`
+and `EU_N_868`, switches to the sibling region that has the preset
+(a write that also changes the region is dropped whole). 2.6
+and 2.7 fall back to `LONG_FAST` when the preset is wider than the band
+(the turbo presets in `EU_868`). `LONG_SLOW` is marked deprecated since
+2.7, and still run by 2.8.
+
+| Region | Frequency plan from |
+|---|---|
+| `ANZ_433` | 2.7.0 |
+| `KZ_433`, `KZ_863` | 2.7.1 |
+| `NP_865`, `BR_902` | 2.7.4 |
+| `EU_866`, `EU_N_868`, `ITU1_2M`, `ITU2_2M`, `ITU3_2M`, `ITU1_70CM`, `ITU2_70CM`, `ITU3_70CM`, `ITU2_125CM` | 2.8.0 (2.7.26 has the region codes of `EU_866`, `EU_N_868` and the three 2 m ITU regions only) |
+| `UA_868` | 2.6.0 or earlier, up to 2.7.26; 2.8 moves it to `EU_868` |
+| `EU_874`, `EU_917` | none from 2.6.0 to 2.8.3 (region codes only) |
+| every other region | 2.6.0 or earlier |
+
+Firmware with a region code but no frequency plan for it uses `UNSET`'s
+(902-928 MHz) and, as the region is set, transmits there. `mesh
+provision` refuses a region or preset the device's firmware cannot run
+(and the template one its region does not run): see
+[`mesh provision`](commands.md#mesh-provision) and
+[the `lora` fields](configuration.md#lora).
+
+A `lora` write alone (outside a settings transaction, which
+meshprovision always uses) reboots firmware 2.6 and 2.7 when a radio
+parameter changes; 2.8 applies every `lora` change live. In the firmware
+simulator 2.7.26 does not reboot, but only because of a simulator-only
+branch in `AdminModule.cpp`.
+
 ## Node identity: the node id follows the key
 
 Firmware 2.8 derives a node's id from its public key. This changes what
