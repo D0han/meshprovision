@@ -7,7 +7,8 @@ parameters for, or a ``channel_num`` firmware 2.8 replaces
 (:func:`lora_firmware_refusal`), and one older firmware wraps
 (:func:`channel_num_wrap_warning`). :func:`radio_move_warning` tells the
 operator that a ``lora`` change takes the node off its current frequency
-or modem settings.
+or modem settings, and :func:`lora_write_reboots` whether the ``lora``
+write alone would reboot the device.
 
 Pure, like :mod:`~meshprovision.provisioning.plan`: no I/O, no device
 access, and nothing from ``meshtastic``. The version boundaries were read
@@ -36,6 +37,7 @@ __all__ = [
     "REGION_REMOVED_FIRMWARE",
     "channel_num_wrap_warning",
     "lora_firmware_refusal",
+    "lora_write_reboots",
     "radio_move_warning",
 ]
 
@@ -101,6 +103,19 @@ RADIO_MOVING_FIELDS: Final[tuple[str, ...]] = (
     "frequency_offset",
 )
 """The template ``lora`` fields whose change moves the radio (``applyModemConfig``)."""
+
+_REBOOTING_LORA_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "use_preset",
+        "region",
+        "modem_preset",
+        "tx_power",
+        "frequency_offset",
+        "channel_num",
+        "sx126x_rx_boosted_gain",
+    }
+)
+"""The template ``lora`` fields whose change reboots firmware before 2.8 (``AdminModule``)."""
 
 _PLANLESS_REGION_FREQUENCIES: Final[str] = "902-928 MHz"
 """Where firmware before 2.8 transmits with a region it has no plan for (``UNSET``'s row)."""
@@ -290,3 +305,24 @@ def radio_move_warning(inputs: PlanInputs, changes: tuple[FieldChange, ...]) -> 
         "frequencies or modem settings: the node stops hearing nodes that keep the old ones.",
         section="lora",
     )
+
+
+def lora_write_reboots(inputs: PlanInputs, changes: tuple[FieldChange, ...]) -> bool:
+    """Tell whether the ``lora`` write alone, outside a settings transaction, reboots.
+
+    ``AdminModule`` set_config lora reboots unless no radio parameter
+    changed (2.6.13, 2.7.2, 2.7.26; of the template's fields those in
+    :data:`_REBOOTING_LORA_FIELDS`); 2.8.0 and later apply every ``lora``
+    change live. An unparseable firmware version counts as older firmware.
+
+    Args:
+        inputs: The plan inputs.
+        changes: The ``lora`` section's field changes.
+
+    Returns:
+        Whether the write reboots the device.
+    """
+    version = parse_firmware_version(inputs.live.firmware_version)
+    if version is not None and version >= _TWO_EIGHT:
+        return False
+    return any(c.field in _REBOOTING_LORA_FIELDS for c in changes)

@@ -143,9 +143,9 @@ def test_a_lora_section_carries_the_template_values_the_writer_checks(make_live,
 
 
 def test_non_reboot_lora_field_change_does_not_claim_reboot(make_live, template) -> None:
-    """A lora field outside {region, modem_preset} must not spuriously reboot.
+    """A lora field that is no radio parameter must not spuriously reboot.
 
-    Only region/modem_preset changes reboot the device -- e.g. hop_limit
+    Only a radio parameter change reboots the device -- e.g. hop_limit
     must not set reboots_device.
     """
     live = make_live(

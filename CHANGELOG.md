@@ -662,6 +662,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `--json`'s per-section `reboots_device` for `lora` follows the device's
+  firmware: before 2.8 a `lora` write alone reboots for a change of
+  `use_preset`, `region`, `modem_preset`, `tx_power`, `frequency_offset`,
+  `channel_num` or `sx126x_rx_boosted_gain` (it named only the region and
+  preset), and from 2.8 it never does. The plan-level reboot is unchanged:
+  the settings commit always reboots.
 - The plan's `region_change_reboots` warning (the radio moves to other
   frequencies or modem settings) also covers a change of `lora.use_preset`,
   `lora.channel_num` (unless the preset has a single frequency slot in the

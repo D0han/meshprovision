@@ -253,3 +253,57 @@ def test_a_lora_change_that_keeps_the_radio_where_it_is_is_not_named(
 
     assert plan.section("lora") is not None
     assert _moved(plan) == []
+
+
+@pytest.mark.parametrize(
+    ("live", "firmware", "reboots"),
+    [
+        pytest.param({"region": "EU_433"}, "2.7.26.54e0d8d", True, id="region-2.7"),
+        pytest.param({"region": "EU_433"}, _FIRMWARE_2_8, False, id="region-2.8"),
+        pytest.param({"tx_power": 20}, "2.6.13.0561f2c", True, id="tx-power-2.6"),
+        pytest.param({"channel_num": 1}, "", True, id="channel-num-unknown"),
+        pytest.param({"hop_limit": 5}, "2.7.26.54e0d8d", False, id="hop-limit-2.7"),
+    ],
+)
+def test_the_lora_sections_own_reboot_follows_the_firmware(
+    live: dict[str, object], firmware: str, reboots: bool
+) -> None:
+    template = _template("lora:\n  tx_power: 27\n  channel_num: 0\n")
+
+    section = _plan(template, sections={"lora": live}, firmware=firmware).section("lora")
+
+    assert section is not None
+    assert section.reboots_device is reboots
+
+
+@pytest.mark.parametrize(
+    ("field", "live"),
+    [
+        pytest.param("use_preset", {"use_preset": False, **_CUSTOM}, id="use_preset"),
+        pytest.param("region", {"region": "EU_433"}, id="region"),
+        pytest.param("modem_preset", {"modem_preset": "SHORT_FAST"}, id="modem_preset"),
+        pytest.param("tx_power", {"tx_power": 20}, id="tx_power"),
+        pytest.param("frequency_offset", {"frequency_offset": 100.0}, id="frequency_offset"),
+        pytest.param("channel_num", {"channel_num": 1}, id="channel_num"),
+        pytest.param(
+            "sx126x_rx_boosted_gain", {"sx126x_rx_boosted_gain": True}, id="rx_boosted_gain"
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("firmware", "reboots"), [("2.7.26.54e0d8d", True), (_FIRMWARE_2_8, False)], ids=["2.7", "2.8"]
+)
+def test_each_radio_parameter_alone_reboots_firmware_before_2_8(
+    field: str, live: dict[str, object], firmware: str, reboots: bool
+) -> None:
+    """AdminModule's "no lora radio parameters change" list, field by field (2.6.13-2.7.26)."""
+    template = _template(
+        "lora:\n  tx_power: 27\n  channel_num: 0\n  frequency_offset: 0.0\n"
+        "  sx126x_rx_boosted_gain: false\n"
+    )
+
+    section = _plan(template, sections={"lora": live}, firmware=firmware).section("lora")
+
+    assert section is not None
+    assert [c.field for c in section.changes] == [field]
+    assert section.reboots_device is reboots

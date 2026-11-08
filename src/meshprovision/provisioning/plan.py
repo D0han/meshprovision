@@ -76,6 +76,7 @@ from meshprovision.provisioning.plan_firmware import (
 from meshprovision.provisioning.plan_lora import (
     channel_num_wrap_warning,
     lora_firmware_refusal,
+    lora_write_reboots,
     radio_move_warning,
 )
 from meshprovision.provisioning.plan_security import (
@@ -136,8 +137,6 @@ in this final execution order, so
 invariant is enforced by :func:`~meshprovision.provisioning.apply.apply_plan`,
 which stops writing at the first section that fails, so nothing after it
 (``security`` or otherwise) is ever sent."""
-
-_REBOOT_LORA_FIELDS: Final[frozenset[str]] = frozenset({"region", "modem_preset"})
 
 _SILENCING_LORA_FIELDS: Final[tuple[str, ...]] = ("tx_enabled", "hop_limit")
 """The ``lora`` fields whose template value every ``lora`` section carries (see
@@ -325,7 +324,7 @@ def _plan_config_sections(
         changes = _diff_section(section_name, model, live, adjusted)
         if not changes:
             continue
-        reboots = section_name == "lora" and any(c.field in _REBOOT_LORA_FIELDS for c in changes)
+        reboots = section_name == "lora" and lora_write_reboots(inputs, changes)
         moved = radio_move_warning(inputs, changes) if section_name == "lora" else None
         if moved is not None:
             warnings.append(moved)

@@ -192,9 +192,10 @@ class SectionChange:
             ``"security"`` when only key material (never represented as
             a :class:`FieldChange`) needs writing.
         reboots_device: Whether this section's own write is a rebooting
-            one: always for ``"security"``, and for ``"lora"`` when
-            ``region``/``modem_preset`` changed (firmware 2.7 reboots for
-            those outside a settings transaction; 2.8 applies them live).
+            one: always for ``"security"``, and for ``"lora"`` when a radio
+            parameter changed on firmware before 2.8, which reboots for
+            those outside a settings transaction (2.8 applies them live;
+            see :func:`~meshprovision.provisioning.plan_lora.lora_write_reboots`).
             Shown in ``--json`` only: the settings commit reboots the
             device anyway (see :attr:`ChangePlan.reboots_device`).
         template_values: ``(field, value)`` pairs the template sets for
