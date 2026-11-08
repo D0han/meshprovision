@@ -662,6 +662,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Without the `meshtastic` protobufs (their built-in fallback tables), the
+  template now accepts the presets `TINY_FAST`, `TINY_SLOW` and
+  `MEDIUM_TURBO` and the regions `ITU1_70CM`, `ITU2_70CM`, `ITU3_70CM` and
+  `ITU2_125CM`, as it does with them.
 - A plan that writes a new node key (a FACTORY node,
   `--force-regenerate-key`) to firmware older than 2.8 warns
   (`peers_keep_old_key`) that the node id stays and that other nodes

@@ -192,6 +192,8 @@ _FALLBACK_ROLE: Final[dict[str, int]] = {
     "CLIENT_BASE": 12,
 }
 
+# ITU1_70CM through ITU2_125CM (34-37) verified 2026-11-07 against meshtastic
+# commit 0a1835760c2437314a2d3544bbdd8b6fead559bc, the pinned dependency.
 _FALLBACK_REGION: Final[dict[str, int]] = {
     "UNSET": 0,
     "US": 1,
@@ -227,6 +229,10 @@ _FALLBACK_REGION: Final[dict[str, int]] = {
     "EU_917": 31,
     "EU_N_868": 32,
     "ITU3_2M": 33,
+    "ITU1_70CM": 34,
+    "ITU2_70CM": 35,
+    "ITU3_70CM": 36,
+    "ITU2_125CM": 37,
 }
 
 # Every key of chipsets.CHIPSET_BY_HW_MODEL that could be confirmed against
@@ -309,6 +315,8 @@ _FALLBACK_REBROADCAST_MODE: Final[dict[str, int]] = {
     "CORE_PORTNUMS_ONLY": 5,
 }
 
+# TINY_FAST through MEDIUM_TURBO (14-16) verified 2026-11-07 against meshtastic
+# commit 0a1835760c2437314a2d3544bbdd8b6fead559bc, the pinned dependency.
 _FALLBACK_MODEM_PRESET: Final[dict[str, int]] = {
     "LONG_FAST": 0,
     "LONG_SLOW": 1,
@@ -324,6 +332,9 @@ _FALLBACK_MODEM_PRESET: Final[dict[str, int]] = {
     "LITE_SLOW": 11,
     "NARROW_FAST": 12,
     "NARROW_SLOW": 13,
+    "TINY_FAST": 14,
+    "TINY_SLOW": 15,
+    "MEDIUM_TURBO": 16,
 }
 
 _FALLBACK_GPS_MODE: Final[dict[str, int]] = {

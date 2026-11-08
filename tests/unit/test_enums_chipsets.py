@@ -165,6 +165,21 @@ def test_fallback_tables_agree_with_real_protobufs_where_present(fallback, table
         assert table.to_value(name) == value, f"{name} value mismatch in real {table.name} table"
 
 
+@pytest.mark.parametrize(
+    ("fallback", "table_fn"),
+    [
+        (enums._FALLBACK_REGION, enums.region_table),
+        (enums._FALLBACK_MODEM_PRESET, enums.modem_preset_table),
+    ],
+    ids=["region", "modem_preset"],
+)
+def test_the_template_validators_fallback_tables_equal_the_pinned_protobufs(
+    fallback, table_fn
+) -> None:
+    """Without the protobufs, the template must accept and reject exactly as with them."""
+    assert fallback == dict(table_fn().name_to_value)
+
+
 def test_chipset_for_hw_model_by_name_and_numeric() -> None:
     assert chipsets.chipset_for_hw_model("RAK4631") is chipsets.Chipset.NRF52840
     numeric = enums.hw_model_table().to_value("RAK4631")
