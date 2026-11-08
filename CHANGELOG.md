@@ -662,6 +662,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` refuses a plan that writes `lora` (exit code 5, before
+  anything is written) when the device's firmware cannot run the
+  template's region or preset, or reports no parseable version. Firmware
+  2.7 has the region codes `EU_866` and `EU_N_868` but no frequency plan
+  for them, so it transmitted on 902-928 MHz with them, outside the band
+  legal in Poland; a preset the firmware has no radio parameters for (the
+  `LITE_*`, `NARROW_*`, `TINY_*` presets and `MEDIUM_TURBO` before 2.8.0,
+  `LONG_TURBO` before 2.7.17) ran `LONG_FAST`'s under the channel name
+  "Invalid", off the default LongFast channel.
 - A template whose `lora.modem_preset` its region does not run is refused
   at load, with the reason: in `EU_868` firmware 2.8 runs `LONG_FAST` in
   place of a turbo or tiny preset and switches the node to `EU_866` or

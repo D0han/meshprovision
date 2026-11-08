@@ -73,6 +73,7 @@ from meshprovision.provisioning.plan_firmware import (
     replaced_role_refusal,
     role_change_warning,
 )
+from meshprovision.provisioning.plan_lora import lora_firmware_refusal
 from meshprovision.provisioning.plan_security import (
     evaluate_lockdown,
     packet_signature_policy_warning,
@@ -626,9 +627,11 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
             ``rebroadcast_mode`` ``KNOWN_ONLY`` to firmware that then
             ignores the connected client (see
             :func:`~meshprovision.provisioning.plan_firmware.local_admin_refusal`),
-            or ``lora.use_preset`` false to a node holding a radio
+            ``lora.use_preset`` false to a node holding a radio
             parameter of 0 (see
-            :func:`~meshprovision.provisioning.plan_firmware.custom_modem_refusal`).
+            :func:`~meshprovision.provisioning.plan_firmware.custom_modem_refusal`),
+            or a region or preset the device's firmware cannot run (see
+            :func:`~meshprovision.provisioning.plan_lora.lora_firmware_refusal`).
     """
     live = inputs.live
     template = inputs.template
@@ -648,6 +651,7 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
         replaced_role_refusal(inputs, writes_device=writes_device),
         local_admin_refusal(inputs, writes_device=writes_device),
         custom_modem_refusal(inputs, writes_lora=writes_lora),
+        lora_firmware_refusal(inputs, writes_lora=writes_lora),
     ):
         if refusal is not None:
             raise refusal

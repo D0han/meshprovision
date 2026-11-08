@@ -237,6 +237,22 @@ simulator). Set the node's own radio
 parameters in the Meshtastic app first, or keep `use_preset: true`. `mesh
 admin bootstrap` inherits this.
 
+A plan that writes `lora` is also refused (exit code 5, before anything is
+written, `--dry-run` included) when the device's firmware cannot run the
+template's region or preset. Firmware with no frequency plan for the
+region falls back to 902-928 MHz and keeps transmitting there: `EU_866`,
+`EU_N_868` and the ITU regions (`ITU1_2M`, `ITU2_2M`, `ITU3_2M`,
+`ITU1_70CM`, `ITU2_70CM`, `ITU3_70CM`, `ITU2_125CM`) before 2.8.0,
+`ANZ_433` before 2.7.0, `KZ_433` and `KZ_863` before 2.7.1, `NP_865` and
+`BR_902` before 2.7.4;
+firmware 2.8.0 and later have none for `UA_868`. Firmware with no radio
+parameters for the preset runs `LONG_FAST`'s and names an unnamed primary
+channel "Invalid", which takes the node off the default LongFast channel:
+`LONG_TURBO` before 2.7.17, the `LITE_*`, `NARROW_*`, `TINY_*` presets and
+`MEDIUM_TURBO` before 2.8.0. An unparseable firmware version is refused
+too. Update the node's firmware first, or pick another region or preset.
+`mesh admin bootstrap` inherits this.
+
 A node the database holds a key for that reports neither a public nor a
 private key while its region is set is refused (exit code 5, before
 anything is written) instead of given a new key: stock firmware keeps a

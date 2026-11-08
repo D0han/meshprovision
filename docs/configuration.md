@@ -363,9 +363,9 @@ unless a range is given.
 
 | Field | Value | Meaning |
 |---|---|---|
-| `region` | region name, default `EU_868`; not `UNSET` (the firmware switches the transmitter off), nor `EU_874` or `EU_917` (no firmware has a frequency plan for them) | LoRa region |
+| `region` | region name, default `EU_868`; not `UNSET` (the firmware switches the transmitter off), nor `EU_874` or `EU_917` (no firmware has a frequency plan for them); `mesh provision` refuses a region the device's firmware has no frequency plan for ([details](commands.md#mesh-provision)) | LoRa region |
 | `use_preset` | `true`/`false`, default `true`; `false` only on a node that already holds its own bandwidth, spread factor and coding rate (set them in the Meshtastic app): the template cannot set them, so `mesh provision` refuses to switch off the preset of a node that holds 0 for any of them | `modem_preset` sets the radio parameters |
-| `modem_preset` | preset name, default `LONG_FAST`; one the region runs while `use_preset` is true ([`EU_868`'s seven](#region-eu_868-not-pl)), and not `VERY_LONG_SLOW` | Modem preset; `null` leaves it alone |
+| `modem_preset` | preset name, default `LONG_FAST`; one the region runs while `use_preset` is true ([`EU_868`'s seven](#region-eu_868-not-pl)), and not `VERY_LONG_SLOW`; `mesh provision` refuses a preset the device's firmware has no radio parameters for (`LONG_TURBO` before 2.7.17; `LITE_*`, `NARROW_*`, `TINY_*`, `MEDIUM_TURBO` before 2.8.0) | Modem preset; `null` leaves it alone |
 | `hop_limit` | 0-7, default 3 | Maximum hop count |
 | `tx_enabled` | `true`/`false`, default `true` | The radio may transmit |
 | `tx_power` | 0-30 dBm | Transmit power; 0 means the region's limit. The firmware holds at most that limit (27 dBm for `EU_868`) unless the owner is licensed, also when a region change lowers it, so a higher value (or 0) gets a plan warning (`tx_power_limited_by_region`) and the verify accepts the limit |

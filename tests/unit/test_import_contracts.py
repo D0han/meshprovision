@@ -102,6 +102,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("provisioning/plan_admin_keys.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/plan_security.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/plan_firmware.py", _PURE_PLAN_FORBIDDEN),
+    ("provisioning/plan_lora.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/discovery.py", ("meshtastic", "meshprovision.provisioning.connection")),
     ("config/settings.py", ("meshprovision.config.template",)),
     ("cli/help_format.py", ("meshprovision",)),
