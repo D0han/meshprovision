@@ -250,6 +250,20 @@ a Meshtastic `RegionCode` protobuf value, the other is a URL path segment
 on lorastats.pl. They are unrelated and both correct in their own
 context — this is a real trip hazard.
 
+`EU_868` runs seven modem presets: `LONG_FAST` (the default),
+`LONG_MODERATE`, `LONG_SLOW`, `MEDIUM_SLOW`, `MEDIUM_FAST`, `SHORT_SLOW`
+and `SHORT_FAST`. A template that pairs a region with a preset the
+region does not run is refused at load, with the reason: firmware 2.8
+runs the region's default preset in its place (the turbo and tiny presets
+in `EU_868`), or switches to the sibling region that has it (`LITE_*` to
+`EU_866`, 865.6-867.6 MHz with a 2.5 % duty cycle for all but `ROUTER`
+and `ROUTER_LATE`; `NARROW_*` to `EU_N_868`), or drops the whole `lora`
+write when it also changes the region; older firmware cannot run it
+there either. `VERY_LONG_SLOW` is refused everywhere: no firmware
+from 2.6 on runs it. `LONG_SLOW` loads with a warning
+(`preset_deprecated`): the firmware has marked it deprecated since 2.7,
+but 2.6 through 2.8 still run it.
+
 ### Security block
 
 ```yaml
@@ -349,9 +363,9 @@ unless a range is given.
 
 | Field | Value | Meaning |
 |---|---|---|
-| `region` | region name, default `EU_868`; not `UNSET` (the firmware switches the transmitter off) | LoRa region |
+| `region` | region name, default `EU_868`; not `UNSET` (the firmware switches the transmitter off), nor `EU_874` or `EU_917` (no firmware has a frequency plan for them) | LoRa region |
 | `use_preset` | `true`/`false`, default `true`; `false` only on a node that already holds its own bandwidth, spread factor and coding rate (set them in the Meshtastic app): the template cannot set them, so `mesh provision` refuses to switch off the preset of a node that holds 0 for any of them | `modem_preset` sets the radio parameters |
-| `modem_preset` | preset name, default `LONG_FAST` | Modem preset; `null` leaves it alone |
+| `modem_preset` | preset name, default `LONG_FAST`; one the region runs while `use_preset` is true ([`EU_868`'s seven](#region-eu_868-not-pl)), and not `VERY_LONG_SLOW` | Modem preset; `null` leaves it alone |
 | `hop_limit` | 0-7, default 3 | Maximum hop count |
 | `tx_enabled` | `true`/`false`, default `true` | The radio may transmit |
 | `tx_power` | 0-30 dBm | Transmit power; 0 means the region's limit. The firmware holds at most that limit (27 dBm for `EU_868`) unless the owner is licensed, also when a region change lowers it, so a higher value (or 0) gets a plan warning (`tx_power_limited_by_region`) and the verify accepts the limit |

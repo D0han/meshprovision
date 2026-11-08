@@ -68,6 +68,7 @@ from meshprovision.errors import (
     NamePatternError,
     TemplateValidationError,
 )
+from meshprovision.lora_regions import DEPRECATED_PRESETS
 from meshprovision.name_pattern import (
     BASE36_ALPHABET,
     DEFAULT_MIN_CAPACITY,
@@ -584,7 +585,7 @@ class TemplateConfig(BaseModel):
             module-option warnings first (unknown, or without an on/off
             switch), then a capacity-below-floor warning (when not already
             a hard error), then a long-name-near-limit warning, then a
-            role-never-announces warning.
+            role-never-announces warning, then a preset-deprecated warning.
         """
         warnings = list(self._option_warnings())
 
@@ -622,6 +623,17 @@ class TemplateConfig(BaseModel):
                     "time: direct messages to it and remote admin of it can fail until "
                     "they do.",
                     field="device.role",
+                )
+            )
+
+        preset = self.lora.modem_preset
+        deprecation = DEPRECATED_PRESETS.get(preset or "")
+        if self.lora.use_preset and deprecation is not None:
+            warnings.append(
+                TemplateWarning(
+                    "preset_deprecated",
+                    f"lora.modem_preset {preset} {deprecation}.",
+                    field="lora.modem_preset",
                 )
             )
 

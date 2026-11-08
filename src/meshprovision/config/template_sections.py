@@ -27,6 +27,7 @@ from meshprovision.enums import (
     role_table,
 )
 from meshprovision.errors import EnumMappingError, TemplateValidationError
+from meshprovision.lora_regions import UNUSABLE_REGIONS, preset_problem
 
 __all__ = [
     "MAX_POSITION_PRECISION",
@@ -276,13 +277,22 @@ class LoraSection(BaseModel):
             The canonical protobuf enum name.
 
         Raises:
-            TemplateValidationError: If the region is ``UNSET``.
+            TemplateValidationError: If the region is ``UNSET``, or one no
+                firmware has a frequency plan for
+                (:data:`~meshprovision.lora_regions.UNUSABLE_REGIONS`).
         """
         region = _canonicalize_enum_field(value, table=region_table(), field="lora.region")
         if region == _UNSET_REGION:
             raise TemplateValidationError(
                 "lora.region UNSET switches the radio's transmitter off (the firmware sets "
                 "tx_enabled false when a region is unset).",
+                field="lora.region",
+                hint="Set the node's region, for example EU_868.",
+            )
+        reason = UNUSABLE_REGIONS.get(str(region))
+        if reason is not None:
+            raise TemplateValidationError(
+                f"lora.region {region} {reason}.",
                 field="lora.region",
                 hint="Set the node's region, for example EU_868.",
             )
@@ -302,6 +312,33 @@ class LoraSection(BaseModel):
         return _canonicalize_enum_field(
             value, table=modem_preset_table(), field="lora.modem_preset"
         )
+
+    @model_validator(mode="after")
+    def _reject_preset_the_region_does_not_run(self) -> LoraSection:
+        """Refuse a ``modem_preset`` the firmware would not run in ``region``.
+
+        The node would run another preset, or switch region, while the
+        template asks for this one, so the write could never be verified
+        (see :func:`~meshprovision.lora_regions.preset_problem`). Without
+        ``use_preset`` the firmware ignores the preset.
+
+        Returns:
+            This section, unchanged.
+
+        Raises:
+            TemplateValidationError: If ``use_preset`` is true and the
+                preset is one ``region`` does not run.
+        """
+        if not self.use_preset or self.modem_preset is None:
+            return self
+        problem = preset_problem(self.region, self.modem_preset)
+        if problem is not None:
+            raise TemplateValidationError(
+                f"lora.modem_preset {self.modem_preset} {problem}.",
+                field="lora.modem_preset",
+                hint=f"Pick a preset that region {self.region} runs.",
+            )
+        return self
 
 
 class PositionSection(BaseModel):

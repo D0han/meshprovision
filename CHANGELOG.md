@@ -662,6 +662,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A template whose `lora.modem_preset` its region does not run is refused
+  at load, with the reason: in `EU_868` firmware 2.8 runs `LONG_FAST` in
+  place of a turbo or tiny preset and switches the node to `EU_866` or
+  `EU_N_868` for a `LITE_*` or `NARROW_*` one (or drops the whole `lora`
+  write when it also changes the region), and older firmware cannot run
+  them there either, so the write could never be verified.
+  `VERY_LONG_SLOW` (which no firmware from 2.6 on runs) and the regions
+  `EU_874` and `EU_917` (no firmware has a frequency plan for them) are
+  refused too; `LONG_SLOW` loads with a warning (`preset_deprecated`).
 - Without the `meshtastic` protobufs (their built-in fallback tables), the
   template now accepts the presets `TINY_FAST`, `TINY_SLOW` and
   `MEDIUM_TURBO` and the regions `ITU1_70CM`, `ITU2_70CM`, `ITU3_70CM` and

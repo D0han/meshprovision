@@ -154,6 +154,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
 STDLIB_ONLY: Final[tuple[str, ...]] = (
     "firmware.py",
     "provisioning/plan_warnings.py",
+    "lora_regions.py",
     "termsafe.py",
     "status/cadence.py",
     "status/timefmt.py",
