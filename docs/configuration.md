@@ -83,7 +83,11 @@ On a default channel (the default key on the preset's own channel name,
 as a stock LongFast node has) the firmware also raises some intervals,
 at every boot: a telemetry interval below 1800 s (43200 s for `ROUTER`
 and `ROUTER_LATE`) while any channel is a default one on the preset's
-frequency slot (firmware 2.8; 2.7 checks no frequency slot at boot), and,
+frequency slot (firmware 2.8, which at boot takes the slot from the
+preset's name whatever the primary channel is called, and also counts
+`channel_num` 0 or one above the slot count; so in `EU_868` every
+`channel_num` is that slot on a 250 kHz preset, while `LONG_SLOW` has
+it at 1 and `LONG_MODERATE` at 2; 2.7 checks no frequency slot at boot), and,
 while the first channel that shares a position is a default one, `position_broadcast_secs` below 3600 s (43200 s for those
 two roles) and `broadcast_smart_minimum_interval_secs` below 300 s. 0
 means the firmware's default and is never raised. Such a value is still

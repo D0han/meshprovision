@@ -23,10 +23,13 @@ from typing import Final
 
 __all__ = [
     "DEPRECATED_PRESETS",
+    "PRESET_CHANNEL_NAMES",
     "REGION_BANDS",
+    "UNKNOWN_PRESET_NAME",
     "UNUSABLE_PRESETS",
     "UNUSABLE_REGIONS",
     "RegionBand",
+    "boot_uses_default_slot",
     "djb2",
     "frequency_slot_count",
     "preset_problem",
@@ -191,6 +194,31 @@ _PRESET_BANDWIDTH_HZ: Final[Mapping[str, tuple[int, int]]] = MappingProxyType(
 
 _LONG_FAST_BANDWIDTH_HZ: Final[tuple[int, int]] = (250_000, 812_500)
 
+PRESET_CHANNEL_NAMES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "SHORT_TURBO": "ShortTurbo",
+        "SHORT_SLOW": "ShortSlow",
+        "SHORT_FAST": "ShortFast",
+        "MEDIUM_SLOW": "MediumSlow",
+        "MEDIUM_FAST": "MediumFast",
+        "MEDIUM_TURBO": "MediumTurbo",
+        "LONG_SLOW": "LongSlow",
+        "LONG_FAST": "LongFast",
+        "LONG_TURBO": "LongTurbo",
+        "LONG_MODERATE": "LongMod",
+        "LITE_FAST": "LiteFast",
+        "LITE_SLOW": "LiteSlow",
+        "NARROW_FAST": "NarrowFast",
+        "NARROW_SLOW": "NarrowSlow",
+        "TINY_FAST": "TinyFast",
+        "TINY_SLOW": "TinySlow",
+    }
+)
+"""Each modem preset's channel name (``DisplayFormatters::getModemPresetDisplayName``)."""
+
+UNKNOWN_PRESET_NAME: Final[str] = "Invalid"
+"""The name the firmware gives a preset it has no name for."""
+
 UNUSABLE_PRESETS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "VERY_LONG_SLOW": (
@@ -325,3 +353,35 @@ def frequency_slot_count(region: str, preset: str, *, firmware_2_8: bool) -> int
         return span // bandwidth
     slots = Fraction(span + band.spacing_hz, band.spacing_hz + 2 * band.padding_hz + bandwidth)
     return floor(slots + Fraction(1, 2))
+
+
+def boot_uses_default_slot(region: str, preset: str, channel_num: int) -> bool | None:
+    """Tell whether firmware 2.8 counts ``channel_num`` as the default slot at boot.
+
+    ``NodeDB::loadFromDisk`` runs ``RadioInterface::clampConfigLora`` before
+    it loads the channels, so the channel name that check hashes is the
+    preset's own (``Channels::getName`` of a channel with no name), whatever
+    the primary channel is called. ``channel_num`` 0, the region's own slot,
+    the preset name's slot, and one above the slot count (which the check
+    replaces with that slot) count as default (``checkOrClampConfigLora``,
+    2.8.0 and 2.8.3).
+
+    Args:
+        region: The region name.
+        preset: The preset name.
+        channel_num: The stored ``channel_num``.
+
+    Returns:
+        Whether the slot is the default one, or ``None`` for a region
+        without a plan here.
+    """
+    band = REGION_BANDS.get(region)
+    slots = frequency_slot_count(region, preset, firmware_2_8=True)
+    if band is None or not slots:
+        return None
+    if channel_num == 0 or channel_num > slots:
+        return True
+    if band.override_slot > 0:
+        return channel_num == band.override_slot
+    name = PRESET_CHANNEL_NAMES.get(preset, UNKNOWN_PRESET_NAME)
+    return channel_num - 1 == djb2(name) % slots

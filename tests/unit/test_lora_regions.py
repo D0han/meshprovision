@@ -173,3 +173,21 @@ def test_the_frequency_slot_count_follows_each_firmware(
 
 def test_a_region_without_a_plan_here_has_no_slot_count() -> None:
     assert lora_regions.frequency_slot_count("UA_868", "LONG_FAST", firmware_2_8=False) is None
+
+
+@pytest.mark.parametrize(
+    ("region", "preset", "channel_num", "default"),
+    [
+        ("EU_868", "LONG_FAST", 0, True),
+        ("EU_868", "LONG_FAST", 1, True),
+        ("EU_868", "LONG_FAST", 7, True),
+        ("EU_868", "LONG_SLOW", 2, False),
+        ("EU_868", "LONG_MODERATE", 1, False),
+        ("EU_868", "LONG_MODERATE", 2, True),
+        ("UA_868", "LONG_FAST", 1, None),
+    ],
+)
+def test_the_default_slot_at_boot_is_the_preset_names(
+    region: str, preset: str, channel_num: int, default: bool | None
+) -> None:
+    assert lora_regions.boot_uses_default_slot(region, preset, channel_num) is default

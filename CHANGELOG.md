@@ -662,6 +662,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- On firmware 2.8 the plan predicts the boot-time telemetry minimum of a
+  default channel for every `lora.channel_num` the firmware counts as the
+  preset's frequency slot, not only for 0: at boot 2.8 takes that slot
+  from the preset's name, and counts 0 and one above the slot count too.
+  In `EU_868` that is every `channel_num` on a 250 kHz preset, so a node
+  with `channel_num: 1` held 1800 s while the plan expected the template's
+  interval, and the verify reported a mismatch.
 - `mesh provision` refuses a plan that writes a `lora.channel_num` above
   the preset's frequency slot count in the region (exit code 5, before
   anything is written) to firmware 2.8 or an unknown version, which stores

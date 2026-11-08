@@ -32,6 +32,11 @@ from typing import TYPE_CHECKING, Final
 
 from meshprovision.errors import PlanConflictError
 from meshprovision.firmware import parse_firmware_version
+from meshprovision.lora_regions import (
+    PRESET_CHANNEL_NAMES,
+    UNKNOWN_PRESET_NAME,
+    boot_uses_default_slot,
+)
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 
 if TYPE_CHECKING:
@@ -119,28 +124,6 @@ TELEMETRY_INTERVAL_FIELDS: Final[tuple[str, ...]] = (
     "health_update_interval",
 )
 """The telemetry intervals ``NodeDB::NodeDB`` raises on a default channel."""
-
-PRESET_CHANNEL_NAMES: Final[Mapping[str, str]] = MappingProxyType(
-    {
-        "SHORT_TURBO": "ShortTurbo",
-        "SHORT_SLOW": "ShortSlow",
-        "SHORT_FAST": "ShortFast",
-        "MEDIUM_SLOW": "MediumSlow",
-        "MEDIUM_FAST": "MediumFast",
-        "MEDIUM_TURBO": "MediumTurbo",
-        "LONG_SLOW": "LongSlow",
-        "LONG_FAST": "LongFast",
-        "LONG_TURBO": "LongTurbo",
-        "LONG_MODERATE": "LongMod",
-        "LITE_FAST": "LiteFast",
-        "LITE_SLOW": "LiteSlow",
-        "NARROW_FAST": "NarrowFast",
-        "NARROW_SLOW": "NarrowSlow",
-        "TINY_FAST": "TinyFast",
-        "TINY_SLOW": "TinySlow",
-    }
-)
-"""Each modem preset's channel name (``DisplayFormatters::getModemPresetDisplayName``)."""
 
 PUBLIC_CHANNEL_MAX_POSITION_PRECISION: Final[int] = 15
 """``MAX_POSITION_PRECISION_PUBLIC_KEY`` (``PositionPrecision.h``): about 700 m."""
@@ -305,9 +288,6 @@ and ``ITU`` regions are 2.8's). 2.7.2 had 12 for ``EU_433`` and 16 for
 _NO_PRESET_NAME: Final[str] = "Custom"
 """The channel name the firmware uses when ``use_preset`` is off."""
 
-_UNKNOWN_PRESET_NAME: Final[str] = "Invalid"
-"""The name the firmware gives a preset it has no name for."""
-
 
 @dataclass(frozen=True, slots=True)
 class FirmwareAdjustment:
@@ -341,7 +321,7 @@ def _preset_channel_name(inputs: PlanInputs) -> str:
     if not lora.use_preset:
         return _NO_PRESET_NAME
     preset = lora.modem_preset or inputs.live.value("lora", "modem_preset")
-    return PRESET_CHANNEL_NAMES.get(str(preset), _UNKNOWN_PRESET_NAME)
+    return PRESET_CHANNEL_NAMES.get(str(preset), UNKNOWN_PRESET_NAME)
 
 
 def _is_default_channel(channel: LiveChannel, preset_name: str) -> bool:
@@ -375,14 +355,15 @@ def _telemetry_floor_applies(inputs: PlanInputs, preset_name: str) -> bool:
 
     From 2.8.0 ``NodeDB::loadFromDisk`` runs ``RadioInterface::clampConfigLora``
     before the check, so ``Channels::hasDefaultChannel`` needs the preset,
-    no ``override_frequency`` and the preset's frequency slot (``channel_num``
-    0 is taken as that slot; a non-zero one the firmware would count too is
-    not recognised). At 2.7.20 to 2.7.26 the slot is not computed yet at
-    boot (its initial value is "default"), so ``channel_num`` does not
-    matter; before 2.7.20 the check is ``isDefaultChannel`` on the primary
-    (index 0) alone, with no preset or frequency condition (2.6.13, 2.7.18).
-    An unparseable version ignores ``channel_num``: predicting a floor the
-    firmware does not apply only adds a value the verify also accepts.
+    no ``override_frequency`` and the default frequency slot (see
+    :func:`~meshprovision.lora_regions.boot_uses_default_slot`; in a region
+    without a plan there, only ``channel_num`` 0 is taken as that slot).
+    At 2.7.20 to 2.7.26 the slot is not computed yet at boot (its initial
+    value is "default"), so ``channel_num`` does not matter; before 2.7.20
+    the check is ``isDefaultChannel`` on the primary (index 0) alone, with
+    no preset or frequency condition (2.6.13, 2.7.18). An unparseable
+    version ignores ``channel_num``: predicting a floor the firmware does
+    not apply only adds a value the verify also accepts.
     """
     live = inputs.live
     lora = inputs.template.lora
@@ -398,7 +379,10 @@ def _telemetry_floor_applies(inputs: PlanInputs, preset_name: str) -> bool:
     channel_num = (
         lora.channel_num if lora.channel_num is not None else live.value("lora", "channel_num")
     )
-    return not channel_num
+    preset = str(lora.modem_preset or live.value("lora", "modem_preset"))
+    stored = channel_num if isinstance(channel_num, int) else 0
+    default_slot = boot_uses_default_slot(lora.region, preset, stored)
+    return not channel_num if default_slot is None else default_slot
 
 
 def _boot_floors(inputs: PlanInputs) -> dict[tuple[str, str], int]:

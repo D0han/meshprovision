@@ -227,7 +227,7 @@ def test_a_channel_named_after_a_preset_is_default_only_on_that_preset(
 @pytest.mark.parametrize(
     ("lora", "firmware", "raised"),
     [
-        pytest.param({"channel_num": 5}, _FIRMWARE_2_8, False, id="channel-num-2.8"),
+        pytest.param({"channel_num": 5}, _FIRMWARE_2_8, True, id="channel-num-2.8"),
         pytest.param({"channel_num": 5}, "2.7.26.54e0d8d", True, id="channel-num-2.7"),
         pytest.param({"channel_num": 5}, "", True, id="channel-num-unknown"),
         pytest.param({"override_frequency": 869.5}, _FIRMWARE_2_8, False, id="override-2.8"),
@@ -241,6 +241,32 @@ def test_the_telemetry_minimum_follows_each_firmwares_boot_check(
     template = _template("telemetry:\n  device_update_interval: 600\n")
 
     warnings = _boot_warnings(_plan(template, sections={"lora": lora}, firmware=firmware))
+
+    assert warnings == ([("telemetry", "device_update_interval")] if raised else [])
+
+
+@pytest.mark.parametrize(
+    ("lora", "channel_num", "raised"),
+    [
+        pytest.param("modem_preset: LONG_FAST", 1, True, id="eu-868-long-fast-1"),
+        pytest.param("modem_preset: SHORT_SLOW", 1, True, id="eu-868-short-slow-1"),
+        pytest.param("modem_preset: LONG_SLOW", 1, True, id="eu-868-long-slow-1"),
+        pytest.param("modem_preset: LONG_SLOW", 2, False, id="eu-868-long-slow-2"),
+        pytest.param("modem_preset: LONG_MODERATE", 1, False, id="eu-868-long-mod-1"),
+        pytest.param("modem_preset: LONG_MODERATE", 2, True, id="eu-868-long-mod-2"),
+        pytest.param("region: US", 20, True, id="us-long-fast-20"),
+        pytest.param("region: US", 5, False, id="us-long-fast-5"),
+        pytest.param("region: EU_N_868\n  modem_preset: NARROW_SLOW", 1, True, id="override-1"),
+        pytest.param("region: EU_N_868\n  modem_preset: NARROW_SLOW", 2, False, id="override-2"),
+    ],
+)
+def test_on_2_8_the_telemetry_minimum_follows_the_presets_frequency_slot(
+    lora: str, channel_num: int, raised: bool
+) -> None:
+    """At boot 2.8 hashes the preset's name, not the primary's (channels load later)."""
+    template = _template(f"lora:\n  {lora}\ntelemetry:\n  device_update_interval: 600\n")
+
+    warnings = _boot_warnings(_plan(template, sections={"lora": {"channel_num": channel_num}}))
 
     assert warnings == ([("telemetry", "device_update_interval")] if raised else [])
 
