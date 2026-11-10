@@ -290,6 +290,19 @@ its slot: always where the preset has a single slot in the region, and
 on `LONG_MODERATE` and `LONG_SLOW` from 0 to the slot the primary
 channel's name already picks, for example.
 
+**Moving a mesh to another preset, or a two-slot preset to its other
+slot, splits it until the last node has moved.** `mesh provision`
+changes one node at a time over its own connection (serial, BLE or TCP),
+and a node on the new radio settings and one on the old cannot hear each
+other. Nothing on the air reports the split: a node that still has a
+neighbour on its own settings sees its packets rebroadcast as usual.
+Move the nodes at the edge of the mesh first and the relays, routers and
+gateways last, so that the nodes still waiting keep their relays, and
+finish an area in one session. Meanwhile `mesh status` and `mesh health`,
+which see a node through the MQTT gateways that hear it, show a node as
+silent when no gateway on its side does. The same holds for a region
+change and for a `channel_num` change that moves the slot.
+
 ### Security block
 
 ```yaml
