@@ -7,8 +7,10 @@ parameters for, or a ``channel_num`` firmware 2.8 replaces
 (:func:`lora_firmware_refusal`), and one older firmware wraps
 (:func:`channel_num_wrap_warning`). :func:`radio_move_warning` tells the
 operator that a ``lora`` change takes the node off its current frequency
-or modem settings, and :func:`lora_write_reboots` whether the ``lora``
-write alone would reboot the device.
+or modem settings, :func:`primary_name_slot_warning` that the primary
+channel's name keeps it off the slot of the preset's other nodes, and
+:func:`lora_write_reboots` whether the ``lora`` write alone would reboot
+the device.
 
 Pure, like :mod:`~meshprovision.provisioning.plan`: no I/O, no device
 access, and nothing from ``meshtastic``. The version boundaries were read
@@ -24,7 +26,7 @@ from typing import TYPE_CHECKING, Final
 
 from meshprovision.errors import PlanConflictError
 from meshprovision.firmware import parse_firmware_version
-from meshprovision.lora_regions import frequency_slot_count
+from meshprovision.lora_regions import frequency_slot_count, name_slot, slot_frequency_hz
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 
 if TYPE_CHECKING:
@@ -38,6 +40,7 @@ __all__ = [
     "channel_num_wrap_warning",
     "lora_firmware_refusal",
     "lora_write_reboots",
+    "primary_name_slot_warning",
     "radio_move_warning",
 ]
 
@@ -224,6 +227,88 @@ def channel_num_wrap_warning(inputs: PlanInputs) -> PlanWarning | None:
         f"has in {inputs.template.lora.region}: this firmware keeps it but uses slot "
         f"{(channel_num - 1) % slots + 1}, and firmware 2.8 replaces it. Use 0 or 1 to "
         f"{slots} in the template.",
+        section="lora",
+        field="channel_num",
+    )
+
+
+def _explicit_slot(channel_num: object, slots: int, *, firmware_2_8: bool) -> int | None:
+    """Return the slot a stored ``channel_num`` picks itself, or ``None`` when the name does.
+
+    0 leaves the slot to the primary channel's name; 1 to ``slots`` is
+    that slot; above ``slots`` firmware before 2.8 wraps it
+    (``applyModemConfig``), and a 2.8 write replaces it with the name's
+    slot (``checkOrClampConfigLora``; 2.8 clamps it at boot too, so a
+    device on 2.8 should not report one). Anything but an ``int`` counts
+    as 0.
+    """
+    if not isinstance(channel_num, int) or channel_num <= 0:
+        return None
+    if channel_num <= slots:
+        return channel_num
+    return None if firmware_2_8 else (channel_num - 1) % slots + 1
+
+
+def _slot_text(region: str, preset: str, slot: int) -> str:
+    """Return ``"slot N (F MHz)"``, or ``"slot N"`` for a region without a plan here."""
+    hz = slot_frequency_hz(region, preset, slot)
+    if hz is None:
+        return f"slot {slot}"
+    return f"slot {slot} ({hz // 1_000_000}.{hz % 1_000_000:06d}".rstrip("0").rstrip(".") + " MHz)"
+
+
+def primary_name_slot_warning(inputs: PlanInputs) -> PlanWarning | None:
+    """Warn that the primary channel's name puts the preset on another slot than the default.
+
+    Where a preset has more than one frequency slot (``LONG_MODERATE`` and
+    ``LONG_SLOW`` in ``EU_868``) and ``channel_num`` leaves the choice to
+    the firmware, the primary channel's name picks the slot
+    (:func:`~meshprovision.lora_regions.name_slot`); a node whose name
+    picks another slot than an unnamed primary does is off the slot the
+    preset's other nodes use. Raised whenever the node is in that state
+    once the plan is applied, as the template cannot name the channel; a
+    ``channel_num`` in the template clears it. A ``lora.override_frequency``
+    on the device leaves no slot to warn about.
+
+    Args:
+        inputs: The plan inputs; the template's ``lora`` values win over
+            the live ones, as they will once the plan is applied.
+
+    Returns:
+        A ``primary_name_moves_slot`` warning, or ``None``.
+    """
+    live = inputs.live
+    lora = inputs.template.lora
+    primary = next((c for c in live.channels if c.index == 0), None)
+    if not lora.use_preset or primary is None or not primary.name:
+        return None
+    if live.value("lora", "override_frequency"):
+        return None
+    preset = str(lora.modem_preset or live.value("lora", "modem_preset"))
+    version = parse_firmware_version(live.firmware_version)
+    firmware_2_8 = version is None or version >= _TWO_EIGHT
+    slots = frequency_slot_count(lora.region, preset, firmware_2_8=firmware_2_8)
+    channel_num = (
+        lora.channel_num if lora.channel_num is not None else live.value("lora", "channel_num")
+    )
+    if (
+        slots is None
+        or slots < 2
+        or _explicit_slot(channel_num, slots, firmware_2_8=firmware_2_8) is not None
+    ):
+        return None
+    chosen = name_slot(lora.region, preset, primary.name, firmware_2_8=firmware_2_8)
+    default = name_slot(lora.region, preset, "", firmware_2_8=firmware_2_8)
+    if chosen is None or default is None or chosen == default:
+        return None
+    return PlanWarning(
+        PlanWarningCode.PRIMARY_NAME_MOVES_SLOT,
+        f'The primary channel is named "{primary.name}", which puts {preset} on '
+        f"{_slot_text(lora.region, preset, chosen)} of the {slots} frequency slots it has in "
+        f"{lora.region}; {preset} nodes with an unnamed primary channel use "
+        f"{_slot_text(lora.region, preset, default)}, so this node and those nodes cannot "
+        f"hear each other. Set lora.channel_num {default} in the template to join them, or "
+        f"{chosen} to keep this slot; either clears this warning.",
         section="lora",
         field="channel_num",
     )

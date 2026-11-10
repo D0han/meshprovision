@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh provision` warns (`primary_name_moves_slot`) when the device's
+  primary channel name puts a preset with two frequency slots
+  (`LONG_MODERATE` or `LONG_SLOW` in `EU_868`) on the other slot than an
+  unnamed primary does, so that the node and the preset's other nodes
+  cannot hear each other, unless `lora.channel_num` (in the template, else
+  on the device) picks a slot itself.
 - `mesh network graph` adds loranet.pl's neighbour lists (what a node
   reported hearing) apart from the observed graph: only reports made in the
   window between two nodes the graph already has, as `loranet_neighbor`

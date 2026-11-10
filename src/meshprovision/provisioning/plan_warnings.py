@@ -57,6 +57,7 @@ class PlanWarningCode(StrEnum):
     TX_POWER_LIMITED_BY_REGION = "tx_power_limited_by_region"
     PEERS_KEEP_OLD_KEY = "peers_keep_old_key"
     CHANNEL_NUM_WRAPS = "channel_num_wraps"
+    PRIMARY_NAME_MOVES_SLOT = "primary_name_moves_slot"
 
 
 @dataclass(frozen=True, slots=True)

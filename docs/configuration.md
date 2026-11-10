@@ -275,7 +275,11 @@ are 125 kHz wide and have two slots, at 869.4625 and 869.5875 MHz:
 with `channel_num: 0` the firmware picks one from the primary channel's
 name (an unnamed primary takes slot 1 on `LONG_SLOW` and slot 2 on
 `LONG_MODERATE`), so renaming that channel can move the node to the
-other slot.
+other slot. The template has no channel name: when the device's primary
+channel has a name that puts the preset on another slot than an unnamed
+primary does, and `channel_num` leaves the choice to the firmware, every
+plan warns (`primary_name_moves_slot`), naming both slots. Setting
+`channel_num` in the template to either slot clears the warning.
 
 A plan that changes `region`, `modem_preset`, `use_preset`,
 `channel_num` or `frequency_offset` moves the radio to other frequencies
@@ -389,7 +393,7 @@ unless a range is given.
 | `hop_limit` | 0-7, default 3 | Maximum hop count |
 | `tx_enabled` | `true`/`false`, default `true` | The radio may transmit |
 | `tx_power` | 0-30 dBm | Transmit power; 0 means the region's limit. The firmware holds at most that limit (27 dBm for `EU_868`) unless the owner is licensed, also when a region change lowers it, so a higher value (or 0) gets a plan warning (`tx_power_limited_by_region`) and the verify accepts the limit |
-| `channel_num` | 0, or a slot from 1 to the preset's slot count in the region (`EU_868`: 1 for the 250 kHz presets, 2 for `LONG_MODERATE` and `LONG_SLOW`); `mesh provision` refuses a higher one on firmware 2.8 or an unknown version, which replaces it, and warns on older firmware, which keeps it but wraps it (`channel_num_wraps`) | Frequency slot; 0 lets the firmware pick it from the primary channel's name |
+| `channel_num` | 0, or a slot from 1 to the preset's slot count in the region (`EU_868`: 1 for the 250 kHz presets, 2 for `LONG_MODERATE` and `LONG_SLOW`); `mesh provision` refuses a higher one on firmware 2.8 or an unknown version, which replaces it, and warns on older firmware, which keeps it but wraps it (`channel_num_wraps`) | Frequency slot; 0 lets the firmware pick it from the primary channel's name, which the plan warns about when that is not the preset's default slot (`primary_name_moves_slot`) |
 | `frequency_offset` | Hz | Frequency offset |
 | `override_duty_cycle` | `true`/`false`, default `false`; `true` in a region with a duty-cycle limit (10 % in `EU_868`) loads with a warning (`duty_cycle_overridden`): the firmware then stops enforcing the limit | Overrides the regional duty-cycle limit |
 | `sx126x_rx_boosted_gain` | `true`/`false` | SX126x boosted receive gain |

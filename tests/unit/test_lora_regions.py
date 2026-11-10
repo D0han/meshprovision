@@ -194,6 +194,54 @@ def test_the_default_slot_at_boot_is_the_preset_names(
 
 
 @pytest.mark.parametrize(
+    ("preset", "name", "slot"),
+    [
+        ("LONG_MODERATE", "", 2),
+        ("LONG_MODERATE", "LongMod", 2),
+        ("LONG_SLOW", "", 1),
+        ("LONG_MODERATE", "Polska", 2),
+        ("LONG_MODERATE", "Krakow", 1),
+        ("LONG_MODERATE", "Mesh", 1),
+        ("LONG_MODERATE", "Gamma", 1),
+        ("LONG_MODERATE", "Alpha", 2),
+        ("LONG_MODERATE", "A", 1),
+        ("LONG_MODERATE", "B", 2),
+        ("LONG_SLOW", "Polska", 2),
+        ("LONG_FAST", "Krakow", 1),
+    ],
+)
+@pytest.mark.parametrize("firmware_2_8", [True, False], ids=["2.8", "before-2.8"])
+def test_the_primary_channel_name_picks_the_slot(
+    preset: str, name: str, slot: int, firmware_2_8: bool
+) -> None:
+    """``hash(name) % 2 + 1`` on every firmware; no name hashes the preset's own."""
+    assert lora_regions.name_slot("EU_868", preset, name, firmware_2_8=firmware_2_8) == slot
+
+
+def test_a_region_with_a_slot_of_its_own_ignores_the_name_on_2_8() -> None:
+    assert lora_regions.name_slot("EU_N_868", "NARROW_SLOW", "Krakow", firmware_2_8=True) == 1
+    assert lora_regions.name_slot("UA_868", "LONG_FAST", "Krakow", firmware_2_8=False) is None
+
+
+@pytest.mark.parametrize(
+    ("region", "preset", "slot", "hz"),
+    [
+        ("EU_868", "LONG_MODERATE", 1, 869_462_500),
+        ("EU_868", "LONG_SLOW", 2, 869_587_500),
+        ("EU_868", "LONG_FAST", 1, 869_525_000),
+        ("US", "LONG_FAST", 20, 906_875_000),
+        ("EU_866", "LITE_FAST", 1, 865_700_000),
+        ("EU_866", "LITE_FAST", 2, 866_300_000),
+        ("EU_N_868", "NARROW_SLOW", 1, 869_441_650),
+        ("UA_868", "LONG_FAST", 1, None),
+    ],
+)
+def test_the_frequency_of_a_slot(region: str, preset: str, slot: int, hz: int | None) -> None:
+    """Padding before each slot, spacing between slots (2.8.3 ``applyModemConfig``)."""
+    assert lora_regions.slot_frequency_hz(region, preset, slot) == hz
+
+
+@pytest.mark.parametrize(
     ("region", "limit"),
     [
         ("EU_868", "10 %"),

@@ -77,6 +77,7 @@ from meshprovision.provisioning.plan_lora import (
     channel_num_wrap_warning,
     lora_firmware_refusal,
     lora_write_reboots,
+    primary_name_slot_warning,
     radio_move_warning,
 )
 from meshprovision.provisioning.plan_security import (
@@ -662,6 +663,7 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
             role_change_warning(inputs),
             known_only_warning(inputs),
             channel_num_wrap_warning(inputs),
+            primary_name_slot_warning(inputs),
         )
         if w is not None
     )

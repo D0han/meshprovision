@@ -27,13 +27,14 @@ def _plan(
     *,
     sections: dict[str, dict[str, object]] | None = None,
     firmware: str = _FIRMWARE_2_8,
+    channels: tuple[LiveChannel, ...] = (_DEFAULT_PRIMARY,),
 ) -> ChangePlan:
     live = live_config_from_template(
         template,
         firmware_version=firmware,
         security=make_security(),
         section_overrides=sections,
-        channels=(_DEFAULT_PRIMARY,),
+        channels=channels,
     )
     return build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
 
@@ -307,3 +308,122 @@ def test_each_radio_parameter_alone_reboots_firmware_before_2_8(
     assert section is not None
     assert [c.field for c in section.changes] == [field]
     assert section.reboots_device is reboots
+
+
+def _named(name: str) -> tuple[LiveChannel, ...]:
+    return (LiveChannel(index=0, name=name, position_precision=12),)
+
+
+def _slot_warnings(plan: ChangePlan) -> list[str]:
+    return [w.message for w in plan.warnings if w.code == "primary_name_moves_slot"]
+
+
+@pytest.mark.parametrize(
+    ("preset", "name", "chosen", "default"),
+    [
+        pytest.param("LONG_MODERATE", "Krakow", 1, 2, id="long-mod-krakow"),
+        pytest.param("LONG_SLOW", "Polska", 2, 1, id="long-slow-polska"),
+    ],
+)
+def test_a_primary_name_off_the_default_slot_is_warned(
+    preset: str, name: str, chosen: int, default: int
+) -> None:
+    template = _template(f"lora:\n  modem_preset: {preset}\n")
+
+    plan = _plan(template, channels=_named(name))
+
+    (warning,) = [w for w in plan.warnings if w.code == "primary_name_moves_slot"]
+    assert (warning.section, warning.field) == ("lora", "channel_num")
+    frequency = {1: "869.4625 MHz", 2: "869.5875 MHz"}
+    assert warning.message == (
+        f'The primary channel is named "{name}", which puts {preset} on slot {chosen} '
+        f"({frequency[chosen]}) of the 2 frequency slots it has in EU_868; {preset} nodes "
+        f"with an unnamed primary channel use slot {default} ({frequency[default]}), so "
+        "this node and those nodes cannot hear each other. Set lora.channel_num "
+        f"{default} in the template to join them, or {chosen} to keep this slot; either "
+        "clears this warning."
+    )
+
+
+@pytest.mark.parametrize(
+    "firmware", ["2.6.13.0561f2c", "2.7.26.54e0d8d", _FIRMWARE_2_8, "", "not-a-version"]
+)
+def test_the_primary_name_slot_is_warned_on_every_firmware(firmware: str) -> None:
+    template = _template("lora:\n  modem_preset: LONG_MODERATE\n")
+
+    plan = _plan(template, firmware=firmware, channels=_named("Krakow"))
+
+    assert len(_slot_warnings(plan)) == 1
+
+
+@pytest.mark.parametrize(
+    ("lora", "live", "channels"),
+    [
+        pytest.param("modem_preset: LONG_MODERATE", None, _named("Polska"), id="same-slot"),
+        pytest.param("modem_preset: LONG_SLOW", None, _named("Krakow"), id="same-slot-ls"),
+        pytest.param("modem_preset: LONG_MODERATE", None, (_DEFAULT_PRIMARY,), id="unnamed"),
+        pytest.param("modem_preset: LONG_MODERATE", None, (), id="no-primary"),
+        pytest.param("modem_preset: LONG_FAST", None, _named("Krakow"), id="one-slot"),
+        pytest.param(
+            "modem_preset: LONG_MODERATE\n  channel_num: 1", None, _named("Krakow"), id="cn-1"
+        ),
+        pytest.param(
+            "modem_preset: LONG_MODERATE\n  channel_num: 2", None, _named("Krakow"), id="cn-2"
+        ),
+        pytest.param(
+            "modem_preset: LONG_MODERATE", {"channel_num": 2}, _named("Krakow"), id="live-cn-2"
+        ),
+        pytest.param(
+            "modem_preset: LONG_MODERATE",
+            {"override_frequency": 869.5},
+            _named("Krakow"),
+            id="override-frequency",
+        ),
+        pytest.param(
+            "use_preset: false\n  modem_preset: LONG_MODERATE",
+            {"use_preset": False, **_CUSTOM},
+            _named("Krakow"),
+            id="no-preset",
+        ),
+    ],
+)
+def test_a_primary_name_that_does_not_pick_another_slot_is_not_warned(
+    lora: str, live: dict[str, object] | None, channels: tuple[LiveChannel, ...]
+) -> None:
+    template = _template(f"lora:\n  {lora}\n")
+
+    plan = _plan(template, sections={"lora": live} if live else None, channels=channels)
+
+    assert _slot_warnings(plan) == []
+
+
+@pytest.mark.parametrize(
+    ("firmware", "warned"),
+    [pytest.param("2.7.26.54e0d8d", False, id="2.7-wraps"), (_FIRMWARE_2_8, True)],
+)
+def test_a_live_channel_num_above_the_slot_count_leaves_the_slot_to_the_name_on_2_8(
+    firmware: str, warned: bool
+) -> None:
+    """2.7 wraps 3 to slot 1 itself; a 2.8 write replaces it with the name's slot."""
+    template = _template("lora:\n  modem_preset: LONG_MODERATE\n")
+
+    plan = _plan(
+        template,
+        sections={"lora": {"channel_num": 3}},
+        firmware=firmware,
+        channels=_named("Krakow"),
+    )
+
+    assert bool(_slot_warnings(plan)) is warned
+
+
+def test_a_preset_change_under_a_named_primary_warns_twice() -> None:
+    template = _template("lora:\n  modem_preset: LONG_MODERATE\n")
+
+    plan = _plan(
+        template, sections={"lora": {"modem_preset": "LONG_FAST"}}, channels=_named("Mesh")
+    )
+
+    assert len(_slot_warnings(plan)) == 1
+    (moved,) = _moved(plan)
+    assert moved.startswith("Changing lora.modem_preset moves the radio")

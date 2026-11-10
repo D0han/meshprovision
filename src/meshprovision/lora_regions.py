@@ -33,7 +33,9 @@ __all__ = [
     "djb2",
     "duty_cycle_limit",
     "frequency_slot_count",
+    "name_slot",
     "preset_problem",
+    "slot_frequency_hz",
 ]
 
 _STD_PRESETS: Final[frozenset[str]] = frozenset(
@@ -357,6 +359,58 @@ def frequency_slot_count(region: str, preset: str, *, firmware_2_8: bool) -> int
         return span // bandwidth
     slots = Fraction(span + band.spacing_hz, band.spacing_hz + 2 * band.padding_hz + bandwidth)
     return floor(slots + Fraction(1, 2))
+
+
+def name_slot(region: str, preset: str, name: str, *, firmware_2_8: bool) -> int | None:
+    """Return the frequency slot a primary channel's name picks for ``preset`` in ``region``.
+
+    With ``channel_num`` 0 the firmware tunes to ``hash(name) % slots + 1``,
+    hashing the primary channel's name, or the preset's name for a channel
+    with none (``applyModemConfig`` and ``Channels::getName``, 2.6.13,
+    2.7.26 and 2.8.3); a region with a slot of its own uses that slot
+    (``resolveFrequencySlot``, 2.8).
+
+    Args:
+        region: The region name.
+        preset: The preset name.
+        name: The primary channel's name, ``""`` for none.
+        firmware_2_8: Whether to count the slots as firmware 2.8 does.
+
+    Returns:
+        The 1-based slot, or ``None`` for a region without a plan here.
+    """
+    band = REGION_BANDS.get(region)
+    slots = frequency_slot_count(region, preset, firmware_2_8=firmware_2_8)
+    if band is None or not slots:
+        return None
+    if firmware_2_8 and 0 < band.override_slot <= slots:
+        return band.override_slot
+    return djb2(name or PRESET_CHANNEL_NAMES.get(preset, UNKNOWN_PRESET_NAME)) % slots + 1
+
+
+def slot_frequency_hz(region: str, preset: str, slot: int) -> int | None:
+    """Return the centre frequency of ``preset``'s 1-based ``slot`` in ``region``, in Hz.
+
+    Firmware 2.8 adds the region's padding before each slot and its
+    spacing between slots (``applyModemConfig``); the regions older
+    firmware has have neither, so 2.6.13 and 2.7.26 give the same
+    frequency.
+
+    Args:
+        region: The region name.
+        preset: The preset name.
+        slot: The slot, from 1.
+
+    Returns:
+        The frequency, or ``None`` for a region without a plan here.
+    """
+    band = REGION_BANDS.get(region)
+    if band is None:
+        return None
+    narrow, wide = _PRESET_BANDWIDTH_HZ.get(preset, _LONG_FAST_BANDWIDTH_HZ)
+    bandwidth = wide if band.wide else narrow
+    width = band.spacing_hz + 2 * band.padding_hz + bandwidth
+    return band.start_hz + band.padding_hz + bandwidth // 2 + (slot - 1) * width
 
 
 def boot_uses_default_slot(region: str, preset: str, channel_num: int) -> bool | None:
