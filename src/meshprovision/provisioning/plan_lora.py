@@ -359,12 +359,41 @@ def lora_firmware_refusal(inputs: PlanInputs, *, writes_lora: bool) -> PlanConfl
     return _channel_num_problem(inputs, version)
 
 
+def _keeps_slot(inputs: PlanInputs, changes: tuple[FieldChange, ...]) -> bool:
+    """Tell whether the ``channel_num`` change leaves the node on its frequency slot.
+
+    Always where the preset has a single slot in the region (every 250 kHz
+    preset in ``EU_868``); with ``use_preset`` and more slots, when the old
+    and the new value pick the same slot (:func:`_explicit_slot`; 0 leaves
+    it to the primary channel's name,
+    :func:`~meshprovision.lora_regions.name_slot`), as ``LONG_MODERATE``'s
+    0 and 2 do with an unnamed primary. Without a primary channel the name
+    is unknown, and the slot counts as moved.
+    """
+    lora = inputs.template.lora
+    preset = str(lora.modem_preset or inputs.live.value("lora", "modem_preset"))
+    version = parse_firmware_version(inputs.live.firmware_version)
+    firmware_2_8 = version is None or version >= _TWO_EIGHT
+    slots = frequency_slot_count(lora.region, preset, firmware_2_8=firmware_2_8)
+    if slots == 1:
+        return True
+    primary = next((c for c in inputs.live.channels if c.index == 0), None)
+    if slots is None or not lora.use_preset or primary is None:
+        return False
+    named = name_slot(lora.region, preset, primary.name, firmware_2_8=firmware_2_8)
+    change = next(c for c in changes if c.field == "channel_num")
+    before, after = (
+        _explicit_slot(value, slots, firmware_2_8=firmware_2_8) or named
+        for value in (change.current, change.desired)
+    )
+    return before == after
+
+
 def radio_move_warning(inputs: PlanInputs, changes: tuple[FieldChange, ...]) -> PlanWarning | None:
     """Warn that a ``lora`` change moves the radio off its frequency or modem settings.
 
     A change of :data:`RADIO_MOVING_FIELDS` does, except a ``channel_num``
-    change alone where the preset has a single frequency slot in the
-    region (every 250 kHz preset in ``EU_868``).
+    change alone that keeps the slot (:func:`_keeps_slot`).
 
     Args:
         inputs: The plan inputs.
@@ -375,14 +404,7 @@ def radio_move_warning(inputs: PlanInputs, changes: tuple[FieldChange, ...]) -> 
         wording) naming the changed fields, or ``None``.
     """
     moved = [c.field for c in changes if c.field in RADIO_MOVING_FIELDS]
-    if moved == ["channel_num"]:
-        lora = inputs.template.lora
-        preset = str(lora.modem_preset or inputs.live.value("lora", "modem_preset"))
-        version = parse_firmware_version(inputs.live.firmware_version)
-        firmware_2_8 = version is None or version >= _TWO_EIGHT
-        if frequency_slot_count(lora.region, preset, firmware_2_8=firmware_2_8) == 1:
-            return None
-    if not moved:
+    if not moved or (moved == ["channel_num"] and _keeps_slot(inputs, changes)):
         return None
     return PlanWarning(
         PlanWarningCode.REGION_CHANGE_REBOOTS,

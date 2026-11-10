@@ -208,7 +208,7 @@ def _moved(plan: ChangePlan) -> list[str]:
     ("lora", "live", "named"),
     [
         pytest.param(
-            "modem_preset: LONG_MODERATE\n  channel_num: 2",
+            "modem_preset: LONG_MODERATE\n  channel_num: 1",
             {"channel_num": 0},
             "lora.channel_num",
             id="slot-of-two",
@@ -427,3 +427,43 @@ def test_a_preset_change_under_a_named_primary_warns_twice() -> None:
     assert len(_slot_warnings(plan)) == 1
     (moved,) = _moved(plan)
     assert moved.startswith("Changing lora.modem_preset moves the radio")
+
+
+@pytest.mark.parametrize(
+    ("preset", "live", "desired", "channels", "firmware", "moves"),
+    [
+        pytest.param("LONG_MODERATE", 0, 2, (_DEFAULT_PRIMARY,), _FIRMWARE_2_8, False, id="lm-0-2"),
+        pytest.param("LONG_MODERATE", 2, 0, (_DEFAULT_PRIMARY,), _FIRMWARE_2_8, False, id="lm-2-0"),
+        pytest.param("LONG_MODERATE", 0, 1, (_DEFAULT_PRIMARY,), _FIRMWARE_2_8, True, id="lm-0-1"),
+        pytest.param("LONG_SLOW", 0, 1, (_DEFAULT_PRIMARY,), "2.6.13.0561f2c", False, id="ls-0-1"),
+        pytest.param("LONG_SLOW", 1, 2, (_DEFAULT_PRIMARY,), _FIRMWARE_2_8, True, id="ls-1-2"),
+        pytest.param(
+            "LONG_MODERATE", 0, 1, _named("Krakow"), _FIRMWARE_2_8, False, id="krakow-0-1"
+        ),
+        pytest.param("LONG_MODERATE", 0, 2, _named("Krakow"), _FIRMWARE_2_8, True, id="krakow-0-2"),
+        pytest.param(
+            "LONG_MODERATE", 3, 1, (_DEFAULT_PRIMARY,), "2.7.26.54e0d8d", False, id="wrap"
+        ),
+        pytest.param(
+            "LONG_MODERATE", 3, 2, (_DEFAULT_PRIMARY,), _FIRMWARE_2_8, False, id="2.8-3-2"
+        ),
+        pytest.param("LONG_MODERATE", 0, 2, (), _FIRMWARE_2_8, True, id="no-primary"),
+    ],
+)
+def test_a_channel_num_change_moves_the_radio_only_off_its_slot(
+    preset: str,
+    live: int,
+    desired: int,
+    channels: tuple[LiveChannel, ...],
+    firmware: str,
+    moves: bool,
+) -> None:
+    """0 leaves the slot to the primary's name: LongMod picks 2, LongSlow 1, "Krakow" 1."""
+    template = _template(f"lora:\n  modem_preset: {preset}\n  channel_num: {desired}\n")
+
+    plan = _plan(
+        template, sections={"lora": {"channel_num": live}}, firmware=firmware, channels=channels
+    )
+
+    assert plan.section("lora") is not None
+    assert bool(_moved(plan)) is moves
