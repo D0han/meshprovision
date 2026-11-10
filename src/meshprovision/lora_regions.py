@@ -170,7 +170,7 @@ REGION_BANDS: Final[Mapping[str, RegionBand]] = MappingProxyType(
 cycle); ``EU_874`` and ``EU_917`` have a region code but no plan in any
 firmware (see :data:`UNUSABLE_REGIONS`). ``EU_866``'s duty cycle is 10 %
 for ``ROUTER`` and ``ROUTER_LATE`` (``getEffectiveDutyCycle``), and ``TH``'s
-is 100 % at 2.6.13."""
+was 100 % before 2.7.21."""
 
 _PRESET_BANDWIDTH_HZ: Final[Mapping[str, tuple[int, int]]] = MappingProxyType(
     {

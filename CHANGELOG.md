@@ -662,6 +662,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` predicts the `lora.tx_power` the firmware holds from
+  the device's firmware version: `EU_433`'s limit was 12 dBm before 2.7.11
+  and `TH`'s 16 dBm before 2.7.21, so the verify no longer reports a
+  mismatch on such a node (`tx_power_limited_by_region`).
 - A template with `lora.override_duty_cycle: true` in a region with a
   duty-cycle limit (10 % in `EU_868`, 2.5 % in `EU_866` for all but
   `ROUTER` and `ROUTER_LATE`) loads with a warning

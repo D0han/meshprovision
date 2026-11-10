@@ -281,9 +281,18 @@ REGION_POWER_LIMITS_DBM: Final[Mapping[str, int]] = MappingProxyType(
 """Each region's ``power_limit``, in dBm (``RadioInterface.cpp`` ``RDEF``).
 
 The same at 2.7.26, 2.8.0 and 2.8.3 for every region those versions share
-(``UA_868`` exists up to 2.7.26; the ``EU_866``, ``EU_N_868``, ``PH_868``
-and ``ITU`` regions are 2.8's). 2.7.2 had 12 for ``EU_433`` and 16 for
-``TH``."""
+(``UA_868`` exists up to 2.7.26; the ``EU_866``, ``EU_N_868`` and ``ITU``
+regions are 2.8's). Older firmware had a lower limit for two regions
+(:data:`_OLD_REGION_POWER_LIMITS_DBM`)."""
+
+_OLD_REGION_POWER_LIMITS_DBM: Final[Mapping[str, tuple[tuple[int, int, int], int]]] = (
+    MappingProxyType({"EU_433": ((2, 7, 11), 12), "TH": ((2, 7, 21), 16)})
+)
+"""The first firmware with a region's :data:`REGION_POWER_LIMITS_DBM` limit, and the older limit.
+
+``RDEF`` at every release tag from 2.6.8 to 2.7.26: ``EU_433`` had 12 dBm
+up to 2.7.10, ``TH`` 16 dBm up to 2.7.20; every other region kept its
+limit."""
 
 _NO_PRESET_NAME: Final[str] = "Custom"
 """The channel name the firmware uses when ``use_preset`` is off."""
@@ -519,17 +528,31 @@ def _region_change_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, 
     return (FirmwareAdjustment("lora", "ignore_mqtt", True, warning),)
 
 
+def _region_power_limit(region: str, version: tuple[int, int, int] | None) -> int | None:
+    """Return ``region``'s power limit on firmware ``version``, in dBm.
+
+    :data:`REGION_POWER_LIMITS_DBM`, or the older limit of
+    :data:`_OLD_REGION_POWER_LIMITS_DBM` before its firmware; an
+    unparseable version counts as the newest.
+    """
+    old = _OLD_REGION_POWER_LIMITS_DBM.get(region)
+    if old is not None and version is not None and version < old[0]:
+        return old[1]
+    return REGION_POWER_LIMITS_DBM.get(region)
+
+
 def _tx_power_adjustments(inputs: PlanInputs) -> tuple[FirmwareAdjustment, ...]:
     """Return the ``lora.tx_power`` the firmware stores in place of the template's, if any.
 
-    ``RadioInterface::applyModemConfig`` (2.7.2 through 2.8.3) stores the
-    region's :data:`REGION_POWER_LIMITS_DBM` limit for a ``tx_power`` of 0
-    and, unless the owner is licensed, for one above that limit; a region
-    change applies it to a ``tx_power`` the template leaves alone too. A
-    region with no known limit predicts nothing.
+    ``RadioInterface::applyModemConfig`` (2.6.13 through 2.8.3) stores the
+    region's limit for the device's firmware (:func:`_region_power_limit`)
+    for a ``tx_power`` of 0 and, unless the owner is licensed, for one
+    above that limit; a region change applies it to a ``tx_power`` the
+    template leaves alone too. A region with no known limit predicts
+    nothing.
     """
     lora = inputs.template.lora
-    limit = REGION_POWER_LIMITS_DBM.get(lora.region)
+    limit = _region_power_limit(lora.region, parse_firmware_version(inputs.live.firmware_version))
     if (
         lora.tx_power is None
         or limit is None

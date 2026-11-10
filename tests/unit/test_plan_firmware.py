@@ -552,10 +552,15 @@ def test_a_region_change_warns_that_the_firmware_sets_ignore_mqtt(
     assert ("ignore_mqtt" in planned) is (live_region == "EU_868" and ignore_mqtt == "false")
 
 
-def _tx_power_plan(tx_power: int, *, region: str, live: int, licensed: bool = False) -> ChangePlan:
+def _tx_power_plan(
+    tx_power: int, *, region: str, live: int, licensed: bool = False, firmware: str = "2.7.11"
+) -> ChangePlan:
     template = _template(f"lora:\n  region: {region}\n  tx_power: {tx_power}\n")
     live_config = live_config_from_template(
-        template, is_licensed=licensed, section_overrides={"lora": {"tx_power": live}}
+        template,
+        is_licensed=licensed,
+        firmware_version=firmware,
+        section_overrides={"lora": {"tx_power": live}},
     )
     return build_plan(
         PlanInputs(live=live_config, template=template, state=detect.NodeState.PROVISIONED)
@@ -582,6 +587,37 @@ def test_a_tx_power_the_region_does_not_allow_plans_the_limit_as_firmware_value(
     assert (change.desired, change.firmware_value) == (tx_power, firmware_value)
     warned = PlanWarningCode.TX_POWER_LIMITED_BY_REGION in [w.code for w in plan.warnings]
     assert warned is (firmware_value is not None)
+
+
+@pytest.mark.parametrize(
+    ("tx_power", "region", "firmware", "firmware_value"),
+    [
+        pytest.param(30, "EU_433", "2.6.13.0561f2c", 12, id="eu433-2.6.13"),
+        pytest.param(0, "EU_433", "2.7.10.94d4bdf", 12, id="eu433-zero-2.7.10"),
+        pytest.param(11, "EU_433", "2.7.10.94d4bdf", None, id="eu433-11-2.7.10"),
+        pytest.param(11, "EU_433", "2.7.11.ee68575", 10, id="eu433-11-2.7.11"),
+        pytest.param(30, "EU_433", "", 10, id="eu433-unknown"),
+        pytest.param(20, "TH", "2.7.20.6658ec2", 16, id="th-2.7.20"),
+        pytest.param(20, "TH", "2.7.21.1370b23", None, id="th-20-2.7.21"),
+        pytest.param(30, "TH", "2.7.21.1370b23", 27, id="th-2.7.21"),
+        pytest.param(30, "TH", "not-a-version", 27, id="th-unparseable"),
+        pytest.param(30, "EU_868", "2.6.13.0561f2c", 27, id="eu868-2.6.13"),
+    ],
+)
+def test_the_tx_power_limit_is_the_one_of_the_devices_firmware(
+    tx_power: int, region: str, firmware: str, firmware_value: int | None
+) -> None:
+    """EU_433 had 12 dBm up to 2.7.10, TH 16 dBm up to 2.7.20 (``RDEF``)."""
+    plan = _tx_power_plan(tx_power, region=region, live=5, firmware=firmware)
+
+    change = _change(plan, "lora", "tx_power")
+    assert (change.desired, change.firmware_value) == (tx_power, firmware_value)
+    warnings = [w for w in plan.warnings if w.code == PlanWarningCode.TX_POWER_LIMITED_BY_REGION]
+    if firmware_value is None:
+        assert warnings == []
+    else:
+        (warning,) = warnings
+        assert f"the node holds {firmware_value} dBm" in warning.message
 
 
 def test_a_device_at_the_region_limit_plans_no_tx_power_change() -> None:

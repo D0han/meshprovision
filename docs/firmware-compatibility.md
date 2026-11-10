@@ -104,6 +104,13 @@ provision` refuses a region or preset the device's firmware cannot run
 [`mesh provision`](commands.md#mesh-provision) and
 [the `lora` fields](configuration.md#lora).
 
+Two regions had a different power limit in older firmware: `EU_433`
+12 dBm before 2.7.11 (10 dBm since), and `TH` 16 dBm with no duty-cycle
+limit before 2.7.21 (27 dBm and 10 % since). `EU_868`'s, 27 dBm and 10 %,
+is the same in every version from 2.6.8 to 2.8.3. `mesh provision`
+predicts the limit of the device's firmware for `lora.tx_power`
+(`tx_power_limited_by_region`).
+
 A `lora` write alone (outside a settings transaction, which
 meshprovision always uses) reboots firmware 2.6 and 2.7 when a radio
 parameter changes; 2.8 applies every `lora` change live. In the firmware
