@@ -117,6 +117,24 @@ parameter changes; 2.8 applies every `lora` change live. In the firmware
 simulator 2.7.26 does not reboot, but only because of a simulator-only
 branch in `AdminModule.cpp`.
 
+## Linux nodes (meshtasticd) before 2.7.13
+
+Firmware 2.6.8 to 2.7.12 (every release tag read; 2.7.13 changed it)
+holds the lower SNR bound of the rebroadcast delay in an unsigned 32-bit
+constant (`RadioInterface::getCWsize`, `SNR_MIN = -20`), which
+Arduino's `map()` takes as a `long`. Where `long` has 32 bits (ESP32 and
+nRF52 boards, a 32-bit Raspberry Pi OS) the value wraps back to -20 and
+the delay window grows with the SNR as designed. On a 64-bit build
+(`meshtasticd` on x86-64 or on a 64-bit Raspberry Pi OS) it stays
+4294967276, and every packet heard below 11 dB SNR gets the largest
+window, from which the delay is drawn at random, so such a relay or
+gateway rebroadcasts it later on average. Run 2.7.13 or later on 64-bit
+Linux nodes. This was read in the source; the firmware simulator is such
+a 64-bit 2.6.13 build, and its measured round trips match a model with
+the largest window, which gives about 1.4 to 1.8 times the round trip of
+the intended window over two or more hops. It was not measured on a
+Raspberry Pi.
+
 ## Node identity: the node id follows the key
 
 Firmware 2.8 derives a node's id from its public key. This changes what
