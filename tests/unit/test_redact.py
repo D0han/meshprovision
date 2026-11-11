@@ -366,6 +366,8 @@ def test_end_to_end_log_output_never_leaks_key_material(
     keypair_factory,
 ) -> None:
     """End-to-end: the real configure_logging pipeline scrubs everything."""
+    import base64
+
     kp = keypair_factory()
     buf = io.StringIO()
     configure_logging("DEBUG", stream=buf, colors=False)
@@ -378,7 +380,7 @@ def test_end_to_end_log_output_never_leaks_key_material(
 
     output = buf.getvalue()
     assert kp.public_b64 not in output
-    assert kp.private.reveal_b64() not in output
+    assert base64.b64encode(kp.private.reveal()).decode("ascii") not in output
     assert kp.public.hex() not in output
     assert "<redacted" in output
     assert "a_pub" in output

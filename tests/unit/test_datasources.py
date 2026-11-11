@@ -25,7 +25,6 @@ from meshprovision.datasources.models import (
     MAX_SEEN_BY_TOPICS,
     CoercionTracker,
     NodeObservation,
-    coerce_bool,
     coerce_float,
     coerce_int,
     coerce_str,
@@ -67,16 +66,6 @@ def test_coerce_int() -> None:
     assert coerce_int(True) is None
     assert coerce_int("42") == 42
     assert coerce_int("not-a-digit") is None
-
-
-def test_coerce_bool() -> None:
-    assert coerce_bool(0) is False
-    assert coerce_bool(1) is True
-    assert coerce_bool(True) is True
-    assert coerce_bool("true") is True
-    assert coerce_bool("false") is False
-    assert coerce_bool(2) is None
-    assert coerce_bool("maybe") is None
 
 
 def test_coerce_str() -> None:
@@ -1666,10 +1655,8 @@ def test_loranet_parse_node_maps_every_field_from_its_own_json_key() -> None:
     assert obs.voltage == pytest.approx(4.05)
     assert obs.channel_utilization == pytest.approx(7.5)
     assert obs.air_util_tx == pytest.approx(1.25)
-    assert obs.temperature == pytest.approx(21.5)
     assert obs.uptime_seconds == 98_765
     assert obs.online_local_nodes == 12
-    assert obs.has_default_channel is False
 
     assert obs.neighbor_count == 2  # the node's own topic is not another node hearing it
     assert obs.seen_by == ("gw1", "gw2")  # sorted, not payload order

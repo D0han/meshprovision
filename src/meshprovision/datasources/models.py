@@ -10,7 +10,7 @@ leaves it ``None`` rather than inventing a default.
 The module-level coercion helpers (``coerce_*``, ``e7_to_degrees``,
 ``parse_epoch``, ``parse_iso8601``) exist because both upstream APIs are
 loosely typed JSON with observed inconsistencies -- loranet.pl reports
-``voltage``/``chUtil``/``temperature`` as *either* ``int`` or ``float``,
+``voltage``/``chUtil`` as *either* ``int`` or ``float``,
 and lorastats.pl's ``LastSeen``/``LastBoot`` fields alternate between
 offset-aware and naive ISO 8601 strings from the same endpoint within
 minutes of each other. Every helper accepts ``object`` and returns
@@ -37,7 +37,6 @@ __all__ = [
     "MAX_SEEN_BY_TOPICS",
     "CoercionTracker",
     "NodeObservation",
-    "coerce_bool",
     "coerce_float",
     "coerce_int",
     "coerce_str",
@@ -156,12 +155,9 @@ class NodeObservation(BaseModel):
             ``chUtil``), when reported.
         air_util_tx: Air utilization for transmit, percentage (loranet
             ``airUtilTx``), when reported.
-        temperature: Reported temperature, when available.
         uptime_seconds: Device uptime in seconds, when reported.
         online_local_nodes: Count of other nodes seen locally online, when
             reported.
-        has_default_channel: Whether the node still uses the default
-            channel, when reported.
         neighbor_count: Number of distinct MQTT gateway topics that have
             relayed this node (loranet ``len(seenBy)``), when known.
         seen_by: The (sorted, capped at :data:`MAX_SEEN_BY_TOPICS`) MQTT
@@ -208,10 +204,8 @@ class NodeObservation(BaseModel):
     voltage: float | None = None
     channel_utilization: float | None = None
     air_util_tx: float | None = None
-    temperature: float | None = None
     uptime_seconds: int | None = None
     online_local_nodes: int | None = None
-    has_default_channel: bool | None = None
 
     neighbor_count: int | None = None
     seen_by: tuple[str, ...] = ()
@@ -417,8 +411,8 @@ def coerce_float(value: object) -> float | None:
     """Coerce a loosely-typed JSON value to a finite ``float``.
 
     Accepts a plain ``int``/``float`` (rejecting ``bool``) or a numeric
-    ``str``. Exists because loranet.pl reports ``voltage``, ``chUtil``,
-    and ``temperature`` as *either* ``int`` or ``float``.
+    ``str``. Exists because loranet.pl reports ``voltage`` and ``chUtil``
+    as *either* ``int`` or ``float``.
 
     Args:
         value: The raw value.
@@ -471,37 +465,6 @@ def coerce_int(value: object) -> int | None:
                 return int(token)
             except ValueError:  # more digits than int max-str-digits allows
                 return None
-        return None
-    return None
-
-
-def coerce_bool(value: object) -> bool | None:
-    """Coerce a loosely-typed JSON value to a ``bool``.
-
-    Accepts a plain ``bool`` unchanged, ``0``/``1`` (rejecting other
-    ints), and the case-insensitive strings ``"true"``/``"false"``.
-
-    Args:
-        value: The raw value.
-
-    Returns:
-        The coerced ``bool``, or ``None`` when ``value`` cannot be
-        confidently coerced.
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int):
-        if value == 1:
-            return True
-        if value == 0:
-            return False
-        return None
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized == "true":
-            return True
-        if normalized == "false":
-            return False
         return None
     return None
 

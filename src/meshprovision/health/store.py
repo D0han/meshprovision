@@ -61,6 +61,7 @@ from meshprovision.health.history import (
     TelemetryPoint,
     prune,
 )
+from meshprovision.network.hourjson import read_number
 from meshprovision.nodeid import NodeId
 from meshprovision.termsafe import terminal_safe
 
@@ -370,25 +371,14 @@ def _dict(value: object) -> dict[Any, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _finite(value: object, low: float, high: float) -> float | None:
-    """Read a finite number (not a bool) within ``low..high``."""
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return None
-    try:
-        number = float(value)
-    except OverflowError:  # an int too large for a float
-        return None
-    return number if math.isfinite(number) and low <= number <= high else None
-
-
 def _time(value: object) -> float | None:
     """Read a finite, non-negative epoch time."""
-    return _finite(value, 0, math.inf)
+    return read_number(value, 0, math.inf)
 
 
 def _number(low: float, high: float) -> _Reader:
     """Build a reader of a finite number (not a bool) within ``low..high``."""
-    return lambda value: _finite(value, low, high)
+    return lambda value: read_number(value, low, high)
 
 
 def _integer(low: int, high: int) -> _Reader:

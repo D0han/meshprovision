@@ -24,7 +24,6 @@ without risking an import cycle.
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
 import re
@@ -198,26 +197,6 @@ class SecretBytes:
             The raw secret bytes.
         """
         return self._raw
-
-    def reveal_b64(self) -> str:
-        """Return the base64 encoding of the wrapped raw bytes.
-
-        This returns secret material as a string. Never log or print the
-        result; only pass it to a destination that is itself trusted with
-        the secret (a config write, an encrypted store, ...).
-
-        Unlike :func:`meshprovision.crypto.keys.encode_key`, this does
-        not validate that the wrapped material is exactly
-        ``X25519_KEY_SIZE`` bytes -- :mod:`meshprovision.crypto.keys`
-        imports :class:`SecretBytes` from this module, so delegating
-        here would be circular. Every current caller only ever wraps a
-        32-byte X25519 key, but that is an invariant held by convention
-        across call sites, not enforced by this method itself.
-
-        Returns:
-            The base64-encoded secret.
-        """
-        return base64.b64encode(self._raw).decode("ascii")
 
     def __len__(self) -> int:
         """Return the length, in bytes, of the wrapped material.
