@@ -261,6 +261,34 @@ channel "Invalid", which takes the node off the default LongFast channel:
 too. Update the node's firmware first, or pick another region or preset.
 `mesh admin bootstrap` inherits this.
 
+A plan that writes `lora` with `lora.use_preset` and a `lora.channel_num`
+above the preset's frequency slot count in the region (1 for the 250 kHz presets in
+`EU_868`, 2 for `LONG_MODERATE` and `LONG_SLOW`) is refused (exit code 5,
+before anything is written, `--dry-run` included) on firmware 2.8 or an
+unparseable version: 2.8 replaces such a value with a slot of its own, or
+drops the whole `lora` write when it also changes the region, so the
+write could never be verified. Use 0 (the firmware picks the slot) or a
+slot in range. Older firmware keeps the value but wraps it onto a slot,
+and the plan warns instead (`channel_num_wraps`). `mesh admin bootstrap`
+inherits this.
+
+A plan that writes `device` with `device.role: REPEATER` is refused (exit
+code 5, before anything is written, `--dry-run` included) on firmware
+2.7.11 and later or an unparseable version: that firmware stores `CLIENT`
+in its place on every `device` write, and turns
+`store_forward.is_server` on when store and forward is enabled, so the
+write could never be verified. Use `ROUTER` or `CLIENT` for such a node.
+`mesh admin bootstrap` inherits this.
+
+A plan that writes `device` with `device.rebroadcast_mode: KNOWN_ONLY` is
+refused (exit code 5, before anything is written, `--dry-run` included)
+on firmware 2.8.0 and later or an unparseable version: in that mode the
+firmware then ignores every admin message from the connected client, so
+the node could no longer be configured or verified over USB, BLE or TCP.
+Older firmware still answers, and the plan warns that it stops doing so
+after an upgrade (`known_only_ignores_client`). Use another mode, such as
+`LOCAL_ONLY`. `mesh admin bootstrap` inherits this.
+
 A node the database holds a key for that reports neither a public nor a
 private key while its region is set is refused (exit code 5, before
 anything is written) instead of given a new key: stock firmware keeps a
@@ -328,6 +356,57 @@ discarding whichever write loses the race. Read-only commands (`mesh
 status`, `mesh db verify`, `mesh db backup`) are never blocked by it.
 `--dry-run` doesn't take the lock. POSIX only: on a platform without
 `fcntl` the lock is a no-op, logged once at WARNING.
+
+**`--json`** prints the plan as one document on STDOUT, also when the
+plan is then applied (the apply's progress and verify go to STDERR):
+`detection` (`node_id`, `state`, `is_new`), `drifts` (`kind`, `field`,
+`recorded`, `observed`: what the device holds against the database row
+before the plan), and `plan`: `node_id`, `state`, `is_new`, `name_change`
+(the current and desired short name, long name and `is_unmessagable`),
+`sections`, `key_plan`, `lockdown` (`enable`, `reason`, `gates`),
+`warnings` and `ble_pin_set`. Each of `sections` has `section`, `kind`,
+`reboots_device` (whether that section's own write reboots the device
+outside a settings transaction: `security` always, `lora` on firmware
+before 2.8 when a radio parameter changes; the settings commit reboots
+anyway) and `changes`, each with `section`, `field`, `current`,
+`desired`, `secret` (secret values read `<redacted>`), `reason` and
+`firmware_value` (the value the firmware is expected to hold in place
+of `desired`, which the verify also accepts; `null` when none). Each of
+`warnings` has `code`, `message`, `section` and `field` (`null` when the
+warning has none).
+
+**Plan warnings.** Every warning the plan prints has one of these codes
+(`warnings[].code` in `--json`); none of them stops the run:
+
+| Code | When |
+|---|---|
+| `name_truncation_risk` | A desired short or long name is over the firmware's byte limit and would be cut silently |
+| `region_change_reboots` | A change of `lora.region`, `modem_preset`, `use_preset`, `channel_num` (unless the node stays on its frequency slot) or `frequency_offset` moves the radio to other frequencies or modem settings: the node stops hearing nodes that keep the old ones (the name predates the wording) |
+| `unknown_module` | A module option names no known module section; nothing is written for it |
+| `module_has_no_enabled_field` | The device reports no `enabled` field for a module the template switches; nothing is written for it |
+| `device_key_differs_from_db` | The device's public key differs from the Keys sheet: the device's key is adopted, not overwritten |
+| `lockdown_not_authorized` | The safety gates for `security.is_managed` pass but `--allow-lockdown` was not given: it stays false |
+| `foreign_node` | The node is not in the database and does not look like a factory-default node |
+| `resolved_admin_key_forced` | An admin key that failed the weak-key audit is authorized anyway (`--allow-weak-admin-key`) |
+| `resolved_admin_key_rejected` | An admin key failed the weak-key audit, or is all-zero or a small-order point, and is not authorized |
+| `live_admin_key_revoked` | An admin key on the device that `admin_nodes` does not name is removed |
+| `live_admin_key_rejected` | An admin key on the device that failed the weak-key audit is removed |
+| `duplicate_admin_key_ref` | Two `admin_nodes` entries name the same key: it is authorized once |
+| `pending_key_recovered` | The keypair an interrupted run generated is recorded from its pending-keypair file |
+| `default_channel_reboot_unknown` | The plan writes `default_channel`, which applies without a reboot (read in the firmware source; not tried on a device) |
+| `field_unsupported_by_firmware` | `security.packet_signature_policy` is not changed: only firmware 2.8 and later have it, and the device reports an older or unparseable version |
+| `primary_channel_unavailable` | `default_channel` is not changed: the device reports no enabled primary channel |
+| `node_id_changes` | The plan writes a new node key on firmware 2.8 or later, which derives the node id from it (see above) |
+| `interval_raised_at_boot` | An interval is below the minimum the firmware raises it to at boot on a default channel; the verify accepts the raised value (see [Configuration](configuration.md)) |
+| `serial_api_disabled` | `security.serial_enabled: false` switches off the serial API from the commit on (over a serial connection the plan is refused instead) |
+| `region_change_sets_ignore_mqtt` | A region change makes the firmware set `lora.ignore_mqtt` to true where the region has a duty-cycle limit; the verify accepts it, and the next run sets the template's `false` |
+| `role_defaults_rewrite` | A `device.role` change makes the firmware reset some settings to the role's defaults; the verify accepts them, and the next run sets the template's values |
+| `position_precision_capped` | `default_channel.position_precision` is above what firmware 2.8 keeps on a channel anyone can decrypt: the node holds the cap, and the verify accepts it |
+| `known_only_ignores_client` | `device.rebroadcast_mode: KNOWN_ONLY` on firmware before 2.8.0, which from 2.8.0 on ignores the connected client in that mode (on 2.8.0 and later the plan is refused, above) |
+| `tx_power_limited_by_region` | `lora.tx_power` is 0 or, unless the owner is licensed, above the region's limit for the device's firmware version: the firmware holds the limit, and the verify accepts it |
+| `peers_keep_old_key` | The plan writes a new node key on firmware before 2.8: other nodes keep the old key (see above) |
+| `channel_num_wraps` | `lora.channel_num` is above the preset's slot count on firmware before 2.8, which keeps it but wraps it onto a slot (on 2.8 the plan is refused, above) |
+| `primary_name_moves_slot` | The primary channel's name puts a preset with two frequency slots on another slot than an unnamed primary does (see [Configuration](configuration.md)) |
 
 ## `mesh adopt`
 
@@ -613,6 +692,22 @@ mesh status --detail full
 mesh status --no-history-refresh
 ```
 
+| Option | Meaning |
+|---|---|
+| `--json` | Emit JSON instead of a table |
+| `--watch` | Poll repeatedly instead of running once |
+| `--interval` | Poll interval, in seconds (`--watch` only); defaults to the cache TTL (at least 5 s, at most one week) |
+| `--node` | Report on this node only (repeatable) |
+| `--source` | Restrict to `loranet` or `lorastats` (repeatable) |
+| `--region` | lorastats region to query (repeatable; overrides `MESHPROVISION_LORASTATS_REGIONS`) |
+| `--refresh-regions` | Read the lorastats region list from lorastats.pl again now, instead of the cached one (only when no region is configured) |
+| `--stale-after` | Hours a node is online for at least (default 2); its expected interval can make it longer |
+| `--offline-after` | Hours before a node can be offline, at least (default 24); its expected interval can make it longer |
+| `--expected-interval` | Expect every reported node every HOURS (at most 48) instead of the learned interval; 0.5 gives the fixed thresholds |
+| `--detail` | Table columns: `brief`, `default` (the default) or `full` (below) |
+| `--history-refresh`, `--no-history-refresh` | Whether the table refreshes a node's health history over an hour old (on by default, below) |
+| `--fail-on-offline`, `--no-fail-on-offline` | Whether an offline or unseen database node makes the exit code non-zero (on by default, below) |
+
 The table columns are: Node, Short, Long, Mgmt, Status, Last seen, Every,
 Timestamp, Metrics, Batt, Volt, ChUtil, AirTx, Seen By, Uptime; the default
 view leaves out Node and Mgmt (they are in `--json` and `--detail full`).
@@ -667,8 +762,9 @@ code use the interval they give (an `--expected-interval` override stays). A
 failed refresh is logged and does not change the table or the exit code; once
 lorastats fails with a 5xx, a transport error or a 429, no other node is asked
 about in that run (see `mesh health`).
-`--no-history-refresh` skips it (the stored histories are still read), and
-`--json` and `--source loranet` never make it.
+`--no-history-refresh` skips it (the stored histories are still read;
+`--history-refresh`, the default, keeps it), and `--json` and `--source
+loranet` never make it.
 
 - **Every** is the node's expected interval `E` (see above), gray when it is
   only its role's default.
@@ -1608,7 +1704,15 @@ there is no separate override specific to this command.
 `--json` prints `template_path`, `admin_nodes` (the refs, in order),
 `short_name_pattern`, `long_name_pattern` and `warnings`, a list of
 `{code, message, field}` objects for the template's non-fatal warnings
-(also printed to STDERR). A template that fails validation prints no
+(also printed to STDERR). Their codes: `unknown_option` (a module option
+that names no known module; nothing is written for it),
+`option_has_no_switch` (a module option for a module without an on/off
+switch), `capacity_below_floor` (a name pattern yields fewer names than
+`name_min_capacity`), `long_name_near_limit` (the long name pattern
+renders within 4 bytes of the firmware's limit), `role_never_announces`
+(`CLIENT_HIDDEN`, which sends no periodic node info), `preset_deprecated`
+(`LONG_SLOW`) and `duty_cycle_overridden` (`lora.override_duty_cycle` in
+a region with a duty-cycle limit). A template that fails validation prints no
 document; the error goes to STDERR with a non-zero exit code (2 for most
 template errors, 5 for more than three `admin_nodes`).
 
