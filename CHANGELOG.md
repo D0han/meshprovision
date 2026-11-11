@@ -668,6 +668,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The hint for a missing template names the example template where it
+  is, `src/meshprovision/examples/template.example.yaml`, not a
+  `config/template.example.yaml` that does not exist.
 - The plan predicts the boot-time position minimums when the first
   channel sharing a position is a default channel by the precisions the
   commit's reboot reads (before this run's `default_channel` write), not
