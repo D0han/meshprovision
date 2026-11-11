@@ -23,9 +23,8 @@ jobs:
   # backend is hatchling>=1.27; there is no uv.lock, no [tool.uv] table, and
   # no PEP 735 [dependency-groups] table — dev dependencies live in
   # [project.optional-dependencies].dev, which `pip install -e ".[dev]"`
-  # resolves natively. The plan's local verification commands use `uv run`,
-  # which is fine on a developer machine, but CI intentionally does not
-  # require uv to be installed.
+  # resolves natively. uv works on a developer machine, but CI
+  # intentionally does not require it to be installed.
   quality:
     name: quality (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -65,8 +64,7 @@ jobs:
         # ["src/meshprovision"] from pyproject.toml. [tool.coverage.report]
         # fail_under = 85 already enforces the floor; --cov-fail-under=85 is
         # passed anyway so the floor is visible directly in the CI log and in
-        # this file. The suite currently sits at 97.09% with 1166 tests, so 85
-        # is a real floor with headroom, not a rubber stamp.
+        # this file.
         #
         # Deliberately not setting MESHPROVISION_CONTACT or any other
         # MESHPROVISION_* variable here: tests/conftest.py's autouse

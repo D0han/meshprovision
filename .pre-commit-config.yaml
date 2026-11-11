@@ -50,22 +50,21 @@ repos:
         # .secrets.baseline file, which nobody can regenerate in this
         # environment and which is not part of this project's file list.
         #
-        # The three exclusions below are load-bearing, published, PUBLIC,
-        # non-secret constants — not a blanket carve-out — and must never be
-        # widened blindly by a future reader:
+        # The two exclusions below hold published, PUBLIC, non-secret
+        # constants — not a blanket carve-out — and must never be widened
+        # blindly by a future reader:
         #   * data/known_bad_keys.txt holds 7 base64-encoded 32-byte X25519
-        #     small-order PUBLIC points (lines 36-54). detect-secrets'
-        #     Base64HighEntropyString detector (limit 4.5) flags high-entropy
-        #     base64 of that shape.
-        #   * src/meshprovision/crypto/weakkeys.py lines 123-153 hold the same
-        #     7 points as 64-char hex literals; HexHighEntropyString
-        #     (limit 3.0) flags those.
+        #     small-order PUBLIC points (lines 36-54), the kind of string
+        #     detect-secrets' Base64HighEntropyString detector (limit 4.5)
+        #     is there to flag; detect-secrets 1.5.0 reports none of them.
         #   * *.ods files are zip containers; the example DB embeds base64
         #     placeholder key material.
+        # src/meshprovision/crypto/known_bad_keys.py holds the same 7 points
+        # as 64-char hex literals and is scanned: detect-secrets 1.5.0
+        # reports none of them either.
         exclude: |
           (?x)^(
             data/known_bad_keys\.txt|
-            src/meshprovision/crypto/weakkeys\.py|
             .*\.ods
           )$
 
