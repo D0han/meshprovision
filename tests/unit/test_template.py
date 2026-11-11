@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from meshprovision.config.template import (
     DefaultChannelSection,
@@ -860,6 +862,32 @@ def test_shipped_example_template_loads_cleanly(repo_root: Path) -> None:
     warnings = cfg.collect_warnings()
     for warning in warnings:
         assert warning.code == "unknown_option", warning
+
+
+@pytest.mark.parametrize(
+    "section",
+    sorted(
+        name
+        for name, field in TemplateConfig.model_fields.items()
+        if isinstance(field.annotation, type) and issubclass(field.annotation, BaseModel)
+    ),
+)
+def test_the_example_template_names_every_field_of_each_section(
+    repo_root: Path, section: str
+) -> None:
+    """Set, or listed in a comment of the section, so an operator can find each one."""
+    example = repo_root / "src" / "meshprovision" / "examples" / "template.example.yaml"
+    text = example.read_text(encoding="utf-8")
+    start = text.index(f"\n{section}:\n") + len(f"\n{section}:\n")
+    following = re.search(r"^\S", text[start:], flags=re.MULTILINE)
+    block = text[start : None if following is None else start + following.start()]
+    model = TemplateConfig.model_fields[section].annotation
+    assert isinstance(model, type)
+    assert issubclass(model, BaseModel)
+
+    missing = [name for name in model.model_fields if not re.search(rf"\b{name}\b", block)]
+
+    assert missing == []
 
 
 def test_admin_key_refs_and_option_state() -> None:

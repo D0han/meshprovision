@@ -177,7 +177,7 @@ case-folds to several characters (`ß`, ligatures like `ﬁ`) is refused too.
 truncates** an over-length name rather than rejecting it, so meshprovision
 refuses to load a template whose *widest possible* rendering exceeds
 **4 UTF-8 bytes** for `short_name` or **25 UTF-8 bytes** for `long_name`
-(firmware 2.8 lowered `long_name` from 39 bytes; meshprovision now
+(firmware 2.8 lowered `long_name` from 39 bytes; meshprovision
 enforces the tighter, 2.8-safe limit regardless of which firmware
 version a given device runs). These are byte limits, not character
 limits — one accented or non-Latin character can consume the entire
@@ -193,7 +193,7 @@ namespace is in use; exhaustion of the namespace is a clear error naming
 the offending pattern.
 
 ```yaml
-is_unmessagable: false
+# is_unmessagable: false
 ```
 
 An owner-identity field, sent through the same admin message as the names
@@ -317,7 +317,7 @@ change and for a `channel_num` change that moves the slot.
 security:
   is_managed: false
   admin_channel_enabled: false
-  packet_signature_policy: PACKET_SIGNATURE_POLICY_COMPATIBLE
+  # packet_signature_policy: PACKET_SIGNATURE_POLICY_COMPATIBLE
 ```
 
 Key material **never** goes in this file — a template containing
