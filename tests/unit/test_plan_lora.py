@@ -54,7 +54,9 @@ _CUSTOM = {"bandwidth": 125, "spread_factor": 11, "coding_rate": 5}
         ),
         pytest.param("region: EU_N_868\n  modem_preset: NARROW_SLOW", "", id="EU_N_868-unknown"),
         pytest.param("region: ANZ_433", "2.6.13.0561f2c", id="ANZ_433-2.6"),
+        pytest.param("region: KZ_433", "2.7.0.705515a", id="KZ_433-2.7.0"),
         pytest.param("region: KZ_863", "2.7.0.705515a", id="KZ_863-2.7.0"),
+        pytest.param("region: NP_865", "2.7.3.cf574c7", id="NP_865-2.7.3"),
         pytest.param("region: BR_902", "2.7.3.cf574c7", id="BR_902-2.7.3"),
     ],
 )
@@ -85,6 +87,9 @@ def test_a_region_newer_firmware_dropped_is_refused_there() -> None:
     [
         pytest.param("region: EU_866\n  modem_preset: LITE_FAST", "2.8.0.47db0e3", id="EU_866-2.8"),
         pytest.param("region: ANZ_433", "2.7.0.195b7cc", id="ANZ_433-2.7.0"),
+        pytest.param("region: KZ_433", "2.7.1.f35ca81", id="KZ_433-2.7.1"),
+        pytest.param("region: KZ_863", "2.7.1.f35ca81", id="KZ_863-2.7.1"),
+        pytest.param("region: NP_865", "2.7.4.c1f4f79", id="NP_865-2.7.4"),
         pytest.param("region: BR_902", "2.7.4.c1f4f79", id="BR_902-2.7.4"),
         pytest.param("region: EU_868", "", id="EU_868-unknown"),
     ],
