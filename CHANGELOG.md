@@ -668,6 +668,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The plan predicts the boot-time position minimums when the first
+  channel sharing a position is a default channel by the precisions the
+  commit's reboot reads (before this run's `default_channel` write), not
+  only by the planned ones: a named primary that starts sharing a position
+  with this run, ahead of a default secondary that already shares one, no
+  longer ends the verify with `position.position_broadcast_secs`
+  unconfirmed.
 - After a firmware 2.8 renumber that the verify proved while another field
   stayed unconfirmed, `mesh provision` names `mesh db renumber OLD NEW`
   (which moves the row and this run's pending keypair) for a node with a

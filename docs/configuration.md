@@ -93,7 +93,12 @@ two roles) and `broadcast_smart_minimum_interval_secs` below 300 s. 0
 means the firmware's default and is never raised. Such a value is still
 written as given, since it holds on any other channel: the plan warns
 (`interval_raised_at_boot`), the verify after the commit's reboot
-accepts the raised value, and the next run plans no change for it. Read
+accepts the raised value, and the next run plans no change for it. That
+reboot reads the precisions the channels have before this run's
+`default_channel` write, and later boots the ones after it: the plan
+predicts the position minimums when the first sharing channel is a
+default one either way, and when it is one only before the write, the
+next run writes the template value again. Read
 in the firmware source: the position minimums since 2.7.18, the router
 values since 2.7.21; older firmware raises only the telemetry intervals,
 to 1800 s for every role, and only while the primary channel is a

@@ -400,9 +400,13 @@ def _boot_floors(inputs: PlanInputs) -> dict[tuple[str, str], int]:
     ``NodeDB::NodeDB`` (read in the source at 2.7.26, 2.8.0, 2.8.2 and
     2.8.3): the telemetry intervals while a channel is a default channel
     (see :func:`_telemetry_floor_applies`), the position intervals while
-    the first channel that shares a position is a default channel. A
-    channel counts as sharing when its live or its planned precision is
-    non-zero: ``default_channel`` may be written after the commit's reboot.
+    the first channel that shares a position (a non-zero precision) is a
+    default channel. That channel is taken both from the live precisions,
+    which the commit's reboot reads (``default_channel`` is written after
+    it), and from the planned ones, which later boots read; either being
+    a default channel predicts the floor. A floor the firmware does not
+    apply adds a value the verify also accepts, and leaves a live value
+    equal to it for the next run to change.
     Older firmware (2.6.13, 2.7.2) raises the telemetry intervals alone,
     to :data:`TELEMETRY_INTERVAL_FLOOR_SECS` for every role: the position
     intervals from :data:`BOOT_POSITION_FLOOR_MIN_FIRMWARE`, the router
@@ -435,11 +439,11 @@ def _boot_floors(inputs: PlanInputs) -> dict[tuple[str, str], int]:
 
     if version is not None and version < BOOT_POSITION_FLOOR_MIN_FIRMWARE:
         return floors
-    sharing = next(
-        (c for c in live.channels if c.position_precision or _planned_precision(inputs, c)),
-        None,
+    sharing = (
+        next((c for c in live.channels if c.position_precision), None),
+        next((c for c in live.channels if _planned_precision(inputs, c)), None),
     )
-    if sharing is not None and _is_default_channel(sharing, preset_name):
+    if any(c is not None and _is_default_channel(c, preset_name) for c in sharing):
         floors[("position", "position_broadcast_secs")] = (
             POSITION_BROADCAST_FLOOR_ROUTER_SECS if router else POSITION_BROADCAST_FLOOR_SECS
         )

@@ -288,6 +288,27 @@ def test_a_primary_that_stops_sharing_after_the_commit_still_counts_as_sharing()
     assert _change(plan, "position", "position_broadcast_secs").firmware_value == 3600
 
 
+def test_the_commit_reboot_takes_the_sharing_channel_from_the_live_precisions() -> None:
+    """The commit's reboot reads the live precisions: the default secondary shares first."""
+    template = _template(
+        "position:\n  position_broadcast_secs: 900\ndefault_channel:\n  position_precision: 13\n"
+    )
+    live = live_config_from_template(
+        template,
+        firmware_version=_FIRMWARE_2_8,
+        section_overrides={"position": {"position_broadcast_secs": 7200}},
+        default_channel_overrides={"position_precision": 0},
+        channels=(
+            LiveChannel(index=0, name="ours"),
+            LiveChannel(index=1, default_key=True, position_precision=13),
+        ),
+    )
+
+    plan = build_plan(PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED))
+
+    assert _change(plan, "position", "position_broadcast_secs").firmware_value == 3600
+
+
 def test_the_example_template_is_above_every_boot_minimum() -> None:
     template = load_template_text(_EXAMPLE)
 
