@@ -121,7 +121,7 @@ Every flag for every command is documented in [Commands](docs/commands.md).
 | [The node database](docs/database.md) | `Nodes`/`Keys` sheet schemas, `observed-*` rows, hand-editing tips, the shipped example |
 | [Commands](docs/commands.md) | Every subcommand, every flag, exit codes |
 | [Security](docs/security.md) | Key generation, the admin-key model, the CVE-2025-52464 weak-key audit, secret hygiene |
-| [Firmware 2.8 and beyond](docs/firmware-compatibility.md) | What firmware 2.8 changes (node ids follow the key), what's fixed, and what's still open |
+| [Firmware 2.8 and beyond](docs/firmware-compatibility.md) | What firmware 2.8 changes (node ids follow the key), what's fixed, and what's still open; presets, regions and power limits by firmware version, the `lora` write reboot, 64-bit Linux nodes before 2.7.13 |
 | [Design notes](docs/design-notes.md) | Deliberate deviations from the original specification |
 | [Troubleshooting](docs/troubleshooting.md) | Linux Mint: USB serial, BLE, TCP/network issues |
 

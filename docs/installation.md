@@ -40,7 +40,7 @@ pip install -e ".[ble]"
 ```
 
 This is a documented alias, kept so the command stays valid: upstream
-`meshtastic` now depends on `bleak` directly, so BLE works without it.
+`meshtastic` depends on `bleak` directly, so BLE works without it.
 
 Everything (`dev` + `ble`) in one shot:
 

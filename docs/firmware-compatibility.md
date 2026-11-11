@@ -5,7 +5,10 @@ Part of the meshprovision docs — see the [README](../README.md).
 Firmware 2.8 ([release notes](https://github.com/meshtastic/firmware/releases/tag/v2.8.0.47db0e3))
 makes several changes worth tracking here. This is a living record of
 what's known, what's already fixed, and what's deliberately not guessed
-at.
+at. It also records what differs between the 2.6, 2.7 and 2.8 versions a
+node may run: the modem presets, frequency plans and power limits by
+version, when a `lora` write reboots the node, and the late rebroadcasts
+of 64-bit Linux nodes before 2.7.13.
 
 **The `meshtastic` library is pinned to a commit, not a release.** The
 newest PyPI release when this was checked (2026-11-02), 2.7.11, has no
@@ -16,7 +19,7 @@ commit `0a18357` of `meshtastic/python`'s unreleased `master` branch
 field), the `TINY_FAST`/`TINY_SLOW`/`MEDIUM_TURBO` modem presets and the
 new amateur-band regions. The v2.8.1 schema adds four hardware models
 (`T_CONNECT_PRO`, `AXIOMETA_GENESIS_MINI`, `MAKERFABS_NOMAD_TERMINAL`,
-`THINKNODE_MX`), which meshprovision now names like any other; their
+`THINKNODE_MX`), which meshprovision names like any other; their
 chipset shows as unknown. Firmware 2.8.2 (prerelease, 2026-11-01) speaks
 protobufs a little past v2.8.1 (submodule `8d0ed0c`): the only additions
 a device can report are hardware model `NODARA` (151) and serial mode

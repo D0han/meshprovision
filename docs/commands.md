@@ -128,8 +128,7 @@ again (the next `mesh provision` alone is refused, see below); for one
 without a row (a first provisioning) it says the next `mesh provision` of
 the new id finds this run's keypair by its key. Any other id is still a
 stop: a device holding our key under another id, or reporting the derived
-id without our private key, ends FAILED with the database not updated, as
-before. A fresh key
+id without our private key, ends FAILED with the database not updated. A fresh key
 whose derived id would be reserved (below 4, or the broadcast address),
 another row's or a key row's owner is drawn again (up to 16 times)
 before anything is sent. If the new id already has a row, nothing is
@@ -1024,7 +1023,8 @@ only first hop of 12 nodes; 15 nodes and 9 gateways got at least half of their
 relayed receptions through it`. The table's Importance column shows the
 raised level. This only reads the store, never fetches it (with or without
 `--no-fetch`); without fresh data, or when the
-region rates the node `low`, everything is as before. In `--json`,
+region rates the node `low`, the level and the detail are the fleet
+score's alone. In `--json`,
 `importance` adds `fleet_level` (the level from the points alone) and
 `network`: `null`, or `region`, `data_as_of`, `level`, `carried_share`,
 `sole_first_hop_for`, `origins_relying`, `gateways_relying` and
@@ -1046,7 +1046,7 @@ region rates the node `low`, everything is as before. In `--json`,
 with a map report), else, for a template-managed node, the template's
 `lora.modem_preset` (when `lora.use_preset` is on); `--json` has it as
 `modem_preset`, with `online_local_nodes`. The chatty limit is an airtime
-budget: 2 packets an hour on `LONG_FAST` (as before), i.e. about 1.1 s of
+budget: 2 packets an hour on `LONG_FAST`, i.e. about 1.1 s of
 airtime an hour, converted with a typical 40-byte packet's airtime per preset
 and kept between 1 (a second or more per packet on `LONG_MODERATE` and
 `LONG_SLOW`) and 6 an hour (a lot from one node on any shared mesh, however

@@ -82,14 +82,18 @@ verified: `device.node_info_broadcast_secs` is at least 3600 and
 On a default channel (the default key on the preset's own channel name,
 as a stock LongFast node has) the firmware also raises some intervals,
 at every boot: a telemetry interval below 1800 s (43200 s for `ROUTER`
-and `ROUTER_LATE`) while any channel is a default one on the preset's
-frequency slot (firmware 2.8, which at boot takes the slot from the
-preset's name whatever the primary channel is called, and also counts
-`channel_num` 0 or one above the slot count; so in `EU_868` every
-`channel_num` is that slot on a 250 kHz preset, while `LONG_SLOW` has
-it at 1 and `LONG_MODERATE` at 2; 2.7 checks no frequency slot at boot), and,
-while the first channel that shares a position is a default one, `position_broadcast_secs` below 3600 s (43200 s for those
-two roles) and `broadcast_smart_minimum_interval_secs` below 300 s. 0
+and `ROUTER_LATE`) while a channel is a default one, and, while the
+first channel that shares a position is a default one,
+`position_broadcast_secs` below 3600 s (43200 s for those two roles) and
+`broadcast_smart_minimum_interval_secs` below 300 s. For the telemetry
+intervals firmware before 2.7.20 looks at the primary channel alone, with
+no other condition; 2.7.20 to 2.7.26 at every channel, but only with
+`lora.use_preset` on and no `lora.override_frequency`; 2.8 also needs the
+preset's frequency slot, which at boot it takes from the preset's name
+whatever the primary channel is called, counting `channel_num` 0 or one
+above the slot count as that slot too (so in `EU_868` every `channel_num`
+is that slot on a 250 kHz preset, while `LONG_SLOW` has it at 1 and
+`LONG_MODERATE` at 2). 0
 means the firmware's default and is never raised. Such a value is still
 written as given, since it holds on any other channel: the plan warns
 (`interval_raised_at_boot`), the verify after the commit's reboot
@@ -101,9 +105,8 @@ default one either way, and when it is one only before the write, the
 next run writes the template value again. Read
 in the firmware source: the position minimums since 2.7.18, the router
 values since 2.7.21; older firmware raises only the telemetry intervals,
-to 1800 s for every role, and only while the primary channel is a
-default one, and the plan predicts just that for a device reporting such
-a version. Not tried on a device.
+to 1800 s for every role, and the plan predicts just that for a device
+reporting such a version. Not tried on a device.
 
 Changing `device.role` makes the firmware reset some settings to the new
 role's defaults as it stores the role (`installRoleDefaults`): for

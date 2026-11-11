@@ -30,7 +30,7 @@ you're curious why.
 
 ## Making a change
 
-1. Create a branch off `main`.
+1. Create a branch off `master`.
 2. Write the test first where practical. This project's own convention
    (see any recent commit) is: write a regression test that fails for the
    right reason, implement the fix, confirm the test passes, then verify
@@ -92,9 +92,9 @@ Please keep to its existing convention:
   so -- explain *why* only when it's non-obvious (a workaround, an
   invariant, a firmware quirk). Look at existing docstrings for the tone.
 - Prefer small, focused functions and modules over large ones; this
-  project targets roughly 200-400 lines per file, with a handful of
-  long-standing, deliberately-not-yet-split exceptions noted in the code
-  itself.
+  project targets roughly 200-400 lines per file and 800 at most. Some
+  older modules are over 800 lines and not split yet; do not take them
+  as the pattern for new code.
 - `ruff format` and `ruff check --fix` handle formatting and most style
   issues automatically -- run them before committing rather than
   hand-formatting.
