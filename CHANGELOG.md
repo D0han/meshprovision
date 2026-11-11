@@ -668,6 +668,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- After a firmware 2.8 renumber that the verify proved while another field
+  stayed unconfirmed, `mesh provision` names `mesh db renumber OLD NEW`
+  (which moves the row and this run's pending keypair) for a node with a
+  database row; it said the next `mesh provision` would find the keypair,
+  which that run refuses while the old row exists.
 - `mesh provision` (also `--dry-run` and `mesh admin bootstrap`) no longer
   stops with a Python traceback when the template leaves
   `lora.modem_preset` to a device reporting a firmware version before 2.8

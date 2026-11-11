@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
     from click.testing import CliRunner
 
-    from tests.e2e.conftest import DeviceBus
+    from tests.e2e.conftest import DeviceBus, FakeNode
 
 pytestmark = pytest.mark.e2e
 
@@ -459,6 +459,73 @@ def test_a_2_8_renumber_whose_save_fails_is_finished_after_mesh_db_renumber(
     assert iface.nid == new
     loaded = ods.load_database(db_path)
     assert [row["node_id"] for row in loaded.nodes] == [new.hex]
+    records = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
+    assert records[f"{new.hex}_pub"].material() == bytes(
+        iface.localNode.localConfig.security.public_key
+    )
+    assert pending_keys.load_pending(db_path, new) is None
+
+
+def test_a_2_8_renumber_with_an_unconfirmed_field_names_mesh_db_renumber(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+) -> None:
+    """The renumber is proven but the run is not: the row and pending keypair stay under OLD."""
+    pub, priv = KeyRecord.for_keypair(_OLD.hex, keypair, origin=KeyOrigin.GENERATED)
+    row = NodeRecord(
+        node_id=_OLD.hex,
+        management=ManagementMode.TEMPLATE,
+        short_name="MT00",
+        long_name="Meshtastic MT00",
+    )
+    db_path = seed_db(nodes=[row], keys=[pub, priv])
+
+    def _hop_limit_back_at_boot(node: FakeNode) -> None:
+        node.localConfig.lora.hop_limit = 5
+
+    iface = bus.use(
+        _device_28(short_name="MT00", long_name="Meshtastic MT00", at_boot=_hop_limit_back_at_boot)
+    )
+    iface.localNode.localConfig.lora.hop_limit = 5
+    iface.localNode.localConfig.security.public_key = keypair.public
+    iface.localNode.localConfig.security.private_key = keypair.private.reveal()
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+
+    result = invoke(
+        runner,
+        ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--force-regenerate-key"],
+        env,
+    )
+
+    new = iface.nid
+    assert result.exit_code == ExitCode.PROVISIONING
+    assert "lora.hop_limit: unconfirmed" in result.stderr
+    assert (
+        f"Node {_OLD.display} now reports {new.display} (firmware >= 2.8 derives the node id "
+        f"from the public key); the database was not updated: run `mesh db renumber "
+        f"{_OLD.hex} {new.hex}` (it moves the row and this run's pending keypair), then "
+        "`mesh provision` again."
+    ) in result.stderr
+    assert "recovers it automatically" not in result.stderr
+    assert pending_keys.load_pending(db_path, _OLD) is not None
+
+    moved = invoke(runner, ["db", "renumber", _OLD.hex, new.hex, "--yes"], env)
+
+    assert moved.exit_code == 0, moved.stderr
+    assert [row["node_id"] for row in ods.load_database(db_path).nodes] == [new.hex]
+    assert pending_keys.load_pending(db_path, _OLD) is None
+    assert pending_keys.load_pending(db_path, new) is not None
+
+    iface.at_boot = None
+    bus.use(iface)
+    finished = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert finished.exit_code == 0, finished.stderr
+    assert iface.nid == new
+    loaded = ods.load_database(db_path)
     records = {row["key_ref"]: KeyRecord.from_row(row) for row in loaded.keys}
     assert records[f"{new.hex}_pub"].material() == bytes(
         iface.localNode.localConfig.security.public_key

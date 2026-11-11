@@ -119,9 +119,17 @@ as `mesh db renumber` would move them (with a `node id was !OLD until
 <date>` note), a first provisioning is recorded under the new id with the
 same note, and the region memo entry moves too. It prints `Node !OLD now
 reports !NEW (firmware >= 2.8 derives the node id from the public key);
-the database follows it.` Any other id is still a stop: a device holding
-our key under another id, or reporting the derived id without our private
-key, ends FAILED with the database not updated, as before. A fresh key
+the database follows it.` When the new id is proven but another field is
+not confirmed, the database is not updated and this run's keypair stays in
+its pending file under the old id. For a node with a row the line says
+the database was not updated and names `mesh db renumber OLD NEW`, which
+moves the row and the pending keypair, to run before `mesh provision`
+again (the next `mesh provision` alone is refused, see below); for one
+without a row (a first provisioning) it says the next `mesh provision` of
+the new id finds this run's keypair by its key. Any other id is still a
+stop: a device holding our key under another id, or reporting the derived
+id without our private key, ends FAILED with the database not updated, as
+before. A fresh key
 whose derived id would be reserved (below 4, or the broadcast address),
 another row's or a key row's owner is drawn again (up to 16 times)
 before anything is sent. If the new id already has a row, nothing is

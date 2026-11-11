@@ -132,22 +132,31 @@ def record_proven_private_key(
         ctx.info(line)
 
 
-def _renumber_line(outcome: apply.ApplyOutcome, *, persisted: bool) -> str:
+def _renumber_line(outcome: apply.ApplyOutcome, *, persisted: bool, old_row: bool) -> str:
     """Say that a proven firmware 2.8 renumber moved the node, and where the database is.
 
     Args:
         outcome: The apply outcome, with ``previous_node_id`` set.
         persisted: Whether the database was updated.
+        old_row: Whether the old id has a row, which the next run refuses
+            to leave behind (:func:`~meshprovision.provisioning.renumbered.renumbered_pending`).
 
     Returns:
         One operator-facing line.
     """
+    old = outcome.previous_node_id
     line = (
-        f"Node {outcome.previous_node_id} now reports {outcome.node_id} (firmware >= 2.8 "
+        f"Node {old} now reports {outcome.node_id} (firmware >= 2.8 "
         "derives the node id from the public key); "
     )
     if persisted:
         return f"{line}the database follows it."
+    if old is not None and old_row:
+        return (
+            f"{line}the database was not updated: run `mesh db renumber {old.hex} "
+            f"{outcome.node_id.hex}` (it moves the row and this run's pending keypair), "
+            "then `mesh provision` again."
+        )
     return (
         f"{line}the database was not updated: the next `mesh provision` of "
         f"{outcome.node_id} finds this run's keypair by its key."
@@ -249,8 +258,11 @@ def apply_and_persist(
             )
         raise
 
+    old_row = (
+        outcome.previous_node_id is not None and db.nodes.find(outcome.previous_node_id) is not None
+    )
     if outcome.previous_node_id is not None:
-        ctx.warn(_renumber_line(outcome, persisted=persisted))
+        ctx.warn(_renumber_line(outcome, persisted=persisted, old_row=old_row))
     if persisted:
         ctx.success(f"Database updated: {db.path}")
         # The database and the device are now known to agree: any pending
@@ -328,7 +340,12 @@ def apply_and_persist(
                 )
 
         if wrote_pending:
-            if outcome.security_attempted:
+            if outcome.security_attempted and old_row:
+                ctx.error(
+                    f"The new keypair was saved to {pending_path} before the device write; "
+                    "the `mesh db renumber` above moves it with the row."
+                )
+            elif outcome.security_attempted:
                 ctx.error(
                     f"The new keypair was saved to {pending_path} before the device write; "
                     "the next `mesh provision` of this node recovers it automatically."
