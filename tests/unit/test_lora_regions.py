@@ -171,6 +171,12 @@ def test_the_frequency_slot_count_follows_each_firmware(
         assert lora_regions.frequency_slot_count(region, preset, firmware_2_8=False) == (before_2_8)
 
 
+@pytest.mark.parametrize("preset", ["SHORT_TURBO", "MEDIUM_TURBO", "LONG_TURBO"])
+def test_older_firmware_counts_a_preset_wider_than_the_band_as_long_fast(preset: str) -> None:
+    """2.6.13 and 2.7.26 run ``LONG_FAST`` there (``applyModemConfig``)."""
+    assert lora_regions.frequency_slot_count("EU_868", preset, firmware_2_8=False) == 1
+
+
 def test_a_region_without_a_plan_here_has_no_slot_count() -> None:
     assert lora_regions.frequency_slot_count("UA_868", "LONG_FAST", firmware_2_8=False) is None
 

@@ -668,6 +668,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision` (also `--dry-run` and `mesh admin bootstrap`) no longer
+  stops with a Python traceback when the template leaves
+  `lora.modem_preset` to a device reporting a firmware version before 2.8
+  and a 500 kHz preset (`SHORT_TURBO`, `MEDIUM_TURBO`, `LONG_TURBO`), puts
+  it in `EU_868` and sets a non-zero `lora.channel_num`: for example a `US`
+  node on `SHORT_TURBO` that the template moves to `EU_868`. (A device
+  already in `EU_868` reports `LONG_FAST` there once its radio has
+  started.) That firmware runs `LONG_FAST`'s parameters for such a preset
+  in `EU_868`, so the plan counts `LONG_FAST`'s one frequency slot.
 - `mesh provision` predicts the `lora.tx_power` the firmware holds from
   the device's firmware version: `EU_433`'s limit was 12 dBm before 2.7.11
   and `TH`'s 16 dBm before 2.7.21, so the verify no longer reports a

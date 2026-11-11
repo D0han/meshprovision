@@ -161,7 +161,7 @@ def _slots(inputs: PlanInputs, *, firmware_2_8: bool) -> tuple[int, int, str] | 
     """Return the template's ``channel_num``, its slot count and the preset, if out of range.
 
     Only for a ``channel_num`` the template sets, with ``use_preset``: the
-    template's preset, else the device's.
+    template's preset, else the device's, where it has a slot.
     """
     lora = inputs.template.lora
     channel_num = lora.channel_num
@@ -169,7 +169,7 @@ def _slots(inputs: PlanInputs, *, firmware_2_8: bool) -> tuple[int, int, str] | 
         return None
     preset = str(lora.modem_preset or inputs.live.value("lora", "modem_preset"))
     slots = frequency_slot_count(lora.region, preset, firmware_2_8=firmware_2_8)
-    if slots is None or channel_num <= slots:
+    if not slots or channel_num <= slots:
         return None
     return channel_num, slots, preset
 
@@ -368,7 +368,9 @@ def _keeps_slot(inputs: PlanInputs, changes: tuple[FieldChange, ...]) -> bool:
     it to the primary channel's name,
     :func:`~meshprovision.lora_regions.name_slot`), as ``LONG_MODERATE``'s
     0 and 2 do with an unnamed primary. Without a primary channel the name
-    is unknown, and the slot counts as moved.
+    is unknown, and without a slot count (a region without a plan here, or
+    a preset wider than its slots on 2.8) so is the slot: it counts as
+    moved.
     """
     lora = inputs.template.lora
     preset = str(lora.modem_preset or inputs.live.value("lora", "modem_preset"))
@@ -378,7 +380,7 @@ def _keeps_slot(inputs: PlanInputs, changes: tuple[FieldChange, ...]) -> bool:
     if slots == 1:
         return True
     primary = next((c for c in inputs.live.channels if c.index == 0), None)
-    if slots is None or not lora.use_preset or primary is None:
+    if not slots or not lora.use_preset or primary is None:
         return False
     named = name_slot(lora.region, preset, primary.name, firmware_2_8=firmware_2_8)
     change = next(c for c in changes if c.field == "channel_num")

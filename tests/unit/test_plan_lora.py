@@ -205,6 +205,62 @@ def _moved(plan: ChangePlan) -> list[str]:
 
 
 @pytest.mark.parametrize(
+    ("live", "desired", "wraps"),
+    [
+        pytest.param(0, 1, False, id="0-1"),
+        pytest.param(1, 2, True, id="1-2"),
+    ],
+)
+def test_a_live_preset_wider_than_the_band_has_long_fasts_slot_before_2_8(
+    live: int, desired: int, wraps: bool
+) -> None:
+    """2.6 and 2.7 run LONG_FAST's parameters for a 500 kHz preset in EU_868: one slot."""
+    template = _template(f"lora:\n  modem_preset: null\n  channel_num: {desired}\n")
+
+    plan = _plan(
+        template,
+        sections={"lora": {"modem_preset": "SHORT_TURBO", "channel_num": live}},
+        firmware="2.7.26.54e0d8d",
+    )
+
+    assert plan.section("lora") is not None
+    assert _moved(plan) == []
+    wrapped = [w.message for w in plan.warnings if w.code == "channel_num_wraps"]
+    assert bool(wrapped) is wraps
+    if wraps:
+        assert "above the 1 frequency slot(s) SHORT_TURBO has in EU_868" in wrapped[0]
+        assert "uses slot 1" in wrapped[0]
+
+
+def test_a_turbo_node_moved_into_eu_868_has_long_fasts_slot_before_2_8() -> None:
+    """A US node on SHORT_TURBO moved to EU_868 with channel_num 2: one slot, so it wraps."""
+    template = _template("lora:\n  modem_preset: null\n  channel_num: 2\n")
+
+    plan = _plan(
+        template,
+        sections={"lora": {"region": "US", "modem_preset": "SHORT_TURBO", "channel_num": 0}},
+        firmware="2.7.26.54e0d8d",
+    )
+
+    assert plan.section("lora") is not None
+    (wrapped,) = [w.message for w in plan.warnings if w.code == "channel_num_wraps"]
+    assert "above the 1 frequency slot(s) SHORT_TURBO has in EU_868" in wrapped
+    (message,) = _moved(plan)
+    assert message.startswith("Changing lora.region, lora.channel_num moves the radio")
+
+
+def test_a_preset_without_a_slot_in_the_region_leaves_the_slot_unchecked_on_2_8() -> None:
+    """SHORT_TURBO is wider than EU_N_868's slots: no count, so the slot counts as moved."""
+    template = _template("lora:\n  region: EU_N_868\n  modem_preset: null\n  channel_num: 1\n")
+
+    plan = _plan(template, sections={"lora": {"modem_preset": "SHORT_TURBO", "channel_num": 0}})
+
+    assert plan.section("lora") is not None
+    (message,) = _moved(plan)
+    assert message.startswith("Changing lora.channel_num moves the radio")
+
+
+@pytest.mark.parametrize(
     ("lora", "live", "named"),
     [
         pytest.param(

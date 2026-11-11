@@ -338,8 +338,10 @@ def frequency_slot_count(region: str, preset: str, *, firmware_2_8: bool) -> int
     ``channel_num`` 1 to this count picks a slot; 0 lets the firmware pick
     one. Firmware 2.8 rounds the count and leaves room for the region's
     spacing and padding (``RadioInterface::frequencySlotCount``); older
-    firmware rounds down, with neither (``applyModemConfig``, 2.6.13 and
-    2.7.26, whose regions all have the same band edges as 2.8's).
+    firmware rounds down, with neither, and runs ``LONG_FAST``'s
+    parameters for a preset wider than the band (``applyModemConfig``,
+    2.6.13 and 2.7.26, whose regions all have the same band edges as
+    2.8's).
 
     Args:
         region: The region name.
@@ -347,7 +349,9 @@ def frequency_slot_count(region: str, preset: str, *, firmware_2_8: bool) -> int
         firmware_2_8: Whether to count as firmware 2.8 does.
 
     Returns:
-        The count, or ``None`` for a region without a plan here.
+        The count, or ``None`` for a region without a plan here. Firmware
+        2.8 gives 0 for a preset wider than the region's slots, which it
+        does not run there.
     """
     band = REGION_BANDS.get(region)
     if band is None:
@@ -356,6 +360,9 @@ def frequency_slot_count(region: str, preset: str, *, firmware_2_8: bool) -> int
     bandwidth = wide if band.wide else narrow
     span = band.end_hz - band.start_hz
     if not firmware_2_8:
+        if bandwidth > span:
+            narrow, wide = _LONG_FAST_BANDWIDTH_HZ
+            bandwidth = wide if band.wide else narrow
         return span // bandwidth
     slots = Fraction(span + band.spacing_hz, band.spacing_hz + 2 * band.padding_hz + bandwidth)
     return floor(slots + Fraction(1, 2))
