@@ -3,7 +3,8 @@
 The template validator already refuses a preset its region does not run
 (:mod:`meshprovision.lora_regions`); what is left needs the device's
 firmware version: a region or preset older firmware has no plan or radio
-parameters for, or a ``channel_num`` firmware 2.8 replaces
+parameters for, a device preset the template leaves that the region does
+not run, or a ``channel_num`` firmware 2.8 replaces
 (:func:`lora_firmware_refusal`), and one older firmware wraps
 (:func:`channel_num_wrap_warning`). :func:`radio_move_warning` tells the
 operator that a ``lora`` change takes the node off its current frequency
@@ -26,7 +27,12 @@ from typing import TYPE_CHECKING, Final
 
 from meshprovision.errors import PlanConflictError
 from meshprovision.firmware import parse_firmware_version
-from meshprovision.lora_regions import frequency_slot_count, name_slot, slot_frequency_hz
+from meshprovision.lora_regions import (
+    frequency_slot_count,
+    name_slot,
+    preset_problem,
+    slot_frequency_hz,
+)
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 
 if TYPE_CHECKING:
@@ -201,6 +207,44 @@ def _channel_num_problem(
     )
 
 
+def _live_preset_problem(
+    inputs: PlanInputs, version: tuple[int, int, int] | None
+) -> PlanConflictError | None:
+    """Refuse a device preset the template's region cannot run, where the template leaves it.
+
+    Only on firmware 2.8 or an unknown one: 2.8 drops a ``lora`` write
+    that changes the region to one the preset does not fit (``AdminModule``
+    set_config lora), and clamps the preset to the region at boot, so a
+    node already in the region on a preset (live ``use_preset`` true)
+    cannot report another; one with ``use_preset`` false can keep a stored
+    preset, which a local write then clamps. Older firmware runs
+    ``LONG_FAST`` for a preset wider than the band and reports it
+    (``applyModemConfig``); the slot checks count the stored preset's slots
+    then, which for ``EU_868`` is the one ``LONG_FAST`` has too.
+    """
+    lora = inputs.template.lora
+    if lora.modem_preset or not lora.use_preset:
+        return None
+    if version is not None and version < _TWO_EIGHT:
+        return None
+    live = inputs.live.value("lora", "modem_preset")
+    problem = preset_problem(lora.region, str(live)) if live else None
+    if problem is None:
+        return None
+    reported = inputs.live.firmware_version or "no firmware version"
+    if inputs.live.value("lora", "region") != lora.region:
+        problem = (
+            f"is not one of {lora.region}'s presets: firmware 2.8 drops a lora write that "
+            "changes the region to one the preset does not fit"
+        )
+    return PlanConflictError(
+        f"lora.modem_preset {live}, which the template leaves to the device, {problem} "
+        f"(this device reports {reported}), so the write could never be verified.",
+        field="lora.modem_preset",
+        hint=f"Set lora.modem_preset in the template to one of {lora.region}'s presets.",
+    )
+
+
 def channel_num_wrap_warning(inputs: PlanInputs) -> PlanWarning | None:
     """Warn that firmware before 2.8 wraps a ``channel_num`` above the slot count.
 
@@ -323,7 +367,9 @@ def lora_firmware_refusal(inputs: PlanInputs, *, writes_lora: bool) -> PlanConfl
     and 2.7.26): outside the band that is legal in Poland, and off the
     mesh. Firmware without radio parameters for the template's preset runs
     ``LONG_FAST``'s under the channel name ``"Invalid"``
-    (``modemPresetToParams``, ``DisplayFormatters``). Firmware 2.8 does
+    (``modemPresetToParams``, ``DisplayFormatters``). Where the template
+    leaves the preset to the device, firmware 2.8 does not run one the
+    template's region has not (:func:`_live_preset_problem`), and it does
     not keep a ``channel_num`` above the preset's slot count in the region
     (:func:`_channel_num_problem`). An unparseable firmware version is
     refused too: only a version known to have the region or preset, and
@@ -356,7 +402,7 @@ def lora_firmware_refusal(inputs: PlanInputs, *, writes_lora: bool) -> PlanConfl
             field="lora.modem_preset",
             hint="Update this node's firmware first, or set another preset in the template.",
         )
-    return _channel_num_problem(inputs, version)
+    return _live_preset_problem(inputs, version) or _channel_num_problem(inputs, version)
 
 
 def _keeps_slot(inputs: PlanInputs, changes: tuple[FieldChange, ...]) -> bool:

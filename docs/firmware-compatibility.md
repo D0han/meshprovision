@@ -103,7 +103,8 @@ and 2.7 fall back to `LONG_FAST` when the preset is wider than the band
 Firmware with a region code but no frequency plan for it uses `UNSET`'s
 (902-928 MHz) and, as the region is set, transmits there. `mesh
 provision` refuses a region or preset the device's firmware cannot run
-(and the template one its region does not run): see
+(and the template one its region does not run, or, on 2.8, the device
+one a template without a preset keeps): see
 [`mesh provision`](commands.md#mesh-provision) and
 [the `lora` fields](configuration.md#lora).
 

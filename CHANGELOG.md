@@ -668,6 +668,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A template that leaves `lora.modem_preset` to the device no longer
+  ends a `mesh provision` run unconfirmed, with no reason given, on a
+  firmware 2.8 node set up in another region whose preset the template's
+  region does not run (a US node on `SHORT_TURBO` moved to `EU_868`):
+  2.8 drops that `lora` write, as it also changes the region. Such a plan
+  that writes `lora` with `lora.use_preset` is now refused (exit code 5,
+  before writing anything, on `--dry-run` too; `mesh admin bootstrap`
+  too) on firmware 2.8 or an unparseable version. Older firmware runs
+  `LONG_FAST` in place of a preset wider than the band and is not
+  refused.
 - The hint for a missing template names the example template where it
   is, `src/meshprovision/examples/template.example.yaml`, not a
   `config/template.example.yaml` that does not exist.

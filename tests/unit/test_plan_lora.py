@@ -8,7 +8,7 @@ from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.errors import PlanConflictError
 from meshprovision.provisioning import detect, plan_lora
 from meshprovision.provisioning.detect import LiveChannel
-from meshprovision.provisioning.plan import ChangePlan, PlanInputs, build_plan
+from meshprovision.provisioning.plan import ChangePlan, FieldChange, PlanInputs, build_plan
 from tests.unit.conftest import live_config_from_template, make_security
 
 pytestmark = pytest.mark.unit
@@ -255,14 +255,85 @@ def test_a_turbo_node_moved_into_eu_868_has_long_fasts_slot_before_2_8() -> None
 
 
 def test_a_preset_without_a_slot_in_the_region_leaves_the_slot_unchecked_on_2_8() -> None:
-    """SHORT_TURBO is wider than EU_N_868's slots: no count, so the slot counts as moved."""
-    template = _template("lora:\n  region: EU_N_868\n  modem_preset: null\n  channel_num: 1\n")
+    """SHORT_TURBO is wider than EU_N_868's slots: no count, so the slot counts as moved.
 
-    plan = _plan(template, sections={"lora": {"modem_preset": "SHORT_TURBO", "channel_num": 0}})
+    The plan refuses that live preset first (EU_N_868 does not run it), so
+    the warning is asked directly.
+    """
+    template = _template("lora:\n  region: EU_N_868\n  modem_preset: null\n  channel_num: 1\n")
+    live = live_config_from_template(
+        template,
+        firmware_version=_FIRMWARE_2_8,
+        security=make_security(),
+        section_overrides={"lora": {"modem_preset": "SHORT_TURBO", "channel_num": 0}},
+    )
+    inputs = PlanInputs(live=live, template=template, state=detect.NodeState.PROVISIONED)
+    change = FieldChange(section="lora", field="channel_num", current=0, desired=1)
+
+    warning = plan_lora.radio_move_warning(inputs, (change,))
+
+    assert warning is not None
+    assert warning.message.startswith("Changing lora.channel_num moves the radio")
+
+
+@pytest.mark.parametrize(
+    ("region", "preset", "firmware", "dropped"),
+    [
+        pytest.param("US", "SHORT_TURBO", _FIRMWARE_2_8, True, id="us-turbo-2.8.3"),
+        pytest.param("US", "SHORT_TURBO", "2.8.0.47db0e3", True, id="us-turbo-2.8.0"),
+        pytest.param("US", "SHORT_TURBO", "", True, id="us-turbo-unknown"),
+        pytest.param("EU_866", "LITE_FAST", _FIRMWARE_2_8, True, id="eu-866-lite"),
+        pytest.param("EU_868", "MEDIUM_TURBO", _FIRMWARE_2_8, False, id="same-region"),
+    ],
+)
+def test_a_device_preset_the_templates_region_does_not_run_is_refused(
+    region: str, preset: str, firmware: str, dropped: bool
+) -> None:
+    """A template leaving modem_preset to the device takes the device's, checked on 2.8."""
+    template = _template("lora:\n  modem_preset: null\n")
+
+    with pytest.raises(PlanConflictError, match=r"which the template leaves to") as exc_info:
+        _plan(
+            template,
+            sections={"lora": {"region": region, "modem_preset": preset, "hop_limit": 5}},
+            firmware=firmware,
+        )
+
+    message = str(exc_info.value)
+    assert exc_info.value.field == "lora.modem_preset"
+    assert message.startswith(f"lora.modem_preset {preset}, which the template leaves")
+    assert ("firmware 2.8 drops a lora write that changes the region" in message) is dropped
+    assert ("in its place" in message) is not dropped
+    assert f"this device reports {firmware or 'no firmware version'}" in message
+    assert (
+        exc_info.value.hint == "Set lora.modem_preset in the template to one of EU_868's presets."
+    )
+
+
+@pytest.mark.parametrize(
+    ("lora", "region", "preset", "firmware"),
+    [
+        pytest.param("modem_preset: null", "US", "SHORT_TURBO", "2.7.26.54e0d8d", id="2.7.26"),
+        pytest.param("modem_preset: null", "US", "LONG_FAST", _FIRMWARE_2_8, id="fits"),
+        pytest.param("modem_preset: LONG_FAST", "US", "SHORT_TURBO", _FIRMWARE_2_8, id="named"),
+        pytest.param(
+            "use_preset: false\n  modem_preset: null", "US", "SHORT_TURBO", "", id="no-preset"
+        ),
+    ],
+)
+def test_a_device_preset_is_not_refused_where_the_write_runs_another_or_it_fits(
+    lora: str, region: str, preset: str, firmware: str
+) -> None:
+    """Before 2.8 the firmware runs LONG_FAST itself; a named preset or custom radio wins."""
+    template = _template(f"lora:\n  {lora}\n")
+
+    plan = _plan(
+        template,
+        sections={"lora": {**_CUSTOM, "region": region, "modem_preset": preset}},
+        firmware=firmware,
+    )
 
     assert plan.section("lora") is not None
-    (message,) = _moved(plan)
-    assert message.startswith("Changing lora.channel_num moves the radio")
 
 
 @pytest.mark.parametrize(
