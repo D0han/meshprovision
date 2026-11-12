@@ -414,7 +414,8 @@ class TestCreateEnvFile:
 
     def test_refuses_to_overwrite_an_existing_env_file(self, tmp_path: Path) -> None:
         target = tmp_path / ".env"
-        target.write_text("MESHPROVISION_CONTACT=already-here\n", encoding="utf-8")
+        existing = "MESHPROVISION_CONTACT=already-here\n"  # pragma: allowlist secret
+        target.write_text(existing, encoding="utf-8")
         with pytest.raises(ConfigError):
             create_env_file(target, contact="new@example.org")
         assert "already-here" in target.read_text(encoding="utf-8")

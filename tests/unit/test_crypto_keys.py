@@ -130,7 +130,7 @@ def test_decode_key_accepts_a_canonical_key_with_and_without_the_prefix() -> Non
 
 
 def test_decode_key_errors_name_the_field_and_never_the_value() -> None:
-    secret_looking = "notavalidkeybutlooksbase64ish"  # noqa: S105 -- not a password, a decode_key input fixture
+    secret_looking = "notavalidkeybutlooksbase64ish"  # noqa: S105 -- not a password, a decode_key input fixture  # pragma: allowlist secret
     with pytest.raises(KeyMaterialError) as excinfo:
         decode_key(secret_looking, field="admin_private_key")
     rendered = str(excinfo.value)

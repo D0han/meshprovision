@@ -273,7 +273,7 @@ def test_stale_cached_formula_private_key_ref(tmp_path: Path, keypair) -> None:
     assert "WRONG_ref" in msg
     assert "deadbe01_priv" in msg
 
-    assert loaded.nodes[0]["private_key_ref"] == "deadbe01_priv"
+    assert loaded.nodes[0]["private_key_ref"] == "deadbe01_priv"  # pragma: allowlist secret
 
 
 def test_stale_cached_formula_keys_key_ref(tmp_path: Path, keypair) -> None:

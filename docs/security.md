@@ -322,7 +322,7 @@ makes it exit `6`.
 | `*.key`, `*.pem`, `secrets/`, `*.log`, `logs/`, `*.ods.bak` | IGNORED | Never commit |
 
 This is enforced by three independent layers: (1) `.gitignore`, (2) the
-`detect-secrets` pre-commit hook, and (3)
+`detect-secrets` pre-commit hook (CI runs it over every tracked file), and (3)
 `tests/unit/test_no_tracked_secrets.py`, which shells out to
 `git ls-files` and fails CI if any sensitive pattern is ever tracked,
 catching `git add -f` bypasses that `.gitignore` alone would miss.

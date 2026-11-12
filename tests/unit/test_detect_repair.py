@@ -298,7 +298,7 @@ def test_live_config_repr_redacts_secret_fields() -> None:
     local_config.network.wifi_psk = "hunter2secret"
     local_config.bluetooth.fixed_pin = 654321
     module_config = localonly_pb2.LocalModuleConfig()
-    module_config.mqtt.password = "mqttpw123"  # noqa: S105 -- fixture value, not a real credential
+    module_config.mqtt.password = "mqttpw123"  # noqa: S105 -- fixture value, not a real credential  # pragma: allowlist secret
 
     live = detect.live_config_from_protobufs(
         local_config, module_config, node_id=NodeId.from_hex("deadbe01")

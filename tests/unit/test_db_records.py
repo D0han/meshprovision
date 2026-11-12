@@ -142,7 +142,7 @@ def test_to_row_always_recomputes_derived_columns() -> None:
     stale = record.with_updates(main_chipset="totally wrong")
     row = stale.to_row()
     assert row["main_chipset"] == "nRF52840"
-    assert row["private_key_ref"] == "deadbe01_priv"
+    assert row["private_key_ref"] == "deadbe01_priv"  # pragma: allowlist secret
     assert row["public_key_ref"] == "deadbe01_pub"
     assert row["channel_psk_ref"] == "deadbe01_psk"
 

@@ -185,7 +185,7 @@ class TestLibraryRecordMayLeak:
 
 class TestRedactProcessor:
     def test_returns_new_mapping_never_mutates_input(self) -> None:
-        event = {"private_key": "secretvalue", "msg": "hello"}
+        event = {"private_key": "secretvalue", "msg": "hello"}  # pragma: allowlist secret
         original = dict(event)
         result = redact_processor(None, "info", event)
         assert event == original

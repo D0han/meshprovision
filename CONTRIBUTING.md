@@ -49,6 +49,7 @@ Run the same checks CI runs:
 ruff check .
 ruff format --check .
 mypy --strict src
+pre-commit run detect-secrets --all-files
 pytest --cov --cov-report=term-missing
 ```
 
@@ -80,8 +81,9 @@ Please keep to its existing convention:
   exception is `mesh adopt --show-admin-keys`, and only for keys not
   already registered in the `Keys` sheet.
 - The `detect-secrets` pre-commit hook and `tests/unit/test_no_tracked_secrets.py`
-  both run automatically; don't disable or narrow them to get a commit
-  through.
+  both run automatically (CI runs both too); don't disable or narrow them
+  to get a commit through. Mark a public constant or test fixture the
+  hook flags with an inline `# pragma: allowlist secret` comment.
 - If you find a security issue (not just a bug), please use GitHub's
   private vulnerability reporting for this repository rather than a
   public issue.

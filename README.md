@@ -137,6 +137,7 @@ pip install -e ".[dev]"
 ruff check .
 ruff format --check .
 mypy --strict src
+pre-commit run detect-secrets --all-files
 pytest --cov --cov-report=term-missing --cov-fail-under=85
 ```
 

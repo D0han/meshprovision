@@ -233,7 +233,7 @@ def test_adopt_registers_the_nodes_own_public_and_private_key(
     assert keys_by_ref["deadbe01_priv"].secret().reveal() == kp.private.reveal()
     node = NodeRecord.from_row(loaded.nodes[0])
     assert node.public_key_ref == "deadbe01_pub"
-    assert node.private_key_ref == "deadbe01_priv"
+    assert node.private_key_ref == "deadbe01_priv"  # pragma: allowlist secret
 
 
 def test_adopt_registers_only_the_nodes_public_key_when_private_is_absent(

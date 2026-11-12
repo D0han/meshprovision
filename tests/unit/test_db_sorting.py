@@ -83,13 +83,13 @@ def test_natural_key_handles_empty_string() -> None:
 
 def test_natural_key_handles_mixed_text_and_digit_runs() -> None:
     # Arrange
-    values = ["abc12def3", "abc2def30", "abc12def30"]
+    values = ["abc12def3", "abc2def30", "abc12def30"]  # pragma: allowlist secret
 
     # Act
     ordered = sorted(values, key=natural_key)
 
     # Assert
-    assert ordered == ["abc2def30", "abc12def3", "abc12def30"]
+    assert ordered == ["abc2def30", "abc12def3", "abc12def30"]  # pragma: allowlist secret
 
 
 # ---------------------------------------------------------------------------

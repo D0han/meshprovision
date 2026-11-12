@@ -55,6 +55,13 @@ jobs:
       - name: mypy --strict
         run: mypy --strict src
 
+      - name: detect-secrets
+        # The pre-commit hook itself, so the rev (v1.5.0) and the
+        # exclusions stay the ones .pre-commit-config.yaml pins, run over
+        # every tracked file. A false positive takes an inline
+        # `pragma: allowlist secret` comment, never a wider exclusion.
+        run: pre-commit run detect-secrets --all-files
+
       - name: pytest
         # `pytest` is invoked bare, not `python -m pytest`: pyproject's
         # [tool.pytest.ini_options] already supplies testpaths, -ra,

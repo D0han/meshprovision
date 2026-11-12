@@ -131,6 +131,7 @@ LORASTATS_NODES_PAGE: Final[str] = """<!DOCTYPE html>
   <a href="/Nodes/Client">a role page is no region</a> <a href="/Nodes/Zach%C3%B3d/Unknown">x</a>
   <a href="/Nodes/../../etc/passwd">x</a> <a href="/Nodes/..">x</a> <a href="/Nodes/a%2Fb">x</a>
   <a href="/Nodes/%FF%FE">x</a> <a href="/Nodes/%00">x</a> <a href="/Nodes/Gda%C5%84sk#top">x</a>
+  <!-- pragma: allowlist nextline secret -->
   <a href="/Nodes/RegionNameThatIsFarTooLongToBeOneBecauseItGoesOnAndOnPastSixtyFourChars">x</a>
   <a href="https://example.com/Nodes/Elsewhere">x</a> <a href="http://lorastats.pl/Nodes/Plain">x</a>
   <a href="javascript:alert(1)">x</a> <a href="mailto:x@example.invalid">x</a>
