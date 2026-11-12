@@ -668,6 +668,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A `mesh provision` interrupted after writing a fresh key no longer says
+  the next `mesh provision` recovers the keypair automatically: when
+  firmware 2.8 renumbered the node and its old row exists, that run
+  refuses until `mesh db renumber OLD NEW` has moved the row. The message
+  now says to run that command first when the next run names it.
 - A template that leaves `lora.modem_preset` to the device no longer
   ends a `mesh provision` run unconfirmed, with no reason given, on a
   firmware 2.8 node set up in another region whose preset the template's

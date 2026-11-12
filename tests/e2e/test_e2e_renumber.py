@@ -24,6 +24,7 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
 from meshprovision.errors import ExitCode
 from meshprovision.nodeid import NodeId, key_derived_id
+from meshprovision.provisioning import apply as apply_mod
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
 if TYPE_CHECKING:
@@ -531,6 +532,60 @@ def test_a_2_8_renumber_with_an_unconfirmed_field_names_mesh_db_renumber(
         iface.localNode.localConfig.security.public_key
     )
     assert pending_keys.load_pending(db_path, new) is None
+
+
+def test_an_interrupted_2_8_renumber_points_to_the_command_the_next_run_names(
+    runner: CliRunner,
+    env: dict[str, str],
+    bus: DeviceBus,
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Interrupted after the renumber was proven: the next run refuses and names the command."""
+    pub, priv = KeyRecord.for_keypair(_OLD.hex, keypair, origin=KeyOrigin.GENERATED)
+    row = NodeRecord(
+        node_id=_OLD.hex,
+        management=ManagementMode.TEMPLATE,
+        short_name="MT00",
+        long_name="Meshtastic MT00",
+    )
+    db_path = seed_db(nodes=[row], keys=[pub, priv])
+    iface = bus.use(_device_28(short_name="MT00", long_name="Meshtastic MT00"))
+    iface.localNode.localConfig.security.public_key = keypair.public
+    iface.localNode.localConfig.security.private_key = keypair.private.reveal()
+    env["MESHPROVISION_LOG_LEVEL"] = "ERROR"
+    original_apply_plan = apply_mod.apply_plan
+
+    def _apply_then_interrupt(*args: object, **kwargs: object) -> object:
+        outcome = original_apply_plan(*args, **kwargs)  # type: ignore[arg-type]
+        assert outcome.previous_node_id == _OLD
+        raise KeyboardInterrupt
+
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(apply_mod, "apply_plan", _apply_then_interrupt)
+        first = invoke(
+            runner,
+            ["provision", "--port", "/dev/ttyFAKE0", "--yes", "--force-regenerate-key"],
+            env,
+        )
+
+    new = iface.nid
+    assert new != _OLD
+    assert first.exit_code == ExitCode.INTERRUPTED
+    assert (
+        f"The new keypair was saved to {pending_keys.pending_key_path(db_path, _OLD)} before "
+        "the device write; the next `mesh provision` of this node recovers it. If that run "
+        "names a `mesh db renumber OLD NEW` command instead (firmware >= 2.8 derives the "
+        "node id from the key), run that first."
+    ) in first.stderr
+    assert "recovers it automatically" not in first.stderr
+
+    bus.use(iface)
+    refused = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert refused.exit_code == ExitCode.PROVISIONING
+    assert f"mesh db renumber {_OLD.hex} {new.hex}" in refused.stderr
 
 
 @pytest.mark.parametrize("dry_run", [False, True], ids=["apply", "dry-run"])

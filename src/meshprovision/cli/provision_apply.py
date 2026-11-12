@@ -250,11 +250,15 @@ def apply_and_persist(
         # The outcome is unknown here (Ctrl-C, or any other exception --
         # including persist_result's own AtomicWriteError, raised after the
         # device write was already confirmed): keep the pending file and
-        # tell the operator it is there, unconditionally.
+        # tell the operator it is there, unconditionally. Whether firmware
+        # >= 2.8 renumbered the node is unknown too, so the next run's
+        # refusal names the `mesh db renumber` command when it did.
         if wrote_pending:
             ctx.error(
                 f"The new keypair was saved to {pending_path} before the device write; "
-                "the next `mesh provision` of this node recovers it automatically."
+                "the next `mesh provision` of this node recovers it. If that run names a "
+                "`mesh db renumber OLD NEW` command instead (firmware >= 2.8 derives the "
+                "node id from the key), run that first."
             )
         raise
 

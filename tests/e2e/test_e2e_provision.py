@@ -1013,7 +1013,7 @@ def test_keyboard_interrupt_during_apply_keeps_the_pending_keypair(
 
     pending_path = pending_keys.pending_key_path(db_path, dev.nid)
     assert str(pending_path) in result.stderr
-    assert "recovers it automatically" in result.stderr
+    assert "the next `mesh provision` of this node recovers it." in result.stderr
     assert pending_path.is_file()
 
     loaded = ods.load_database(db_path)
