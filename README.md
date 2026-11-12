@@ -110,7 +110,9 @@ mesh adopt --port /dev/ttyUSB0                  # inventory an already-deployed 
 mesh status --json                              # machine-readable network health
 ```
 
-Every flag for every command is documented in [Commands](docs/commands.md).
+Every flag for every command is documented in [Commands](docs/commands.md);
+[Running from cron](docs/commands.md#running-from-cron) sets up `mesh
+status` and `mesh health` on a schedule.
 
 ## Documentation
 

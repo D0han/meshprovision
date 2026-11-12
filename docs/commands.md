@@ -33,7 +33,8 @@ STDOUT). So `mesh status --json | jq .` never needs filtering.
 | `-h`, `--help` | Show help and exit |
 
 `--non-interactive` is auto-enabled whenever stdin is not a TTY, and it
-turns every prompt into an error — which is what makes `mesh` cron-safe.
+turns every prompt into an error — which is what makes `mesh` cron-safe
+(see [Running from cron](#running-from-cron)).
 
 ## `mesh init`
 
@@ -1727,6 +1728,60 @@ renders within 4 bytes of the firmware's limit), `role_never_announces`
 a region with a duty-cycle limit). A template that fails validation prints no
 document; the error goes to STDERR with a non-zero exit code (2 for most
 template errors, 5 for more than three `admin_nodes`).
+
+## Running from cron
+
+`mesh status` and `mesh health` are read-only (they never write to the
+database or to a device) and suit a schedule; `mesh provision`, `mesh
+adopt` and the other commands that write do not. A crontab line needs:
+
+- **A working directory and the script's path.** cron starts in your
+  home directory with a minimal `PATH`. `cd` into the directory you run
+  `mesh` from, where `.env` is found and the default relative paths
+  (`data/nodes_db.ods`, `config/template.yaml`) resolve, and call `mesh`
+  by its full path (`.venv/bin/mesh` in a source checkout,
+  `$HOME/.local/bin/mesh` for `pipx`). `--env-file`, `--db-path` and
+  `--template-path` with absolute paths work too; relative paths inside
+  `.env` still resolve against the working directory. Run it as the user
+  you run `mesh` as by hand, so both share the cache directory: the HTTP
+  cache, the `mesh health` histories and the rate-limit cool-down below.
+- **Output.** STDOUT carries only the report or the `--json` document;
+  logging, warnings and errors go to STDERR (see the output contract at
+  the top). Without a terminal, tables and messages are 80 columns wide,
+  so long cells such as node ids are cut short: set `COLUMNS=200` for a
+  table you keep in a log, and use `--json` for anything a script reads.
+  No prompt can wait for an answer, as stdin is not a TTY. `--watch` is
+  for a terminal; cron runs each command once.
+- **Exit codes.** cron ignores them and mails whatever a command prints.
+  `mesh status` exits `7` for an offline or unseen database node or a
+  failed source (with `--no-fail-on-offline`, only for a failed source),
+  `mesh health` for a `crit` verdict, an unseen database node, or a
+  failed source or history refresh; both exit `0` otherwise. `2` (a
+  configuration error, for example no `MESHPROVISION_CONTACT`) and `4`
+  (the database could not be read) mean no report was made; see
+  [Exit codes](#exit-codes). Append `|| echo "... exited $?"` to be
+  mailed about a non-zero exit.
+- **Rate limits and caching.** A host that answered HTTP 429 is not
+  asked again by any `mesh` process using the same cache directory for
+  the `Retry-After` time it gave (10 minutes without one, at most a day);
+  a scheduled run in that time lists the source as failed and exits `7`.
+  A run within the cache TTL (`MESHPROVISION_CACHE_TTL`, 300 s by default)
+  of another makes no request for what that one fetched, so a `mesh
+  health` a few minutes after a `mesh status` reuses its downloads.
+  `mesh health` refreshes a node's history at most once every 10 minutes.
+  The loranet.pl dump is about 13 MB per download.
+
+For example, `mesh status --json` every half hour into a file, and the
+`mesh health` table two minutes later into a log:
+
+```cron
+# m  h  dom mon dow  command
+*/30 *  *   *   *    cd "$HOME/meshprovision" && .venv/bin/mesh status --json > "$HOME/mesh-status.json" || echo "mesh status exited $?"
+2,32 *  *   *   *    cd "$HOME/meshprovision" && COLUMNS=200 .venv/bin/mesh health >> "$HOME/mesh-health.log" || echo "mesh health exited $?"
+```
+
+Both write a report even when they exit `7`. STDERR is not redirected,
+so cron mails warnings and errors along with the exit line.
 
 ## Exit codes
 
