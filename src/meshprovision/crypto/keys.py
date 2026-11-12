@@ -51,7 +51,7 @@ bare base64.
 """
 
 _B64_ALPHABET: Final[frozenset[str]] = frozenset(
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="  # pragma: allowlist secret
 )
 
 

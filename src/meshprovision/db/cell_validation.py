@@ -6,7 +6,7 @@ once. This is the layer :mod:`meshprovision.db.ods` distrusts every cell's
 raw text through on load.
 
 **Never pandas, never implicit typing.** Every cell is read and written as
-an explicit string. A hex node id like ``"1234567e8"`` must survive a
+an explicit string. A hex node id like ``1234567e8`` must survive a
 round trip byte-for-byte; nothing in this module ever coerces a cell value
 through ``int()``/``float()`` except inside the ``INT``/``FLOAT`` column
 kinds' own validators, and even then the canonical form re-emitted is a
