@@ -157,6 +157,8 @@ STDLIB_ONLY: Final[tuple[str, ...]] = (
     "firmware.py",
     "provisioning/plan_warnings.py",
     "lora_regions.py",
+    "remote/__init__.py",
+    "remote/refused.py",
     "termsafe.py",
     "status/cadence.py",
     "status/timefmt.py",
@@ -167,6 +169,7 @@ STDLIB_PLUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("name_pattern.py", ("meshprovision.errors",)),
     ("crypto/redact.py", ("meshprovision.termsafe",)),
     ("config/env_trust.py", ("meshprovision.errors",)),
+    ("remote/firmware.py", ("meshprovision.firmware",)),
     ("provisioning/backup_models.py", ("meshprovision.crypto.redact", "meshprovision.nodeid")),
     (
         "provisioning/detect_types.py",
