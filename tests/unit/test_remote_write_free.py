@@ -28,7 +28,7 @@ pytestmark = pytest.mark.unit
 REMOTE: Final[Path] = PACKAGE / "remote"
 
 _REMOTE_MODULES: Final[frozenset[str]] = frozenset(
-    {"__init__.py", "budget.py", "firmware.py", "refused.py"}
+    {"__init__.py", "budget.py", "diff.py", "firmware.py", "refused.py"}
 )
 """Every module ``remote/`` may hold; a new one must be certified here first."""
 

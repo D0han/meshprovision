@@ -170,6 +170,7 @@ STDLIB_PLUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("crypto/redact.py", ("meshprovision.termsafe",)),
     ("config/env_trust.py", ("meshprovision.errors",)),
     ("remote/budget.py", ("meshprovision.lora_regions",)),
+    ("remote/diff.py", ("meshprovision.provisioning.plan_types",)),
     ("remote/firmware.py", ("meshprovision.firmware",)),
     ("provisioning/backup_models.py", ("meshprovision.crypto.redact", "meshprovision.nodeid")),
     (
