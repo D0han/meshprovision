@@ -18,7 +18,7 @@ from meshprovision import firmware, nodeid
 from meshprovision.cli import provision_keys
 from meshprovision.datasources import loranet
 from meshprovision.db import pending_keys, renumber
-from meshprovision.health import rules
+from meshprovision.health import drift, rules
 from meshprovision.network import graph, maintenance, relays, render_graph
 
 pytestmark = pytest.mark.unit
@@ -140,6 +140,16 @@ _FIRMWARE_FLOOR = ".".join(str(part) for part in firmware.KEY_DERIVED_ID_MIN_FIR
             _HEALTH,
             f"in the {_hours(maintenance.MAINTENANCE_WINDOW_SECONDS)} before the fetch",
             id="health-window",
+        ),
+        pytest.param(
+            _HEALTH,
+            f"heard in the last {drift.DRIFT_MAX_AGE_SECONDS / 86400:g} days",
+            id="health-drift-max-age",
+        ),
+        pytest.param(
+            _HEALTH,
+            f"more than {drift.RECORD_GRACE_SECONDS / 60:g} minutes after the row was last updated",
+            id="health-drift-grace",
         ),
         pytest.param(_NETWORK, f"below {rules.BATTERY_WARN_PERCENT} %", id="battery-warn"),
         pytest.param(

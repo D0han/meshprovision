@@ -985,14 +985,15 @@ reading the battery rule judges: the newest battery reading from the history or
 `mesh status` within 24 h, or within the node's stale threshold when longer,
 `powered` when that is external power, so a node plugged in since a low
 reading shows `powered`; when every reading is older, the newest in
-gray), and the first two reasons. **The detailed report** (`NODE`) shows the expected interval, where it came
+gray), and the first two reasons. The caption counts the nodes that differ from
+the database (see **Drift** below). **The detailed report** (`NODE`) shows the expected interval, where it came
 from and the stale and offline thresholds it gives, every metric with its
 sample size, the gateways, hop counts, relays (with the node of ours each
 byte likely is), decoded packets per port, battery trend, local stats, boots,
-neighbours, the gateway check, every finding and suggestion, and the limits
-below. `--json` carries all of it per node (`expected_interval_seconds`,
+neighbours, the gateway check, every finding and suggestion, the drift from the
+database, and the limits below. `--json` carries all of it per node (`expected_interval_seconds`,
 `expected_interval_source`, `stale_after_seconds`, `offline_after_seconds`,
-`verdict`, `findings`, `importance`, `suggestions`, `metrics`), plus `failures` (per source or node)
+`verdict`, `findings`, `importance`, `suggestions`, `drift`, `metrics`), plus `failures` (per source or node)
 and `refresh` (`refreshed`, `no_region`, `skipped_rows`).
 
 **Verdict.** `crit` if any rule below says so, else `warn` if any does, else
@@ -1054,6 +1055,26 @@ score's alone. In `--json`,
 | check the role | a `CLIENT_MUTE` whose id byte is the busiest relay of one of our nodes (a byte collision, or the role is not what it reports) |
 | check a router's placement | a router role uplinked by fewer than 3 gateways besides itself (20+ receptions) |
 | another router within its reach | one relay byte carried 80%+ of its relayed receptions (20+) |
+
+**Drift from the database.** For each active, template-managed node whose row a
+device run has filled (it has a firmware version), `mesh health` compares what
+it already collected with the row; it asks nothing more of anyone, and the node
+is never contacted. The short and long names and the role come from the newest
+node info in the node's history, the hardware model from `mesh status`'s
+sources. A value counts only when it was heard in the last 7 days, more than 5
+minutes after the row was last updated (a node announces a new name with its
+next node info, every 3 hours by default), and when both sides have it: an empty
+cell, a role lorastats does not name, or a hardware model this installation does
+not know is not compared. Drift never changes the verdict or the exit code. The
+detail lists each difference with where and when it was heard, and `--json` has
+`drift`: a list of `{field, recorded, observed, source, seen_at}`, `source`
+being `node_info` or `sources`. `mesh status --json --detail full` carries the
+same list in each node's `health`. Rows `mesh adopt` records (observed, not
+template-managed) are not judged: their names are their owners' to change. Names
+and role are compared only for nodes whose node info lorastats decodes (a node
+on a private primary channel key gets none, and so no name or role drift). A
+name the firmware truncated shows as drift until the row is fixed. To bring a
+node back to its row, run `mesh provision` with the node connected.
 
 **Presets.** The preset is the newest one loranet reports for the node (only
 with a map report), else, for a template-managed node, the template's

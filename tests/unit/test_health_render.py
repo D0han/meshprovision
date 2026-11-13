@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import io
 import json
+import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import MappingProxyType
 
 import pytest
@@ -12,14 +14,15 @@ from rich.console import Console
 from rich.text import Text
 
 from meshprovision.health import render
+from meshprovision.health.drift import DriftSource, PassiveDrift
 from meshprovision.health.history import GatewayCheck, LocalStatsPoint, NodeHistory, TelemetryPoint
 from meshprovision.health.metrics import BatteryTrend, NodeMetrics, RelayShare
 from meshprovision.health.refresh import RefreshFailure, RefreshOutcome
-from meshprovision.health.report import HealthReport, NodeHealth, assess_nodes
+from meshprovision.health.report import HealthReport, NodeHealth, StatusHealth, assess_nodes
 from meshprovision.health.rules import Advice, Finding, Importance, RegionImportance, Verdict
 from meshprovision.nodeid import NodeId
 from meshprovision.status import timefmt
-from meshprovision.status.merge import MergedNode, Thresholds
+from meshprovision.status.merge import MergedNode, Thresholds, humanize_age
 from meshprovision.status.report import SourceFailure, StatusReport
 
 pytestmark = pytest.mark.unit
@@ -44,6 +47,7 @@ def _health(
     findings: tuple[Finding, ...] = (),
     advice: tuple[Advice, ...] = (),
     importance: Importance | None = None,
+    drift: tuple[PassiveDrift, ...] = (),
 ) -> NodeHealth:
     return NodeHealth(
         node=node or MergedNode(node_id=_A, short_name="D0h5", long_name="Alpha"),
@@ -54,6 +58,7 @@ def _health(
         advice=advice,
         role="CLIENT",
         history_fetched_at=_T - 120,
+        drift=drift,
     )
 
 
@@ -746,3 +751,104 @@ def test_json_importance_carries_the_region_and_the_fleet_level() -> None:
         "gateways_relying": 9,
         "only_gateway_for": 1,
     }
+
+
+_LONG_NAME_DRIFT = PassiveDrift("long_name", "Alpha", "Beta", DriftSource.NODE_INFO, _T - 3 * 3600)
+_HW_DRIFT = PassiveDrift("hw_model", "HELTEC_V3", "T_ECHO", DriftSource.SOURCES, _T - 20 * 60)
+
+
+def _ago(seconds: int) -> str:
+    return humanize_age(timedelta(seconds=seconds))
+
+
+def test_the_detailed_report_lists_each_drift() -> None:
+    health = _health(drift=(_LONG_NAME_DRIFT, _HW_DRIFT))
+
+    lines = _detail(health).splitlines()
+
+    start = next(i for i, line in enumerate(lines) if line.startswith("Drift from the database"))
+    assert lines[start : start + 3] == [
+        "Drift from the database (from data already collected; nothing was asked of the node):",
+        f"  - long_name: database 'Alpha', heard 'Beta' (node info, {_ago(3 * 3600)})",
+        f"  - hw_model: database 'HELTEC_V3', heard 'T_ECHO' "
+        f"(mesh status sources, {_ago(20 * 60)})",
+    ]
+    assert lines[start - 1] == "Verdict: OK"
+    assert lines[start + 3].startswith("Importance")
+
+
+def test_the_detailed_report_leaves_out_drift_when_there_is_none() -> None:
+    assert "Drift from the database" not in _detail(_health())
+
+
+def test_drift_text_cannot_reach_the_terminal() -> None:
+    odd = PassiveDrift("long_name", "Alpha", "x\x1b[31mred", DriftSource.NODE_INFO, _T)
+
+    text = _detail(_health(drift=(odd,)))
+
+    assert "\x1b" not in text
+    assert "x\\x1b[31mred" in text
+
+
+def test_json_carries_drift_after_suggestions() -> None:
+    health = _health(drift=(_LONG_NAME_DRIFT,))
+
+    (node,) = json.loads(render.render_json(_report(health)))["nodes"]
+
+    keys = list(node)
+    assert keys[keys.index("suggestions") + 1 : keys.index("suggestions") + 3] == ["drift", "role"]
+    assert node["drift"] == [
+        {
+            "field": "long_name",
+            "recorded": "Alpha",
+            "observed": "Beta",
+            "source": "node_info",
+            "seen_at": timefmt.isoformat_z(datetime.fromtimestamp(_T - 3 * 3600, tz=UTC)),
+        }
+    ]
+
+
+def test_the_caption_counts_the_nodes_that_differ() -> None:
+    drifting = _health(drift=(_LONG_NAME_DRIFT,))
+
+    two = _text(render.build_table(_report(drifting, drifting, _health())).caption)
+    none = _text(render.build_table(_report(_health())).caption)
+
+    assert "; 2 node(s) differ from the database (details: mesh health NODE)" in two
+    assert "differ from the database" not in none
+
+
+def test_status_json_detail_full_carries_drift() -> None:
+    report = StatusReport(
+        generated_at=_NOW, nodes=(MergedNode(node_id=_A),), thresholds=Thresholds()
+    )
+    refresh = RefreshOutcome(histories={}, refreshed=())
+    status_health = StatusHealth(
+        days=7, nodes={_A: _health(drift=(_LONG_NAME_DRIFT,))}, refresh=refresh, network_requests=0
+    )
+
+    document = json.loads(render.status_json(report, status_health))
+
+    assert document["nodes"][0]["health"]["drift"] == [
+        {
+            "field": "long_name",
+            "recorded": "Alpha",
+            "observed": "Beta",
+            "source": "node_info",
+            "seen_at": timefmt.isoformat_z(datetime.fromtimestamp(_T - 3 * 3600, tz=UTC)),
+        }
+    ]
+
+
+def test_the_docs_list_the_json_node_keys_in_order() -> None:
+    docs = (Path(__file__).resolve().parents[2] / "docs" / "commands.md").read_text("utf-8")
+    section = " ".join(
+        docs[docs.index("## `mesh health`") : docs.index("## `mesh network`")].split()
+    )
+    match = re.search(r"`verdict`, `findings`.*?`metrics`", section)
+    assert match is not None
+    listed = re.findall(r"`(\w+)`", match.group(0))
+
+    (node,) = json.loads(render.render_json(_report(_health())))["nodes"]
+
+    assert [key for key in node if key in listed] == listed

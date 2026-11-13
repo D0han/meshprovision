@@ -16,6 +16,7 @@ from meshprovision.cache.http import CachedHTTPClient
 from meshprovision.config.settings import Settings
 from meshprovision.db import ods_write
 from meshprovision.db.nodes import NodeRecord
+from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import ExitCode
 from meshprovision.health.history import HOUR_SECONDS, HourBucket, NodeHistory, NodeInfoSeen
 from meshprovision.health.refresh import RefreshFailure, RefreshOutcome
@@ -364,3 +365,81 @@ def test_region_importance_reaches_the_reported_nodes_importance() -> None:
     )
 
     assert (health.importance.level, health.importance.network) == ("high", network)
+
+
+_UPDATED = _NOW - timedelta(days=2)
+
+
+def _template_record(**fields: object) -> NodeRecord:
+    base: dict[str, object] = {
+        "node_id": _A.hex,
+        "short_name": "A",
+        "long_name": "Alpha",
+        "role": "CLIENT",
+        "hw_model": "HELTEC_V3",
+        "management": ManagementMode.TEMPLATE,
+        "firmware_version": "2.7.15",
+        "last_updated_ts": _UPDATED,
+    }
+    base.update(fields)
+    return NodeRecord(**base)  # type: ignore[arg-type]
+
+
+def _renamed(long_name: str = "Beta") -> dict[NodeId, NodeHistory]:
+    info = NodeInfoSeen(_NOW.timestamp() - 3600, "A", long_name, "CLIENT")
+    return {_A: _history(_A, nodeinfo=info)}
+
+
+@pytest.mark.parametrize(
+    ("fields", "findings"),
+    [
+        pytest.param({"management": ManagementMode.OBSERVED}, 0, id="observed"),
+        pytest.param({"archived_at": _UPDATED}, 0, id="archived"),
+        pytest.param({"firmware_version": ""}, 0, id="never-filled"),
+        pytest.param({}, 1, id="filled"),
+    ],
+)
+def test_drift_is_judged_only_for_active_template_rows_a_device_run_filled(
+    fields: dict[str, object], findings: int
+) -> None:
+    node = MergedNode(node_id=_A, record=_template_record(**fields))
+
+    (health,) = _assess([node], _renamed())
+
+    assert [d.field for d in health.drift] == ["long_name"] * findings
+
+
+def test_drift_never_changes_the_verdict_or_the_exit_code() -> None:
+    node = MergedNode(node_id=_A, record=_template_record(), last_seen=_NOW - timedelta(minutes=5))
+
+    (health,) = _assess([node], _renamed())
+    report = HealthReport(generated_at=_NOW, days=7, fetched=False, nodes=(health,))
+
+    assert health.drift
+    assert health.verdict is Verdict.OK
+    assert report.exit_code() == 0
+
+
+def test_hardware_drift_uses_the_status_view_and_its_last_seen() -> None:
+    seen = _NOW - timedelta(minutes=10)
+    node = MergedNode(
+        node_id=_A,
+        record=_template_record(),
+        hw_model="T_ECHO",
+        last_seen=seen,
+        sources=("loranet",),
+    )
+
+    (health,) = _assess([node], {})
+
+    assert [(d.field, d.observed, d.seen_at) for d in health.drift] == [
+        ("hw_model", "T_ECHO", seen.timestamp())
+    ]
+
+
+def test_drift_without_fetching_uses_the_stored_node_info() -> None:
+    node = MergedNode(node_id=_A, record=_template_record(), sources=(), hw_model=None)
+
+    (health,) = _assess([node], _renamed())
+
+    assert [d.field for d in health.drift] == ["long_name"]

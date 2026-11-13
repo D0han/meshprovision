@@ -23,6 +23,12 @@ from typing import TYPE_CHECKING, Final
 from meshprovision.datasources.lorastats_packets import LorastatsPackets
 from meshprovision.datasources.models import epoch_seconds
 from meshprovision.errors import ExitCode
+from meshprovision.health.drift import (
+    ObservedHardware,
+    PassiveDrift,
+    RecordedIdentity,
+    passive_drift,
+)
 from meshprovision.health.history import NodeHistory
 from meshprovision.health.metrics import NodeMetrics, compute_metrics
 from meshprovision.health.refresh import HealthRefresher, RefreshFailure, RefreshOutcome
@@ -132,6 +138,8 @@ class NodeHealth:
         advice: Configuration changes worth considering.
         role: Its role, from the sources, its node info or the database.
         history_fetched_at: When its history was last refreshed.
+        drift: How its database row differs from what was heard of it (see
+            :mod:`meshprovision.health.drift`); never part of the verdict.
     """
 
     node: MergedNode
@@ -142,6 +150,7 @@ class NodeHealth:
     advice: tuple[Advice, ...]
     role: str | None
     history_fetched_at: float | None
+    drift: tuple[PassiveDrift, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,7 +192,8 @@ class HealthReport:
             7 when any node's verdict is critical, any source or refresh
             failed or, when the sources were asked, a database node's (not
             archived) verdict is unknown (no history heard it and no source
-            gives a last-seen time for it), else 0.
+            gives a last-seen time for it), else 0. Drift from the database
+            (:attr:`NodeHealth.drift`) never changes it.
         """
         critical = any(node.verdict is Verdict.CRIT for node in self.nodes)
         unseen = self.fetched and any(
@@ -225,6 +235,29 @@ def _context(node: MergedNode, role: str | None) -> NodeContext:
         preset=node.modem_preset,
         online_local_nodes=node.online_local_nodes,
     )
+
+
+def _recorded_identity(node: MergedNode) -> RecordedIdentity | None:
+    """What a node's row claims, for an active template-managed row a device run filled."""
+    record = node.record
+    if record is None or not node.in_active_database or node.management != "template":
+        return None
+    if not record.firmware_version:
+        return None
+    return RecordedIdentity(
+        short_name=record.short_name,
+        long_name=record.long_name,
+        role=record.role,
+        hw_model=record.hw_model,
+        updated_at=epoch_seconds(record.last_updated_ts),
+    )
+
+
+def _observed_hardware(node: MergedNode) -> ObservedHardware | None:
+    """The hardware model the sources report, with the node's last-seen time."""
+    if node.hw_model is None or node.last_seen is None:
+        return None
+    return ObservedHardware(node.hw_model, node.last_seen.timestamp())
 
 
 def current_battery(health: NodeHealth) -> BatteryReading | None:
@@ -299,6 +332,12 @@ def assess_nodes(
                 advice=advise(metrics[node.node_id], context, importance[node.node_id]),
                 role=role,
                 history_fetched_at=history_of(node.node_id).fetched_at,
+                drift=passive_drift(
+                    _recorded_identity(node),
+                    history_of(node.node_id).nodeinfo,
+                    _observed_hardware(node),
+                    now=now,
+                ),
             )
         )
     return tuple(result)

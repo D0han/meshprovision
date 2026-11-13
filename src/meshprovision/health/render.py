@@ -20,6 +20,7 @@ from rich.console import Console, Group, JustifyMethod, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from meshprovision.health.drift import DriftSource, PassiveDrift
 from meshprovision.health.metrics import NodeMetrics, RelayShare
 from meshprovision.health.packets import (
     PORT_NEIGHBORINFO,
@@ -92,6 +93,11 @@ _CADENCE_SOURCES: Final[dict[CadenceSource, str]] = {
     CadenceSource.ROLE: "its role's node-info default",
 }
 """How the detailed report names where an expected interval came from."""
+_SOURCE_LABELS: Final[dict[DriftSource, str]] = {
+    DriftSource.NODE_INFO: "node info",
+    DriftSource.SOURCES: "mesh status sources",
+}
+"""How the detailed report names where a drifting value was heard."""
 _LIMITS: Final[str] = (
     "Limits: receptions are lorastats PacketReports rows (one per packet per MQTT gateway; "
     "MQTT and radio receptions cannot be told apart); hops come only from the packets lorastats "
@@ -110,6 +116,19 @@ def _ago(value: float | None, now: datetime) -> str:
     """Render how long ago an epoch time was."""
     moment = _time(value)
     return _DASH if moment is None else humanize_age(now - moment)
+
+
+def _drift_text(drift: Sequence[PassiveDrift], now: datetime) -> str:
+    """List how a node's row differs from what was heard, one line each."""
+    return (
+        "Drift from the database (from data already collected; nothing was asked of the node):"
+        + "".join(
+            f"\n  - {d.field}: database {terminal_safe(repr(d.recorded))}, "
+            f"heard {terminal_safe(repr(d.observed))} "
+            f"({_SOURCE_LABELS[d.source]}, {_ago(d.seen_at, now)})"
+            for d in drift
+        )
+    )
 
 
 def _last_heard(health: NodeHealth) -> float | None:
@@ -214,6 +233,9 @@ def _caption(report: HealthReport) -> Text:
         + ", ".join(f"{counts[verdict]} {verdict.value}" for verdict in Verdict)
         + f"; window {report.days} d"
     )
+    drifted = sum(1 for health in report.nodes if health.drift)
+    if drifted:
+        text.append(f"; {drifted} node(s) differ from the database (details: mesh health NODE)")
     if not report.fetched:
         text.append("; history only, nothing fetched")
     elif report.refresh is not None:
@@ -402,6 +424,8 @@ def _lines(health: NodeHealth, now: datetime) -> Iterable[str]:
     yield f"Verdict: {health.verdict.value.upper()}" + "".join(
         f"\n  - {finding.severity.value}: {finding.text}" for finding in health.findings
     )
+    if health.drift:
+        yield _drift_text(health.drift, now)
     yield _importance_text(health.importance)
     yield (
         f"Window: last {metrics.days} d; {metrics.covered_hours} of {metrics.days * 24} hours "
@@ -557,7 +581,7 @@ def node_health_to_json_dict(health: NodeHealth) -> dict[str, object]:
         health: The node's health.
 
     Returns:
-        ``verdict``, ``findings``, ``importance``, ``suggestions`` and
+        ``verdict``, ``findings``, ``importance``, ``suggestions``, ``drift`` and
         ``metrics``, with insertion-ordered keys.
     """
     metrics = health.metrics
@@ -579,6 +603,16 @@ def node_health_to_json_dict(health: NodeHealth) -> dict[str, object]:
             "network": _network_json(health.importance.network),
         },
         "suggestions": [{"code": a.code, "text": a.text} for a in health.advice],
+        "drift": [
+            {
+                "field": d.field,
+                "recorded": d.recorded,
+                "observed": d.observed,
+                "source": d.source.value,
+                "seen_at": _iso(d.seen_at),
+            }
+            for d in health.drift
+        ],
         "role": health.role,
         "history_fetched_at": _iso(health.history_fetched_at),
         "metrics": {

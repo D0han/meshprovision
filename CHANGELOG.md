@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh health` shows how an active template-managed node differs from its
+  database row (short and long name and role from the node's newest node
+  info, hardware model from `mesh status`'s sources), from data it already
+  collects, with no request and no contact with the node: a count in the
+  table caption, a list in the detail, `drift` in `--json` (also in `mesh
+  status --json --detail full`). It ignores values heard more than 7 days
+  ago or not more than 5 minutes after the row's last update, and rows
+  `mesh adopt` records. It never changes the verdict or the exit code.
 - `mesh provision` warns (`primary_name_moves_slot`) when the device's
   primary channel name puts a preset with two frequency slots
   (`LONG_MODERATE` or `LONG_SLOW` in `EU_868`) on the other slot than an
