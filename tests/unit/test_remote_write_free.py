@@ -27,7 +27,9 @@ pytestmark = pytest.mark.unit
 
 REMOTE: Final[Path] = PACKAGE / "remote"
 
-_REMOTE_MODULES: Final[frozenset[str]] = frozenset({"__init__.py", "firmware.py", "refused.py"})
+_REMOTE_MODULES: Final[frozenset[str]] = frozenset(
+    {"__init__.py", "budget.py", "firmware.py", "refused.py"}
+)
 """Every module ``remote/`` may hold; a new one must be certified here first."""
 
 _FORBIDDEN_IDENTIFIERS: Final[frozenset[str]] = frozenset(
@@ -138,6 +140,8 @@ _ALLOWED_STDLIB: Final[tuple[str, ...]] = (
     "collections.abc",
     "dataclasses",
     "enum",
+    "fractions",
+    "math",
     "types",
     "typing",
 )
