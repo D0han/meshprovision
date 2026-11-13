@@ -95,6 +95,7 @@ from meshprovision.provisioning.plan_types import (
     NameChange,
     PlanInputs,
     SectionChange,
+    diff_fields,
     values_equal,
 )
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
@@ -112,6 +113,7 @@ __all__ = [
     "PlanWarningCode",
     "SectionChange",
     "build_plan",
+    "diff_fields",
     "values_equal",
 ]
 
@@ -276,24 +278,12 @@ def _diff_section(
         field-declaration order, carrying the adjusted value as
         :attr:`~FieldChange.firmware_value`.
     """
-    changes: list[FieldChange] = []
-    for field_name, desired_value in model.model_dump(exclude_none=True).items():
-        current_value = live.value(section_name, field_name)
-        firmware_value = adjusted.get((section_name, field_name))
-        if values_equal(current_value, desired_value) or (
-            firmware_value is not None and values_equal(current_value, firmware_value)
-        ):
-            continue
-        changes.append(
-            FieldChange(
-                section=section_name,
-                field=field_name,
-                current=current_value,
-                desired=desired_value,
-                firmware_value=firmware_value,
-            )
-        )
-    return tuple(changes)
+    return diff_fields(
+        section_name,
+        model.model_dump(exclude_none=True),
+        lambda field_name: live.value(section_name, field_name),
+        adjusted,
+    )
 
 
 def _plan_config_sections(

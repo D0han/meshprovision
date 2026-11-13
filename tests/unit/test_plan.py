@@ -1090,3 +1090,24 @@ def test_a_kept_key_before_firmware_2_8_gets_no_old_key_warning(
 
     assert not plan.key_plan.regenerate
     assert PlanWarningCode.PEERS_KEEP_OLD_KEY not in [w.code for w in plan.warnings]
+
+
+def test_diff_fields_reports_in_desired_order_and_honours_adjusted_values() -> None:
+    from meshprovision.provisioning.plan import diff_fields
+
+    current = {"a": 1, "b": 1, "c": 3}
+
+    changes = diff_fields(
+        "device", {"a": 1, "b": True, "c": 2}, current.__getitem__, {("device", "c"): 3}
+    )
+
+    assert [(c.field, c.current, c.desired, c.secret) for c in changes] == [("b", 1, True, False)]
+
+
+def test_diff_fields_marks_secret_fields() -> None:
+    from meshprovision.provisioning.plan import diff_fields
+
+    (change,) = diff_fields("bluetooth", {"fixed_pin": 123456}, {"fixed_pin": 111111}.__getitem__)
+
+    assert change.secret is True
+    assert change.describe() == "<redacted> -> <redacted>"

@@ -23,6 +23,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.provisioning import detect
@@ -30,7 +31,7 @@ from meshprovision.provisioning.plan_admin_keys import KeyPlan, ResolvedAdminKey
 from meshprovision.provisioning.plan_warnings import PlanWarning
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
 
     from meshprovision.config.template import TemplateConfig
     from meshprovision.db.node_record import NodeRecord
@@ -44,6 +45,7 @@ __all__ = [
     "NameChange",
     "PlanInputs",
     "SectionChange",
+    "diff_fields",
     "values_equal",
 ]
 
@@ -85,6 +87,52 @@ def values_equal(current: object, desired: object) -> bool:
     if isinstance(current, int | float) and isinstance(desired, int | float):
         return math.isclose(float(current), float(desired), rel_tol=1e-6, abs_tol=1e-9)
     return current == desired
+
+
+_NO_ADJUSTMENTS: Final[Mapping[tuple[str, str], object]] = MappingProxyType({})
+
+
+def diff_fields(
+    section: str,
+    desired: Mapping[str, object],
+    current: Callable[[str], object],
+    adjusted: Mapping[tuple[str, str], object] = _NO_ADJUSTMENTS,
+) -> tuple[FieldChange, ...]:
+    """Diff desired field values against current ones, one section.
+
+    Args:
+        section: The section name.
+        desired: ``{field: value}`` in the order to report.
+        current: Returns a field's current value.
+        adjusted: ``{(section, field): value}`` the firmware holds in place of the
+            desired value (see
+            :func:`~meshprovision.provisioning.plan_firmware.firmware_adjustments`).
+
+    Returns:
+        One :class:`FieldChange` per field whose current value is neither the desired
+        value nor the firmware's adjusted one, in ``desired`` order, carrying the adjusted
+        value as :attr:`~FieldChange.firmware_value` and marked secret for a
+        :data:`~meshprovision.provisioning.detect.SECRET_FIELDS` pair.
+    """
+    changes: list[FieldChange] = []
+    for field_name, desired_value in desired.items():
+        current_value = current(field_name)
+        firmware_value = adjusted.get((section, field_name))
+        if values_equal(current_value, desired_value) or (
+            firmware_value is not None and values_equal(current_value, firmware_value)
+        ):
+            continue
+        changes.append(
+            FieldChange(
+                section=section,
+                field=field_name,
+                current=current_value,
+                desired=desired_value,
+                secret=(section, field_name) in detect.SECRET_FIELDS,
+                firmware_value=firmware_value,
+            )
+        )
+    return tuple(changes)
 
 
 @dataclass(frozen=True, slots=True)
