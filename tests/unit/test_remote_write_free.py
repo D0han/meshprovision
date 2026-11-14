@@ -37,6 +37,7 @@ _REMOTE_MODULES: Final[frozenset[str]] = frozenset(
         "plan.py",
         "plan_types.py",
         "refused.py",
+        "render.py",
     }
 )
 """Every module ``remote/`` may hold; a new one must be certified here first."""

@@ -185,6 +185,14 @@ STDLIB_PLUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
             "meshprovision.remote.refused",
         ),
     ),
+    (
+        "remote/render.py",
+        (
+            "meshprovision.remote.ledger",
+            "meshprovision.remote.plan",
+            "meshprovision.remote.plan_types",
+        ),
+    ),
     ("remote/plan_types.py", ("meshprovision.remote.budget", "meshprovision.remote.ledger")),
     ("provisioning/backup_models.py", ("meshprovision.crypto.redact", "meshprovision.nodeid")),
     (
