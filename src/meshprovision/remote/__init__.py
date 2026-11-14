@@ -8,7 +8,8 @@ forever (:mod:`~meshprovision.remote.refused`), a section diff that tells "not r
 (:mod:`~meshprovision.remote.plan`, with its types in
 :mod:`~meshprovision.remote.plan_types`) and its text and JSON report
 (:mod:`~meshprovision.remote.render`). Nothing in this package sends a packet, opens a device,
-reads a file or the clock, or writes anything, and no command uses it yet;
+reads a file or the clock, or writes anything, and only ``mesh remote diff --dry-run``
+(``cli/remote.py``) uses it, to print an offline estimate;
 ``tests/unit/test_remote_write_free.py`` holds it to that.
 
 Values marked *policy* are choices, not measurements; *measured* ones come from simulator

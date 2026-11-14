@@ -51,6 +51,7 @@ CLI_COMMAND_MODULES: Final[frozenset[str]] = frozenset(
         "network",
         "peers",
         "provision",
+        "remote",
         "status",
         "template_cmd",
     }
@@ -95,6 +96,43 @@ _PURE_HEALTH_FORBIDDEN: Final[tuple[str, ...]] = (
 )
 """The pure ``health`` and ``network`` modules read no file and no network, and know no CLI."""
 
+_REMOTE_CLI_FORBIDDEN: Final[tuple[str, ...]] = (
+    "meshtastic",
+    "serial",
+    "bleak",
+    "pubsub",
+    "socket",
+    "httpx",
+    "subprocess",
+    "meshprovision.provisioning",
+    "meshprovision.cache",
+    "meshprovision.datasources",
+    "meshprovision.network",
+    "meshprovision.status",
+    "meshprovision.crypto",
+    "meshprovision.health.refresh",
+    "meshprovision.health.report",
+    "meshprovision.cli.transport",
+    "meshprovision.cli.progress",
+    "meshprovision.cli.provision_apply",
+    "meshprovision.cli.provision_keys",
+    "meshprovision.cli.adopt_backup",
+    "meshprovision.cli.peers_sync",
+    "meshprovision.db.atomic_writer",
+    "meshprovision.db.backups",
+    "meshprovision.db.fs_primitives",
+    "meshprovision.db.known_good",
+    "meshprovision.db.locking",
+    "meshprovision.db.ods",
+    "meshprovision.db.ods_write",
+    "meshprovision.db.pending_keys",
+    "meshprovision.db.renumber",
+)
+"""``mesh remote`` sends nothing and writes nothing: no transport, connection, HTTP,
+provisioning or database-write module, by its own imports (what ``cli.common`` or the
+template loader load transitively is not covered; the e2e tests check at run time that no
+device connection and no socket is opened)."""
+
 FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("errors.py", ("meshprovision",)),
     ("provisioning/plan.py", _PURE_PLAN_FORBIDDEN),
@@ -114,6 +152,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("cli/provision_keys.py", _CLI_COMMANDS),
     ("cli/health.py", _READ_ONLY_CLI_FORBIDDEN),
     ("cli/network.py", _READ_ONLY_CLI_FORBIDDEN),
+    ("cli/remote.py", _REMOTE_CLI_FORBIDDEN),
     ("cli/status.py", _READ_ONLY_CLI_FORBIDDEN),
     ("cli/template_cmd.py", _READ_ONLY_CLI_FORBIDDEN),
     (

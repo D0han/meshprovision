@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `mesh remote diff --dry-run NODE`: an offline estimate of what reading a
+  node's configuration over the mesh would cost and whether it would be
+  allowed. It sends nothing and opens no device or network connection: it
+  reads the template, the database and the node's local health history,
+  and prints the planned requests, each request's deadline and the longest
+  run for every link count the hop limit allows, the airtime the gateway,
+  each relay and the node would spend in one rolling hour (judged at
+  contention window 7, with window 8, strong links at SNR 10 to 15 dB, shown
+  as the worst case), and the
+  rules that refuse the read (exit code 5): a node not template-managed or
+  below firmware 2.7.0, a full diff on `LONG_MODERATE`/`LONG_SLOW`,
+  `security` below firmware 2.8.0, a gateway whose key the node does not
+  list, a busy node, or one relay's cost over a polite share of 36 s per
+  rolling hour. There is no live remote read and no remote write; without
+  `--dry-run` the command exits 2 before reading anything.
 - `mesh health` shows how an active template-managed node differs from its
   database row (short and long name and role from the node's newest node
   info, hardware model from `mesh status`'s sources), from data it already

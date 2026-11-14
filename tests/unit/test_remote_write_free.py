@@ -1,7 +1,7 @@
 """The write-free certification of ``meshprovision.remote``.
 
 No module in it can talk to a device, send a packet, plan or apply a change, read a file
-or the clock, or reach names dynamically; and no other module uses it yet. Like
+or the clock, or reach names dynamically; and only ``cli/remote.py`` uses it. Like
 ``test_import_contracts.py``, it checks each module's *own* import statements and names,
 walked with ``ast.walk`` over the whole tree (function bodies and ``TYPE_CHECKING`` blocks
 included), not what they import transitively: ``provisioning/plan_types.py`` imports
@@ -259,21 +259,30 @@ def test_no_remote_module_does_io_or_reaches_names_dynamically(module: str) -> N
     assert (calls, attributes) == ([], [])
 
 
-def test_nothing_outside_remote_imports_it() -> None:
-    """``mesh`` has no remote command, and ``build_plan`` can never be handed remote data.
+def test_only_the_remote_command_imports_it() -> None:
+    """Only ``mesh remote diff --dry-run`` imports the package; a new importer is deliberate.
 
-    This must be relaxed deliberately when a ``cli/remote.py`` is added. It checks import
-    statements only, so a dynamic import elsewhere in ``src`` is not caught; inside
-    ``remote/`` the standard-library allow-list above rules that out.
+    So ``build_plan`` can never be handed remote data. It checks import statements only, so a
+    dynamic import elsewhere in ``src`` is not caught; inside ``remote/`` the standard-library
+    allow-list above rules that out.
     """
-    offending = [
-        f"{path.relative_to(PACKAGE).as_posix()}: {name}"
+    importers = {
+        path.relative_to(PACKAGE).as_posix(): sorted(
+            name for name in _imported(_tree(path)) if _matches(name, "meshprovision.remote")
+        )
         for path in PACKAGE.rglob("*.py")
         if REMOTE not in path.parents
-        for name in _imported(_tree(path))
-        if _matches(name, "meshprovision.remote")
-    ]
-    assert offending == []
+    }
+    importers = {path: names for path, names in importers.items() if names}
+
+    assert list(importers) == ["cli/remote.py"]
+    assert all(
+        any(
+            _matches(name, f"meshprovision.remote.{module}")
+            for module in ("plan", "plan_types", "render")
+        )
+        for name in importers["cli/remote.py"]
+    )
 
 
 @pytest.mark.parametrize("module", _MODULES)

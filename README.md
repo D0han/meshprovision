@@ -83,7 +83,7 @@ covered in [Installation](docs/installation.md).
 
 ## Command cheat sheet
 
-One console script, `mesh`, with ten subcommands/subcommand groups.
+One console script, `mesh`, with eleven subcommands/subcommand groups.
 **Global options go before the subcommand** — `mesh --no-cache status
 --json`, not `mesh status --no-cache`. Every command supports `-h`/`--help`.
 
@@ -96,6 +96,7 @@ One console script, `mesh`, with ten subcommands/subcommand groups.
 | `mesh status` | Read-only network health from loranet.pl/lorastats.pl, merged with the database. |
 | `mesh health` | Per-node health, importance and suggestions from lorastats packet reports, with a 30-day local history. |
 | `mesh network` | Region-wide views from lorastats raw packets: `keys` (network-wide key scan), `relays` (relays we depend on but don't own), `impact` (what depends on our nodes), `graph` (single points of failure). |
+| `mesh remote` | `diff --dry-run`: what reading a node over the mesh would cost the relays, and whether it would be allowed. Offline; sends nothing. |
 | `mesh admin` | Admin-key custody: `bootstrap`, `import`, `list`. |
 | `mesh db` | Database integrity/backup: `verify`, `backup`, `restore`, `list`, `forget`, `renumber`. |
 | `mesh template` | `validate` a template file — no database or device needed. |
@@ -145,7 +146,7 @@ pytest --cov --cov-report=term-missing --cov-fail-under=85
 
 A separate `package` job builds the sdist/wheel (`python -m build`),
 runs `twine check`, and smoke-tests the built wheel's console script
-against all ten subcommands. Locally, `pre-commit install` plus
+against all eleven subcommands. Locally, `pre-commit install` plus
 `pre-commit run --all-files` covers the same lint/type/secret checks
 before you push. Run `pre-commit` from the same virtualenv where you ran
 `pip install -e ".[dev]"` — the mypy and no-tracked-secrets hooks are

@@ -2,7 +2,7 @@
 
 Part of the meshprovision docs — see the [README](../README.md).
 
-The toolkit installs **one** console script, `mesh`, with ten
+The toolkit installs **one** console script, `mesh`, with eleven
 subcommands/subcommand groups. **Global options go before the
 subcommand** — for example `mesh --no-cache status --json`, not
 `mesh status --no-cache`. Every command and subcommand supports
@@ -10,7 +10,7 @@ subcommand** — for example `mesh --no-cache status --json`, not
 
 **Output contract:** STDOUT carries only what a script reads: `--json`
 documents, the `mesh status`, `mesh health` and `mesh network` reports,
-`--dry-run` change lines and the `mesh db backups` listing. Logging,
+the `mesh remote diff --dry-run` report, `--dry-run` change lines and the `mesh db backups` listing. Logging,
 prompts, warnings and errors go to STDERR, and so does the human-readable
 result of `mesh init`, `mesh db list`, `mesh admin list`, `mesh db verify`
 and `mesh template validate` (with `--json`, their document goes to
@@ -1750,6 +1750,137 @@ a region with a duty-cycle limit). A template that fails validation prints no
 document; the error goes to STDERR with a non-zero exit code (2 for most
 template errors, 5 for more than three `admin_nodes`).
 
+## `mesh remote`
+
+```bash
+mesh remote diff --dry-run !deadbe01
+mesh remote diff --dry-run !deadbe01 --gateway !deadbe0a --section lora --json
+```
+
+`mesh remote diff --dry-run NODE` works out what a read-only diff of NODE
+through the mesh would cost, and whether this version's offline rules would
+allow it. It sends nothing. It reads the template, the database (and, like
+every command that opens the database, refreshes the known-good copy beside
+it) and NODE's local health history (kept by `mesh health`). It opens no
+radio, serial, Bluetooth or network connection. This version has no live
+remote read and no remote write; without `--dry-run` the command stops with
+exit code 2 before reading anything.
+
+A planning estimate from worst-case arithmetic calibrated in a simulator, not a measurement.
+The timings and airtimes come from the LoRa time-on-air formula, the
+firmware's backoff and retransmit rules, and reply sizes seen in simulator
+runs of real firmware; none of it has been checked on hardware.
+
+| Option | Meaning |
+|---|---|
+| `--dry-run` | Required. Estimate only; nothing is sent. |
+| `--gateway` NODE | The database node whose radio would send the requests. Checks that NODE's recorded admin keys include its key. Nothing connects to it. |
+| `--section` NAME | Plan only this section; repeatable. Required on `LONG_MODERATE` and `LONG_SLOW`. Default: every section the template sets. |
+| `--json` | Emit JSON instead of text. |
+
+**What it plans.** One request for NODE's metadata (its firmware version),
+then one per section the template sets: the owner (names), the `device`,
+`position`, `power`, `lora` and `security` configuration, the primary
+channel's settings (channel 0 only, never the channel list), and each
+module the template configures or switches on or off. The template's own
+defaults count: `device`, `lora` and `security` are always planned.
+`--section` plans only the named sections; the metadata request is always
+first. `security` is planned only for firmware 2.8.0 and later, because
+older firmware sends the node's private key in that reply. Reply sizes come
+from a simulator run for the sections it read, and are taken as the
+largest possible packet (255 B) for every other section.
+
+**Why a read is not free.** Every request and every reply is sent again by
+each relay that hears it with hops left: on a first contact that is every
+rebroadcasting node within the hop limit, not only the nodes on the path;
+once a node on firmware 2.8 has learnt a next hop, only that relay. Each
+spends its legal airtime, 10 % of each hour on `EU_868`, which its firmware
+enforces over a rolling hour, and those relays are often other people's
+nodes. The command charges one relay the time on air of every request and
+reply, raised by the chance of a spurious retransmission, and compares it
+with a polite share of 36 s per rolling hour (10 % of the relay's 360 s).
+The share is a policy of this tool, not a legal or safety limit. The cost
+is judged at contention window 7, the largest window of a link below SNR
+10 dB, and shown at window 8 (strong links, SNR 10 to 15 dB) as the worst
+case, which never refuses on its own. On `LONG_FAST` a full diff of the example template
+fits once per rolling hour that way, and would not at window 8; on
+`LONG_MODERATE` and `LONG_SLOW` no full diff of the example template fits
+at either window, so there a full diff is refused by policy and `--section`
+is required. What one relay
+pays does not depend on the path; how many relays pay is unknown offline.
+The relays' radios are unknown too, so the command assumes the longer slot
+of firmware 2.8 on an SX126x radio. The gateway's own airtime is shown but
+not judged: it is your radio, and its firmware stops it at its own limit.
+
+**Time.** The path is unknown offline, so each request's deadline, and
+the longest a run could take if every request ran to its deadline, are
+shown for every link count the template's hop limit allows (hop limit 3:
+1 to 4 links), at windows 7 and 8. On `LONG_FAST` at 4 links, a
+15-request diff could take up to about 24 minutes.
+
+**The gateway.** The gateway is the radio that would send the requests,
+and NODE checks the gateway's own key. Anyone holding that radio can
+administer every node that lists the key, so keep the gateway like a
+credential; revoking a lost gateway's key on remote nodes takes a site
+visit. Nothing is checked live: the authorization shown is the database's
+last-known record. Without `--gateway`, authorization is not checked and 5
+transmissions are charged for each unanswered request (the count on
+firmware 2.8; 3 below).
+
+**Refusals.** Exit code 5, with the report still printed:
+
+| Code | When |
+|---|---|
+| `not_in_database` | NODE is not in the database. |
+| `archived` | NODE is archived. |
+| `not_template_managed` | NODE's `management` is `observed`. |
+| `firmware_unknown` | The database records no parseable firmware version for NODE. |
+| `firmware_too_old` | NODE's recorded firmware is below 2.7.0. |
+| `region_not_modelled` | The template's region is not `EU_868`. |
+| `preset_not_modelled` | The template runs no modem preset, or one the model lacks. |
+| `override_duty_cycle` | The template sets `lora.override_duty_cycle: true`. |
+| `section_not_in_template` | A `--section` names something the template does not set. |
+| `full_diff_on_slow_preset` | A full diff on `LONG_MODERATE` or `LONG_SLOW` (refused by policy, see above). |
+| `security_below_2_8` | `--section security` on firmware below 2.8.0. |
+| `gateway_is_destination` | `--gateway` names NODE. |
+| `gateway_not_in_database` | The gateway is not an active database node. |
+| `gateway_key_unknown` | The database records no public key for the gateway. |
+| `gateway_not_authorized` | NODE's recorded admin keys do not include the gateway's key. |
+| `destination_busy` | NODE reported transmitting above 5 % of its last hour (half the duty limit) in the last 24 hours: near its limit its firmware drops its own replies, wasting every relay's airtime on the requests. |
+| `over_polite_share` | One relay's airtime, judged at window 7, is over the polite share. |
+
+**Notes.** These never change the exit code:
+
+| Code | When |
+|---|---|
+| `path_unknown` | Whenever there is an estimate: the link counts shown, and that more than the path may pay. |
+| `gateway_assumed` | No `--gateway`, or the gateway's firmware version does not parse. |
+| `security_skipped` | A full diff on firmware below 2.8.0 leaves `security` out. |
+| `admin_key_fallback` | NODE runs 2.7: it answers only once it has heard the gateway's node info. |
+| `two_frequency_slots` | `LONG_MODERATE` or `LONG_SLOW`: the gateway reaches NODE only on its own frequency slot. |
+| `busy_unknown` | No air-utilization reading for NODE from the last day (`mesh health` refreshes it). |
+| `largest_replies_over_share` | It fits, but would not if every reply were 255 B. |
+| `worst_case_over_share` | It fits, but would not at window 8 on every link. |
+| `never_written` | Which of the sections read remote work never writes; every difference is fixed over a local link with `mesh provision`. |
+
+**JSON.** `--json` prints `dry_run` (always `true`), `node`, `verdict`
+(`allowed` or `refused`; `allowed` means only that the offline rules pass,
+since this version cannot run the read), `refusals` and `notes` (lists of
+`{code, message}`), `full_diff`, `firmware` (`recorded`, `version`,
+`security_read`), `gateway` (`node`, `authorization`,
+`unanswered_attempts`), `destination_air_util_tx` (`percent`,
+`age_seconds`, or `null`), `requests` (`section`, `kind`, `reply_bytes`,
+`reply_size`) and `estimate`. `estimate` is `null` when the region or
+preset is outside the model. Otherwise it holds `region`, `preset`,
+`slot_ms`, `cad_symbols`, `settle` (`quiet_seconds`, `min_seconds`,
+`max_seconds`), `timings` (`links`, `deadline_typical`,
+`deadline_worst_case`, `longest_run_typical`, `longest_run_worst_case`),
+`ledger` (judged, at window 7) and `ledger_worst_case` (window 8), each with
+`cw`, `window_seconds`, `budget_seconds`, `spurious_factor`,
+`gateway_seconds`, `gateway_unanswered_seconds`, `relay_seconds`,
+`relay_largest_replies_seconds`, `destination_seconds`, `fits` and
+`per_window`. Seconds are rounded to 3 decimals.
+
 ## Running from cron
 
 `mesh status` and `mesh health` are read-only (they never write to the
@@ -1823,7 +1954,7 @@ so cron mails warnings and errors along with the exit line.
 Exit code 2 (`CONFIG`) also covers command-line usage errors, which
 click reports with a `Usage:` line: an unknown option, a missing
 argument, or a node id that does not parse (`mesh status --node`,
-`mesh adopt --node-id`, `mesh db forget`, `mesh db renumber`).
+`mesh adopt --node-id`, `mesh db forget`, `mesh db renumber`). It also covers `mesh remote diff` without `--dry-run`, which stops before reading anything.
 
 Exit code 4 (`DB`) also covers "another mesh command is running": a
 write command that could not acquire the database's write lock within
@@ -1843,7 +1974,8 @@ also covers two `mesh adopt`/`--enroll` refusals: `NodeNotEnrolledError`
 disambiguated by message text, not exit code. `mesh adopt --from-backup`
 adds `NodeIdentityError` to this same code: its node id could not be
 resolved at all, or resolved ambiguously without `--force` (see
-[Adopting from a config backup](#mesh-adopt) above).
+[Adopting from a config backup](#mesh-adopt) above). It is also the exit code of a refusal by `mesh remote diff --dry-run`,
+which prints its report first.
 
 Exit code 2 (`CONFIG`) also covers `mesh adopt --from-backup`'s
 `BackupParseError`: an unreadable path, a file matching none of the

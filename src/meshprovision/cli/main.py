@@ -6,8 +6,8 @@ invokes directly -- there is deliberately no separate ``main()``
 wrapper. Declares every global option, builds the layered
 :class:`~meshprovision.cli.common.Settings` and the shared
 :class:`~meshprovision.cli.common.CliContext`, and registers the
-subcommands: ``provision``, ``status``, ``health``, ``admin``, ``db``,
-``adopt``, ``template``, ``init``, ``peers``.
+subcommands: ``provision``, ``status``, ``health``, ``network``, ``remote``, ``admin``,
+``db``, ``adopt``, ``template``, ``init``, ``peers``.
 
 The group callback does no I/O beyond building settings and configuring
 logging on a help-only invocation -- ``mesh --help`` and ``mesh <cmd>
@@ -43,6 +43,7 @@ from meshprovision.cli.logging_setup import LOG_LEVELS, configure_logging, resol
 from meshprovision.cli.network import network
 from meshprovision.cli.peers import peers
 from meshprovision.cli.provision import provision
+from meshprovision.cli.remote import remote
 from meshprovision.cli.status import status
 from meshprovision.cli.template_cmd import template
 from meshprovision.errors import SettingsError
@@ -205,5 +206,17 @@ def cli(
     ctx.obj = cli_ctx
 
 
-for command in (provision, status, health, network, admin, db, adopt, template, init, peers):
+for command in (
+    provision,
+    status,
+    health,
+    network,
+    remote,
+    admin,
+    db,
+    adopt,
+    template,
+    init,
+    peers,
+):
     cli.add_command(command)
