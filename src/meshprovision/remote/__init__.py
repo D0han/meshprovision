@@ -2,8 +2,9 @@
 
 It holds airtime and deadline arithmetic (:mod:`~meshprovision.remote.budget`), firmware
 traits (:mod:`~meshprovision.remote.firmware`), the configuration remote work refuses
-forever (:mod:`~meshprovision.remote.refused`) and a section diff that tells "not read"
-from "matches" (:mod:`~meshprovision.remote.diff`). Nothing in this package sends a
+forever (:mod:`~meshprovision.remote.refused`), a section diff that tells "not read"
+from "matches" (:mod:`~meshprovision.remote.diff`) and the airtime ledger of a planned
+diff (:mod:`~meshprovision.remote.ledger`). Nothing in this package sends a
 packet, opens a device, reads a file or the clock, or writes anything, and no command
 uses it yet; ``tests/unit/test_remote_write_free.py`` holds it to that.
 

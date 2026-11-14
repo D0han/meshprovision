@@ -464,7 +464,8 @@ def spurious_retransmit_probability(slot_ms: int, cw: int) -> Fraction:
     - 1}``, compared in integer milliseconds: ``(o + 16 + b) * slot_ms > 56 * slot_ms +
     4500``. The firmware's timer is shorter by ``2 * (air(54) - air(42))`` (it times the
     decoded size), which raises the probability by 2-9 points on LONG_MODERATE and
-    LONG_SLOW; a faithful variant belongs to the ledger (OPINION step 4). [model: T1 b3]
+    LONG_SLOW; the ledger uses the faithful variant,
+    :func:`~meshprovision.remote.ledger.firmware_spurious_probability`. [model: T1 b3]
 
     Args:
         slot_ms: The node's slot time in milliseconds.
