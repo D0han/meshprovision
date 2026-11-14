@@ -173,6 +173,19 @@ STDLIB_PLUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("remote/diff.py", ("meshprovision.provisioning.plan_types",)),
     ("remote/firmware.py", ("meshprovision.firmware",)),
     ("remote/ledger.py", ("meshprovision.lora_regions", "meshprovision.remote.budget")),
+    (
+        "remote/plan.py",
+        (
+            "meshprovision.enums",
+            "meshprovision.lora_regions",
+            "meshprovision.remote.budget",
+            "meshprovision.remote.firmware",
+            "meshprovision.remote.ledger",
+            "meshprovision.remote.plan_types",
+            "meshprovision.remote.refused",
+        ),
+    ),
+    ("remote/plan_types.py", ("meshprovision.remote.budget", "meshprovision.remote.ledger")),
     ("provisioning/backup_models.py", ("meshprovision.crypto.redact", "meshprovision.nodeid")),
     (
         "provisioning/detect_types.py",
