@@ -21,7 +21,6 @@ __all__ = [
     "CLIENT_OVERHEAD_SECONDS",
     "CW_LIMIT",
     "CW_MIN",
-    "DEFAULT_CW",
     "HEADER_BYTES",
     "HOUR_SECONDS",
     "LATE_REPLY_GRACE_FACTOR",
@@ -47,6 +46,8 @@ __all__ = [
     "SLOW_PRESETS",
     "STRONG_LINK_CW",
     "T1_REPLY_BYTES",
+    "TYPICAL_CW",
+    "WORST_CASE_CW",
     "PresetRadio",
     "SettleRule",
     "air_time_seconds",
@@ -196,9 +197,17 @@ STRONG_LINK_CW: Final[int] = 8
 """The contention-window exponent of a strong link: ``getCWsize`` maps SNR -20..10 to 3..8, so
 SNR 10 to 15 dB gives 8. [source: T1 b1]"""
 
-DEFAULT_CW: Final[int] = 8
-"""The exponent the deadline assumes; it covers links up to SNR 15 dB.
-[policy: PRESETS-PL section 2.1; OPINION Q3.3 suggests 7]"""
+WORST_CASE_CW: Final[int] = STRONG_LINK_CW
+"""The contention-window exponent of the worst case: every link at SNR 10 to 15 dB, which
+``getCWsize`` maps to 8; above 15 dB it gives 9 and more, outside the model. The deadline
+always assumes it (the conservative direction there), and the ledger shows the airtime at it
+next to :data:`TYPICAL_CW`. [policy: PRESETS-PL section 2.1]"""
+
+TYPICAL_CW: Final[int] = 7
+"""The contention-window exponent a plan's airtime is judged at: ``getCWsize`` gives at most 7
+below SNR 10 dB (RadioInterface.cpp:841-857). [policy: OPINION Q3.3 recommends 7 as the
+default with 8 as the worst case; T3's measured LONG_FAST relay total for 13 sections, 18.3 s,
+is below the unfactored model's 20.97 s, so no CW 8 spurious retransmits showed there]"""
 
 CLIENT_OVERHEAD_SECONDS: Final[float] = 4.0
 """The deadline's allowance for the client's own overhead (``a``). A guess, to be measured on
@@ -369,7 +378,7 @@ def deadline_seconds(
     links: int,
     *,
     slot_ms: int,
-    cw: int = DEFAULT_CW,
+    cw: int = WORST_CASE_CW,
     client_seconds: float = CLIENT_OVERHEAD_SECONDS,
     reply_bytes: int = MAX_REPLY_BYTES,
 ) -> float:

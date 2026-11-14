@@ -478,13 +478,18 @@ def test_policy_values_are_the_documented_ones() -> None:
     """Pins policy, so that changing one is deliberate."""
     assert (
         budget.CLIENT_OVERHEAD_SECONDS,
-        budget.DEFAULT_CW,
+        budget.WORST_CASE_CW,
+        budget.TYPICAL_CW,
         budget.POLITE_RELAY_SHARE,
         budget.LATE_REPLY_GRACE_FACTOR,
         budget.SETTLE_MIN_SECONDS,
         budget.SETTLE_MIN_SLOW_PRESET_SECONDS,
         budget.SETTLE_MAX_SECONDS,
-    ) == (4.0, 8, 0.10, 2, 25.0, 45.0, 120.0)
+    ) == (4.0, 8, 7, 0.10, 2, 25.0, 45.0, 120.0)
+
+
+def test_worst_case_cw_is_the_strong_link() -> None:
+    assert budget.WORST_CASE_CW == budget.STRONG_LINK_CW
 
 
 def test_the_default_reply_is_the_largest_pkc_reply() -> None:
