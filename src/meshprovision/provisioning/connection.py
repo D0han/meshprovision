@@ -764,14 +764,18 @@ never held hostage by a stuck disconnect.
 
 
 def _close_ignoring_errors(iface: MeshInterface) -> None:
-    """Call ``iface.close()``, swallowing the errors :func:`close_interface` always has.
+    """Call ``iface.close()``, swallowing whatever it raises.
+
+    Any exception, not only an ``OSError``: a BLE stack's ``BleakError``
+    or a serial port's ``termios.error`` would otherwise end the thread
+    with a traceback on stderr after a run that worked.
 
     Args:
         iface: The interface to close.
     """
     try:
         iface.close()
-    except (OSError, AttributeError, RuntimeError):
+    except Exception:  # a close-time error never surfaces, whatever the transport
         _logger.debug("Failed to close MeshInterface cleanly.", exc_info=True)
 
 
@@ -781,8 +785,8 @@ def close_interface(iface: MeshInterface, *, timeout: float = DEFAULT_CLOSE_TIME
     Intended for use in a ``finally`` block: a close-time problem never
     hides whatever exception was already
     propagating, since the actual close runs on a daemon thread and any
-    ``OSError``/``AttributeError``/``RuntimeError`` it raises is logged at
-    DEBUG rather than re-raised (see :func:`_close_ignoring_errors`).
+    exception it raises is logged at DEBUG rather than re-raised (see
+    :func:`_close_ignoring_errors`).
 
     Beyond that existing guarantee, this also never *blocks* longer than
     ``timeout``: ``iface.close()`` runs on a daemon thread, and if it has

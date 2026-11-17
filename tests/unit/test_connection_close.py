@@ -101,3 +101,22 @@ def test_close_interface_swallows_the_documented_exceptions(
         close_interface(iface, timeout=1.0)  # type: ignore[arg-type]
 
     assert any("Failed to close MeshInterface cleanly" in r.message for r in caplog.records)
+
+
+class _BleakError(Exception):
+    """Stands in for ``bleak.exc.BleakError``: no OSError, AttributeError or RuntimeError."""
+
+
+@pytest.mark.parametrize("exc", [_BleakError("boom"), ValueError("boom")])
+def test_close_interface_swallows_any_other_exception_on_its_thread(
+    exc: Exception, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A BLE stack's own close() error printed a thread traceback after a run that worked."""
+    escaped: list[threading.ExceptHookArgs] = []
+    monkeypatch.setattr(threading, "excepthook", escaped.append)
+
+    with caplog.at_level(logging.DEBUG, logger="meshprovision.provisioning.connection"):
+        close_interface(_RaisingIface(exc), timeout=1.0)  # type: ignore[arg-type]
+
+    assert escaped == []
+    assert any("Failed to close MeshInterface cleanly" in r.message for r in caplog.records)

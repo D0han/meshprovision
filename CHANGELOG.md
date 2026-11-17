@@ -692,6 +692,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Closing a device connection no longer prints an "Exception in thread"
+  traceback to stderr after a command that worked when the BLE stack or
+  the serial port raises its own error on close (a `BleakError`, say):
+  any such error is now logged at debug level, as an `OSError` already
+  was.
 - `mesh status` and `mesh health` ignore a last-seen time more than 5
   minutes ahead of the clock, as a gateway with a wrong clock or a
   corrupt loranet epoch reports: it no longer outranks every other
