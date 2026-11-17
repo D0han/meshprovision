@@ -14,7 +14,8 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
-from meshprovision.provisioning.plan_types import FieldChange, diff_fields
+from meshprovision.provisioning.plan_diff import diff_fields
+from meshprovision.provisioning.plan_types import FieldChange
 
 __all__ = ["SectionDiff", "SectionState", "diff_sections"]
 

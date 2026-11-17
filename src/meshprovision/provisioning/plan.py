@@ -24,8 +24,10 @@ already frozen; this module never calls ``.append`` on one).
 
 **The types this module builds** (``ChangePlan``, ``PlanInputs``,
 ``FieldChange``, ``SectionChange``, ``NameChange``,
-``LockdownDecision``/``LockdownReason``, ``values_equal``) live in
-:mod:`meshprovision.provisioning.plan_types` -- this module imports and
+``LockdownDecision``/``LockdownReason``) live in
+:mod:`meshprovision.provisioning.plan_types`, and the field diff
+(``diff_fields``, ``values_equal``) in
+:mod:`meshprovision.provisioning.plan_diff` -- this module imports and
 re-exports every one of them via ``__all__`` unchanged, so a caller may
 still import any of them from here. The split exists so this file holds
 only the ``_plan_*``/:func:`build_plan` decision logic, mirroring the
@@ -65,6 +67,7 @@ from meshprovision.firmware import derives_node_id_from_key, parse_firmware_vers
 from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
+from meshprovision.provisioning.plan_diff import diff_fields, values_equal
 from meshprovision.provisioning.plan_firmware import (
     custom_modem_refusal,
     firmware_adjustments,
@@ -95,8 +98,6 @@ from meshprovision.provisioning.plan_types import (
     NameChange,
     PlanInputs,
     SectionChange,
-    diff_fields,
-    values_equal,
 )
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 

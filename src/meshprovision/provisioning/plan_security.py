@@ -28,13 +28,13 @@ from meshprovision.errors import (
 from meshprovision.firmware import parse_firmware_version
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan
+from meshprovision.provisioning.plan_diff import values_equal
 from meshprovision.provisioning.plan_types import (
     FieldChange,
     LockdownDecision,
     LockdownReason,
     PlanInputs,
     SectionChange,
-    values_equal,
 )
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 

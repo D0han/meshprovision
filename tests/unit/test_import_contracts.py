@@ -137,6 +137,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("errors.py", ("meshprovision",)),
     ("provisioning/plan.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/plan_types.py", _PURE_PLAN_FORBIDDEN),
+    ("provisioning/plan_diff.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/plan_admin_keys.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/plan_security.py", _PURE_PLAN_FORBIDDEN),
     ("provisioning/plan_firmware.py", _PURE_PLAN_FORBIDDEN),
@@ -209,7 +210,10 @@ STDLIB_PLUS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("crypto/redact.py", ("meshprovision.termsafe",)),
     ("config/env_trust.py", ("meshprovision.errors",)),
     ("remote/budget.py", ("meshprovision.lora_regions",)),
-    ("remote/diff.py", ("meshprovision.provisioning.plan_types",)),
+    (
+        "remote/diff.py",
+        ("meshprovision.provisioning.plan_diff", "meshprovision.provisioning.plan_types"),
+    ),
     ("remote/firmware.py", ("meshprovision.firmware",)),
     ("remote/ledger.py", ("meshprovision.lora_regions", "meshprovision.remote.budget")),
     (

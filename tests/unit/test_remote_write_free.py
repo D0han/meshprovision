@@ -4,8 +4,8 @@ No module in it can talk to a device, send a packet, plan or apply a change, rea
 or the clock, or reach names dynamically; and only ``cli/remote.py`` uses it. Like
 ``test_import_contracts.py``, it checks each module's *own* import statements and names,
 walked with ``ast.walk`` over the whole tree (function bodies and ``TYPE_CHECKING`` blocks
-included), not what they import transitively: ``provisioning/plan_types.py`` imports
-``detect``, and that is allowed. The positive allow-list is each module's
+included), not what they import transitively: ``provisioning/plan_diff.py`` and
+``plan_types.py`` import ``detect``, and that is allowed. The positive allow-list is each module's
 ``STDLIB_ONLY``/``STDLIB_PLUS`` row in ``test_import_contracts.py``; this file adds a
 block-list of what must never appear even among the standard library, and refuses a module
 that has no contract row.
@@ -142,8 +142,9 @@ _FORBIDDEN_IMPORTS: Final[tuple[str, ...]] = (
 )
 """Matched exactly or as a dotted parent (``os`` bans ``os`` and ``os.path``, not
 ``ossaudiodev``), *unless* the name is allowed by the module's ``STDLIB_PLUS`` row: that row
-is the one exception mechanism, so ``meshprovision.provisioning.plan_types`` is importable
-by ``remote/diff.py`` only, and every other ``meshprovision`` module by none."""
+is the one exception mechanism, so ``meshprovision.provisioning.plan_diff`` and
+``plan_types`` are importable by ``remote/diff.py`` only, and every other ``meshprovision``
+module by none."""
 
 _ALLOWED_STDLIB: Final[tuple[str, ...]] = (
     "__future__",
