@@ -692,6 +692,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh health` and `mesh network` no longer build an empty hour for every
+  hour back to a lorastats row with a bogus old time (1970, say) on a
+  node's or region's first refresh, which took hundreds of MB and
+  minutes, or never finished: silent hours now start at most 30 days
+  back, the history's retention.
 - `mesh provision`'s refusal of a device preset the template's region
   does not run, on a firmware 2.8 node already in that region, no longer
   says the write "could never be verified": 2.8 clamps such a preset to

@@ -314,7 +314,10 @@ def summarize(parsed: ParsedRaw, *, since: int | None, fetched_at: float) -> tup
                 )
     oldest = min((r.time for r in parsed.receptions), default=None)
     hours = {hour: builder.freeze() for hour, builder in builders.items()}
-    for hour in answered_hours(oldest, since=since, fetched_at=fetched_at):
+    answered = answered_hours(
+        oldest, since=since, fetched_at=fetched_at, retention=NETWORK_RETENTION_SECONDS
+    )
+    for hour in answered:
         hours.setdefault(hour, Traffic())
     return tuple(RegionHour(hour, hours[hour]) for hour in sorted(hours))
 

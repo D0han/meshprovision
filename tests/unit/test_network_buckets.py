@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import MappingProxyType
 
 import pytest
@@ -135,6 +136,21 @@ def test_a_first_refresh_starts_at_the_oldest_row(rows: bool, count: int) -> Non
     hours = _hours([row(packet(_ORIGIN, 1))] if rows else [], since=None)
 
     assert len(hours) == count
+
+
+@pytest.mark.parametrize("year", [1970, 2])
+def test_a_first_refresh_pads_no_silent_hour_older_than_the_retention(year: int) -> None:
+    """One row with a bogus old time asked for a bucket per hour since: 17 M back to year 2."""
+    ancient = datetime(year, 1, 2, tzinfo=UTC).timestamp()
+    old_row = {**row(packet(_ORIGIN, 1)), "Time": f"{year:04d}-01-02T00:00:00+00:00"}
+
+    hours = _hours([old_row, row(packet(_ORIGIN, 2))], since=None)
+
+    kept = floor_hour(NOW - NETWORK_RETENTION_SECONDS)
+    assert [bucket.hour for bucket in hours] == [
+        floor_hour(ancient),
+        *range(kept, floor_hour(NOW) + 1, HOUR_SECONDS),
+    ]
 
 
 def test_a_relayed_reception_that_took_no_hop_is_no_first_hop() -> None:

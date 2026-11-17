@@ -323,7 +323,9 @@ def replace_from(history: NodeHistory, *, now: float) -> int | None:
     return floor_hour(min(history.fetched_at, now))
 
 
-def answered_hours(oldest: float | None, *, since: int | None, fetched_at: float) -> range:
+def answered_hours(
+    oldest: float | None, *, since: int | None, fetched_at: float, retention: float
+) -> range:
     """Return the hours a lorastats answer speaks for completely, silent ones included.
 
     lorastats deletes its oldest rows first, so it holds every hour from
@@ -332,13 +334,16 @@ def answered_hours(oldest: float | None, *, since: int | None, fetched_at: float
     :data:`ASSUMED_LORASTATS_RETENTION_SECONDS`; an older hour without a
     row stays unknown. Without ``since`` (a first refresh) the hours start
     only at that of the oldest row, and there are none without any: how
-    far back lorastats keeps rows it has none of is not known.
+    far back lorastats keeps rows it has none of is not known. None starts
+    before the hour of ``fetched_at - retention``: it would be pruned, and
+    one row with a bogus old time would ask for every hour since.
 
     Args:
         oldest: The time of the oldest row returned, or ``None`` when none was.
         since: The start of the hour the request asked from, or ``None``
             when it asked for everything.
         fetched_at: When lorastats was asked, epoch seconds.
+        retention: How long the caller keeps an hour, seconds.
 
     Returns:
         The hour starts, from the first answered hour up to that of
@@ -350,6 +355,7 @@ def answered_hours(oldest: float | None, *, since: int | None, fetched_at: float
     else:
         held = floor_hour(fetched_at - ASSUMED_LORASTATS_RETENTION_SECONDS) + HOUR_SECONDS
         first = max(since, held if first_heard is None else min(held, first_heard))
+    first = max(first, floor_hour(fetched_at - retention))
     return range(first, floor_hour(fetched_at) + 1, HOUR_SECONDS)
 
 
@@ -435,7 +441,8 @@ def summarize(
     reception stays unknown. Without ``since`` (a node's first refresh)
     empty buckets start only at the hour of its oldest reception, and there
     are none without any: how far back lorastats keeps the reports of a
-    node it has none of is not known.
+    node it has none of is not known. No empty bucket is older than
+    :data:`HISTORY_RETENTION_SECONDS`.
 
     Args:
         node: The node.
@@ -462,7 +469,10 @@ def summarize(
     for packet in packets.values():
         by_hour.setdefault(floor_hour(packet.time), [])
     oldest = min((r.time for r in returned), default=None)
-    for hour in answered_hours(oldest, since=since, fetched_at=fetched_at):
+    answered = answered_hours(
+        oldest, since=since, fetched_at=fetched_at, retention=HISTORY_RETENTION_SECONDS
+    )
+    for hour in answered:
         by_hour.setdefault(hour, [])
     own_byte = relay_byte(node)
     return dataclasses.replace(

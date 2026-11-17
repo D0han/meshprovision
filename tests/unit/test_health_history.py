@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import dataclasses
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -257,6 +257,18 @@ def test_without_since_silent_hours_start_at_the_oldest_reception_even_days_back
     hours = [bucket.hour for bucket in history.hours]
     assert hours == list(range(floor_hour(old_row.time), floor_hour(fetched_at) + 1, HOUR_SECONDS))
     assert [bucket.receptions for bucket in history.hours][:2] == [1, 0]
+
+
+@pytest.mark.parametrize("year", [1970, 2])
+def test_a_first_refresh_pads_no_silent_hour_older_than_the_retention(year: int) -> None:
+    """One row with a bogus old time asked for a bucket per hour since: 17 M back to year 2."""
+    ancient = _rx(datetime(year, 1, 2, tzinfo=UTC).timestamp(), packet="ancient")
+
+    history = _summary([ancient, _rx(_NOW - 60)], since=None, fetched_at=_NOW)
+
+    kept = floor_hour(_NOW - HISTORY_RETENTION_SECONDS)
+    hours = [bucket.hour for bucket in history.hours]
+    assert hours == [floor_hour(ancient.time), *range(kept, floor_hour(_NOW) + 1, HOUR_SECONDS)]
 
 
 def test_a_node_heard_every_6_hours_with_48_hours_held_learns_6_hours() -> None:
