@@ -54,9 +54,24 @@ documented here rather than buried.
    the validator is what keeps a custom pattern honest.
 8. **A single `mesh` console script with subcommands**, replacing the
    specification's two `meshprovision-*` executables (which stuttered).
-   The read-only guarantee of `mesh status` is preserved by code and by
-   test, not by binary separation.
+   The read-only guarantee of `mesh status`, `mesh health`, `mesh
+   network` and `mesh remote` is preserved by code and by test, not by
+   binary separation: `tests/unit/test_import_contracts.py` keeps their
+   command modules from importing a provisioning (device) module or a
+   database one (`mesh remote`: a database-write one),
+   `test_readonly_status_boundary.py` and
+   `test_readonly_remote_boundary.py` bar device and write names, and
+   `test_remote_write_free.py` holds the `meshprovision.remote` package
+   to no device, file, clock or network access at all.
 9. **`data/known_bad_keys.txt` is committed but holds only 7 verified
    X25519 small-order points** — no public CVE-2025-52464 key list
    exists. See [What `known_bad_keys.txt` does and does NOT
    cover](security.md#what-dataknown_bad_keystxt-does-and-does-not-cover).
+10. **Remote admin is offline groundwork only.** `meshprovision.remote`
+    plans a read-only diff of a node over the mesh (`mesh remote diff
+    --dry-run`) and sends nothing; there is no live remote read and no
+    remote write. Its docstrings cite the maintainer's research documents
+    on remote admin (OPINION-REMOTE-ADMIN, COMPARE, T1 to T7, PRESETS-PL,
+    SIM-REVIEW, REFINED, PLAN-REVIEW-59 and simulator runs such as "A1 run
+    s01_3"), which are not part of this repository; the Meshtastic
+    firmware `file:line` citations are the ones a reader can check.

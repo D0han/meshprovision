@@ -20,7 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the worst case), and the
   rules that refuse the read (exit code 5): a node not template-managed or
   below firmware 2.7.0, a full diff on `LONG_MODERATE`/`LONG_SLOW`,
-  `security` below firmware 2.8.0, a gateway whose key the node does not
+  `--section security` below firmware 2.8.0 (a full diff leaves
+  `security` out there, with a note), a gateway whose key the node does not
   list, a busy node, or one relay's cost over a polite share of 36 s per
   rolling hour. There is no live remote read and no remote write; without
   `--dry-run` the command exits 2 before reading anything.

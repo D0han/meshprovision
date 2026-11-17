@@ -100,7 +100,7 @@ jobs:
       - name: Smoke-test the built wheel in a clean environment
         # The point of this job: prove the single console script
         # `mesh = "meshprovision.cli.main:cli"` is actually installed and
-        # that all ten subcommands register, from a built wheel
+        # that all eleven subcommands register, from a built wheel
         # rather than from an editable install.
         #
         # `mesh --help` (and each subcommand's --help) is side-effect free by

@@ -38,6 +38,11 @@ from [loranet.pl](https://loranet.pl) and [lorastats.pl](https://lorastats.pl).
 - Region-wide views of the mesh (`mesh network`): a key scan for clones
   and weak or moved keys, the relays our nodes depend on, who depends on
   a node, and a relay graph for single points of failure.
+- An offline estimate of reading a node's configuration over the mesh
+  (`mesh remote diff --dry-run`): the requests, their deadlines, the
+  airtime each relay would spend against a polite share, and the rules
+  that refuse the read. Nothing is sent; there is no live remote read or
+  remote write.
 
 ## Requirements
 

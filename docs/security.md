@@ -64,6 +64,12 @@ One hard interlock on top: `is_managed=true` with **zero** authorized
 admin keys is refused outright — that combination locks the node with
 nobody able to administer it.
 
+Whoever holds a radio whose key a node lists as an admin key can
+administer that node over the mesh. Keep such a radio, a gateway for
+remote work included, like a credential: revoking a lost one's key on
+remote nodes takes a site visit (see
+[`mesh remote`](commands.md#mesh-remote)).
+
 ### Rotating an admin node's key
 
 A node whose recorded key is also an authorized admin key (named in
