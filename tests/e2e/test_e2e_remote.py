@@ -164,7 +164,7 @@ def test_dry_run_on_medium_fast_with_an_authorized_gateway_is_allowed(
     document = _json(result.stdout)
     assert document["verdict"] == "allowed"
     assert document["gateway"]["authorization"] == "authorized"
-    assert document["estimate"]["ledger"]["relay_seconds"] == 9.839
+    assert document["estimate"]["ledger"]["relay_seconds"] == 9.767
     assert document["estimate"]["ledger"]["per_window"] == 3
     assert len(document["requests"]) == 16
     assert bus.targets == ()

@@ -29,6 +29,7 @@ from meshprovision.remote.plan import (
     PATH_CAD_SYMBOLS,
     REQUEST_ORDER,
     SECTION_CHOICES,
+    SECURITY_REPLY_BYTES,
     TEMPLATE_DUMP_SECTIONS,
     plan_dry_run,
     template_sections,
@@ -42,6 +43,7 @@ from meshprovision.remote.plan_types import (
     GatewayAuthorization,
     NoteCode,
     RefusalCode,
+    ReplySize,
     RequestKind,
     Verdict,
 )
@@ -203,6 +205,7 @@ def test_measured_reply_bytes() -> None:
     assert tuple(MEASURED_REPLY_BYTES.values()) == MEASURED_TEMPLATE_REPLY_BYTES
     assert MEASURED_REPLY_BYTES["default_channel"] == 77
     assert MEASURED_REPLY_BYTES["security"] == 174
+    assert SECURITY_REPLY_BYTES == 142
 
 
 def test_full_diff_presets_are_the_250_khz_ones() -> None:
@@ -241,9 +244,9 @@ def test_g1_is_allowed() -> None:
     assert plan.security_read is False
     assert plan.gateway_authorization is GatewayAuthorization.AUTHORIZED
     assert plan.gateway_attempts == 3
-    assert [(r.section, r.kind, r.reply_bytes, r.measured) for r in plan.requests] == [
-        ("metadata", RequestKind.METADATA, 91, True),
-        ("lora", RequestKind.CONFIG, 89, True),
+    assert [(r.section, r.kind, r.reply_bytes, r.reply_size) for r in plan.requests] == [
+        ("metadata", RequestKind.METADATA, 91, ReplySize.MEASURED),
+        ("lora", RequestKind.CONFIG, 89, ReplySize.MEASURED),
     ]
     estimate = plan.estimate
     assert estimate is not None
@@ -305,13 +308,25 @@ def test_g2_example_on_long_fast_is_allowed_with_two_notes() -> None:
     assert plan.estimate.ledger.per_window == 1
 
 
+def test_security_is_planned_at_its_2_8_estimate() -> None:
+    plan = _plan(requested_sections=frozenset({"security", "mqtt", "serial"}))
+
+    assert [(r.section, r.reply_bytes, r.reply_size) for r in plan.requests] == [
+        ("metadata", 91, ReplySize.MEASURED),
+        ("security", 142, ReplySize.ESTIMATED),
+        ("mqtt", 118, ReplySize.MEASURED),
+        ("serial", 255, ReplySize.MAXIMUM),
+    ]
+    assert plan.security_read is True
+
+
 def test_g3_full_diff_on_long_moderate_is_refused_twice() -> None:
     plan = _plan(preset="LONG_MODERATE", gateway=None, requested_sections=frozenset())
 
     assert plan.verdict is Verdict.REFUSED
     assert _refusals(plan) == ["full_diff_on_slow_preset", "over_polite_share"]
     over = _message(plan, RefusalCode.OVER_POLITE_SHARE)
-    assert "152.05 s" in over
+    assert "150.83 s" in over
     assert "contention window 7" in over
     slow = _message(plan, RefusalCode.FULL_DIFF_ON_SLOW_PRESET)
     assert "refused by policy" in slow
@@ -357,7 +372,7 @@ def test_g3_full_diff_on_long_moderate_is_refused_twice() -> None:
         ),
         pytest.param(
             {"preset": "MEDIUM_SLOW", "requested_sections": frozenset()},
-            17.915904,
+            17.793024,
             ["path_unknown", "gateway_assumed", "busy_unknown", "never_written"],
             id="G8",
         ),
@@ -389,7 +404,7 @@ def test_g5_medium_fast_with_an_authorized_gateway() -> None:
     assert _notes(plan) == ["path_unknown", "busy_unknown", "never_written"]
     assert plan.gateway_attempts == 5
     assert plan.estimate is not None
-    assert plan.estimate.ledger.relay_seconds == pytest.approx(9.838592, abs=5e-6)
+    assert plan.estimate.ledger.relay_seconds == pytest.approx(9.766912, abs=5e-6)
     assert plan.estimate.ledger.per_window == 3
 
 
@@ -407,7 +422,7 @@ def test_g7_shows_both_notes() -> None:
         "never_written",
     ]
     assert "36.37 s" in _message(plan, NoteCode.LARGEST_REPLIES_OVER_SHARE)
-    assert "36.44 s" in _message(plan, NoteCode.WORST_CASE_OVER_SHARE)
+    assert "36.08 s" in _message(plan, NoteCode.WORST_CASE_OVER_SHARE)
 
 
 # ---- refusals and notes

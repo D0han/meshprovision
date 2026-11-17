@@ -60,8 +60,7 @@ def _gateway(plan: DryRunPlan) -> str:
 
 
 def _request_line(request: Request) -> str:
-    size = "measured" if request.measured else "maximum"
-    return f"  {request.section:<22}{request.reply_bytes:>4} B {size}"
+    return f"  {request.section:<22}{request.reply_bytes:>4} B {request.reply_size.value}"
 
 
 def _timing_line(timing: LinkTiming) -> str:
@@ -231,7 +230,7 @@ def plan_to_json(plan: DryRunPlan) -> dict[str, object]:
                 "section": request.section,
                 "kind": request.kind.value,
                 "reply_bytes": request.reply_bytes,
-                "reply_size": "measured" if request.measured else "maximum",
+                "reply_size": request.reply_size.value,
             }
             for request in plan.requests
         ],

@@ -25,6 +25,7 @@ __all__ = [
     "LinkTiming",
     "NoteCode",
     "RefusalCode",
+    "ReplySize",
     "Request",
     "RequestKind",
     "Verdict",
@@ -44,6 +45,14 @@ class RequestKind(StrEnum):
     CONFIG = "config"
     MODULE = "module"
     CHANNEL = "channel"
+
+
+class ReplySize(StrEnum):
+    """Where a planned reply's size comes from."""
+
+    MEASURED = "measured"  # a simulator run's reply
+    ESTIMATED = "estimated"  # derived from a measured reply
+    MAXIMUM = "maximum"  # the largest packet, for a section no run read
 
 
 class Verdict(StrEnum):
@@ -202,13 +211,13 @@ class Request:
         section: The section it reads (``metadata`` for the firmware version).
         kind: What kind of AdminMessage asks for it.
         reply_bytes: The reply's size on air.
-        measured: The size was measured in a simulator run, not assumed at the maximum.
+        reply_size: Where :attr:`reply_bytes` comes from.
     """
 
     section: str
     kind: RequestKind
     reply_bytes: int
-    measured: bool
+    reply_size: ReplySize
 
 
 @dataclass(frozen=True, slots=True)

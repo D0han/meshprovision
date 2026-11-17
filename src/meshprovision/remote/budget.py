@@ -162,8 +162,8 @@ MEASURED_TEMPLATE_REPLY_BYTES: Final[tuple[int, ...]] = (
     77,
 )
 """On-air sizes of the 13 replies to a full template read, in order.
-[measured: A1 run s01_3; T1 section d gives 75, 120, 57, 71, 67, 87, 57, 73, 62, 158, 102,
-60, 61, each plus the 16 B header; total 1258 B]"""
+[measured: A1 run s01_3, firmware 2.7.26; T1 section d gives 75, 120, 57, 71, 67, 87, 57, 73,
+62, 158, 102, 60, 61, each plus the 16 B header; total 1258 B]"""
 
 MAX_LINKS: Final[int] = 7
 """The most links (the request's hop limit, T1's convention). [source: ``MeshTypes.h:38``

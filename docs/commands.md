@@ -1789,7 +1789,9 @@ first. `security` is planned only for firmware 2.8.0 and later, because
 older firmware sends the node's private key in that reply; a node not in
 the database gets no finding about it, as it is refused anyway. Reply
 sizes come from a simulator run for the sections it read, and are taken as
-the largest possible packet (255 B) for every other section.
+the largest possible packet (255 B) for every other section. `security`'s
+is estimated: that run's reply (firmware 2.7.26) less the 34 B private
+key, which 2.8 leaves out, plus 2 B for 2.8's signature policy, 142 B.
 
 **Why a read is not free.** Every request and every reply is sent again by
 each relay that hears it with hops left: on a first contact that is every
@@ -1871,14 +1873,15 @@ since this version cannot run the read), `refusals` and `notes` (lists of
 `security_read`), `gateway` (`node`, `authorization`,
 `unanswered_attempts`), `destination_air_util_tx` (`percent`,
 `age_seconds`, or `null`), `requests` (`section`, `kind`, `reply_bytes`,
-`reply_size`) and `estimate`. `estimate` is `null` when the region or
-preset is outside the model. Otherwise it holds `region`, `preset`,
-`slot_ms`, `cad_symbols`, `settle` (`quiet_seconds`, `min_seconds`,
-`max_seconds`), `timings` (`links`, `deadline_typical`,
-`deadline_worst_case`, `longest_run_typical`, `longest_run_worst_case`),
-`ledger` (judged, at window 7) and `ledger_worst_case` (window 8), each with
-`cw`, `window_seconds`, `budget_seconds`, `spurious_factor`,
-`gateway_seconds`, `gateway_unanswered_seconds`, `relay_seconds`,
+`reply_size`: `measured`, `estimated` or `maximum`) and `estimate`.
+`estimate` is `null` when the region or preset is outside the model.
+Otherwise it holds `region`, `preset`, `slot_ms`, `cad_symbols`, `settle`
+(`quiet_seconds`, `min_seconds`, `max_seconds`), `timings` (`links`,
+`deadline_typical`, `deadline_worst_case`, `longest_run_typical`,
+`longest_run_worst_case`), `ledger` (judged, at window 7) and
+`ledger_worst_case` (window 8), each with `cw`, `window_seconds`,
+`budget_seconds`, `spurious_factor`, `gateway_seconds`,
+`gateway_unanswered_seconds`, `relay_seconds`,
 `relay_largest_replies_seconds`, `destination_seconds`, `fits` and
 `per_window`. Seconds are rounded to 3 decimals.
 

@@ -167,6 +167,7 @@ def test_g3_text_shows_refusals() -> None:
     assert "Verdict: refused" in lines
     assert "Refused:" in lines
     assert any(line.startswith("  full_diff_on_slow_preset: ") for line in lines)
+    assert "  security               142 B estimated" in lines
 
 
 def test_g6_airtime_block() -> None:
@@ -311,6 +312,16 @@ def test_json_g2() -> None:
     assert document["estimate"]["ledger_worst_case"]["fits"] is False
     assert document["estimate"]["ledger"]["per_window"] == 1
     assert document["estimate"]["ledger_worst_case"]["per_window"] == 0
+
+
+def test_json_names_where_each_reply_size_comes_from() -> None:
+    document: Any = plan_to_json(_plan(requested_sections=frozenset({"security", "serial"})))
+
+    assert [(r["section"], r["reply_size"]) for r in document["requests"]] == [
+        ("metadata", "measured"),
+        ("security", "estimated"),
+        ("serial", "maximum"),
+    ]
 
 
 def test_json_without_estimate() -> None:

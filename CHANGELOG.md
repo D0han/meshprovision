@@ -691,6 +691,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh remote diff --dry-run` plans the `security` reply at 142 B, an
+  estimate labelled `estimated` (also `reply_size` in `--json`), not at
+  the 174 B labelled `measured` that a firmware 2.7.26 reply carrying the
+  private key took: the plan reads `security` only from firmware 2.8.0
+  on, which leaves the key out. A full diff of a 2.8 node costs a relay
+  slightly less (0.25 s on `LONG_FAST`).
 - `mesh remote diff --dry-run` no longer says "below firmware 2.8.0" in
   its `security_skipped` note and `security_below_2_8` refusal when the
   database records no parseable firmware version for the node: it says the

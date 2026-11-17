@@ -62,6 +62,7 @@ from meshprovision.remote.plan_types import (
     LinkTiming,
     NoteCode,
     RefusalCode,
+    ReplySize,
     Request,
     RequestKind,
 )
@@ -76,6 +77,7 @@ __all__ = [
     "PATH_CAD_SYMBOLS",
     "REQUEST_ORDER",
     "SECTION_CHOICES",
+    "SECURITY_REPLY_BYTES",
     "TEMPLATE_DUMP_SECTIONS",
     "plan_dry_run",
     "template_sections",
@@ -159,8 +161,27 @@ MEASURED_REPLY_BYTES: Final[Mapping[str, int]] = MappingProxyType(
     dict(zip(_MEASURED_SECTIONS, MEASURED_TEMPLATE_REPLY_BYTES, strict=True))
 )
 """On-air reply size per section where one was measured; any other section is planned at
-MAX_REPLY_BYTES. [measured: A1 run s01_3, simulator; T1 section d lists the 13 sections in
-this order, "channel0" being default_channel]"""
+MAX_REPLY_BYTES, and ``security`` at :data:`SECURITY_REPLY_BYTES`. [measured: A1 run s01_3,
+simulator, firmware 2.7.26; T1 section d lists the 13 sections in this order, "channel0"
+being default_channel]"""
+
+_PRIVATE_KEY_FIELD_BYTES: Final[int] = 34
+"""``SecurityConfig.private_key`` in a reply: a 1 B tag, a 1 B length and the 32 B key.
+[source: ``config.pb.h`` ``SecurityConfig`` field 2, ``PB_BYTES_ARRAY_T(32)``]"""
+
+_SIGNATURE_POLICY_FIELD_BYTES: Final[int] = 2
+"""``SecurityConfig.packet_signature_policy`` in a reply set away from its default: a 1 B tag
+and a 1 B enum value. 2.7.26 has no such field. [source: 2.8.3 ``config.pb.h``
+``SecurityConfig`` field 9]"""
+
+SECURITY_REPLY_BYTES: Final[int] = (
+    MEASURED_REPLY_BYTES["security"] - _PRIVATE_KEY_FIELD_BYTES + _SIGNATURE_POLICY_FIELD_BYTES
+)
+"""The ``security`` reply's on-air size as planned (142): the plan reads it only from firmware
+2.8.0 on, which leaves the private key out of a remote reply (``AdminModule.cpp:1528-1531``
+sets its size to 0, so the field is not encoded), and 2.8 may add the signature policy.
+[model: the 2.7.26 measurement less the key field plus the policy field; an upper bound for
+the measured configuration, as a shorter enclosing length prefix only makes it smaller]"""
 
 _CONFIG_REQUESTS: Final[frozenset[str]] = frozenset(
     {"device", "position", "power", "lora", "security"}
@@ -383,14 +404,17 @@ def _kind(section: str) -> RequestKind:
     return RequestKind.MODULE
 
 
+def _reply(section: str) -> tuple[int, ReplySize]:
+    if section == "security":
+        return SECURITY_REPLY_BYTES, ReplySize.ESTIMATED
+    if section in MEASURED_REPLY_BYTES:
+        return MEASURED_REPLY_BYTES[section], ReplySize.MEASURED
+    return MAX_REPLY_BYTES, ReplySize.MAXIMUM
+
+
 def _requests(wanted: frozenset[str]) -> tuple[Request, ...]:
     return tuple(
-        Request(
-            section=section,
-            kind=_kind(section),
-            reply_bytes=MEASURED_REPLY_BYTES.get(section, MAX_REPLY_BYTES),
-            measured=section in MEASURED_REPLY_BYTES,
-        )
+        Request(section, _kind(section), *_reply(section))
         for section in REQUEST_ORDER
         if section == "metadata" or section in wanted
     )
