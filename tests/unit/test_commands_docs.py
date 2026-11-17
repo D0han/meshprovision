@@ -16,6 +16,8 @@ from meshprovision.remote.budget import TYPICAL_CW, relay_budget_seconds
 from meshprovision.remote.plan import (
     BUSY_EVIDENCE_MAX_AGE_SECONDS,
     BUSY_SHARE_OF_DUTY,
+    MAX_REPLY_BYTES,
+    SECURITY_REPLY_BYTES,
     plan_dry_run,
 )
 from meshprovision.remote.plan_types import (
@@ -24,6 +26,7 @@ from meshprovision.remote.plan_types import (
     Gateway,
     NoteCode,
     RefusalCode,
+    ReplySize,
 )
 from tests.unit.test_followup_constants import _standalone
 
@@ -130,10 +133,19 @@ def test_the_remote_json_keys_are_documented() -> None:
     assert missing == []
 
 
+def test_every_remote_reply_size_is_documented() -> None:
+    listed = re.search(r"`reply_size`: ([^)]*)\)", _remote_section())
+
+    assert listed is not None
+    assert re.findall(r"`([a-z]+)`", listed.group(1)) == [size.value for size in ReplySize]
+
+
 @pytest.mark.parametrize(
     "phrase",
     [
         f"a polite share of {relay_budget_seconds('EU_868'):g} s per rolling hour",
+        f"largest possible packet ({MAX_REPLY_BYTES} B)",
+        f"signature policy, {SECURITY_REPLY_BYTES} B.",
         f"above {REGION_BANDS['EU_868'].duty_cycle * BUSY_SHARE_OF_DUTY:g} %",
         f"in the last {BUSY_EVIDENCE_MAX_AGE_SECONDS / 3600:g} hours",
         f"contention window {TYPICAL_CW}",
