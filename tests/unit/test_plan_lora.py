@@ -303,11 +303,32 @@ def test_a_device_preset_the_templates_region_does_not_run_is_refused(
     assert exc_info.value.field == "lora.modem_preset"
     assert message.startswith(f"lora.modem_preset {preset}, which the template leaves")
     assert ("firmware 2.8 drops a lora write that changes the region" in message) is dropped
-    assert ("in its place" in message) is not dropped
+    assert ("clamps it to the region's default, LONG_FAST" in message) is not dropped
+    assert message.endswith(
+        "so the write could never be verified."
+        if dropped
+        else "a radio move this plan cannot verify."
+    )
     assert f"this device reports {firmware or 'no firmware version'}" in message
     assert (
         exc_info.value.hint == "Set lora.modem_preset in the template to one of EU_868's presets."
     )
+
+
+def test_a_sibling_regions_device_preset_in_the_same_region_is_refused_as_a_switch() -> None:
+    """2.8 switches an EU_868 node on EU_866's LITE_FAST to EU_866: the region never verifies."""
+    template = _template("lora:\n  modem_preset: null\n")
+
+    with pytest.raises(PlanConflictError) as exc_info:
+        _plan(
+            template,
+            sections={"lora": {"region": "EU_868", "modem_preset": "LITE_FAST", "hop_limit": 5}},
+            firmware=_FIRMWARE_2_8,
+        )
+
+    message = str(exc_info.value)
+    assert "belongs to region EU_866: with region EU_868, firmware 2.8 switches" in message
+    assert message.endswith("so the write could never be verified.")
 
 
 @pytest.mark.parametrize(

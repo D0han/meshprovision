@@ -28,9 +28,11 @@ from typing import TYPE_CHECKING, Final
 from meshprovision.errors import PlanConflictError
 from meshprovision.firmware import parse_firmware_version
 from meshprovision.lora_regions import (
+    REGION_BANDS,
     frequency_slot_count,
     name_slot,
     preset_problem,
+    preset_swap_region,
     slot_frequency_hz,
 )
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
@@ -217,7 +219,9 @@ def _live_preset_problem(
     set_config lora), and clamps the preset to the region at boot, so a
     node already in the region on a preset (live ``use_preset`` true)
     cannot report another; one with ``use_preset`` false can keep a stored
-    preset, which a local write then clamps. Older firmware runs
+    preset, which a local write then clamps to the region's default (or
+    switches to the sibling region that runs it): a radio move the plan
+    does not predict, so it is refused too. Older firmware runs
     ``LONG_FAST`` for a preset wider than the band and reports it
     (``applyModemConfig``); the slot checks count the stored preset's slots
     then, which for ``EU_868`` is the one ``LONG_FAST`` has too.
@@ -232,14 +236,22 @@ def _live_preset_problem(
     if problem is None:
         return None
     reported = inputs.live.firmware_version or "no firmware version"
+    outcome = "so the write could never be verified"
+    band = REGION_BANDS.get(lora.region)
     if inputs.live.value("lora", "region") != lora.region:
         problem = (
             f"is not one of {lora.region}'s presets: firmware 2.8 drops a lora write that "
             "changes the region to one the preset does not fit"
         )
+    elif band is not None and preset_swap_region(lora.region, str(live)) is None:
+        problem = (
+            f"is not one of {lora.region}'s presets: firmware 2.8 clamps it to the region's "
+            f"default, {band.default_preset}"
+        )
+        outcome = "a radio move this plan cannot verify"
     return PlanConflictError(
         f"lora.modem_preset {live}, which the template leaves to the device, {problem} "
-        f"(this device reports {reported}), so the write could never be verified.",
+        f"(this device reports {reported}), {outcome}.",
         field="lora.modem_preset",
         hint=f"Set lora.modem_preset in the template to one of {lora.region}'s presets.",
     )

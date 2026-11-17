@@ -263,15 +263,18 @@ too. Update the node's firmware first, or pick another region or preset.
 
 A plan that writes `lora` with `lora.use_preset` and no
 `lora.modem_preset` in the template keeps the device's own preset, and is
-refused (exit code 5, before anything is written, `--dry-run` included)
-on firmware 2.8 or an unparseable version when the template's region does
-not run that preset (for `EU_868`, a turbo preset or a `LITE_*`,
-`NARROW_*` or `TINY_*` one), as a node set up in another region can hold:
-2.8 drops a `lora` write that changes the region to one the preset does
-not fit, so the write could never be verified. Set `lora.modem_preset` in
-the template. Older firmware runs `LONG_FAST` in place of a preset wider
-than the band and reports it, and is not refused. `mesh admin bootstrap`
-inherits this.
+refused (exit code 5, before anything is written, `--dry-run` included) on
+firmware 2.8 or an unparseable version when the template's region does not
+run that preset (for `EU_868`, a turbo preset or a `LITE_*`, `NARROW_*` or
+`TINY_*` one), as a node set up in another region can hold: 2.8 drops a
+`lora` write that changes the region to one the preset does not fit, so
+the write could never be verified. In the same region (a node on
+`use_preset` false can keep such a preset stored), 2.8 clamps it to the
+region's default (`LONG_FAST` in `EU_868`), a radio move the plan cannot
+verify, or switches the node between `EU_868`, `EU_866` and `EU_N_868` to
+the one that runs it. Set `lora.modem_preset` in the template. Older
+firmware runs `LONG_FAST` in place of a preset wider than the band and
+reports it, and is not refused. `mesh admin bootstrap` inherits this.
 
 A plan that writes `lora` with `lora.use_preset` and a `lora.channel_num`
 above the preset's frequency slot count in the region (1 for the 250 kHz presets in

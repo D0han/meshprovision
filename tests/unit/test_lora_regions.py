@@ -64,6 +64,20 @@ def test_eu_868_refuses_every_other_preset_with_the_reason(preset: str, expected
     assert expected in problem
 
 
+@pytest.mark.parametrize(
+    ("region", "preset", "expected"),
+    [
+        pytest.param("EU_868", "LITE_FAST", "EU_866", id="eu-868-lite"),
+        pytest.param("EU_866", "LONG_FAST", "EU_868", id="eu-866-long-fast"),
+        pytest.param("EU_868", "LONG_FAST", None, id="own-preset"),
+        pytest.param("EU_868", "SHORT_TURBO", None, id="no-sibling-runs-it"),
+        pytest.param("US", "LITE_FAST", None, id="not-a-sibling"),
+    ],
+)
+def test_preset_swap_region(region: str, preset: str, expected: str | None) -> None:
+    assert lora_regions.preset_swap_region(region, preset) == expected
+
+
 def test_a_region_swap_is_named_from_each_eu_sibling() -> None:
     assert str(lora_regions.preset_problem("EU_866", "LONG_FAST")).endswith(
         "switches the node to EU_868 (869.4-869.65 MHz, 10 % duty cycle), or drops the lora "

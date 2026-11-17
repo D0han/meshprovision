@@ -35,6 +35,7 @@ __all__ = [
     "frequency_slot_count",
     "name_slot",
     "preset_problem",
+    "preset_swap_region",
     "slot_frequency_hz",
 ]
 
@@ -310,26 +311,43 @@ def preset_problem(region: str, preset: str) -> str | None:
     band = REGION_BANDS.get(region)
     if band is None or preset in band.presets:
         return None
-    if region in _EU_SIBLINGS:
-        sibling = next(
-            (name for name in _EU_SIBLINGS if preset in REGION_BANDS[name].presets), None
+    sibling = preset_swap_region(region, preset)
+    if sibling is not None:
+        older = (
+            "older firmware has no radio parameters for it"
+            if region == "EU_868"
+            else f"firmware before 2.8 has no frequency plan for {region}"
         )
-        if sibling is not None:
-            older = (
-                "older firmware has no radio parameters for it"
-                if region == "EU_868"
-                else f"firmware before 2.8 has no frequency plan for {region}"
-            )
-            return (
-                f"belongs to region {sibling}: with region {region}, firmware 2.8 switches "
-                f"the node to {sibling} ({_band_text(sibling)}), or drops the lora write when "
-                f"it also changes the region, and {older}"
-            )
+        return (
+            f"belongs to region {sibling}: with region {region}, firmware 2.8 switches "
+            f"the node to {sibling} ({_band_text(sibling)}), or drops the lora write when "
+            f"it also changes the region, and {older}"
+        )
     return (
         f"is not one of {region}'s presets ({', '.join(sorted(band.presets))}): firmware "
         f"2.8 runs {band.default_preset} in its place, and older firmware cannot run it "
         "there either"
     )
+
+
+def preset_swap_region(region: str, preset: str) -> str | None:
+    """Return the sibling region firmware 2.8 switches to for ``preset``, if any.
+
+    Between ``EU_868``, ``EU_866`` and ``EU_N_868`` it runs a preset of
+    another of the three by switching to that region (``regionSwapForPreset``);
+    for any other preset a region does not run, it runs the region's default.
+
+    Args:
+        region: The region name.
+        preset: The preset name.
+
+    Returns:
+        The sibling region, or ``None`` when ``region`` runs the preset or
+        is not one of the three, or no sibling runs it.
+    """
+    if region not in _EU_SIBLINGS or preset in REGION_BANDS[region].presets:
+        return None
+    return next((name for name in _EU_SIBLINGS if preset in REGION_BANDS[name].presets), None)
 
 
 def frequency_slot_count(region: str, preset: str, *, firmware_2_8: bool) -> int | None:

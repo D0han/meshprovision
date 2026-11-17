@@ -691,6 +691,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh provision`'s refusal of a device preset the template's region
+  does not run, on a firmware 2.8 node already in that region, no longer
+  says the write "could never be verified": 2.8 clamps such a preset to
+  the region's default (`LONG_FAST` in `EU_868`), and the message now
+  says so, a radio move the plan cannot verify. The refusal stays; a
+  preset of a sibling EU region, which 2.8 switches the region for, keeps
+  its message.
 - `mesh health` dates a hardware model drift by when the source that
   reports the model last saw the node, not by the newest time any source
   saw it: a model only an older observation carries (a newer source
