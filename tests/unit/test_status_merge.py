@@ -493,6 +493,7 @@ def test_merge_observations_carries_every_field_through() -> None:
     assert merged.short_name == "LNET"
     assert merged.long_name == "Loranet Long Name"
     assert merged.hw_model == "HELTEC_V3"
+    assert merged.hw_model_seen == last_seen
     assert merged.role == "ROUTER"
     assert merged.region == "EU_868"
     assert merged.firmware_version == "2.7.11"
@@ -574,6 +575,18 @@ def test_every_identity_field_follows_recency_not_priority() -> None:
         "2.7.11",
     )
     assert (merged.latitude, merged.longitude, merged.altitude) == (52.0, 21.0, 100)
+
+
+def test_the_hardware_model_keeps_the_time_its_own_source_saw_the_node() -> None:
+    older = NOW - timedelta(days=3)
+    loranet = _obs(SOURCE_LORANET, last_seen=older, hw_model="RAK4631")
+    lorastats = _obs(SOURCE_LORASTATS, last_seen=NOW - timedelta(minutes=5))
+
+    merged = merge_observations(NID, [loranet, lorastats], now=NOW)
+
+    assert merged.hw_model == "RAK4631"
+    assert merged.hw_model_seen == older
+    assert merged.last_seen == NOW - timedelta(minutes=5)
 
 
 def test_order_by_recency_is_most_recent_first_with_none_last() -> None:

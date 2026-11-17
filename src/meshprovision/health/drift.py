@@ -84,7 +84,8 @@ class ObservedHardware:
 
     Attributes:
         hw_model: The sources' hardware model (canonical name or raw string).
-        seen_at: The node's last-seen time across the sources, epoch seconds.
+        seen_at: When the source that reported :attr:`hw_model` last saw the node, epoch
+            seconds.
     """
 
     hw_model: str

@@ -254,10 +254,10 @@ def _recorded_identity(node: MergedNode) -> RecordedIdentity | None:
 
 
 def _observed_hardware(node: MergedNode) -> ObservedHardware | None:
-    """The hardware model the sources report, with the node's last-seen time."""
-    if node.hw_model is None or node.last_seen is None:
+    """The hardware model the sources report, with when the source that reported it saw the node."""
+    if node.hw_model is None or node.hw_model_seen is None:
         return None
-    return ObservedHardware(node.hw_model, node.last_seen.timestamp())
+    return ObservedHardware(node.hw_model, node.hw_model_seen.timestamp())
 
 
 def current_battery(health: NodeHealth) -> BatteryReading | None:

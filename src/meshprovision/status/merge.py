@@ -208,6 +208,9 @@ class MergedNode:
         long_name: Best-known long display name (same fallback as
             :attr:`short_name`).
         hw_model: Best-known hardware model.
+        hw_model_seen: When the observation that supplied :attr:`hw_model`
+            last saw the node, or ``None`` when it did not say; it can be
+            older than :attr:`last_seen`, which another source may give.
         role: Best-known device role.
         region: Best-known LoRa region.
         modem_preset: Best-known modem preset name (loranet reports it with
@@ -260,6 +263,7 @@ class MergedNode:
     short_name: str | None = None
     long_name: str | None = None
     hw_model: str | None = None
+    hw_model_seen: datetime | None = None
     role: str | None = None
     region: str | None = None
     modem_preset: str | None = None
@@ -754,6 +758,7 @@ def merge_observations(
     short_name = _first_non_none(by_recency, lambda obs: obs.short_name) or db_short_name
     long_name = _first_non_none(by_recency, lambda obs: obs.long_name) or db_long_name
     hw_model = _first_non_none(by_recency, lambda obs: obs.hw_model)
+    hw_model_seen = next((obs.last_seen for obs in by_recency if obs.hw_model is not None), None)
     role = _first_non_none(by_recency, lambda obs: obs.role)
     region = _first_non_none(by_recency, lambda obs: obs.region)
     modem_preset = _first_non_none(by_recency, lambda obs: obs.modem_preset) or template_preset
@@ -779,6 +784,7 @@ def merge_observations(
         short_name=short_name,
         long_name=long_name,
         hw_model=hw_model,
+        hw_model_seen=hw_model_seen,
         role=role,
         region=region,
         modem_preset=modem_preset,

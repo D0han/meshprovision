@@ -420,13 +420,14 @@ def test_drift_never_changes_the_verdict_or_the_exit_code() -> None:
     assert report.exit_code() == 0
 
 
-def test_hardware_drift_uses_the_status_view_and_its_last_seen() -> None:
+def test_hardware_drift_uses_the_status_view_and_when_its_source_saw_the_node() -> None:
     seen = _NOW - timedelta(minutes=10)
     node = MergedNode(
         node_id=_A,
         record=_template_record(),
         hw_model="T_ECHO",
-        last_seen=seen,
+        hw_model_seen=seen,
+        last_seen=_NOW - timedelta(minutes=1),
         sources=("loranet",),
     )
 
@@ -435,6 +436,31 @@ def test_hardware_drift_uses_the_status_view_and_its_last_seen() -> None:
     assert [(d.field, d.observed, d.seen_at) for d in health.drift] == [
         ("hw_model", "T_ECHO", seen.timestamp())
     ]
+
+
+@pytest.mark.parametrize(
+    "hw_model_seen",
+    [
+        pytest.param(_UPDATED - timedelta(days=1), id="before-the-row"),
+        pytest.param(None, id="undated"),
+    ],
+)
+def test_a_hardware_model_not_seen_after_the_row_is_not_drift(
+    hw_model_seen: datetime | None,
+) -> None:
+    """A newer source without a hardware model does not make an older one's model current."""
+    node = MergedNode(
+        node_id=_A,
+        record=_template_record(),
+        hw_model="T_ECHO",
+        hw_model_seen=hw_model_seen,
+        last_seen=_NOW - timedelta(minutes=5),
+        sources=("loranet", "lorastats"),
+    )
+
+    (health,) = _assess([node], {})
+
+    assert [d.field for d in health.drift] == []
 
 
 def test_drift_without_fetching_uses_the_stored_node_info() -> None:

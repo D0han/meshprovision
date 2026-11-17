@@ -691,6 +691,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh health` dates a hardware model drift by when the source that
+  reports the model last saw the node, not by the newest time any source
+  saw it: a model only an older observation carries (a newer source
+  without one) is no longer taken as heard after the row's last update,
+  and its `seen_at` is that observation's time.
 - `mesh remote diff --dry-run` plans the `security` reply at 142 B, an
   estimate labelled `estimated` (also `reply_size` in `--json`), not at
   the 174 B labelled `measured` that a firmware 2.7.26 reply carrying the
