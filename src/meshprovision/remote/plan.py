@@ -90,10 +90,12 @@ presets, slots, duty cycle and the simulator runs); the project serves the Polis
 FULL_DIFF_PRESETS: Final[frozenset[str]] = frozenset(
     name for name, radio in PRESET_RADIO.items() if radio.bandwidth_hz == 250_000
 )
-"""The presets a full diff (no --section) is planned on at all: the five 250 kHz ones.
-[policy: OPINION Q2 item 3; PRESETS-PL sections 1.2 and 2.3: one full diff costs an LM or LS
-relay several times the polite share. The refusal tests the complement,
-:data:`~meshprovision.remote.budget.SLOW_PRESETS`; a test pins the two]"""
+"""The presets a full diff (no --section) is planned on at all: the five 250 kHz ones. The
+``full_diff_on_slow_preset`` rule refuses the other two,
+:data:`~meshprovision.remote.budget.SLOW_PRESETS`, and names them in its message;
+``test_full_diff_presets_are_the_250_khz_ones`` pins that the two sets split
+:data:`~meshprovision.remote.budget.PRESET_RADIO`. [policy: OPINION Q2 item 3; PRESETS-PL
+sections 1.2 and 2.3: one full diff costs an LM or LS relay several times the polite share]"""
 
 PATH_CAD_SYMBOLS: Final[int] = 4
 """The CAD symbols assumed for the relays' slot. [policy: the relays and their firmware are
@@ -161,7 +163,9 @@ MEASURED_REPLY_BYTES: Final[Mapping[str, int]] = MappingProxyType(
     dict(zip(_MEASURED_SECTIONS, MEASURED_TEMPLATE_REPLY_BYTES, strict=True))
 )
 """On-air reply size per section where one was measured; any other section is planned at
-MAX_REPLY_BYTES, and ``security`` at :data:`SECURITY_REPLY_BYTES`. [measured: A1 run s01_3,
+MAX_REPLY_BYTES, and ``security`` at :data:`SECURITY_REPLY_BYTES`. ``network``, ``display``
+and ``bluetooth`` were measured but are never planned (:data:`REQUEST_ORDER` leaves them out:
+the template sets none of them). [measured: A1 run s01_3,
 simulator, firmware 2.7.26; T1 section d lists the 13 sections in this order, "channel0"
 being default_channel]"""
 
@@ -187,7 +191,9 @@ _CONFIG_REQUESTS: Final[frozenset[str]] = frozenset(
     {"device", "position", "power", "lora", "security"}
 )
 
-_MAX_HOP_LIMIT: Final[int] = 7
+_MAX_HOP_LIMIT: Final[int] = MAX_LINKS
+"""The largest hop limit a template sets, the firmware's ``HOP_MAX``, as
+:data:`~meshprovision.remote.budget.MAX_LINKS` is."""
 
 
 _CODE_ORDER: Final[Mapping[RefusalCode | NoteCode, int]] = MappingProxyType(

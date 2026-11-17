@@ -25,7 +25,6 @@ from typing import Final
 
 from meshprovision.lora_regions import REGION_BANDS
 from meshprovision.remote.budget import (
-    CW_LIMIT,
     CW_MIN,
     HOUR_SECONDS,
     MAX_REPLY_BYTES,
@@ -34,6 +33,8 @@ from meshprovision.remote.budget import (
     RELAY_FIXED_BACKOFF_SLOTS,
     REQUEST_BYTES,
     RETRANSMIT_SLOTS,
+    _check_cw,
+    _check_slot,
     air_time_seconds,
     diff_airtime_seconds,
     diffs_per_hour,
@@ -68,14 +69,9 @@ and ``ReliableRouter.cpp:32`` (copied before encryption); PLAN-REVIEW-59 M1]"""
 _MICROSECONDS: Final[int] = 1_000_000
 
 
-def _check_slot(slot_ms: int) -> None:
-    if slot_ms < 1:
-        raise ValueError(f"slot_ms must be at least 1, got {slot_ms}")
-
-
-def _air_us(preset: str, size: int) -> int:
-    """Return the time on air in whole microseconds (every airtime is a whole number of them)."""
-    return round(air_time_seconds(preset, size) * _MICROSECONDS)
+def _us(seconds: float) -> int:
+    """Return whole microseconds (every airtime, and so every timer here, is a whole number)."""
+    return round(seconds * _MICROSECONDS)
 
 
 def firmware_retransmit_timer_seconds(preset: str, slot_ms: int) -> float:
@@ -130,12 +126,9 @@ def firmware_spurious_probability(preset: str, slot_ms: int, cw: int) -> Fractio
         ValueError: If ``slot_ms`` or ``cw`` is out of range or the preset is unknown.
     """
     _check_slot(slot_ms)
-    if not CW_MIN <= cw <= CW_LIMIT:
-        raise ValueError(f"cw must be {CW_MIN}..{CW_LIMIT}, got {cw}")
-    threshold_us = (
-        RETRANSMIT_SLOTS * slot_ms * 1000
-        + round(PROCESSING_SECONDS * _MICROSECONDS)
-        + 2 * (_air_us(preset, DECODED_REQUEST_BYTES) - _air_us(preset, REQUEST_BYTES))
+    _check_cw(cw)
+    threshold_us = _us(firmware_retransmit_timer_seconds(preset, slot_ms)) - 2 * _us(
+        air_time_seconds(preset, REQUEST_BYTES)
     )
     spurious = sum(
         1

@@ -174,7 +174,7 @@ CW_MIN: Final[int] = 3
 
 CW_LIMIT: Final[int] = 11
 """The largest contention-window exponent: ``getCWsize`` is unclamped and reaches 11 at
-+30 dB. [source: T1 b1]"""
++30 dB. [source: ``getCWsize``, ``RadioInterface.cpp:841-850``, an unclamped ``map``; T1 b1]"""
 
 RELAY_FIXED_BACKOFF_SLOTS: Final[int] = 16
 """A relay's fixed backoff, ``2 * CWmax`` slots.
@@ -182,7 +182,9 @@ RELAY_FIXED_BACKOFF_SLOTS: Final[int] = 16
 
 ORIGIN_BACKOFF_SLOTS: Final[int] = 14
 """The backoff of the two origins (the gateway's request, the node's reply): at most
-``2**CW_MIN - 1 = 7`` slots each. [source: T1 b1 and b4]"""
+``2**CW_MIN - 1 = 7`` slots each. [model: T1 b1 and b4; ``getTxDelayMsec``
+(``RadioInterface.cpp:829-838``) maps channel utilisation to a window of ``CW_MIN`` (idle)
+to ``CWmax``, so this holds on a quiet channel]"""
 
 RETRANSMIT_SLOTS: Final[int] = 56
 """Slots in the retransmit timer on a quiet channel: ``2**3 + 2*8 + 2**5``. The slot count is
@@ -195,7 +197,9 @@ PROCESSING_SECONDS: Final[float] = 4.5
 
 STRONG_LINK_CW: Final[int] = 8
 """The contention-window exponent of a strong link: ``getCWsize`` maps SNR -20..10 to 3..8, so
-SNR 10 to 15 dB gives 8. [source: T1 b1]"""
+SNR 10 to 15 dB gives 8. This is the firmware fact; :data:`WORST_CASE_CW` is the policy built
+on it, and both names are kept so each says which it is. [source: ``getCWsize``,
+``RadioInterface.cpp:841-850``; T1 b1]"""
 
 WORST_CASE_CW: Final[int] = STRONG_LINK_CW
 """The contention-window exponent of the worst case: every link at SNR 10 to 15 dB, which

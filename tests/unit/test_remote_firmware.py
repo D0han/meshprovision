@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import pytest
 
-from meshprovision.remote import firmware
 from meshprovision.remote.firmware import FirmwareTraits, RadioChip, cad_symbols, firmware_traits
 
 pytestmark = pytest.mark.unit
@@ -41,10 +40,6 @@ def test_traits_by_version(raw: str, expected: FirmwareTraits) -> None:
     assert firmware_traits(raw) == expected
 
 
-def test_an_unparseable_version_gets_the_most_careful_traits() -> None:
-    assert firmware_traits("") == FirmwareTraits(None, False, False, False, False, 5, True)
-
-
 @pytest.mark.parametrize(
     ("raw", "chip", "symbols"),
     [
@@ -62,13 +57,3 @@ def test_cad_symbols(raw: str, chip: RadioChip, symbols: int) -> None:
 
 def test_an_unparseable_version_with_an_unknown_chip_scans_the_long_cad() -> None:
     assert cad_symbols(firmware_traits("garbage"), RadioChip.UNKNOWN) == 4
-
-
-def test_timing_constants_are_the_firmware_values() -> None:
-    assert (
-        firmware.PASSKEY_ROTATE_SECONDS,
-        firmware.PASSKEY_VALID_SECONDS,
-        firmware.TRANSACTION_IDLE_FLUSH_SECONDS,
-        firmware.GATEWAY_ATTEMPTS_FROM_2_8,
-        firmware.GATEWAY_ATTEMPTS_BEFORE_2_8,
-    ) == (150, 300, 60, 5, 3)

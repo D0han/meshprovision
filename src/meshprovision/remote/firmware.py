@@ -2,7 +2,8 @@
 
 Version gates, the gateway's retry count and the admin session timings, each with its
 class in brackets: ``[source: ...]`` read in the firmware, ``[measured: ...]`` seen in
-simulator runs, ``[policy: ...]`` a choice. Pure: nothing here talks to a device.
+simulator runs, ``[policy: ...]`` a choice (see :mod:`meshprovision.remote`). Pure: nothing
+here talks to a device.
 """
 
 from __future__ import annotations
@@ -67,8 +68,8 @@ GATEWAY_ATTEMPTS_BEFORE_2_8: Final[int] = 3
 
 LONG_CAD_MIN_FIRMWARE: Final[tuple[int, int, int]] = (2, 8, 0)
 """An SX126x-family radio scans 4 CAD symbols from this firmware on (RF95 scans 2, as does
-every chip before). [source: T1 section a; 2.8 ``SX126xInterface.h:97``, ``RF95Interface.h:58``;
-2.6 and 2.7 ``NUM_SYM_CAD = 2`` for every chip. Boundary assumed]"""
+every chip before). [source: 2.8 ``SX126xInterface.h:97``, ``RF95Interface.h:58``; 2.6 and
+2.7 ``NUM_SYM_CAD = 2`` for every chip; T1 section a. Boundary assumed]"""
 
 PASSKEY_ROTATE_SECONDS: Final[int] = 150
 """How often a node issues a new admin session key.
