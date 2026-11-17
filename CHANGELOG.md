@@ -691,6 +691,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh remote diff --dry-run` no longer says "below firmware 2.8.0" in
+  its `security_skipped` note and `security_below_2_8` refusal when the
+  database records no parseable firmware version for the node: it says the
+  version is unknown. A node not in the database gets neither finding.
 - A `mesh provision` interrupted after writing a fresh key no longer says
   the next `mesh provision` recovers the keypair automatically: when
   firmware 2.8 renumbered the node and its old row exists, that run

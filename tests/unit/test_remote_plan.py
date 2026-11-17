@@ -499,6 +499,61 @@ def test_security_section_below_2_8_is_refused() -> None:
     assert [r.section for r in plan.requests] == ["metadata"]
 
 
+@pytest.mark.parametrize(
+    ("firmware", "requested", "code", "message"),
+    [
+        pytest.param(
+            "2.7.26",
+            frozenset(),
+            NoteCode.SECURITY_SKIPPED,
+            "security is not read: below firmware 2.8.0 the reply carries !deadbe01's "
+            "private key over the mesh.",
+            id="2.7-full",
+        ),
+        pytest.param(
+            "2.7.26",
+            frozenset({"security"}),
+            RefusalCode.SECURITY_BELOW_2_8,
+            "security is read only from firmware 2.8.0 on; below it the reply carries "
+            "!deadbe01's private key over the mesh.",
+            id="2.7-section",
+        ),
+        pytest.param(
+            "",
+            frozenset(),
+            NoteCode.SECURITY_SKIPPED,
+            "security is not read: !deadbe01's firmware version is unknown, and below 2.8.0 "
+            "the reply carries !deadbe01's private key over the mesh.",
+            id="unknown-full",
+        ),
+        pytest.param(
+            "2.x",
+            frozenset({"security"}),
+            RefusalCode.SECURITY_BELOW_2_8,
+            "security is read only from firmware 2.8.0 on; !deadbe01's firmware version is "
+            "unknown, and below 2.8.0 the reply carries !deadbe01's private key over the mesh.",
+            id="unparseable-section",
+        ),
+    ],
+)
+def test_security_findings_name_the_version_only_when_it_is_known(
+    firmware: str, requested: frozenset[str], code: RefusalCode | NoteCode, message: str
+) -> None:
+    plan = _plan(destination=_dest(firmware=firmware), requested_sections=requested)
+
+    assert _message(plan, code) == message
+    assert plan.security_read is False
+
+
+@pytest.mark.parametrize("requested", [frozenset(), frozenset({"security"})])
+def test_a_node_not_in_the_database_gets_no_security_finding(requested: frozenset[str]) -> None:
+    plan = _plan(destination=Destination("!deadbe01", False), requested_sections=requested)
+
+    assert _refusals(plan) == ["not_in_database"]
+    assert "security_skipped" not in _notes(plan)
+    assert plan.security_read is False
+
+
 def _gateway_case(**overrides: Any) -> dict[str, Any]:
     return {"gateway": Gateway("!deadbe0a", True, firmware="2.8.3", public_key=KEY), **overrides}
 

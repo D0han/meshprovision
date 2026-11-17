@@ -325,7 +325,6 @@ def _sections(
 ) -> tuple[frozenset[str], tuple[Finding, ...]]:
     findings: list[Finding] = []
     node = inputs.destination.label
-    redacted = _dotted(PRIVATE_KEY_REDACTED_MIN_FIRMWARE)
     full = not inputs.requested_sections
     missing = inputs.requested_sections - inputs.template_sections
     if missing:
@@ -350,23 +349,26 @@ def _sections(
     )
     if "security" in wanted and not traits.private_key_redacted:
         wanted = wanted - {"security"}
-        if full:
-            findings.append(
-                Finding(
-                    NoteCode.SECURITY_SKIPPED,
-                    f"security is not read: below firmware {redacted} the reply carries "
-                    f"{node}'s private key over the mesh.",
-                )
-            )
-        else:
-            findings.append(
-                Finding(
-                    RefusalCode.SECURITY_BELOW_2_8,
-                    f"security is read only from firmware {redacted} on; below it the reply "
-                    f"carries {node}'s private key over the mesh.",
-                )
-            )
+        if inputs.destination.found:
+            findings.append(_security_finding(node, traits, full=full))
     return wanted, tuple(findings)
+
+
+def _security_finding(node: str, traits: FirmwareTraits, *, full: bool) -> Finding:
+    """Why ``security`` is left out: a note on a full diff, a refusal when it was named."""
+    redacted = _dotted(PRIVATE_KEY_REDACTED_MIN_FIRMWARE)
+    leak = f"the reply carries {node}'s private key over the mesh"
+    if traits.version is None:
+        skipped = refused = f"{node}'s firmware version is unknown, and below {redacted} {leak}"
+    else:
+        skipped = f"below firmware {redacted} {leak}"
+        refused = f"below it {leak}"
+    if full:
+        return Finding(NoteCode.SECURITY_SKIPPED, f"security is not read: {skipped}.")
+    return Finding(
+        RefusalCode.SECURITY_BELOW_2_8,
+        f"security is read only from firmware {redacted} on; {refused}.",
+    )
 
 
 def _kind(section: str) -> RequestKind:

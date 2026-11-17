@@ -1786,9 +1786,10 @@ module the template configures or switches on or off. The template's own
 defaults count: `device`, `lora` and `security` are always planned.
 `--section` plans only the named sections; the metadata request is always
 first. `security` is planned only for firmware 2.8.0 and later, because
-older firmware sends the node's private key in that reply. Reply sizes come
-from a simulator run for the sections it read, and are taken as the
-largest possible packet (255 B) for every other section.
+older firmware sends the node's private key in that reply; a node not in
+the database gets no finding about it, as it is refused anyway. Reply
+sizes come from a simulator run for the sections it read, and are taken as
+the largest possible packet (255 B) for every other section.
 
 **Why a read is not free.** Every request and every reply is sent again by
 each relay that hears it with hops left: on a first contact that is every
@@ -1841,7 +1842,7 @@ firmware 2.8; 3 below).
 | `override_duty_cycle` | The template sets `lora.override_duty_cycle: true`. |
 | `section_not_in_template` | A `--section` names something the template does not set. |
 | `full_diff_on_slow_preset` | A full diff on `LONG_MODERATE` or `LONG_SLOW` (refused by policy, see above). |
-| `security_below_2_8` | `--section security` on firmware below 2.8.0. |
+| `security_below_2_8` | `--section security` on firmware below 2.8.0 or of an unknown version. |
 | `gateway_is_destination` | `--gateway` names NODE. |
 | `gateway_not_in_database` | The gateway is not an active database node. |
 | `gateway_key_unknown` | The database records no public key for the gateway. |
@@ -1855,7 +1856,7 @@ firmware 2.8; 3 below).
 |---|---|
 | `path_unknown` | Whenever there is an estimate: the link counts shown, and that more than the path may pay. |
 | `gateway_assumed` | No `--gateway`, or the gateway's firmware version does not parse. |
-| `security_skipped` | A full diff on firmware below 2.8.0 leaves `security` out. |
+| `security_skipped` | A full diff on firmware below 2.8.0 or of an unknown version leaves `security` out. |
 | `admin_key_fallback` | NODE runs 2.7: it answers only once it has heard the gateway's node info. |
 | `two_frequency_slots` | `LONG_MODERATE` or `LONG_SLOW`: the gateway reaches NODE only on its own frequency slot. |
 | `busy_unknown` | No air-utilization reading for NODE from the last day (`mesh health` refreshes it). |
