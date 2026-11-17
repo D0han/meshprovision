@@ -165,9 +165,8 @@ MEASURED_REPLY_BYTES: Final[Mapping[str, int]] = MappingProxyType(
 """On-air reply size per section where one was measured; any other section is planned at
 MAX_REPLY_BYTES, and ``security`` at :data:`SECURITY_REPLY_BYTES`. ``network``, ``display``
 and ``bluetooth`` were measured but are never planned (:data:`REQUEST_ORDER` leaves them out:
-the template sets none of them). [measured: A1 run s01_3,
-simulator, firmware 2.7.26; T1 section d lists the 13 sections in this order, "channel0"
-being default_channel]"""
+the template sets none of them). [measured: A1 run s01_3, simulator, firmware 2.7.26; T1
+section d lists the 13 sections in this order, "channel0" being default_channel]"""
 
 _PRIVATE_KEY_FIELD_BYTES: Final[int] = 34
 """``SecurityConfig.private_key`` in a reply: a 1 B tag, a 1 B length and the 32 B key.
