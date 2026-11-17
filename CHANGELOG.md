@@ -692,6 +692,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status` and `mesh health` ignore a last-seen time more than 5
+  minutes ahead of the clock, as a gateway with a wrong clock or a
+  corrupt loranet epoch reports: it no longer outranks every other
+  source's and keeps a node that went silent `online`, "in the future",
+  with no silence finding. A node seen only at such a time counts as
+  never seen.
 - `mesh health` and `mesh network` no longer build an empty hour for every
   hour back to a lorastats row with a bogus old time (1970, say) on a
   node's or region's first refresh, which took hundreds of MB and

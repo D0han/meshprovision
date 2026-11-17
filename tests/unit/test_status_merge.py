@@ -108,6 +108,32 @@ def test_most_recent_last_seen_wins_and_names_source() -> None:
     assert merged.last_seen_source == SOURCE_LORASTATS
 
 
+def test_a_last_seen_in_the_future_is_ignored() -> None:
+    """A gateway with a wrong clock kept a node that went silent online, "in the future"."""
+    future = _obs(SOURCE_LORANET, short_name="FUTR", last_seen=NOW + timedelta(days=3650))
+    stale = _obs(SOURCE_LORASTATS, short_name="OLD", last_seen=NOW - timedelta(days=3))
+
+    merged = merge_observations(NID, [future, stale], now=NOW)
+    alone = merge_observations(NID, [future], now=NOW)
+
+    assert (merged.last_seen, merged.last_seen_source) == (stale.last_seen, SOURCE_LORASTATS)
+    assert (merged.availability, merged.age_text) == (Availability.OFFLINE, "3 days ago")
+    assert merged.short_name == "OLD"
+    assert (alone.last_seen, alone.availability, alone.age_text) == (
+        None,
+        Availability.UNKNOWN,
+        "never",
+    )
+
+
+def test_a_last_seen_up_to_5_minutes_ahead_still_counts() -> None:
+    skewed = _obs(SOURCE_LORANET, last_seen=NOW + timedelta(minutes=5))
+
+    merged = merge_observations(NID, [skewed], now=NOW)
+
+    assert (merged.last_seen, merged.availability) == (skewed.last_seen, Availability.ONLINE)
+
+
 def test_sources_reported_in_priority_order() -> None:
     loranet_obs = _obs(SOURCE_LORANET, last_seen=NOW)
     lorastats_obs = _obs(SOURCE_LORASTATS, last_seen=NOW)

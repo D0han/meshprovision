@@ -14,6 +14,8 @@ import respx
 
 from meshprovision.cache.http import CachedHTTPClient
 from meshprovision.config.settings import Settings
+from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
+from meshprovision.datasources.models import NodeObservation
 from meshprovision.db import ods_write
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import ManagementMode
@@ -37,7 +39,7 @@ from meshprovision.network.impact import Dependant, Level, NodeImpact
 from meshprovision.network.maintenance import StoredImpact
 from meshprovision.nodeid import NodeId
 from meshprovision.status.cadence import Cadence, CadenceSource
-from meshprovision.status.merge import Availability, MergedNode, Thresholds
+from meshprovision.status.merge import Availability, MergedNode, Thresholds, merge_observations
 from meshprovision.status.report import SourceFailure, StatusReport
 
 pytestmark = pytest.mark.unit
@@ -191,6 +193,22 @@ def test_a_recent_sighting_without_history_is_ok_not_unknown() -> None:
     (health,) = _assess([node], {})
 
     assert health.verdict is Verdict.OK
+
+
+def test_a_last_seen_in_the_future_does_not_hide_a_silent_node() -> None:
+    """A wrong gateway clock made a node silent for 3 days look heard just now."""
+    seen = {SOURCE_LORANET: _NOW + timedelta(days=3650), SOURCE_LORASTATS: _NOW - timedelta(days=3)}
+    observations = [
+        NodeObservation(node_id=_A, source=source, observed_at=_NOW, last_seen=last_seen)
+        for source, last_seen in seen.items()
+    ]
+    node = merge_observations(_A, observations, now=_NOW)
+
+    (health,) = _assess([node], {})
+
+    assert health.verdict is Verdict.CRIT
+    (silent,) = (finding for finding in health.findings if finding.code == "silent")
+    assert silent.text.startswith("not heard for 3 d ")
 
 
 def _settings(tmp_path: Path, db: Path) -> Settings:

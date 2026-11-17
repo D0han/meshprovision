@@ -27,7 +27,7 @@ from enum import StrEnum
 from typing import Final, TypeVar
 
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
-from meshprovision.datasources.models import NodeObservation
+from meshprovision.datasources.models import NodeObservation, without_future_last_seen
 from meshprovision.db.node_record import NodeRecord
 from meshprovision.nodeid import NodeId
 from meshprovision.status.cadence import (
@@ -640,7 +640,9 @@ def merge_observations(
        observations -- most-recent-wins on conflicting timestamps.
        ``last_seen_source`` is the source that supplied that maximum; on
        an exact tie, the higher-priority source (loranet) wins. This is
-       the "lorastats corroborates last-seen" requirement.
+       the "lorastats corroborates last-seen" requirement. A ``last_seen``
+       in the future (:func:`~meshprovision.datasources.models.without_future_last_seen`)
+       counts as ``None``, here and in rule 4.
     2a. ``last_boot``: the maximum non-``None`` value across all
        observations (the newest boot any source knows of).
     2b. ``seen_by_counts``: from the first observation in ``by_priority``
@@ -735,7 +737,8 @@ def merge_observations(
             thresholds=node_thresholds(thresholds, node_cadence),
         )
 
-    by_priority = _order_by_priority(observations)
+    current = [without_future_last_seen(obs, now=now) for obs in observations]
+    by_priority = _order_by_priority(current)
     by_recency = _order_by_recency(by_priority)
 
     last_seen, last_seen_source = _pick_last_seen(by_priority)

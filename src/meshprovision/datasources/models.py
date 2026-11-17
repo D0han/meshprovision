@@ -33,6 +33,7 @@ from meshprovision.termsafe import terminal_safe
 
 __all__ = [
     "E7_SCALE",
+    "LAST_SEEN_FUTURE_SKEW",
     "LORASTATS_NAIVE_TZ",
     "MAX_SEEN_BY_TOPICS",
     "CoercionTracker",
@@ -44,6 +45,7 @@ __all__ = [
     "epoch_seconds",
     "parse_epoch",
     "parse_iso8601",
+    "without_future_last_seen",
 ]
 
 _T = TypeVar("_T")
@@ -109,6 +111,11 @@ the same endpoint returns both naive and offset-aware forms.
 
 MAX_SEEN_BY_TOPICS: Final[int] = 32
 """Cap on the number of loranet MQTT gateway topics kept in ``seen_by``."""
+
+LAST_SEEN_FUTURE_SKEW: Final[timedelta] = timedelta(minutes=5)
+"""How far ahead of the clock a ``last_seen`` may be; a later one (a gateway
+with a wrong clock, a corrupt epoch) is ignored by
+:func:`without_future_last_seen`."""
 
 
 class NodeObservation(BaseModel):
@@ -261,6 +268,26 @@ class NodeObservation(BaseModel):
         if value is not None and value.tzinfo is None:
             raise ValueError("datetime fields must be timezone-aware")
         return value
+
+
+def without_future_last_seen(observation: NodeObservation, *, now: datetime) -> NodeObservation:
+    """Drop an observation's ``last_seen`` when it lies in the future.
+
+    A ``last_seen`` more than :data:`LAST_SEEN_FUTURE_SKEW` after ``now``
+    would be the newest of every source's for as long as it is reported,
+    and keep a node that went silent online.
+
+    Args:
+        observation: One source's observation.
+        now: The current time. Must be timezone-aware.
+
+    Returns:
+        ``observation`` itself, or a copy of it without ``last_seen``.
+    """
+    seen = observation.last_seen
+    if seen is None or seen <= now + LAST_SEEN_FUTURE_SKEW:
+        return observation
+    return observation.model_copy(update={"last_seen": None})
 
 
 def e7_to_degrees(value: object, *, limit: float) -> float | None:

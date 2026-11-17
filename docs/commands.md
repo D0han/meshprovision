@@ -573,10 +573,12 @@ file's mtime is unchanged across a full status run.
 
 Data sources: loranet.pl's bulk `https://loranet.pl/nodes.json` dump
 (preferred for telemetry) and lorastats.pl per-node queries (last-seen
-corroboration); most recent wins. Whether a node is online, stale or offline
-depends on how often it is expected to be heard (see **Online, stale,
-offline** below): a client with default settings is stale after 6 h 45 m and
-offline after 24 h; nothing is ever stale before 2 h or offline before 24 h.
+corroboration); most recent wins, but a last-seen time more than 5 minutes
+ahead of the clock (a gateway with a wrong clock) is ignored. Whether a node
+is online, stale or offline depends on how often it is expected to be heard
+(see **Online, stale, offline** below): a client with default settings is
+stale after 6 h 45 m and offline after 24 h; nothing is ever stale before
+2 h or offline before 24 h.
 
 **Online, stale, offline.** A node is judged against its *expected interval*
 `E`, the longest gap a healthy node of its configuration leaves between two
