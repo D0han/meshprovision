@@ -105,6 +105,13 @@ def test_only_data_at_most_48_hours_old_counts(tmp_path: Path, age: float, noted
     assert (_note(tmp_path) is not None) is noted
 
 
+def test_the_given_clock_decides_what_is_stored_not_the_real_one(tmp_path: Path) -> None:
+    long_ago = NOW - 60 * 86400
+    _seed(tmp_path, "PL", fetched_at=long_ago)
+
+    assert _note(tmp_path, now=long_ago + 3600) is not None
+
+
 def test_the_region_where_it_matters_most_is_named(tmp_path: Path) -> None:
     _seed(tmp_path, "A", first_hop=False, noise=600, elsewhere=10)
     _seed(tmp_path, "B", dependants=2)

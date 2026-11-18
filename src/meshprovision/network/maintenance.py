@@ -108,8 +108,8 @@ def stored_impacts(
 
 def _stored(nodes: tuple[NodeId, ...], directory: Path, now: float) -> dict[NodeId, StoredImpact]:
     """Judge every node in every fresh region, keeping each node's best (see above)."""
-    store = RegionStore(directory)
-    keys = KeyStore(directory)
+    store = RegionStore(directory, clock=lambda: now)
+    keys = KeyStore(directory, clock=lambda: now)
     best: dict[NodeId, StoredImpact] = {}
     for region in store.regions():
         fetched_at = store.state(region).fetched_at
