@@ -118,7 +118,7 @@ def health(
         gateway_checks=bool(nodes),
         node_ids=tuple(dict.fromkeys(nodes)),
         regions=regions,
-        region_list=None if regions else RegionList(),
+        region_list=None if regions else RegionList(region_option=False),
         force_refresh=ctx.force_refresh,
         expected_interval=None if expected_interval is None else timedelta(hours=expected_interval),
         template_interval=interval_of_template,

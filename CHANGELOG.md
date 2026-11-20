@@ -692,6 +692,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh health`'s hint when it has no lorastats region list (none
+  configured and lorastats.pl's page unreachable) no longer tells the
+  user to pass `--region`, which `mesh health` does not have; it names
+  `MESHPROVISION_LORASTATS_REGIONS` only. `mesh status` still names
+  both.
 - `mesh health` drops a stored last-heard time more than 5 minutes ahead
   of the clock (a corrupt or hand-edited history, or one written while
   the clock was set ahead) when it reads the history: such a time no

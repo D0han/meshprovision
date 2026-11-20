@@ -101,8 +101,8 @@ _MAX_FILE_BYTES: Final[int] = 64 * 1024
 _FUTURE_SKEW_SECONDS: Final[float] = 300.0
 _WHAT: Final[str] = "lorastats region list"
 _HINT: Final[str] = (
-    "Set MESHPROVISION_LORASTATS_REGIONS (or pass --region) to the lorastats "
-    "regions to ask, for example MESHPROVISION_LORASTATS_REGIONS=Zachód,Warszawa."
+    "Set MESHPROVISION_LORASTATS_REGIONS{flag} to the lorastats regions to ask, "
+    "for example MESHPROVISION_LORASTATS_REGIONS=Zachód,Warszawa."
 )
 
 
@@ -206,6 +206,7 @@ class RegionList:
         self,
         *,
         refresh: bool = False,
+        region_option: bool = True,
         base_url: str = LORASTATS_BASE_URL,
         clock: Callable[[], float] = time.time,
     ) -> None:
@@ -214,12 +215,15 @@ class RegionList:
         Args:
             refresh: Request the page even when the cached list is still
                 fresh (``mesh status --refresh-regions``).
+            region_option: Whether the command has ``--region``, which the
+                error's hint then names next to the setting.
             base_url: The lorastats.pl base URL. Overridable for tests.
             clock: Callable returning the current unix epoch seconds.
         """
         self._refresh = refresh
         self._url = base_url.rstrip("/") + REGION_LIST_PAGE_PATH
         self._clock = clock
+        self._hint = _HINT.format(flag=" (or pass --region)" if region_option else "")
         self._regions: tuple[str, ...] | None = None
         self._error: DataSourceError | None = None
 
@@ -277,7 +281,7 @@ class RegionList:
                 return cached[0]
             tried_at = _read_tried_at(document)
             if tried_at is not None and _recent(tried_at, REGION_LIST_RETRY_SECONDS, now):
-                return _after_recent_failure(cached, self._url)
+                return _after_recent_failure(cached, self._url, self._hint)
         try:
             regions = self._fetch(client)
         except DataSourceError as exc:
@@ -287,7 +291,7 @@ class RegionList:
                 _record_failure(path, cached, now)
             if cached is None:
                 raise DataSourceError(
-                    f"No lorastats region list: {exc.message}", hint=_HINT
+                    f"No lorastats region list: {exc.message}", hint=self._hint
                 ) from exc
             _logger.warning(
                 "Could not refresh the lorastats region list (%s); using the cached one.",
@@ -398,13 +402,14 @@ def _recent(at: float, window: float, now: float) -> bool:
 
 
 def _after_recent_failure(
-    cached: tuple[tuple[str, ...], float] | None, url: str
+    cached: tuple[tuple[str, ...], float] | None, url: str, hint: str
 ) -> tuple[str, ...]:
     """Answer without a request while the last one failed recently.
 
     Args:
         cached: The stale cached list and when it was fetched, if any.
         url: The page's URL, for the error.
+        hint: The error's hint.
 
     Returns:
         The stale cached list.
@@ -416,7 +421,7 @@ def _after_recent_failure(
         raise DataSourceError(
             f"No lorastats region list: reading {url} failed in the last day "
             "(mesh status --refresh-regions asks again now)",
-            hint=_HINT,
+            hint=hint,
         )
     _logger.info("Reading the lorastats region list failed in the last day; using the cached one.")
     return cached[0]

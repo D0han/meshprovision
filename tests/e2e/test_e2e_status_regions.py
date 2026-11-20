@@ -237,8 +237,31 @@ def test_no_region_list_makes_lorastats_a_failed_source_naming_the_setting(
     assert failure["source"] == "lorastats"
     assert failure["message"].startswith("No lorastats region list")
     assert "MESHPROVISION_LORASTATS_REGIONS" in failure["hint"]
+    assert "--region" in failure["hint"]
     (node,) = document["nodes"]
     assert node["sources"] == ["loranet"]
+    assert result.exit_code == ExitCode.STATUS_DEGRADED
+
+
+def test_mesh_health_without_a_region_list_names_no_region_flag(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """``mesh health`` has no --region; its failure's hint must not tell the user to pass one."""
+    nodes = _seed(seed_db)
+    del env["MESHPROVISION_LORASTATS_REGIONS"]
+    router, page, _ = _listed_router(mock_sources, nodes, page=httpx.Response(404))
+
+    with router:
+        result = invoke(runner, ["health", "--json"], env)
+        assert page.call_count == 1
+
+    hints = [failure["hint"] for failure in json.loads(result.stdout)["failures"]]
+    assert hints
+    assert all("MESHPROVISION_LORASTATS_REGIONS" in hint for hint in hints)
+    assert not any("--region" in hint for hint in hints)
     assert result.exit_code == ExitCode.STATUS_DEGRADED
 
 

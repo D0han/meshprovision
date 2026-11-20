@@ -432,6 +432,24 @@ def test_a_day_after_a_failed_fetch_the_page_is_asked_again(tmp_path: Path) -> N
     assert json.loads(path.read_text()) == _cached(list(LORASTATS_NODES_PAGE_REGIONS), now[0])
 
 
+@pytest.mark.parametrize("region_option", [True, False], ids=["with-region", "without-region"])
+@respx.mock
+def test_the_hint_names_region_only_for_a_command_that_has_it(
+    tmp_path: Path, region_option: bool
+) -> None:
+    """``mesh health`` has no --region, but its hint told the user to pass one."""
+    _page_route(httpx.Response(404))
+    hints = []
+    for now in (_NOW, _NOW + 3600):  # the failed request, then the recent failure
+        region_list = RegionList(region_option=region_option, clock=lambda at=now: at)
+        with pytest.raises(DataSourceError) as exc_info:
+            region_list.regions(_client(tmp_path, [now]))
+        hints.append(exc_info.value.hint or "")
+
+    assert all("MESHPROVISION_LORASTATS_REGIONS" in hint for hint in hints)
+    assert [("--region" in hint) for hint in hints] == [region_option, region_option]
+
+
 @respx.mock
 def test_without_a_cached_list_a_recent_failure_fails_without_a_request(tmp_path: Path) -> None:
     route = _page_route(httpx.Response(404))
