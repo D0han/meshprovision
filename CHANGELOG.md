@@ -692,6 +692,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A lorastats.pl last-seen or last-boot time more than 5 minutes after
+  the record was read (lorastats' clock was wrong) is now dropped when it
+  is parsed: such a record no longer beats an older, correct one from
+  another region, `mesh status` no longer shows the time as the last
+  boot, and `mesh network` no longer counts the node as heard in the
+  window or shows that time.
 - `mesh health --no-fetch` and `mesh network ... --no-fetch` no longer
   stop with a raw `ValueError` (year out of range) when a cached time lies
   past every date a computer can show (a corrupt or hand-edited cache

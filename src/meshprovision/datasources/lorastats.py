@@ -66,6 +66,7 @@ from urllib.parse import quote
 
 from meshprovision.datasources.base import SOURCE_LORASTATS, BaseHTTPDataSource, require_json_list
 from meshprovision.datasources.models import (
+    LAST_SEEN_FUTURE_SKEW,
     CoercionTracker,
     NodeObservation,
     coerce_int,
@@ -591,7 +592,9 @@ def parse_node(
     ``LastSeen`` and ``LastBoot`` are ISO 8601 and may be either
     offset-aware or naive; a naive value is interpreted as Europe/Warsaw,
     lorastats.pl's local timezone, then normalized to UTC (see
-    :func:`meshprovision.datasources.models.parse_iso8601`).
+    :func:`meshprovision.datasources.models.parse_iso8601`). Either one
+    more than :data:`~meshprovision.datasources.models.LAST_SEEN_FUTURE_SKEW`
+    after ``observed_at`` is dropped.
 
     Args:
         payload: One element of the decoded JSON array.
@@ -631,9 +634,22 @@ def parse_node(
         role_value=role_value,
         hw_model=hw_model_table().try_name(hw_model_value) if hw_model_value is not None else None,
         hw_model_value=hw_model_value,
-        last_seen=tracker.coerce(payload.get("LastSeen"), parse_iso8601),
-        last_boot=tracker.coerce(payload.get("LastBoot"), parse_iso8601),
+        last_seen=_not_after(tracker.coerce(payload.get("LastSeen"), parse_iso8601), observed_at),
+        last_boot=_not_after(tracker.coerce(payload.get("LastBoot"), parse_iso8601), observed_at),
     )
+
+
+def _not_after(value: datetime | None, observed_at: datetime) -> datetime | None:
+    """Drop a time more than :data:`LAST_SEEN_FUTURE_SKEW` after the record was read.
+
+    ``observed_at`` is when the record was read: the time of lorastats.pl's
+    answer for a region node list, the time of parsing (the answer may be
+    from the cache, so earlier) for a single node. lorastats.pl cannot have
+    seen a node after it answered, so a later time comes from a wrong
+    server clock; kept, it would win :func:`_fresher`, be the newest
+    ``last_boot`` in a merge and count the node as heard for ``mesh network``.
+    """
+    return value if value is None or value <= observed_at + LAST_SEEN_FUTURE_SKEW else None
 
 
 def validate_regions(regions: Sequence[str]) -> tuple[str, ...]:

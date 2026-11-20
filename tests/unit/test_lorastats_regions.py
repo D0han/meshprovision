@@ -616,6 +616,23 @@ def test_a_stale_record_in_the_remembered_region_loses_to_a_fresh_one_elsewhere(
 
 
 @respx.mock
+def test_a_record_seen_in_the_future_elsewhere_does_not_beat_a_stale_one(tmp_path: Path) -> None:
+    """A wrong lorastats clock ahead by a day: that record's time is unknown, not the freshest."""
+    now = [_NOW]
+    mocked = _mock_seen({"Zachód": _ago(_STALE), "Gdańsk": _ago(-86400)})
+    memo = _memo(tmp_path, now)
+    memo.remember(_NODE, "Zachód")
+    source, _ = _source(tmp_path, now, memo=memo)
+
+    observation = source.fetch_node(_NODE)
+
+    assert observation is not None
+    assert observation.region_queried == "Zachód"
+    assert observation.last_seen is not None
+    assert mocked.calls()["Gdańsk"] == 1
+
+
+@respx.mock
 @pytest.mark.parametrize(
     ("age", "asked_elsewhere"),
     [(LORASTATS_STALE_RECORD_SECONDS - 60, 0), (LORASTATS_STALE_RECORD_SECONDS + 60, 1)],
