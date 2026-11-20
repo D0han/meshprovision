@@ -199,6 +199,7 @@ def test_a_path_that_cannot_be_read_reads_as_no_memo(
         pytest.param("deadbe01", {"region": "PL", "stored_at": "1"}, id="str-stored-at"),
         pytest.param("deadbe01", {"region": "PL", "stored_at": "NaN"}, id="nan-stored-at"),
         pytest.param("deadbe01", {"region": "PL", "stored_at": 1e400}, id="inf-stored-at"),
+        pytest.param("deadbe01", {"region": "PL", "stored_at": 10**400}, id="huge-int-stored-at"),
     ],
 )
 def test_a_malformed_entry_is_skipped_but_its_siblings_are_kept(

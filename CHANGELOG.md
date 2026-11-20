@@ -692,6 +692,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status`, `mesh health`, `mesh network` and the other commands
+  that read the remembered lorastats regions or the cached region list
+  no longer stop with a raw `OverflowError` on every run when a time in
+  either file is an integer too large for a float (a corrupt or
+  hand-edited file): such a time is never current or fresh, like any
+  other time out of range.
 - `mesh status` and `mesh health` ignore a loranet device-metrics time
   more than 5 minutes ahead of the clock, as they already did a last-seen
   time: the battery level it dates (an old 95%, say) no longer counts as

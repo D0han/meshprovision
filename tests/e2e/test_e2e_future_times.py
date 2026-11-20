@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from meshprovision.datasources.region_memo import REGION_MEMO_FILENAME, REGION_MEMO_VERSION
 from meshprovision.health.history import NodeHistory
 from meshprovision.health.store import HISTORY_DIRNAME, history_to_json
 from meshprovision.network.store import NETWORK_DIRNAME, region_dirname
@@ -92,3 +93,18 @@ def test_health_judges_a_fresh_low_battery_over_a_level_dated_in_the_future(
     assert result.exit_code == 7
     assert node["verdict"] == "crit"
     assert [f["text"] for f in node["findings"] if f["code"] == "battery_low"] == ["battery at 4%"]
+
+
+def test_a_remembered_region_time_too_large_for_a_float_is_never_current(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    health._seed(seed_db)
+    memo = Path(env["MESHPROVISION_CACHE_DIR"]) / REGION_MEMO_FILENAME
+    memo.parent.mkdir(parents=True, exist_ok=True)
+    node = f'"{health._A}": {{"region": "PL", "stored_at": 1{"0" * 400}}}'
+    memo.write_text(f'{{"version": {REGION_MEMO_VERSION}, "nodes": {{{node}}}}}', encoding="utf-8")
+
+    result = invoke(runner, ["network", "relays", "--no-fetch"], env)
+
+    assert result.exit_code == 2, result.exception
+    assert "No lorastats region is known for any of our nodes" in result.output

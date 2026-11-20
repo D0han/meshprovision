@@ -52,6 +52,7 @@ from meshprovision.datasources.lorastats import (
     LORASTATS_MAX_REGIONS,
     validate_regions,
 )
+from meshprovision.datasources.models import json_number
 from meshprovision.errors import DataSourceError, RateLimitCoolingDownError, SettingsError
 
 if TYPE_CHECKING:
@@ -345,15 +346,16 @@ def _read_cached(document: object) -> tuple[tuple[str, ...], float] | None:
         version :data:`REGION_LIST_VERSION` list of 1 to
         :data:`~meshprovision.datasources.lorastats.LORASTATS_MAX_REGIONS`
         valid, canonical region names with a numeric ``fetched_at`` (a
-        non-finite one is never fresh).
+        non-finite one, or an integer too large for a float, is never
+        fresh).
     """
     if not isinstance(document, dict) or document.get("version") != REGION_LIST_VERSION:
         return None
     regions = document.get("regions")
-    fetched_at = document.get("fetched_at")
+    fetched_at = json_number(document.get("fetched_at"))
     if not isinstance(regions, list) or not all(isinstance(r, str) for r in regions):
         return None
-    if isinstance(fetched_at, bool) or not isinstance(fetched_at, int | float):
+    if fetched_at is None:
         return None
     try:
         valid = validate_regions(regions)
@@ -361,7 +363,7 @@ def _read_cached(document: object) -> tuple[tuple[str, ...], float] | None:
         return None
     if list(valid) != regions:
         return None
-    return valid, float(fetched_at)
+    return valid, fetched_at
 
 
 def _read_tried_at(document: object) -> float | None:
@@ -372,15 +374,12 @@ def _read_tried_at(document: object) -> float | None:
 
     Returns:
         A version :data:`REGION_LIST_VERSION` document's numeric
-        ``tried_at`` (a boolean reads as the epoch's first second, never
-        recent), else ``None``.
+        ``tried_at`` (not a boolean; a non-finite one is never recent),
+        else ``None``.
     """
     if not isinstance(document, dict) or document.get("version") != REGION_LIST_VERSION:
         return None
-    tried_at = document.get("tried_at")
-    if not isinstance(tried_at, int | float):
-        return None
-    return float(tried_at)
+    return json_number(document.get("tried_at"))
 
 
 def _recent(at: float, window: float, now: float) -> bool:

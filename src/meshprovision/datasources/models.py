@@ -44,6 +44,7 @@ __all__ = [
     "coerce_str",
     "e7_to_degrees",
     "epoch_seconds",
+    "json_number",
     "parse_epoch",
     "parse_iso8601",
     "without_future_times",
@@ -482,6 +483,26 @@ def coerce_float(value: object) -> float | None:
             return None
         return result if math.isfinite(result) else None
     return None
+
+
+def json_number(value: object) -> float | None:
+    """Read a stored JSON number (not a ``bool``) as a ``float``, never raising.
+
+    An integer too large for a ``float`` reads as an infinity of its sign,
+    what the same number written with an exponent (``1e400``) decodes to.
+
+    Args:
+        value: The decoded JSON value.
+
+    Returns:
+        The number, or ``None`` when ``value`` is not one.
+    """
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    try:
+        return float(value)
+    except OverflowError:  # an int too large for a float
+        return math.inf if value > 0 else -math.inf
 
 
 def coerce_int(value: object) -> int | None:

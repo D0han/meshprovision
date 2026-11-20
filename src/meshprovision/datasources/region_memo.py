@@ -31,6 +31,7 @@ from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Final
 
 from meshprovision.datasources.json_store import read_json, write_json
+from meshprovision.datasources.models import json_number
 from meshprovision.errors import NodeIdError
 from meshprovision.nodeid import NodeId
 
@@ -231,7 +232,8 @@ def _parse_entry(key: str, value: object) -> tuple[str, float] | None:
 
     Returns:
         ``(region, stored_at)``, or ``None`` for anything else. A
-        non-finite ``stored_at`` passes here and is never current.
+        non-finite ``stored_at`` (or an integer too large for a float)
+        passes here and is never current.
     """
     if not isinstance(value, dict):
         return None
@@ -241,12 +243,10 @@ def _parse_entry(key: str, value: object) -> tuple[str, float] | None:
     except NodeIdError:
         return None
     region = value.get("region")
-    stored_at = value.get("stored_at")
-    if not isinstance(region, str) or not region:
+    stored_at = json_number(value.get("stored_at"))
+    if not isinstance(region, str) or not region or stored_at is None:
         return None
-    if isinstance(stored_at, bool) or not isinstance(stored_at, int | float):
-        return None
-    return region, float(stored_at)
+    return region, stored_at
 
 
 def _newest(entries: _Entries) -> dict[str, tuple[str, float]]:

@@ -474,6 +474,7 @@ def test_a_recent_failure_does_not_hide_a_fresh_list(tmp_path: Path) -> None:
         pytest.param(True, id="bool"),
         pytest.param("now", id="str"),
         pytest.param(None, id="null"),
+        pytest.param(10**400, id="too-large-for-a-float"),
     ],
 )
 @respx.mock
@@ -531,12 +532,17 @@ def test_a_malformed_cached_list_is_ignored(tmp_path: Path, document: object) ->
     assert route.call_count == 1
 
 
+@pytest.mark.parametrize("literal", ["NaN", "1" + "0" * 400], ids=["nan", "too-large-for-a-float"])
 @respx.mock
-def test_a_non_finite_cached_time_is_never_fresh_but_still_a_fallback(tmp_path: Path) -> None:
+def test_a_non_finite_cached_time_is_never_fresh_but_still_a_fallback(
+    tmp_path: Path, literal: str
+) -> None:
     _page_route(httpx.Response(404))
     path = tmp_path / "cache" / REGION_LIST_FILENAME
     path.parent.mkdir(parents=True)
-    path.write_text('{"version": 1, "regions": ["Zachód"], "fetched_at": NaN}', encoding="utf-8")
+    path.write_text(
+        f'{{"version": 1, "regions": ["Zachód"], "fetched_at": {literal}}}', encoding="utf-8"
+    )
 
     assert RegionList(clock=lambda: _NOW).regions(_client(tmp_path, [_NOW])) == ("Zachód",)
 
