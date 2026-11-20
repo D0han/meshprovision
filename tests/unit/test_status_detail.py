@@ -185,9 +185,12 @@ def test_status_json_appends_health_keys_and_keeps_the_rest() -> None:
 def test_assess_status_refreshes_the_reported_nodes_without_gateway_checks(
     tmp_path: Path,
 ) -> None:
-    store = HistoryStore(tmp_path / "cache" / HISTORY_DIRNAME)
+    def clock() -> float:
+        return _NOW.timestamp()
+
+    store = HistoryStore(tmp_path / "cache" / HISTORY_DIRNAME, clock=clock)
     packets = _Packets()
-    refresher = HealthRefresher(store, packets)  # type: ignore[arg-type]
+    refresher = HealthRefresher(store, packets, clock=clock)  # type: ignore[arg-type]
     client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
     boot = _NOW - timedelta(hours=5)
     report = _report(
