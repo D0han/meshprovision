@@ -246,13 +246,16 @@ def admin_bootstrap(
 ) -> None:
     """Provision the connected node and register it as an admin.
 
-    Reuses :func:`meshprovision.cli.provision.run_provision` wholesale:
-    generates the connected node's keypair, writes it to the device,
-    records it in both sheets, and (when ``--ref`` names an alias
-    different from the node's own hex id) additionally files the same
-    public/private material under that alias. Reports which of the
-    template's other admins are already authorized on this node, and
-    which cross-authorizations are still pending.
+    Provisions it exactly as ``mesh provision`` does: generates the
+    connected node's keypair, writes it to the device, records it in both
+    sheets, and (when ``--ref`` names an alias different from the node's
+    own hex id) additionally files the same public/private material under
+    that alias. Reports which of the template's other admins are already
+    authorized on this node, and which cross-authorizations are still
+    pending.
+
+    Note:
+        Reuses :func:`meshprovision.cli.provision.run_provision` wholesale.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
@@ -427,12 +430,11 @@ def admin_import(
     encoding, runs the weak-key audit, and refuses a duplicate public key
     already registered under a different (non-``observed-*``) reference,
     unless ``--allow-alias`` is passed. Registering a key also reconciles
-    it onto its real ref everywhere else in the database (see
-    :func:`~meshprovision.provisioning.key_registry.adopt_canonical_ref`):
-    a synthetic ``observed-*`` row ``mesh adopt`` minted for this exact
-    material is deleted and every node's ``authorized_admin_keys``
-    rewritten to point at the real ref instead, and any legacy
-    ``unregistered_admin_keys`` entry for the same material is dropped.
+    it onto its real ref everywhere else in the database: a synthetic
+    ``observed-*`` row ``mesh adopt`` minted for this exact material is
+    deleted and every node's ``authorized_admin_keys`` rewritten to point
+    at the real ref instead, and any legacy ``unregistered_admin_keys``
+    entry for the same material is dropped.
 
     ``--overwrite``, ``--allow-alias`` and ``--allow-weak`` each gate
     exactly one refusal and are independent of one another: none of them
@@ -440,11 +442,16 @@ def admin_import(
 
     When ``--overwrite`` replaces an existing ref's material, this is the
     one remaining way an admin alias can go stale (every other case is
-    refused up front -- see :func:`~meshprovision.provisioning.pipeline.
-    node_key_admin_refs`): another ref may still name the old material, or
-    a recorded private key may no longer derive it. See
-    :func:`_warn_stale_admin_alias` -- this never blocks the overwrite,
-    it only warns.
+    refused up front): another ref may still name the old material, or a
+    recorded private key may no longer derive it. This never blocks the
+    overwrite, it only warns.
+
+    Note:
+        The reconciliation is
+        :func:`~meshprovision.provisioning.key_registry.adopt_canonical_ref`,
+        the up-front refusal
+        :func:`~meshprovision.provisioning.pipeline.node_key_admin_refs`,
+        the warning :func:`_warn_stale_admin_alias`.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.

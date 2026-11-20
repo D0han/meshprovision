@@ -3,16 +3,21 @@
 Covers :func:`clean_help_text` in isolation, :class:`MeshCommand`/
 :class:`MeshGroup` wiring, and a standing regression guard that walks
 every registered ``mesh`` command and asserts none of them leaks a
-Google-style docstring section or raw rST markup into ``--help``.
+Google-style docstring section, raw rST markup or an internal identifier
+into ``--help``.
 """
 
 from __future__ import annotations
 
+import ast
+import re
 from pathlib import Path
+from typing import Final
 
 import click
 import pytest
 
+import meshprovision
 from meshprovision.cli.common import CONTEXT_SETTINGS
 from meshprovision.cli.help_format import (
     HELP_REQUESTED_KEY,
@@ -23,6 +28,31 @@ from meshprovision.cli.help_format import (
 )
 
 pytestmark = pytest.mark.unit
+
+_INTERNAL_NAMES: Final[frozenset[str]] = frozenset(
+    node.name
+    for path in Path(meshprovision.__file__).parent.rglob("*.py")
+    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8")))
+    if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    and "_" in node.name.strip("_")
+)
+"""Every function and class name in the package with an underscore (``create_backup``): code,
+never ``--help`` text. Names without one (``KeyRecord``) are too often plain words to check."""
+
+
+def _leaked_names(text: str) -> list[str]:
+    """The tokens of ``text`` that name code: an internal name, ``meshprovision.``, a ``.py`` file.
+
+    A token is a dotted path (``backups.create_backup``), so a name that ends a sentence
+    (``create_backup.``) is found too.
+    """
+    return [
+        token
+        for token in re.findall(r"\w+(?:\.\w+)*", text)
+        if token.startswith("meshprovision.")
+        or token.endswith(".py")
+        or _INTERNAL_NAMES.intersection(token.split("."))
+    ]
 
 
 class TestCleanHelpText:
@@ -210,6 +240,34 @@ class TestRealCommandSurface:
                 continue
             for marker in forbidden:
                 assert marker not in cmd.help, f"{name} --help still contains {marker!r}"
+
+    def test_no_command_help_names_a_module_or_an_internal_function(self) -> None:
+        """Maintainer notes (``see refresh_known_good``) belong under a ``Note:`` section."""
+        from meshprovision.cli.main import cli
+
+        ctx = click.Context(cli)
+        for name, cmd in [("mesh", cli), *self._iter_commands(cli, ctx)]:
+            texts = [cmd.help or "", *(getattr(param, "help", None) or "" for param in cmd.params)]
+            leaked = sorted({word for text in texts for word in _leaked_names(text)})
+            assert leaked == [], f"{name} --help names {leaked}"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Uses create_backup.",
+            "See create_backup.",
+            "See backups.create_backup here.",
+            "See meshprovision.db.backups here.",
+            "See ``db/backups.py`` here.",
+        ],
+    )
+    def test_the_identifier_guard_flags_a_name_at_the_end_of_a_sentence_or_in_a_path(
+        self, text: str
+    ) -> None:
+        assert _leaked_names(text) != []
+
+    def test_the_identifier_guard_leaves_plain_prose_alone(self) -> None:
+        assert _leaked_names("Back up the database, e.g. data/nodes_db.ods.") == []
 
     def test_every_registered_command_is_a_mesh_command(self) -> None:
         from meshprovision.cli.main import cli

@@ -580,13 +580,14 @@ def adopt(
     With ``--from-backup``, no device is touched at all: the same report
     and write path is driven instead by an exported Meshtastic app config
     backup (a ``.cfg``/``.yaml`` ``DeviceProfile``, a node-db JSON export,
-    or one of each -- see :mod:`meshprovision.provisioning.backup`), for
-    a node the operator owns but cannot currently reach. A backup never
-    asserts its own node id with authority, so one must be resolved from
-    ``--node-id``, a ``Keys`` sheet public-key match, or a paired node-db
-    export's ``myNodeNum`` -- see
-    :func:`~meshprovision.cli.adopt_backup.resolve_node_id`; a bare
-    long-name match is only ever offered as a hint, never used to adopt.
+    or one of each), for a node the operator owns but cannot currently
+    reach. A backup never asserts its own node id with authority, so one
+    must be resolved from ``--node-id``, a ``Keys`` sheet public-key match,
+    or a paired node-db export's ``myNodeNum``; a bare long-name match is
+    only ever offered as a hint, never used to adopt.
+
+    Note:
+        The node id is resolved by :func:`~meshprovision.cli.adopt_backup.resolve_node_id`.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.

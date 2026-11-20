@@ -692,6 +692,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The `--help` of `mesh db backup`, `mesh db restore`, `mesh admin
+  import`, `mesh admin bootstrap` and `mesh adopt` no longer shows
+  internal function and module names (`refresh_known_good`,
+  `run_provision`, `meshprovision.db.locking`, ...) or a note meant for
+  maintainers; otherwise unchanged, and `mesh db restore`
+  now spells `--known-good` in one piece.
 - `mesh health`'s hint when it has no lorastats region list (none
   configured and lorastats.pl's page unreachable) no longer tells the
   user to pass `--region`, which `mesh health` does not have; it names

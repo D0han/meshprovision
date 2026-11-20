@@ -283,25 +283,29 @@ def db_backup(
     """Create an on-demand backup of the ODS database, or list existing backups.
 
     Writes only into the backup directory; never rewrites the database
-    itself. Deliberately does not take the cross-process write lock (see
-    :mod:`meshprovision.db.locking`): ``shutil.copy2`` (used by
-    :func:`~meshprovision.db.backups.create_backup`) reads whichever
-    inode it opened through to completion even if a concurrent writer's
-    ``os.replace`` re-points the path mid-copy, so the backup is always a
-    consistent snapshot of some version of the database. Do not "fix"
-    this by adding a lock.
+    itself. It takes no lock: a backup made while another ``mesh``
+    command writes the database is still a consistent snapshot of some
+    version of it.
 
-    ``--list`` also reports the known-good safety copy (see
-    :func:`~meshprovision.db.known_good.refresh_known_good`), when one
-    exists, ahead of the timestamped backups it is not one of --
-    ``mesh db restore --known-good`` restores it directly, without
-    needing to name its path -- tagged with its provenance, so an
-    unverified copy (see :func:`~meshprovision.db.known_good
-    .known_good_status`) is visibly not one ``--known-good`` will accept.
-    It also prints a one-line notice (see :func:`~meshprovision.db
-    .backups.legacy_backup_notice`) when matching backups are
-    sitting in the old, pre-per-database ``data/backups`` location for a
-    non-default ``--db-path``.
+    ``--list`` also reports the known-good safety copy, when one exists,
+    ahead of the timestamped backups it is not one of -- ``mesh db
+    restore --known-good`` restores it directly, without needing to name
+    its path -- tagged with its provenance, so an unverified copy is
+    visibly not one ``--known-good`` will accept. It also prints a
+    one-line notice when matching backups are sitting in the old,
+    pre-per-database ``data/backups`` location for a non-default
+    ``--db-path``.
+
+    Note:
+        Deliberately does not take the cross-process write lock (see
+        :mod:`meshprovision.db.locking`): ``shutil.copy2`` (used by
+        :func:`~meshprovision.db.backups.create_backup`) reads whichever
+        inode it opened through to completion even if a concurrent
+        writer's ``os.replace`` re-points the path mid-copy. Do not "fix"
+        this by adding a lock. The known-good copy is the one
+        :func:`~meshprovision.db.known_good.refresh_known_good` writes,
+        its provenance :func:`~meshprovision.db.known_good.known_good_status`,
+        the notice :func:`~meshprovision.db.backups.legacy_backup_notice`.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
@@ -389,29 +393,33 @@ def db_restore(
     so it holds the cross-process write lock for the whole operation --
     excluding a concurrent ``mesh provision``/``mesh admin`` run the same
     way those commands exclude each other. ``BACKUP``'s bytes are
-    validated (see :func:`~meshprovision.db.ods.parse_database`) *before*
-    anything is written, so a bad ``backup`` file (wrong format, fails
-    schema validation) is refused with the live database left completely
-    untouched, rather than replacing it with something broken. Once that
-    check passes, the current database is itself backed up first (by
-    :func:`~meshprovision.db.atomic_writer.restore_backup`), so the
-    restore is always reversible via ``mesh db backup --list``. After
-    restoring, the result is loaded back once more, to confirm it is
-    actually a valid database on disk too.
+    validated *before* anything is written, so a bad ``backup`` file
+    (wrong format, fails schema validation) is refused with the live
+    database left completely untouched, rather than replacing it with
+    something broken. Once that check passes, the current database is
+    itself backed up first, so the restore is always reversible via
+    ``mesh db backup --list``. After restoring, the result is loaded back
+    once more, to confirm it is actually a valid database on disk too.
 
     Pass either ``BACKUP`` (a specific file, typically copied from
     ``mesh db backup --list``) or ``--known-good``, never both: the
     latter restores the safety copy every successful database load
-    refreshes (see :func:`~meshprovision.db.known_good
-    .refresh_known_good`) -- exactly what a load-failure error's hint
-    points at, without needing to first hunt down its path. ``--known
-    -good`` additionally refuses, before the confirmation prompt and
-    without touching the database, when that copy's recorded provenance
-    (see :func:`~meshprovision.db.known_good.known_good_status`) is not
+    refreshes -- exactly what a load-failure error's hint points at,
+    without needing to first hunt down its path. ``--known-good``
+    additionally refuses, before the confirmation prompt and without
+    touching the database, when that copy's recorded provenance is not
     verified -- for example after a database directory was copied or
     renamed, or the sidecar is missing or stale. An explicit ``BACKUP``
     path is never provenance-checked: naming a file by path is itself
     the operator's own verification.
+
+    Note:
+        ``BACKUP`` is validated by :func:`~meshprovision.db.ods.parse_database`
+        and the pre-restore backup made by
+        :func:`~meshprovision.db.atomic_writer.restore_backup`; the safety
+        copy is the one :func:`~meshprovision.db.known_good.refresh_known_good`
+        writes, its provenance
+        :func:`~meshprovision.db.known_good.known_good_status`.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
