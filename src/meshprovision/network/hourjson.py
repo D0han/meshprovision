@@ -30,6 +30,7 @@ from collections.abc import Callable, Mapping
 from types import MappingProxyType
 from typing import Any, Final
 
+from meshprovision.datasources.models import LATEST_RENDERABLE_EPOCH
 from meshprovision.health.history import HOUR_SECONDS
 from meshprovision.network.buckets import (
     EDGE_NEIGHBOR,
@@ -45,6 +46,7 @@ __all__ = [
     "hour_from_json",
     "hour_to_json",
     "read_count",
+    "read_epoch",
     "read_hex_id",
     "read_number",
     "read_relay_byte",
@@ -128,6 +130,11 @@ def read_number(value: object, low: float, high: float) -> float | None:
     except OverflowError:
         return None
     return number if math.isfinite(number) and low <= number <= high else None
+
+
+def read_epoch(value: object) -> float | None:
+    """Read a stored epoch time, from 0 up to :data:`LATEST_RENDERABLE_EPOCH`."""
+    return read_number(value, 0, LATEST_RENDERABLE_EPOCH)
 
 
 def read_count(value: object, high: int = _MAX_COUNT) -> int | None:

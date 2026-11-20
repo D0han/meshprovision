@@ -20,6 +20,7 @@ from rich.console import Console, Group, JustifyMethod, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from meshprovision.datasources.models import parse_epoch
 from meshprovision.health.drift import DriftSource, PassiveDrift
 from meshprovision.health.metrics import NodeMetrics, RelayShare
 from meshprovision.health.packets import (
@@ -108,8 +109,8 @@ _LIMITS: Final[str] = (
 
 
 def _time(value: float | None) -> datetime | None:
-    """Return an epoch time as an aware UTC datetime."""
-    return None if value is None else datetime.fromtimestamp(value, tz=UTC)
+    """Return an epoch time as an aware UTC datetime; ``None`` when unknown or out of range."""
+    return parse_epoch(value)
 
 
 def _ago(value: float | None, now: datetime) -> str:

@@ -6,8 +6,9 @@ from typing import Any
 
 import pytest
 
+from meshprovision.datasources.models import LATEST_RENDERABLE_EPOCH, parse_epoch
 from meshprovision.network.buckets import LastHop, Radio, RegionHour, Traffic
-from meshprovision.network.hourjson import hour_from_json, hour_to_json, read_number
+from meshprovision.network.hourjson import hour_from_json, hour_to_json, read_epoch, read_number
 
 pytestmark = pytest.mark.unit
 
@@ -111,3 +112,10 @@ def test_an_hour_that_is_not_an_object_is_unusable() -> None:
 
 def test_a_number_too_large_for_a_float_is_not_a_number() -> None:
     assert read_number(10**400, 0, float("inf")) is None
+
+
+def test_a_stored_epoch_is_read_up_to_the_latest_renderable_one() -> None:
+    assert read_epoch(LATEST_RENDERABLE_EPOCH) == LATEST_RENDERABLE_EPOCH
+    assert parse_epoch(LATEST_RENDERABLE_EPOCH) is not None
+    assert read_epoch(LATEST_RENDERABLE_EPOCH + 1) is None
+    assert read_epoch(-1) is None

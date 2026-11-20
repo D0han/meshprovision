@@ -22,7 +22,6 @@ dropping the sightings heard longest ago.
 from __future__ import annotations
 
 import json
-import math
 import re
 import time
 from collections.abc import Callable, Iterable
@@ -31,7 +30,7 @@ from typing import TYPE_CHECKING, Any, Final
 from meshprovision.datasources.json_store import read_json, write_json
 from meshprovision.health.history import HOUR_SECONDS
 from meshprovision.network.buckets import NETWORK_RETENTION_SECONDS
-from meshprovision.network.hourjson import read_count, read_hex_id, read_number
+from meshprovision.network.hourjson import read_count, read_epoch, read_hex_id
 from meshprovision.network.keys import (
     KEY_DIGEST_CHARS,
     MAX_KEY_HOURS,
@@ -150,7 +149,7 @@ def _entry(item: object) -> KeySeen | None:
     if not isinstance(item, list) or len(item) != _ENTRY_FIELDS:
         return None
     node, digest = read_hex_id(item[0]), item[1]
-    first, last = read_number(item[2], 0, math.inf), read_number(item[3], 0, math.inf)
+    first, last = read_epoch(item[2]), read_epoch(item[3])
     hours = _hours(item[4])
     texts = [_text(value) for value in item[5:8]]
     audit = _audit(item[9])

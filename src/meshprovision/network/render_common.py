@@ -10,11 +10,11 @@ the database or a store is passed through
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final
 
 from rich.text import Text
 
+from meshprovision.datasources.models import parse_epoch
 from meshprovision.status import timefmt
 from meshprovision.termsafe import terminal_safe
 
@@ -43,7 +43,7 @@ MAX_NAMED: Final[int] = 8
 
 
 def time_text(epoch: float | None) -> str:
-    """Render an epoch time in local time, ``-`` when unknown.
+    """Render an epoch time in local time, ``-`` when unknown or out of range.
 
     Args:
         epoch: Unix epoch seconds, or ``None``.
@@ -51,9 +51,8 @@ def time_text(epoch: float | None) -> str:
     Returns:
         For example ``"2026-10-31 23:26:00"``.
     """
-    if epoch is None:
-        return "-"
-    return timefmt.format_local(datetime.fromtimestamp(epoch, tz=UTC), include_zone=False)
+    moment = parse_epoch(epoch)
+    return "-" if moment is None else timefmt.format_local(moment, include_zone=False)
 
 
 def iso(epoch: float | None) -> str | None:
@@ -63,9 +62,10 @@ def iso(epoch: float | None) -> str | None:
         epoch: Unix epoch seconds, or ``None``.
 
     Returns:
-        For example ``"2026-10-31T22:26:00Z"``, or ``None``.
+        For example ``"2026-10-31T22:26:00Z"``, or ``None`` when unknown or
+        out of range.
     """
-    return None if epoch is None else timefmt.isoformat_z(datetime.fromtimestamp(epoch, tz=UTC))
+    return timefmt.isoformat_z(parse_epoch(epoch))
 
 
 def names(report: NetworkReport, region: RegionReport) -> dict[str, str]:

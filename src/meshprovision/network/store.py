@@ -58,8 +58,8 @@ from meshprovision.network.buckets import NETWORK_RETENTION_SECONDS, RegionHour,
 from meshprovision.network.hourjson import (
     hour_from_json,
     hour_to_json,
+    read_epoch,
     read_hex_id,
-    read_number,
     read_relay_byte,
 )
 from meshprovision.network.resolve import Confidence, LearnedRelay, Resolution
@@ -210,7 +210,7 @@ class RegionStore:
         document = read_json(path, max_bytes=_STATE_MAX_BYTES, what=_WHAT)
         if not _is_document(document, region):
             return RegionState()
-        return RegionState(fetched_at=read_number(document.get("fetched_at"), 0, math.inf))
+        return RegionState(fetched_at=read_epoch(document.get("fetched_at")))
 
     def load(self, region: str, *, start: float) -> tuple[RegionHour, ...]:
         """Read ``region``'s hours from the hour of ``start`` on.
@@ -395,7 +395,7 @@ def _learned(key: object, value: object) -> tuple[int, LearnedRelay] | None:
     byte = read_relay_byte(key)
     if byte is None or not isinstance(value, list) or len(value) != 2:
         return None
-    node, seen = read_hex_id(value[0]), read_number(value[1], 0, math.inf)
+    node, seen = read_hex_id(value[0]), read_epoch(value[1])
     if node is None or seen is None or relay_byte(node) != byte:
         return None
     return byte, LearnedRelay(node, seen)

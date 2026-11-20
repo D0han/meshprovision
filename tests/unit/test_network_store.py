@@ -230,6 +230,11 @@ def test_a_day_file_over_the_cap_is_not_read(
             id="bad-values",
         ),
         pytest.param(
+            {"version": STORE_VERSION, "region": _REGION, "fetched_at": 1e12},
+            RegionState(),
+            id="past-the-renderable-range",
+        ),
+        pytest.param(
             {"version": STORE_VERSION, "region": _REGION, "fetched_at": NOW, "skipped_rows": 4},
             RegionState(NOW),
             id="good",
@@ -427,6 +432,10 @@ def test_nothing_new_to_learn_writes_nothing(tmp_path: Path) -> None:
     )
 
     assert not (store.path_for(_REGION) / "relays.json").exists()
+
+
+def test_a_learned_time_past_the_renderable_range_is_unusable() -> None:
+    assert store_module._learned("97", ["c464e761", 1e12]) is None
 
 
 @pytest.mark.parametrize(

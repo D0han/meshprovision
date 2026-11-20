@@ -692,6 +692,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh health --no-fetch` and `mesh network ... --no-fetch` no longer
+  stop with a raw `ValueError` (year out of range) when a cached time lies
+  past every date a computer can show (a corrupt or hand-edited cache
+  value): such a stored refresh or last-heard time reads as unknown (the
+  region shows "no data yet"), a key sighting at such a time is dropped,
+  and any time out of range is shown as `-`.
 - Closing a device connection no longer prints an "Exception in thread"
   traceback to stderr after a command that worked when the BLE stack or
   the serial port raises its own error on close (a `BleakError`, say):

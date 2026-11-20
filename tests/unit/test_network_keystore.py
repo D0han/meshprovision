@@ -137,6 +137,7 @@ _GOOD = ["11111111", _DIGEST, NOW, NOW, [1792530000], None, None, None, False, N
         pytest.param(1, "sha256:abcd", id="short-digest"),
         pytest.param(2, NOW + 1, id="first-after-last"),
         pytest.param(3, "now", id="last-not-a-number"),
+        pytest.param(3, 1e12, id="last-past-the-renderable-range"),
         pytest.param(4, [1792530001], id="hour-not-on-the-hour"),
         pytest.param(4, list(range(0, 169 * 3600, 3600)), id="too-many-hours"),
         pytest.param(5, "", id="blank-name"),

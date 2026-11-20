@@ -61,7 +61,7 @@ from meshprovision.health.history import (
     TelemetryPoint,
     prune,
 )
-from meshprovision.network.hourjson import read_number
+from meshprovision.network.hourjson import read_epoch, read_number
 from meshprovision.nodeid import NodeId
 from meshprovision.termsafe import terminal_safe
 
@@ -372,8 +372,8 @@ def _dict(value: object) -> dict[Any, Any]:
 
 
 def _time(value: object) -> float | None:
-    """Read a finite, non-negative epoch time."""
-    return read_number(value, 0, math.inf)
+    """Read a stored epoch time (see :func:`~meshprovision.network.hourjson.read_epoch`)."""
+    return read_epoch(value)
 
 
 def _number(low: float, high: float) -> _Reader:

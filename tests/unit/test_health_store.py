@@ -249,6 +249,15 @@ def test_an_overflowing_or_infinite_time_reads_as_none() -> None:
     assert (history.fetched_at, history.last_heard) == (None, None)
 
 
+def test_a_time_past_the_renderable_range_reads_as_none() -> None:
+    document = _document(fetched_at=1e12, last_heard=1e12)
+
+    history = history_from_json(document, _NODE)
+
+    assert history is not None
+    assert (history.fetched_at, history.last_heard) == (None, None)
+
+
 @pytest.mark.parametrize(
     "nodeinfo",
     [

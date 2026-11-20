@@ -34,6 +34,7 @@ from meshprovision.termsafe import terminal_safe
 __all__ = [
     "E7_SCALE",
     "LAST_SEEN_FUTURE_SKEW",
+    "LATEST_RENDERABLE_EPOCH",
     "LORASTATS_NAIVE_TZ",
     "MAX_SEEN_BY_TOPICS",
     "CoercionTracker",
@@ -334,6 +335,11 @@ never a real observation -- it is typically a .NET ``DateTime.MinValue``/
 _RENDERABLE_MAX: Final[datetime] = datetime.max.replace(tzinfo=UTC) - timedelta(days=1)
 """Latest timestamp :func:`parse_epoch`/:func:`parse_iso8601` return; see
 :data:`_RENDERABLE_MIN`."""
+
+LATEST_RENDERABLE_EPOCH: Final[float] = _RENDERABLE_MAX.replace(microsecond=0).timestamp()
+""":data:`_RENDERABLE_MAX` as whole unix epoch seconds (:func:`parse_epoch`
+accepts it): the latest stored epoch time read back (a later one is a corrupt
+cache value no timezone can show)."""
 
 
 def _renderable_or_none(value: datetime) -> datetime | None:
