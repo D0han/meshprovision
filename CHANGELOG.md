@@ -692,6 +692,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh network relays` no longer reads a loranet device-metrics time
+  ahead of the observation as when a relay's metrics were taken: a relay
+  up for two hours with a time a day ahead showed `rebooted <1h ago`,
+  and its JSON `metrics_at` was in the future. That time is now left out.
 - The `--help` of `mesh db backup`, `mesh db restore`, `mesh admin
   import`, `mesh admin bootstrap` and `mesh adopt` no longer shows
   internal function and module names (`refresh_known_good`,

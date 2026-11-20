@@ -383,5 +383,15 @@ def test_a_negative_uptime_is_no_reboot() -> None:
     assert device_notes(device, now=NOW) == ()
 
 
+def test_a_device_metrics_time_ahead_of_the_clock_is_not_a_reboot_time() -> None:
+    """A day-ahead time dated the uptime from the future: 2 h up read as "rebooted <1h ago"."""
+    ahead = datetime.fromtimestamp(NOW + 86400, tz=UTC)
+
+    device = device_health(_loranet(uptime_seconds=7200, last_device_metrics=ahead))
+
+    assert device.metrics_at is None
+    assert device_notes(device, now=NOW) == ()
+
+
 def test_the_plausibility_bounds() -> None:
     assert (MAX_PLAUSIBLE_VOLTAGE, MAX_UPTIME_SECONDS) == (100.0, 0xFFFFFFFF)

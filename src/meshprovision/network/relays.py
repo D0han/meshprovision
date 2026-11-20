@@ -45,7 +45,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
-from meshprovision.datasources.models import epoch_seconds
+from meshprovision.datasources.models import epoch_seconds, without_future_times
 from meshprovision.health.rules import BATTERY_WARN_PERCENT
 
 if TYPE_CHECKING:
@@ -162,9 +162,11 @@ def device_health(observation: NodeObservation) -> DeviceHealth:
     Returns:
         Its device health: level 101 is external power (no level); a level
         of 0 or above 101, a voltage outside (0, :data:`MAX_PLAUSIBLE_VOLTAGE`],
-        a percentage outside 0-100 and an uptime outside
-        0-:data:`MAX_UPTIME_SECONDS` are left out.
+        a percentage outside 0-100, an uptime outside
+        0-:data:`MAX_UPTIME_SECONDS` and a metrics time ahead of when the
+        observation was made are left out.
     """
+    observation = without_future_times(observation, now=observation.observed_at)
     level = observation.battery_level
     voltage = observation.voltage
     uptime = observation.uptime_seconds
