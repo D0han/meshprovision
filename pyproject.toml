@@ -63,8 +63,11 @@ dev = [
   "pytest-cov",
   "respx",
   "responses",
-  "ruff",
-  "mypy",
+  # Pinned so CI (which installs this extra) and pre-commit run the same
+  # checks: ruff as .pre-commit-config.yaml's ruff-pre-commit rev, mypy to
+  # one minor release. Bump them together, deliberately.
+  "ruff==0.16.4",
+  "mypy>=2.3,<2.4",
   # PyYAML and protobuf (declared above, in [project.dependencies]) ship no
   # `py.typed` marker, so `mypy --strict` needs a stub package for each or it
   # fails `import-untyped` on `config/template.py`, `provisioning/backup_parse.py`,
