@@ -1517,6 +1517,7 @@ first-class solutions.
 ```bash
 mesh admin bootstrap --port /dev/ttyUSB0 --ref ADMIN1
 mesh admin bootstrap --interface tcp --host 192.168.1.50 --ref ADMIN2 --dry-run
+mesh admin bootstrap --ble-scan --ble-scan-timeout 15 --ref ADMIN4
 mesh admin import ADMIN3=<base64 32-byte public key>
 mesh admin import ADMIN1=<b64> ADMIN2=<b64> --json
 mesh admin import ADMIN3=<b64> --dry-run
@@ -1530,10 +1531,14 @@ mesh admin list --json
   per admin node. Later admins are authorized on earlier ones only when
   those devices are next connected — the run **reports** which
   cross-authorizations are still pending rather than silently skipping
-  them. It reuses `run_provision` wholesale, so it accepts and honors
-  every option in `mesh provision`'s table above (`--dry-run`, `--enroll`,
-  `--allow-lockdown`, `--allow-weak-admin-key`, `--force-regenerate-key`,
-  `--no-reconnect`, `-y`/`--yes`, `--json`) in addition to its own `--ref`
+  them. It connects the same way `mesh provision` does, with the same
+  connection flags (`--port`, `--ble-address`, `--ble-scan`, `--host`,
+  `--interface`, `--timeout`, `--ble-scan-timeout`; see the transport
+  selection priority above). It reuses `run_provision` wholesale, so it
+  accepts and honors every option in `mesh provision`'s table above
+  (`--dry-run`, `--enroll`, `--allow-lockdown`, `--allow-weak-admin-key`,
+  `--force-regenerate-key`, `--no-reconnect`, `-y`/`--yes`, `--json`) in
+  addition to its own `--ref`
   -- including the admin-key-rotation refusal above: bootstrapping a node
   whose recorded key already backs an admin ref is refused the same way,
   with no bypass flag.
