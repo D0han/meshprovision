@@ -24,13 +24,17 @@ client's retries and their back-off. A failure of one node's own answer (a
 asks again.
 
 **Incremental, idempotent.** Each refresh asks from one hour before the
-start of the hour of the previous refresh (the extra hour absorbs a
-misread Warsaw time around a DST change) and replaces that hour onwards
+start of the hour of the previous refresh and replaces that hour onwards
 (see :func:`~meshprovision.health.history.merge`), so nothing is counted
-twice. A failed request leaves the history as it was and is reported. A
-stored refresh time more than :data:`FUTURE_SKEW_SECONDS` ahead of the
-clock (one written while the clock was set ahead) counts as no refresh and
-is replaced by the next one, so it never voids the budget for long.
+twice. The extra hour keeps a ``since`` from missing rows in the autumn
+fold hour, whose naive Warsaw time is ambiguous; rows from that hour's
+second pass are still read as the first pass
+(:func:`~meshprovision.datasources.models.parse_iso8601`), so once a year
+they are counted one UTC hour early. A failed request leaves the history
+as it was and is reported. A stored refresh time more than
+:data:`FUTURE_SKEW_SECONDS` ahead of the clock (one written while the
+clock was set ahead) counts as no refresh and is replaced by the next one,
+so it never voids the budget for long.
 """
 
 from __future__ import annotations

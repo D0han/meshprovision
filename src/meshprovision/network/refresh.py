@@ -26,13 +26,19 @@ or over-large body) does not stop the others.
 
 **Incremental, idempotent.** As for a node's health history
 (:mod:`meshprovision.health.refresh`): each refresh asks from one hour
-before the start of the hour of the previous one (the extra hour absorbs
-a misread Warsaw time around a DST change) and replaces that hour onwards
-(see :func:`~meshprovision.network.buckets.merge`). The public keys a
-fetch saw are audited and recorded as digests
-(:mod:`meshprovision.network.keystore`) before the rows are dropped. The raw rows are
-dropped as soon as they are summarized; regions are refreshed one at a
-time, so at most one region's answer is in memory.
+before the start of the hour of the previous one and replaces that hour
+onwards (see :func:`~meshprovision.network.buckets.merge`). The extra hour
+keeps a ``since`` from missing rows where its naive Warsaw time is
+ambiguous (the autumn fold hour, which lorastats may read as either pass).
+It does not place that hour's rows: a naive time there is always read as
+the first (summer time) pass
+(:func:`~meshprovision.datasources.models.parse_iso8601`), so once a year
+the second pass's rows are counted one UTC hour early and the hour after
+looks quieter than it was. The public keys a fetch saw are audited and
+recorded as digests (:mod:`meshprovision.network.keystore`) before the
+rows are dropped. The raw rows are dropped as soon as they are
+summarized; regions are refreshed one at a time, so at most one region's
+answer is in memory.
 """
 
 from __future__ import annotations
