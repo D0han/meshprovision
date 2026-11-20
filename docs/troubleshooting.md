@@ -72,9 +72,10 @@ Part of the meshprovision docs — see the [README](../README.md).
 - Separately, `mesh status`, `mesh health` and `mesh network` need
   outbound HTTPS to loranet.pl and lorastats.pl, and fail at startup with
   a clear message if `MESHPROVISION_CONTACT` is unset (`mesh health
-  --no-fetch` and `mesh network --no-fetch` ask nothing and need
-  neither). Do not work around a lorastats block by retrying — that site
-  bans IP addresses.
+  --no-fetch` and `mesh network <view> --no-fetch`, for any of `keys`,
+  `relays`, `impact` and `graph`, ask nothing and need neither). Do not
+  work around a lorastats block by retrying — that site bans IP
+  addresses.
 - `not asked: lorastats failed for <node or region> (...)`: an earlier
   request of the same `mesh health` or `mesh network` run (or of
   `mesh status`'s history refresh) got a 5xx, a 429 or no answer at all,

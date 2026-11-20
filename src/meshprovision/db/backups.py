@@ -8,9 +8,8 @@ project's own default database path, ``data/nodes_db.ods``, that is
 non-default ``--db-path``/``MESHPROVISION_DB_PATH`` puts backups beside
 *that* file instead, which is not necessarily covered by any
 ``.gitignore``. Each backup is created with mode ``0o600``: its temp
-copy is chmodded to that mode before its own rename, so there is no
-window in which a complete backup of a key-bearing database sits at the
-process umask.
+copy is chmodded to that mode before its own rename; until then the
+owner-only backup directory keeps the copy private.
 
 A backup's temp copy is swept opportunistically at its creation site
 (see :mod:`meshprovision.db.fs_primitives`), since a SIGKILL between
@@ -472,9 +471,9 @@ def create_backup(
     tmp_destination = fs_primitives.temp_sibling(resolved_dir, name)
     try:
         shutil.copy2(target, tmp_destination)
-        # Mode is set on the temp file, before it becomes visible under the
-        # final name: a complete copy of the key material must never exist
-        # at the process umask, even briefly.
+        # copy2 creates the temp at the process umask, then gives it the
+        # source's mode; the owner-only backup directory keeps it private
+        # until this chmod, which comes before it gets its final name.
         try:
             tmp_destination.chmod(FILE_MODE)
         except OSError as chmod_exc:

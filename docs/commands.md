@@ -10,9 +10,9 @@ subcommand** — for example `mesh --no-cache status --json`, not
 
 **Output contract:** STDOUT carries only what a script reads: `--json`
 documents, the `mesh status`, `mesh health` and `mesh network` reports,
-the `mesh remote diff --dry-run` report, `--dry-run` change lines and the `mesh db backups` listing. Logging,
-prompts, warnings and errors go to STDERR, and so does the human-readable
-result of `mesh init`, `mesh db list`, `mesh admin list`, `mesh db verify`
+the `mesh remote diff --dry-run` report, `--dry-run` change lines and the
+`mesh db backup --list` listing. Logging, prompts, warnings and errors go
+to STDERR, and so does the human-readable result of `mesh init`, `mesh db list`, `mesh admin list`, `mesh db verify`
 and `mesh template validate` (with `--json`, their document goes to
 STDOUT). So `mesh status --json | jq .` never needs filtering.
 
@@ -971,7 +971,9 @@ still holds and heard nothing in is recorded as silent; an hour nobody asked
 about stays unknown. lorastats deletes its oldest reports first, so it is
 taken to hold every hour from that of the oldest reception it returned, and
 the last 24 hours (a node's first refresh records silent hours only from its
-oldest reception on, at most 30 days back). Everything older than 30 days is
+oldest reception on, at most 30 days back; that reception's time is trusted,
+so one wrongly dated weeks back makes every hour since then that heard nothing
+a silent one rather than an unknown one). Everything older than 30 days is
 dropped on every write, a file is at most 2 MiB (the oldest days go first),
 and a file not written for 30 days is deleted. The files of the nodes a run
 refreshes are never deleted by it; of the other files the least recently
