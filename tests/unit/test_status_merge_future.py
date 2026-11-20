@@ -9,7 +9,7 @@ import pytest
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
 from meshprovision.datasources.models import NodeObservation
 from meshprovision.nodeid import NodeId
-from meshprovision.status.merge import merge_observations
+from meshprovision.status.merge import Availability, merge_observations
 
 pytestmark = pytest.mark.unit
 
@@ -38,3 +38,12 @@ def test_a_device_metrics_time_up_to_5_minutes_ahead_still_counts() -> None:
     merged = merge_observations(NID, [skewed], now=NOW)
 
     assert merged.last_device_metrics == skewed.last_device_metrics
+
+
+def test_a_last_seen_more_than_5_minutes_ahead_is_ignored() -> None:
+    """The 5 minutes docs/commands.md states, to the second (a 6-minute skew went unnoticed)."""
+    skewed = _obs(SOURCE_LORANET, last_seen=NOW + timedelta(minutes=5, seconds=1))
+
+    merged = merge_observations(NID, [skewed], now=NOW)
+
+    assert (merged.last_seen, merged.availability) == (None, Availability.UNKNOWN)

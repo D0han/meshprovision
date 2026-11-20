@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
 import click
 import pytest
 
+import meshprovision
 from meshprovision.cli.main import cli
 from meshprovision.lora_regions import REGION_BANDS
 from meshprovision.provisioning.plan import PlanWarningCode
@@ -47,6 +49,42 @@ def test_every_plan_warning_code_has_a_row() -> None:
     rows = re.findall(r"^\| `(\w+)` \|", table, flags=re.MULTILINE)
 
     assert sorted(rows) == sorted(code.value for code in PlanWarningCode)
+
+
+_JSON_KEY_WRITERS: dict[str, tuple[str, ...]] = {
+    "## `mesh status`": ("status/render.py", "status/merge.py", "health/render.py"),
+    "## `mesh health`": ("health/render.py", "health/drift.py"),
+    "## `mesh network`": (
+        "network/render.py",
+        "network/render_common.py",
+        "network/render_graph.py",
+        "network/render_impact.py",
+        "network/graph.py",
+    ),
+}
+"""Each command's section, and the modules that write the keys of its ``--json``."""
+
+
+def _string_constants(files: tuple[str, ...]) -> set[str]:
+    package = Path(meshprovision.__file__).parent
+    return {
+        node.value
+        for name in files
+        for node in ast.walk(ast.parse((package / name).read_text(encoding="utf-8")))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+    }
+
+
+@pytest.mark.parametrize(
+    ("heading", "files"), _JSON_KEY_WRITERS.items(), ids=["status", "health", "network"]
+)
+def test_every_documented_json_key_is_one_its_command_writes(
+    heading: str, files: tuple[str, ...]
+) -> None:
+    """A renamed or dropped key leaves no stale name in the docs (not every key is documented)."""
+    documented = set(re.findall(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`", _after(heading)))
+
+    assert sorted(documented - _string_constants(files)) == []
 
 
 def test_every_status_option_has_a_row() -> None:

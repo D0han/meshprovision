@@ -117,5 +117,6 @@ def test_a_number_too_large_for_a_float_is_not_a_number() -> None:
 def test_a_stored_epoch_is_read_up_to_the_latest_renderable_one() -> None:
     assert read_epoch(LATEST_RENDERABLE_EPOCH) == LATEST_RENDERABLE_EPOCH
     assert parse_epoch(LATEST_RENDERABLE_EPOCH) is not None
+    assert parse_epoch(LATEST_RENDERABLE_EPOCH + 1) is None
     assert read_epoch(LATEST_RENDERABLE_EPOCH + 1) is None
     assert read_epoch(-1) is None
