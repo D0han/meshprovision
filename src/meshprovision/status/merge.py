@@ -27,7 +27,7 @@ from enum import StrEnum
 from typing import Final, TypeVar
 
 from meshprovision.datasources.base import SOURCE_LORANET, SOURCE_LORASTATS
-from meshprovision.datasources.models import NodeObservation, without_future_last_seen
+from meshprovision.datasources.models import NodeObservation, without_future_times
 from meshprovision.db.node_record import NodeRecord
 from meshprovision.nodeid import NodeId
 from meshprovision.status.cadence import (
@@ -641,7 +641,7 @@ def merge_observations(
        ``last_seen_source`` is the source that supplied that maximum; on
        an exact tie, the higher-priority source (loranet) wins. This is
        the "lorastats corroborates last-seen" requirement. A ``last_seen``
-       in the future (:func:`~meshprovision.datasources.models.without_future_last_seen`)
+       in the future (:func:`~meshprovision.datasources.models.without_future_times`)
        counts as ``None``, here and in rule 4.
     2a. ``last_boot``: the maximum non-``None`` value across all
        observations (the newest boot any source knows of).
@@ -652,10 +652,10 @@ def merge_observations(
     3. Telemetry fields (``battery_level``, ``voltage``,
        ``channel_utilization``, ``air_util_tx``, ``neighbor_count``,
        ``uptime_seconds``) and ``last_device_metrics`` (when that
-       telemetry was reported): the first non-``None`` value in
-       ``by_priority`` order, i.e. loranet preferred, lorastats only as
-       fallback (loranet is the source that reports
-       ``chUtil``/``airUtilTx``/``seenBy``, but omits them frequently).
+       telemetry was reported; ``None`` when in the future): the first
+       non-``None`` value in ``by_priority`` order, i.e. loranet
+       preferred, lorastats only as fallback (loranet is the source that
+       reports ``chUtil``/``airUtilTx``/``seenBy``, but omits them frequently).
     4. Identity/descriptive fields (``short_name``, ``long_name``,
        ``hw_model``, ``role``, ``region``, ``modem_preset``,
        ``online_local_nodes``, ``firmware_version``, ``latitude``,
@@ -737,7 +737,7 @@ def merge_observations(
             thresholds=node_thresholds(thresholds, node_cadence),
         )
 
-    current = [without_future_last_seen(obs, now=now) for obs in observations]
+    current = [without_future_times(obs, now=now) for obs in observations]
     by_priority = _order_by_priority(current)
     by_recency = _order_by_recency(by_priority)
 

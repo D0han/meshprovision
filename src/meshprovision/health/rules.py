@@ -33,6 +33,7 @@ from types import MappingProxyType
 from typing import Final
 
 from meshprovision.health.metrics import NodeMetrics
+from meshprovision.health.packets import FUTURE_SKEW_SECONDS
 from meshprovision.nodeid import NodeId
 from meshprovision.status.cadence import OFFLINE_MISSED, CadenceSource, interval_text
 
@@ -404,10 +405,11 @@ def battery_reading(metrics: NodeMetrics, context: NodeContext) -> BatteryReadin
     level or external power, so a node plugged in after a low reading is
     not judged by that reading (and one unplugged since is judged by its
     level); at the same time a higher level wins. Without a fresh
-    reading the newest one wins, not fresh. A ``mesh status`` level
-    without a time counts only when there is no dated reading, and never
-    as fresh. Fresh means not older than :data:`BATTERY_FRESH_SECONDS` or,
-    when longer, the node's stale threshold.
+    reading the newest one wins, not fresh. A reading dated more than
+    :data:`FUTURE_SKEW_SECONDS` ahead is dropped. A ``mesh status`` level
+    without a usable time counts only when there is no dated reading, and
+    never as fresh. Fresh means not older than :data:`BATTERY_FRESH_SECONDS`
+    or, when longer, the node's stale threshold.
 
     Args:
         metrics: The node's metrics.
@@ -424,6 +426,7 @@ def battery_reading(metrics: NodeMetrics, context: NodeContext) -> BatteryReadin
     status_level = context.battery if context.battery is not None and context.battery > 0 else None
     if status_level is not None and context.battery_time is not None:
         readings.append((context.battery_time, status_level, BATTERY_FROM_STATUS))
+    readings = [reading for reading in readings if reading[0] <= metrics.now + FUTURE_SKEW_SECONDS]
     fresh_for = max(BATTERY_FRESH_SECONDS, context.stale_after)
     fresh = [reading for reading in readings if metrics.now - reading[0] <= fresh_for]
     for candidates, is_fresh in ((fresh, True), (readings, False)):

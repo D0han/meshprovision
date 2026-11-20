@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -18,6 +19,7 @@ from tests.e2e import test_e2e_network as network
 from tests.e2e.conftest import invoke
 
 if TYPE_CHECKING:
+    import respx
     from click.testing import CliRunner
 
 pytestmark = pytest.mark.e2e
@@ -63,3 +65,30 @@ def test_network_no_fetch_reads_a_far_future_fetch_time_as_no_data(
     assert (text.exit_code, as_json.exit_code) == (3, 3)
     (region,) = json.loads(as_json.stdout)["regions"]
     assert region["data_as_of"] is None
+
+
+def test_health_judges_a_fresh_low_battery_over_a_level_dated_in_the_future(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    mock_sources: Callable[..., respx.MockRouter],
+) -> None:
+    """An old loranet 95% dated a day ahead hid the 4% lorastats heard 10 minutes ago."""
+    health._seed(seed_db)
+    now = time.time()
+    ahead = {"batteryLevel": 95, "lastDeviceMetrics": int(now) + 86400}
+    nodes = {
+        hex_id: {**fields, **ahead} if hex_id == health._A else fields
+        for hex_id, fields in health._nodes(now).items()
+    }
+    router = mock_sources(nodes=nodes)
+    rows = {health._A: health._reports(health._A, now, battery=4)}
+    health._Lorastats(router, {**rows, health._B: health._reports(health._B, now)})
+
+    with router:
+        result = invoke(runner, ["health", "--json"], env)
+
+    (node,) = (n for n in json.loads(result.stdout)["nodes"] if n["node_id"] == health._A)
+    assert result.exit_code == 7
+    assert node["verdict"] == "crit"
+    assert [f["text"] for f in node["findings"] if f["code"] == "battery_low"] == ["battery at 4%"]

@@ -46,7 +46,7 @@ __all__ = [
     "epoch_seconds",
     "parse_epoch",
     "parse_iso8601",
-    "without_future_last_seen",
+    "without_future_times",
 ]
 
 _T = TypeVar("_T")
@@ -114,9 +114,9 @@ MAX_SEEN_BY_TOPICS: Final[int] = 32
 """Cap on the number of loranet MQTT gateway topics kept in ``seen_by``."""
 
 LAST_SEEN_FUTURE_SKEW: Final[timedelta] = timedelta(minutes=5)
-"""How far ahead of the clock a ``last_seen`` may be; a later one (a gateway
-with a wrong clock, a corrupt epoch) is ignored by
-:func:`without_future_last_seen`, and lorastats' parse_node drops a
+"""How far ahead of the clock a ``last_seen`` or ``last_device_metrics`` may
+be; a later one (a gateway with a wrong clock, a corrupt epoch) is ignored
+by :func:`without_future_times`, and lorastats' parse_node drops a
 ``LastSeen``/``LastBoot`` that far after the record was read."""
 
 
@@ -272,24 +272,33 @@ class NodeObservation(BaseModel):
         return value
 
 
-def without_future_last_seen(observation: NodeObservation, *, now: datetime) -> NodeObservation:
-    """Drop an observation's ``last_seen`` when it lies in the future.
+def without_future_times(observation: NodeObservation, *, now: datetime) -> NodeObservation:
+    """Drop an observation's ``last_seen`` and ``last_device_metrics`` when in the future.
 
     A ``last_seen`` more than :data:`LAST_SEEN_FUTURE_SKEW` after ``now``
     would be the newest of every source's for as long as it is reported,
-    and keep a node that went silent online.
+    and keep a node that went silent online. A ``last_device_metrics``
+    that far ahead would date the telemetry it comes with as the newest
+    reading (an old battery level beating a fresh low one); the telemetry
+    is kept, undated.
 
     Args:
         observation: One source's observation.
         now: The current time. Must be timezone-aware.
 
     Returns:
-        ``observation`` itself, or a copy of it without ``last_seen``.
+        ``observation`` itself, or a copy of it without those times.
     """
-    seen = observation.last_seen
-    if seen is None or seen <= now + LAST_SEEN_FUTURE_SKEW:
-        return observation
-    return observation.model_copy(update={"last_seen": None})
+    latest = now + LAST_SEEN_FUTURE_SKEW
+    future = {
+        name: None
+        for name, time in (
+            ("last_seen", observation.last_seen),
+            ("last_device_metrics", observation.last_device_metrics),
+        )
+        if time is not None and time > latest
+    }
+    return observation.model_copy(update=future) if future else observation
 
 
 def e7_to_degrees(value: object, *, limit: float) -> float | None:

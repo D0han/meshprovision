@@ -9,6 +9,7 @@ import pytest
 from meshprovision.health import rules
 from meshprovision.health.history import GatewayCheck, NodeHistory
 from meshprovision.health.metrics import BatteryTrend, NodeMetrics, RelayShare, compute_metrics
+from meshprovision.health.packets import FUTURE_SKEW_SECONDS
 from meshprovision.health.rules import (
     AIR_UTIL_TX_CRIT_PERCENT,
     AIR_UTIL_TX_WARN_PERCENT,
@@ -293,6 +294,33 @@ def test_a_status_level_without_a_time_counts_only_without_a_dated_reading() -> 
         BatteryReading(80, _NOW - BATTERY_FRESH_SECONDS - 1, BATTERY_FROM_HISTORY, fresh=False)
     )
     assert "battery_low" not in _codes(_m(), NodeContext(battery=5))
+
+
+def test_a_status_level_dated_in_the_future_never_beats_a_fresh_history_reading() -> None:
+    """An old 95% dated a day ahead outranked a 10-minute-old 4% and hid a flat battery."""
+    ahead = NodeContext(battery=95, battery_time=_NOW + 86400)
+
+    assert battery_reading(_m(battery=_trend(4, age=600)), ahead) == (
+        BatteryReading(4, _NOW - 600, BATTERY_FROM_HISTORY, fresh=True)
+    )
+    assert _codes(_m(battery=_trend(4, age=600)), ahead)["battery_low"] is Verdict.CRIT
+    assert battery_reading(_m(), ahead) == BatteryReading(95, None, BATTERY_FROM_STATUS, False)
+
+
+def test_a_status_level_up_to_5_minutes_ahead_keeps_its_time() -> None:
+    skewed = NodeContext(battery=95, battery_time=_NOW + 300)
+
+    assert battery_reading(_m(battery=_trend(4, age=600)), skewed) == (
+        BatteryReading(95, _NOW + 300, BATTERY_FROM_STATUS, fresh=True)
+    )
+
+
+def test_a_status_level_just_past_5_minutes_ahead_is_dropped() -> None:
+    skewed = NodeContext(battery=95, battery_time=_NOW + FUTURE_SKEW_SECONDS + 1)
+
+    assert battery_reading(_m(battery=_trend(4, age=600)), skewed) == (
+        BatteryReading(4, _NOW - 600, BATTERY_FROM_HISTORY, fresh=True)
+    )
 
 
 @pytest.mark.parametrize("level", [0, -5])

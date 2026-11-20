@@ -692,6 +692,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status` and `mesh health` ignore a loranet device-metrics time
+  more than 5 minutes ahead of the clock, as they already did a last-seen
+  time: the battery level it dates (an old 95%, say) no longer counts as
+  the newest reading, beating a fresh low level from the node's history
+  and hiding a critical battery. The level itself is kept, undated.
 - A lorastats.pl last-seen or last-boot time more than 5 minutes after
   the record was read (lorastats' clock was wrong) is now dropped when it
   is parsed: such a record no longer beats an older, correct one from
