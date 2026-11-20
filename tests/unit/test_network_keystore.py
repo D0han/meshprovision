@@ -101,6 +101,14 @@ def test_sightings_past_the_retention_are_dropped(tmp_path: Path) -> None:
     assert _store(tmp_path, _ENTRY.last + NETWORK_RETENTION_SECONDS + 1).load("PL") == ()
 
 
+def test_sightings_last_heard_ahead_of_the_clock_are_dropped(tmp_path: Path) -> None:
+    """A sighting a day ahead never aged out and stayed the node's newest key."""
+    _store(tmp_path).update("PL", [_ENTRY])
+
+    assert _store(tmp_path, _ENTRY.last - 300).load("PL") == (_ENTRY,)
+    assert _store(tmp_path, _ENTRY.last - 301).load("PL") == ()
+
+
 def test_over_the_cap_the_sightings_heard_longest_ago_go_first(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -692,6 +692,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh health` drops a stored last-heard time more than 5 minutes ahead
+  of the clock (a corrupt or hand-edited history, or one written while
+  the clock was set ahead) when it reads the history: such a time no
+  longer survives every refresh and judges a silent node `ok`, "Last
+  heard: in the future". Likewise `mesh network keys` drops a key
+  sighting last heard that far ahead, which never aged out and stayed
+  the node's newest key.
 - A corrupt HTTP cache entry (an infinite status code, a refresh time too
   large for a float, or JSON nested too deeply to decode) is now a cache
   miss and deleted, as every other corrupt entry already was, instead of

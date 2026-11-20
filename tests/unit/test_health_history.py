@@ -508,6 +508,26 @@ def test_prune_keeps_exactly_the_retention_window() -> None:
     assert pruned.gateway_checks == (GatewayCheck(oldest, 1, 1, 1),)
 
 
+@pytest.mark.parametrize(
+    ("last_heard", "kept"),
+    [
+        (_NOW - HISTORY_RETENTION_SECONDS - 1, True),
+        (_NOW + 300, True),
+        (_NOW + 301, False),
+        (_NOW + 365 * 86400, False),
+    ],
+    ids=["past-the-retention", "at-the-skew", "past-the-skew", "a-year-ahead"],
+)
+def test_prune_drops_only_a_last_heard_ahead_of_the_clock(last_heard: float, kept: bool) -> None:
+    """A last_heard a year ahead kept the node "heard" (OK) through every later refresh."""
+    heard_since = _NOW - 3 * 86400
+    pruned = prune(NodeHistory(node=_NODE, last_heard=last_heard), now=_NOW)
+    merged = merge(pruned, NodeHistory(node=_NODE, last_heard=heard_since))
+
+    assert pruned.last_heard == (last_heard if kept else None)
+    assert merged.last_heard == (max(last_heard, heard_since) if kept else heard_since)
+
+
 def test_prune_keeps_a_current_nodeinfo() -> None:
     info = NodeInfoSeen(_NOW, "A", "B", None)
 

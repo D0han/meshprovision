@@ -15,8 +15,9 @@ dropped). An update re-reads the file and merges its own sightings
 (:func:`~meshprovision.network.keys.merge_seen`), so it is idempotent
 and two processes both leave their sightings. Sightings last heard more
 than :data:`~meshprovision.network.buckets.NETWORK_RETENTION_DAYS` days
-ago are dropped, and the file is kept under :data:`KEYS_MAX_BYTES` by
-dropping the sightings heard longest ago.
+ago (or more than 5 minutes ahead of the clock) are dropped, and the file
+is kept under :data:`KEYS_MAX_BYTES` by dropping the sightings heard
+longest ago.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Final
 
 from meshprovision.datasources.json_store import read_json, write_json
-from meshprovision.health.history import HOUR_SECONDS
+from meshprovision.health.history import FUTURE_SKEW_SECONDS, HOUR_SECONDS
 from meshprovision.network.buckets import NETWORK_RETENTION_SECONDS
 from meshprovision.network.hourjson import read_count, read_epoch, read_hex_id
 from meshprovision.network.keys import (
@@ -81,8 +82,10 @@ class KeyStore:
             region: The region.
 
         Returns:
-            The sightings within the retention, by node and digest (none
-            when there is no usable file).
+            The sightings within the retention and last heard at most
+            :data:`~meshprovision.health.history.FUTURE_SKEW_SECONDS`
+            ahead of the clock, by node and digest (none when there is no
+            usable file).
         """
         path = self._directory / region_dirname(region) / KEYS_FILENAME
         document = read_json(path, max_bytes=KEYS_MAX_BYTES, what=_WHAT)
@@ -91,11 +94,12 @@ class KeyStore:
         raw = document.get("keys")
         if document.get("region") != region or not isinstance(raw, list):
             return ()
-        oldest = self._clock() - NETWORK_RETENTION_SECONDS
+        now = self._clock()
+        oldest, newest = now - NETWORK_RETENTION_SECONDS, now + FUTURE_SKEW_SECONDS
         entries = {}
         for item in raw:
             entry = _entry(item)
-            if entry is not None and entry.last >= oldest:
+            if entry is not None and oldest <= entry.last <= newest:
                 entries[(entry.node, entry.digest)] = entry
         return tuple(entries[key] for key in sorted(entries))
 

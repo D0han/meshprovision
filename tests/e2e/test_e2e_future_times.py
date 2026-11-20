@@ -108,3 +108,24 @@ def test_a_remembered_region_time_too_large_for_a_float_is_never_current(
 
     assert result.exit_code == 2, result.exception
     assert "No lorastats region is known for any of our nodes" in result.output
+
+
+def test_health_no_fetch_ignores_a_last_heard_a_year_ahead(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """A last_heard a year ahead judged the node OK, "Last heard: in the future"."""
+    health._seed(seed_db)
+    directory = Path(env["MESHPROVISION_CACHE_DIR"]) / HISTORY_DIRNAME
+    directory.mkdir(parents=True)
+    now = time.time()
+    history = NodeHistory(
+        node=NodeId.from_hex(health._A), fetched_at=now - 600, last_heard=now + 365 * 86400
+    )
+    (directory / f"{health._A}.json").write_text(json.dumps(history_to_json(history)))
+
+    as_json = invoke(runner, ["health", "--no-fetch", "--json"], env)
+    detail = invoke(runner, ["health", health._A, "--no-fetch"], env)
+
+    (node,) = (n for n in json.loads(as_json.stdout)["nodes"] if n["node_id"] == health._A)
+    assert (node["verdict"], node["metrics"]["last_heard"]) == ("unknown", None)
+    assert "Last heard: -" in detail.stdout

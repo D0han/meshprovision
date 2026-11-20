@@ -622,7 +622,8 @@ def prune(history: NodeHistory, *, now: float) -> NodeHistory:
     Returns:
         The history with only hours and points from the last
         :data:`HISTORY_RETENTION_SECONDS` up to
-        :data:`FUTURE_SKEW_SECONDS` ahead of ``now``, at most
+        :data:`FUTURE_SKEW_SECONDS` ahead of ``now`` (a ``last_heard``
+        later than that dropped, an older one kept), at most
         :data:`MAX_SERIES_POINTS` telemetry and local-stats points,
         :data:`MAX_POSITIONS` positions (a repeat of the previous position
         dropped), :data:`MAX_NEIGHBORS` neighbours, :data:`MAX_BOOTS` boots
@@ -638,11 +639,11 @@ def prune(history: NodeHistory, *, now: float) -> NodeHistory:
         ((key, seen) for key, seen in history.neighbors.items() if current(seen)),
         key=lambda item: (-item[1], item[0]),
     )[:MAX_NEIGHBORS]
-    nodeinfo = history.nodeinfo
+    nodeinfo, last_heard = history.nodeinfo, history.last_heard
     return NodeHistory(
         node=history.node,
         fetched_at=history.fetched_at,
-        last_heard=history.last_heard,
+        last_heard=last_heard if last_heard is not None and last_heard <= newest else None,
         hours=tuple(b for b in history.hours if floor_hour(oldest) <= b.hour <= floor_hour(newest)),
         telemetry=tuple(p for p in history.telemetry if current(p.time))[-MAX_SERIES_POINTS:],
         local_stats=tuple(p for p in history.local_stats if current(p.time))[-MAX_SERIES_POINTS:],
