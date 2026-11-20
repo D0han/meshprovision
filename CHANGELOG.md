@@ -692,6 +692,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A corrupt HTTP cache entry (an infinite status code, a refresh time too
+  large for a float, or JSON nested too deeply to decode) is now a cache
+  miss and deleted, as every other corrupt entry already was, instead of
+  a raw `OverflowError` or `RecursionError` on every run that asked for
+  that URL. A known-good provenance file or a pending-keypair file nested
+  too deeply reads as unrecorded or as nothing pending, with the same
+  warning as any other malformed one, instead of a `RecursionError`.
 - `mesh status`, `mesh health`, `mesh network` and the other commands
   that read the remembered lorastats regions or the cached region list
   no longer stop with a raw `OverflowError` on every run when a time in

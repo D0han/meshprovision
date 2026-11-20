@@ -551,7 +551,7 @@ def _entry_to_response(
     Raises:
         KeyError: If a required field is missing.
         TypeError: If a field has the wrong shape.
-        ValueError: If a numeric field cannot be converted.
+        ValueError, OverflowError: If a numeric field cannot be converted.
         binascii.Error: If the body is not valid base64.
     """
     body = _base64_decode(entry["body"])
@@ -1243,12 +1243,12 @@ class CachedHTTPClient:
             if entry.get("version") != CACHE_ENTRY_VERSION:
                 raise ValueError(f"unsupported cache entry version: {entry.get('version')!r}")
             return _entry_to_response(entry, cache_key_value=cache_key_value, from_cache=True)
-        except (
-            json.JSONDecodeError,
-            UnicodeDecodeError,
+        except (  # ValueError covers JSONDecodeError and UnicodeDecodeError
             KeyError,
             TypeError,
             ValueError,
+            OverflowError,
+            RecursionError,
             binascii.Error,
         ) as exc:
             _logger.debug("corrupt cache entry %s, treating as miss: %s", path, exc)

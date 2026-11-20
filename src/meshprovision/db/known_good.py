@@ -268,7 +268,7 @@ def _read_sidecar(path: Path) -> dict[str, object] | None:
         return None
     try:
         data = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return data if isinstance(data, dict) else None
 

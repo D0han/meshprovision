@@ -234,7 +234,7 @@ def _parse_pending(path: Path, raw: bytes, node_id: NodeId) -> PendingKeypair | 
     """
     try:
         data = json.loads(raw)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:
         _logger.warning("Malformed pending keypair at %s: %s", path, exc)
         return None
 

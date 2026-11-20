@@ -100,13 +100,14 @@ def test_load_pending_is_none_and_warns_when_path_is_a_directory(
     assert str(path) in caplog.text
 
 
+@pytest.mark.parametrize("raw", [b"not json", b"[" * 200_000], ids=["not-json", "too-deep"])
 def test_load_pending_is_none_and_warns_on_malformed_json(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, raw: bytes
 ) -> None:
     db_path = tmp_path / "nodes_db.ods"
     path = pending_keys.pending_key_path(db_path, _NODE)
     path.parent.mkdir(parents=True)
-    path.write_bytes(b"not json")
+    path.write_bytes(raw)
 
     with caplog.at_level("WARNING"):
         assert pending_keys.load_pending(db_path, _NODE) is None
