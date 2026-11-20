@@ -13,6 +13,7 @@ script's output without any other test noticing.
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -76,9 +77,16 @@ def test_generate_example_db_output_loads_with_every_key_origin_recorded(
 
 @pytest.mark.parametrize("shipped", [False, True], ids=["generated", "shipped"])
 def test_the_example_database_passes_db_verify(tmp_path: Path, shipped: bool) -> None:
-    """``mesh db verify`` on the example finds nothing worse than a warning."""
+    """``mesh db verify`` on the example finds nothing worse than a warning.
+
+    The shipped file is copied first: loading it refreshes its known-good
+    copy, which must not land in the source tree.
+    """
     module = _load_script()
-    path = _ROOT / module.EXAMPLE_DB_PATH if shipped else module.generate(tmp_path / "ex.ods")
+    if shipped:
+        path = Path(shutil.copy2(_ROOT / module.EXAMPLE_DB_PATH, tmp_path / "ex.ods"))
+    else:
+        path = module.generate(tmp_path / "ex.ods")
     db = ods.OdsDatabase(path)
     db.load(force=True)
 
