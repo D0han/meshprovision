@@ -197,11 +197,12 @@ def test_assess_status_refreshes_the_reported_nodes_without_gateway_checks(
         MergedNode(node_id=_A, lorastats_region="PL", last_boot=boot), MergedNode(node_id=_B)
     )
 
-    health = assess_status(report, refresher, client=client, days=3)
+    health = assess_status(report, refresher, client=client, days=3, clock=clock)
 
     assert health.days == 3
     assert set(health.nodes) == {_A, _B}
     assert health.nodes[_A].metrics.days == 3
+    assert health.nodes[_A].metrics.window_start == (_NOW - timedelta(days=3)).timestamp()
     assert health.refresh.refreshed == (_A,)
     assert health.refresh.no_region == (_B,)
     assert [call[0] for call in packets.calls] == ["reports", "decoded"]

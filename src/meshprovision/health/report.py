@@ -14,7 +14,8 @@ maintenance.stored_impacts`), for how much each node's region relies on it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
@@ -434,6 +435,7 @@ def assess_status(
     *,
     client: CachedHTTPClient,
     days: int = DEFAULT_DAYS,
+    clock: Callable[[], float] = time.time,
 ) -> StatusHealth:
     """Refresh and judge the nodes of a ``mesh status`` report (``--detail full``).
 
@@ -446,6 +448,8 @@ def assess_status(
         refresher: The refresher (one per process, shared by ``--watch`` polls).
         client: The HTTP client the refresher uses, to count its requests.
         days: The window, in days.
+        clock: Callable returning the current unix epoch seconds, the one
+            the refresher and its store run on.
 
     Returns:
         The health of every reported node.
@@ -457,7 +461,7 @@ def assess_status(
         report.nodes,
         outcome.histories,
         fleet=fleet,
-        now=datetime.now(tz=UTC).timestamp(),
+        now=clock(),
         days=days,
         floor=report.thresholds,
     )
