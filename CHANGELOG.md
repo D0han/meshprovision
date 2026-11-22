@@ -692,6 +692,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh network` no longer fails for good when a region's raw packets
+  outgrow the 48 MiB cap (`the response body is larger than 50331648
+  bytes`). A refresh that is too large is retried with a shorter window
+  (the last day for a first refresh, then halved down to a few hours); the
+  hours left out stay unanswered, never read as silence.
 - `mesh network relays` no longer reads a loranet device-metrics time
   ahead of the observation as when a relay's metrics were taken: a relay
   up for two hours with a time a day ahead showed `rebooted <1h ago`,

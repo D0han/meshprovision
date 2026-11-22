@@ -35,6 +35,7 @@ from meshprovision.errors import (
     MissingContactError,
     RateLimitCoolingDownError,
     RateLimitError,
+    ResponseTooLargeError,
     SettingsError,
 )
 
@@ -1428,7 +1429,7 @@ def test_a_call_can_lower_the_response_size_cap(tmp_path: Path) -> None:
     route = respx.get(URL).mock(return_value=httpx.Response(200, content=b"x" * 1001))
     client = _make_client(tmp_path, now=[0.0])
 
-    with pytest.raises(HttpError, match="larger than 1000 bytes"):
+    with pytest.raises(ResponseTooLargeError, match="larger than 1000 bytes"):
         client.get(URL, max_bytes=1000)
     assert route.call_count == 1
     assert client.stats.writes == 0

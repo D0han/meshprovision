@@ -87,6 +87,7 @@ from meshprovision.errors import (
     MissingContactError,
     RateLimitCoolingDownError,
     RateLimitError,
+    ResponseTooLargeError,
     SettingsError,
 )
 
@@ -1408,7 +1409,10 @@ class CachedHTTPClient:
                 # undecodable body), unlike `TransportError` above -- so this
                 # is not retried. Must stay after the `TransportError` arm,
                 # since `TransportError` is itself a `RequestError` subclass.
-                raise HttpError(
+                error_type = (
+                    ResponseTooLargeError if isinstance(exc, _ResponseTooLargeError) else HttpError
+                )
+                raise error_type(
                     f"Request to {url} failed: {exc}",
                     url=url,
                     source=source,

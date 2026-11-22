@@ -20,6 +20,7 @@ from meshprovision.errors import (
     HttpError,
     InvalidResponseError,
     RateLimitError,
+    ResponseTooLargeError,
     SettingsError,
 )
 from meshprovision.health.history import HOUR_SECONDS, floor_hour
@@ -336,3 +337,47 @@ def test_without_any_region_known_the_hint_says_how_to_get_one() -> None:
 
     assert error.value.hint is not None
     assert "--region" in error.value.hint
+
+
+def _too_large() -> ResponseTooLargeError:
+    return ResponseTooLargeError("the response body is larger than 5 bytes", url="u")
+
+
+def test_a_first_refresh_too_large_for_everything_asks_for_the_last_day(tmp_path: Path) -> None:
+    refresher, feed, store, _ = _setup(tmp_path)
+    answers: list[object] = [_too_large(), feed.rows]
+
+    def raw(region: str, *, since: float | None) -> list[Any]:
+        feed.calls.append(("raw", region, since))
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return cast("list[Any]", answer)
+
+    feed.raw = raw  # type: ignore[method-assign]
+
+    outcome = refresher.refresh(["Zachód"])
+
+    asked = [since for kind, _, since in feed.calls if kind == "raw"]
+    assert asked[0] is None
+    assert asked[1] == floor_hour(NOW - 24 * HOUR_SECONDS) - HOUR_SECONDS
+    assert outcome.failures == ()
+    assert store.state("Zachód") == RegionState(fetched_at=NOW)
+
+
+def test_a_window_too_large_is_halved_until_it_is_too_short_to_try(tmp_path: Path) -> None:
+    refresher, feed, store, now = _setup(tmp_path)
+    refresher.refresh(["Zachód"])
+    now[0] = NOW + 8 * HOUR_SECONDS
+    feed.calls.clear()
+    feed.fail_for[("raw", "Zachód")] = _too_large()
+
+    outcome = refresher.refresh(["Zachód"])
+
+    asked = [since for kind, _, since in feed.calls if kind == "raw"]
+    assert len(asked) >= 2
+    assert all(a is not None for a in asked)
+    assert asked == sorted(asked)  # type: ignore[type-var]
+    assert len(set(asked)) == len(asked)
+    assert [f.region for f in outcome.failures] == ["Zachód"]
+    assert store.state("Zachód") == RegionState(fetched_at=NOW)

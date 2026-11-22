@@ -49,12 +49,12 @@ from collections import Counter
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from meshprovision.datasources.lorastats import LORASTATS_MIN_TTL_SECONDS, validate_regions
 from meshprovision.datasources.lorastats_failures import outage_error
-from meshprovision.errors import DataSourceError, SettingsError
-from meshprovision.health.history import floor_hour
+from meshprovision.errors import DataSourceError, ResponseTooLargeError, SettingsError
+from meshprovision.health.history import HOUR_SECONDS, floor_hour
 from meshprovision.health.packets import FUTURE_SKEW_SECONDS
 from meshprovision.health.refresh import SINCE_MARGIN_SECONDS
 from meshprovision.network.buckets import summarize
@@ -87,6 +87,9 @@ NETWORK_FORCED_REFRESH_INTERVAL_SECONDS: Final[float] = LORASTATS_MIN_TTL_SECOND
 
 NETWORK_DEFAULT_MAX_REGIONS: Final[int] = 4
 """The most regions looked at when none is asked for."""
+
+_FIRST_NARROWED_SPAN_SECONDS: Final[float] = 24 * HOUR_SECONDS
+"""The window a first refresh retries with when asking for everything was too large."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,8 +255,21 @@ class RegionRefresher:
         now = self._clock()
         previous = self._store.state(region).fetched_at
         since = None if previous is None else floor_hour(min(previous, now))
-        asked = None if since is None else since - SINCE_MARGIN_SECONDS
-        parsed = parse_raw(self._feed.raw(region, since=asked), now=now)
+        rows: list[Any] | None = None
+        while rows is None:
+            asked = None if since is None else since - SINCE_MARGIN_SECONDS
+            try:
+                rows = self._feed.raw(region, since=asked)
+            except ResponseTooLargeError:
+                since = _narrower_since(since, now)
+                if since is None:
+                    raise
+                _logger.warning(
+                    "lorastats: %s raw packets too large, asking only from the last %d h",
+                    region,
+                    round((now - since) / HOUR_SECONDS),
+                )
+        parsed = parse_raw(rows, now=now)
         hours = summarize(parsed, since=since, fetched_at=now)
         self._store.update(region, hours, fetched_at=now)
         self._keys.update(region, observe(parsed.keys, self._known_bad))
@@ -264,6 +280,21 @@ class RegionRefresher:
             parsed.skipped,
         )
         return parsed.skipped
+
+
+def _narrower_since(since: int | None, now: float) -> int | None:
+    """Return a shorter window start after an answer was too large, or ``None`` to give up.
+
+    Asking for everything retries with the last day; a window is halved
+    until it is shorter than the hour the next one would need. The hours
+    left out stay unanswered (see
+    :func:`~meshprovision.health.history.answered_hours`), so the gap is
+    never read as silence.
+    """
+    span = _FIRST_NARROWED_SPAN_SECONDS if since is None else (now - since) / 2
+    if since is not None and span < 2 * HOUR_SECONDS:
+        return None
+    return floor_hour(now - span)
 
 
 def _tripped(exc: DataSourceError, region: str) -> DataSourceError | None:

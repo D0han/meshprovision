@@ -75,6 +75,7 @@ __all__ = [
     "RateLimitCoolingDownError",
     "RateLimitError",
     "RenumberRefusedError",
+    "ResponseTooLargeError",
     "SchemaError",
     "SettingsError",
     "TemplateValidationError",
@@ -401,6 +402,14 @@ class HttpError(DataSourceError):
         self.url = url
         self.status_code = status_code
         self.source = source
+
+
+class ResponseTooLargeError(HttpError):
+    """A data source's answer was larger than the cap set for the request.
+
+    Deterministic for the request as asked (never retried), but a caller
+    that can ask for less (a shorter window) may try again.
+    """
 
 
 class RateLimitError(HttpError):
