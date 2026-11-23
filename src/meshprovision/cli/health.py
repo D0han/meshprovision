@@ -126,6 +126,17 @@ def health(
     )
     with ctx.http_client(require_contact=not no_fetch) as client:
         report = run_health(ctx.settings, options, client=client)
+    if not report.nodes:
+        ctx.info(
+            f"No active nodes in {ctx.settings.db_path}: nothing to assess. Add one with "
+            "`mesh adopt` or `mesh provision`, or point --db-path at your database."
+        )
+    for health in report.nodes:
+        if health.node.record is None:
+            ctx.warn(
+                f"{health.node.node_id.display} is not in the database; it is assessed "
+                "from the sources and its history alone."
+            )
     if json_output:
         click.echo(render.render_json(report))
     else:

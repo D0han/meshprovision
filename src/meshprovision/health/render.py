@@ -438,9 +438,14 @@ def _lines(health: NodeHealth, now: datetime) -> Iterable[str]:
         f"row); history refreshed {_ago(health.history_fetched_at, now)}"
     )
     yield f"Last heard: {_ago(_last_heard(health), now)}"
+    cadence_source = (
+        "the default node-info interval: its role is unknown"
+        if node.cadence.source is CadenceSource.ROLE and health.role is None
+        else _CADENCE_SOURCES[node.cadence.source]
+    )
     yield (
         f"Expected every {interval_text(node.cadence.interval)} "
-        f"({_CADENCE_SOURCES[node.cadence.source]}): stale after "
+        f"({cadence_source}): stale after "
         f"{interval_text(node.thresholds.stale_after)}, offline after "
         f"{interval_text(node.thresholds.offline_after)}"
     )

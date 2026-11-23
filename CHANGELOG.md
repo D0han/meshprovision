@@ -434,6 +434,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh health` says when the database has no active nodes instead of
+  printing an empty table, warns when a node it is asked about is not in
+  the database, and no longer calls the interval of a node whose role is
+  unknown "its role's node-info default".
 - `mesh db restore` now says where it saved the database it replaced,
   and its `--json` document carries that path as `pre_restore_backup`.
 - Messages on stderr are no longer wrapped at the console width, so a

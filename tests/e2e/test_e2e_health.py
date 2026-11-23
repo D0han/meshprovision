@@ -421,6 +421,7 @@ def test_a_node_not_in_the_database_can_be_asked_for_and_counts_as_ours(
     (node,) = json.loads(result.stdout)["nodes"]
     assert node["node_id"] == _B
     assert [r.url.params["fromNode"] for r in lorastats.reports] == [_B]
+    assert f"!{_B} is not in the database" in result.stderr
 
 
 def _age_histories(env: Mapping[str, str], seconds: float) -> None:
@@ -676,3 +677,28 @@ def test_mesh_health_reads_the_network_store_but_never_fetches_it(
     raw_path = LORASTATS_PACKETS_RAW_PATH.split("{region}")[1]
     assert not any(raw_path in url for url in asked)
     assert not any("Zach" in url for url in asked)
+
+
+def test_an_empty_database_says_there_is_nothing_to_assess(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db()
+
+    result = invoke(runner, ["health", "--no-fetch"], env)
+
+    assert result.exit_code == 0
+    assert "No active nodes in" in result.stderr
+    assert "`mesh adopt` or `mesh provision`" in result.stderr
+
+
+def test_an_unknown_node_without_a_role_names_the_default_interval(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id=_A, short_name="D0h5", long_name="Alpha D0h5")])
+
+    result = invoke(runner, ["health", "--no-fetch", _B], env)
+
+    assert result.exit_code == 0, result.output
+    assert "(the default node-info interval: its role is unknown)" in result.stdout
+    assert "its role's node-info default" not in result.stdout
+    assert f"!{_B} is not in the database" in result.stderr
