@@ -1,5 +1,7 @@
 name: Release
 
+# Publishing does not wait for ci.yml: run it green on the tagged commit
+# first. The artifacts carry a SHA256SUMS file; build tools are pinned.
 on:
   push:
     tags: ["v*.*.*"]
@@ -14,11 +16,12 @@ jobs:
     # Pinned: ubuntu-latest moved to 26.04; bump the image on purpose.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
-      - uses: actions/setup-python@v7
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
 
@@ -46,11 +49,12 @@ jobs:
       - name: Build and check
         run: |
           python -m pip install --upgrade pip
-          pip install build twine
+          pip install build==1.6.1 twine==7.0.0
           python -m build
           twine check dist/*
+          (cd dist && sha256sum -- * > SHA256SUMS)
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist
           path: dist/
@@ -67,19 +71,34 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist
           path: dist
 
-      - uses: softprops/action-gh-release@v3
+      - name: Tell whether the tag is a pre-release
+        id: kind
+        # A PEP 440 pre-release suffix (aN, bN, rcN) only: the tag guard in
+        # the build job makes the tag the pyproject version.
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: dist/*
           generate_release_notes: true
           draft: false
-          prerelease: ${{ contains(github.ref_name, 'rc') || contains(github.ref_name, 'a') || contains(github.ref_name, 'b') }}
+          prerelease: ${{ steps.kind.outputs.prerelease == 'true' }}
 
   # OPTIONAL, DISABLED BY DEFAULT — PyPI publish.
   #
