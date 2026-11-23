@@ -308,8 +308,15 @@ class BLEBackend:
             ) from exc
 
         _logger.debug("Connecting over BLE to %s (timeout=%ss).", self.address, self.timeout)
+        # Built in two steps so a failed __init__ still leaves this frame
+        # the half-open object to close (see _close_half_open_ble).
+        iface = BLEInterface.__new__(BLEInterface)
         try:
-            iface = BLEInterface(address=self.address, timeout=self.timeout)
+            try:
+                iface.__init__(address=self.address, timeout=self.timeout)
+            except Exception:
+                _close_half_open_ble(iface)
+                raise
         except (*_BLE_CONNECT_BASE_EXCEPTIONS, *device_io_errors()) as exc:
             raise ConnectionFailedError(
                 f"Failed to connect over BLE to {self.address}: {exc}",
@@ -777,6 +784,28 @@ def _close_ignoring_errors(iface: MeshInterface) -> None:
         iface.close()
     except Exception:  # a close-time error never surfaces, whatever the transport
         _logger.debug("Failed to close MeshInterface cleanly.", exc_info=True)
+
+
+def _close_half_open_ble(iface: MeshInterface) -> None:
+    """Close a ``BLEInterface`` whose ``__init__`` raised after the link came up.
+
+    meshtastic's ``BLEInterface`` closes itself only when connecting fails.
+    A config handshake that times out (``waitForConfig``), or any later
+    step, raises with the link up and its receive thread running, and the
+    caller never gets the object to close: the device stays connected and
+    refuses the next attempt. Its ``close()`` also needs ``_exit_handler``,
+    which ``__init__`` sets last; the client's ``disconnect`` stands in
+    (never registered, so ``atexit.unregister`` does nothing with it).
+
+    Args:
+        iface: The partly initialized interface.
+    """
+    client = getattr(iface, "client", None)
+    if client is None and not getattr(iface, "_want_receive", False):
+        return
+    if client is not None and not hasattr(iface, "_exit_handler"):
+        iface._exit_handler = client.disconnect
+    close_interface(iface)
 
 
 def close_interface(iface: MeshInterface, *, timeout: float = DEFAULT_CLOSE_TIMEOUT) -> None:

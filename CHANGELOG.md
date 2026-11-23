@@ -699,6 +699,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A Bluetooth connection whose configuration handshake fails or times
+  out is now closed. The meshtastic library left the link up with no way
+  for mesh to close it, so the device stayed connected and could refuse
+  the next attempt. Tested against a fake interface only, not yet on
+  hardware.
 - `mesh status --stale-after` or `--offline-after` with a value so small
   it rounds to zero (`1e-300`) now hints that the value rounds to zero,
   not that `--stale-after` must be less than `--offline-after`.

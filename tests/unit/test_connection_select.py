@@ -430,3 +430,56 @@ def test_device_io_errors_degrades_gracefully_without_ble(monkeypatch: pytest.Mo
         assert errors == (MeshInterface.MeshInterfaceError,)
     finally:
         connection.device_io_errors.cache_clear()
+
+
+def test_ble_backend_connect_closes_a_link_whose_handshake_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The link came up, then ``waitForConfig`` timed out inside ``__init__``."""
+    import meshtastic.ble_interface as ble_mod
+
+    closed: list[object] = []
+
+    class _Client:
+        def disconnect(self) -> None:
+            """Never called here: ``close()`` is faked."""
+
+    client = _Client()
+
+    def handshake_timeout_init(self: object, **_kwargs: object) -> None:
+        self.client = client  # type: ignore[attr-defined]
+        self._want_receive = True  # type: ignore[attr-defined]
+        raise ble_mod.BLEInterface.MeshInterfaceError("Timed out waiting for interface config")
+
+    def close(self: object) -> None:
+        assert self._exit_handler == client.disconnect  # type: ignore[attr-defined]
+        closed.append(self)
+
+    monkeypatch.setattr(ble_mod.BLEInterface, "__init__", handshake_timeout_init)
+    monkeypatch.setattr(ble_mod.BLEInterface, "close", close)
+
+    with pytest.raises(ConnectionFailedError, match="Timed out waiting for interface config"):
+        BLEBackend("AA:BB:CC:DD:EE:FF").connect()
+
+    assert len(closed) == 1
+
+
+def test_ble_backend_connect_does_not_close_a_link_that_never_came_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import meshtastic.ble_interface as ble_mod
+
+    closed: list[object] = []
+
+    def failing_init(self: object, **kwargs: object) -> None:
+        self.client = None  # type: ignore[attr-defined]
+        self._want_receive = False  # type: ignore[attr-defined]
+        raise ble_mod.BLEInterface.BLEError("No device found")
+
+    monkeypatch.setattr(ble_mod.BLEInterface, "__init__", failing_init)
+    monkeypatch.setattr(ble_mod.BLEInterface, "close", lambda self: closed.append(self))
+
+    with pytest.raises(ConnectionFailedError):
+        BLEBackend("AA:BB:CC:DD:EE:FF").connect()
+
+    assert closed == []
