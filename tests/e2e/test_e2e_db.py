@@ -181,6 +181,11 @@ def test_db_restore_json_reports_target_and_source(
     document = json.loads(result.stdout)
     assert document["target"] == str(db_path)
     assert document["restored_from"] == str(backup_file)
+    pre_restore = Path(document["pre_restore_backup"])
+    assert pre_restore.parent == backup_dir
+    assert pre_restore != backup_file
+    assert pre_restore.is_file()
+    assert f"The previous database was backed up to {pre_restore}." in result.stderr
 
 
 def test_db_restore_refuses_without_confirmation_when_non_interactive(
@@ -1074,8 +1079,8 @@ def test_db_restore_write_failure_does_not_blame_a_valid_backup(
 ) -> None:
     """A write that fails after the backup validated blames the write, never the backup.
 
-    Before, every failure inside the restore -- here the temp file the
-    atomic replace needs, in a read-only database directory -- read
+    Before, every failure inside the restore -- here the backup and temp file the
+    restore needs, in a read-only database directory -- read
     "<BACKUP> is not a valid database ... Pick a different backup",
     sending the operator off to discard a good backup while the real
     problem stayed unfixed.
@@ -1096,7 +1101,9 @@ def test_db_restore_write_failure_does_not_blame_a_valid_backup(
 
     stderr = " ".join(result.stderr.split())
     assert result.exit_code == 4
-    assert f"Could not restore {db_path} from {backup}: Failed to create temporary file" in stderr
+    # The pre-restore backup is made first; its directory is in the same
+    # read-only directory here.
+    assert f"Could not restore {db_path} from {backup}: Failed to create backup" in stderr
     assert "the backup itself is fine" in stderr
     assert "not a valid database" not in stderr
     assert stderr.count("Hint:") == 1

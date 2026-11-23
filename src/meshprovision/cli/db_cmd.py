@@ -509,7 +509,7 @@ def db_restore(
 
     with locking.exclusive_lock(path):
         try:
-            atomic_writer.restore_backup(
+            pre_restore = atomic_writer.restore_backup(
                 resolved_backup, path, backup_dir=resolved_backup_dir, validate=_validate
             )
         except AtomicWriteError as exc:
@@ -549,8 +549,16 @@ def db_restore(
             ) from exc
 
     ctx.success(f"Restored {path} from {resolved_backup}.")
+    if pre_restore is not None:
+        ctx.info(f"The previous database was backed up to {pre_restore.path}.")
     if json_output:
-        echo_json({"target": str(path), "restored_from": str(resolved_backup)})
+        echo_json(
+            {
+                "target": str(path),
+                "restored_from": str(resolved_backup),
+                "pre_restore_backup": None if pre_restore is None else str(pre_restore.path),
+            }
+        )
 
 
 @db.command(name="list")

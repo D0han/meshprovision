@@ -1631,7 +1631,10 @@ mesh db renumber deadbe01 3a7c19e2
   directly, so unlike `backup` it holds the cross-process write lock for
   the whole operation, excluding a concurrent `mesh provision`/`mesh
   admin` run. The current database is itself backed up first, so a
-  restore is always reversible via `mesh db backup --list`. The restored
+  restore is always reversible: the command prints where that backup
+  went (`pre_restore_backup` with `--json`, next to `target` and
+  `restored_from`; `null` when there was no database yet), and `mesh db
+  backup --list` lists it. The restored
   file is loaded back immediately to confirm it is actually valid —
   restoring a corrupt or non-ODS file fails loudly on the spot rather
   than breaking the next unrelated `mesh` command. Pass either a

@@ -238,11 +238,24 @@ def test_restore_backup_restores_and_backs_up_current(tmp_path: Path) -> None:
     assert info is not None
     write_bytes_atomic(target, b"v2", backup=False, backup_dir=backup_dir)
 
-    restore_backup(info.path, target, backup_dir=backup_dir)
+    pre_restore = restore_backup(info.path, target, backup_dir=backup_dir)
     assert target.read_bytes() == b"v1"
 
+    assert pre_restore is not None
+    assert pre_restore.path.read_bytes() == b"v2"
     backups = list_backups(target, backup_dir=backup_dir)
-    assert any(b.path.read_bytes() == b"v2" for b in backups)
+    assert pre_restore.path in [b.path for b in backups]
+
+
+def test_restore_backup_onto_a_missing_target_reports_no_pre_restore_backup(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "saved.bak"
+    source.write_bytes(b"v1")
+    target = tmp_path / "data.txt"
+
+    assert restore_backup(source, target, backup_dir=tmp_path / "backups") is None
+    assert target.read_bytes() == b"v1"
 
 
 def test_restore_backup_missing_file_raises(tmp_path: Path) -> None:

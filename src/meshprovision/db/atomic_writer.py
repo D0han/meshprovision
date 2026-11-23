@@ -32,7 +32,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from meshprovision.db import fs_primitives
-from meshprovision.db.backups import DEFAULT_RETENTION, create_backup
+from meshprovision.db.backups import DEFAULT_RETENTION, BackupInfo, create_backup
 from meshprovision.db.fs_primitives import FILE_MODE
 from meshprovision.errors import AtomicWriteError
 
@@ -181,7 +181,7 @@ def restore_backup(
     *,
     backup_dir: Path | None = None,
     validate: Callable[[bytes], object] | None = None,
-) -> None:
+) -> BackupInfo | None:
     """Restore ``target`` from a backup file, atomically.
 
     When ``validate`` is given, it runs against the backup's bytes
@@ -205,9 +205,13 @@ def restore_backup(
             return value is discarded; it signals a bad backup by
             raising. ``None`` skips validation, restoring unconditionally.
 
+    Returns:
+        The pre-restore backup of ``target``, or ``None`` when ``target``
+        did not exist.
+
     Raises:
-        AtomicWriteError: If ``backup`` cannot be read, or the restore
-            write fails.
+        AtomicWriteError: If ``backup`` cannot be read, the pre-restore
+            backup cannot be made, or the restore write fails.
         Exception: Whatever ``validate`` raises, when the backup's
             content fails validation. Propagates before any write.
     """
@@ -219,4 +223,6 @@ def restore_backup(
         raise AtomicWriteError(f"Failed to read backup {backup}: {exc}", path=str(backup)) from exc
     if validate is not None:
         validate(data)
-    write_bytes_atomic(target, data, backup=True, backup_dir=backup_dir)
+    pre_restore = create_backup(target, backup_dir=backup_dir)
+    write_bytes_atomic(target, data, backup=False)
+    return pre_restore

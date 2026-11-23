@@ -434,6 +434,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh db restore` now says where it saved the database it replaced,
+  and its `--json` document carries that path as `pre_restore_backup`.
 - Messages on stderr are no longer wrapped at the console width, so a
   path or command in them stays whole for copying, and table columns
   holding node ids (`mesh db list`, `mesh health`, `mesh status`,
