@@ -434,6 +434,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Runtime dependencies now declare lower bounds: protobuf 6.31 (an
+  older one made every live configuration read fail), click 8.2, httpx
+  0.25, pydantic 2.0, structlog 22.1, cryptography 38.0.4, rich 13.3.1,
+  python-dotenv 0.21, platformdirs 2.6.2 and odfpy 1.4.1. The build
+  backend is held below hatchling 2.
 - `MESHPROVISION_CONTACT` (and `mesh init --contact`) must be an email
   address or an `http(s)://` URL, and a placeholder under a domain
   reserved for examples or tests (`example.com`, `example.org`,

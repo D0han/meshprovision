@@ -215,3 +215,28 @@ def test_stub_packages_stay_paired_with_their_runtime_dependency() -> None:
                 f"{stub!r} is expected in the dev extra for runtime dependency {runtime!r}"
             )
     assert problems == [], "\n".join(problems)
+
+
+def _runtime_requirements() -> list[str]:
+    pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return list(pyproject["project"]["dependencies"])
+
+
+def test_every_runtime_dependency_declares_a_lower_bound() -> None:
+    """A bare name lets pip's lowest-version resolution pick a release decades old."""
+    unbounded = [
+        requirement
+        for requirement in _runtime_requirements()
+        if " @ " not in requirement and ">=" not in requirement
+    ]
+
+    assert unbounded == []
+
+
+def test_protobuf_lower_bound_has_field_descriptor_is_repeated() -> None:
+    """detect.py skips repeated fields by ``is_repeated``, False for all before 6.31."""
+    (protobuf,) = [r for r in _runtime_requirements() if r.lower().startswith("protobuf")]
+    lower = re.search(r">=\s*([0-9.]+)", protobuf)
+
+    assert lower is not None
+    assert tuple(int(part) for part in lower.group(1).split(".")) >= (6, 31)

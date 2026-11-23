@@ -2,7 +2,10 @@
 #
 # The `pip` ecosystem below reads PEP 621 [project.dependencies] and
 # [project.optional-dependencies] straight out of pyproject.toml; there is no
-# requirements.txt in this repo and none should be added.
+# requirements.txt in this repo and none should be added. Most runtime
+# dependencies carry only a lower bound, which already admits every new
+# release, so its PRs mostly cover the exact dev pins (ruff, mypy). It never
+# updates the meshtastic git-commit pin: re-pin that by hand.
 #
 # `Europe/Warsaw` matches the PL-mesh operator this toolkit is built for, and
 # is also the timezone lorastats.pl's naive timestamps are interpreted in.

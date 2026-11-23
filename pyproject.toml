@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.27"]
+requires = ["hatchling>=1.27,<2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -31,22 +31,28 @@ dependencies = [
   # ~/.claude/projects/-home-claude-meshprovision/memory/firmware_28_compatibility.md
   # for why, and re-evaluate once an official 2.8-compatible release lands.
   "meshtastic @ git+https://github.com/meshtastic/python.git@0a1835760c2437314a2d3544bbdd8b6fead559bc",
-  "cryptography",
-  "pydantic>=2",
-  "rich",
-  "click",
-  "structlog",
-  "httpx",
-  "odfpy",
-  "python-dotenv",
-  "platformdirs",
+  # Lower bounds are the oldest releases the test suite passes on (round
+  # 65): click 8.2 for the CLI tests, httpx 0.25 (the first on httpcore 1);
+  # the others with every test passing at that version.
+  "cryptography>=38.0.4",
+  "pydantic>=2.0",
+  "rich>=13.3.1",
+  "click>=8.2",
+  "structlog>=22.1",
+  "httpx>=0.25",
+  "odfpy>=1.4.1",
+  "python-dotenv>=0.21",
+  "platformdirs>=2.6.2",
   # Imported directly by this package, not just pulled in by meshtastic:
   # yaml (config/template.py, provisioning/backup_parse.py), google.protobuf
   # (provisioning/backup_parse.py, device_write.py, detect.py) and serial.tools
-  # (provisioning/discovery.py). Bounds match meshtastic's own so pip has one
-  # interval to satisfy, not two that could drift apart.
+  # (provisioning/discovery.py). PyYAML's and pyserial's bounds match
+  # meshtastic's own so pip has one interval to satisfy. protobuf's is
+  # tighter than meshtastic's >=4.21.12: detect.py reads
+  # FieldDescriptor.is_repeated, which is False for every field before 6.31,
+  # so every live configuration read would fail on an older protobuf.
   "PyYAML>=6.0.1,<7",
-  "protobuf>=4.21.12",
+  "protobuf>=6.31",
   "pyserial>=3.5,<4",
   # Imported directly by db/ods_read.py, which checks every ODF part with it
   # before odfpy loads the file; also odfpy's own XML parser.
