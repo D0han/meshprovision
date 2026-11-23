@@ -184,6 +184,10 @@ def _warn_no_fcntl_once() -> None:
     )
 
 
+_MAX_PID: Final[int] = 2**31 - 1
+"""The largest pid any platform hands out (a signed 32-bit ``pid_t``)."""
+
+
 def _read_holder_pid(fd: int) -> int | None:
     """Best-effort read of the pid recorded in an already-open lock file.
 
@@ -192,9 +196,10 @@ def _read_holder_pid(fd: int) -> int | None:
 
     Returns:
         The recorded pid, or ``None`` if the file is empty, unreadable,
-        or does not hold a plain integer -- a holder killed between
-        acquiring the lock and recording its pid leaves this ``None``,
-        and that is treated as an ordinary, expected case, not an error.
+        or does not hold a plain integer in a pid's range (1 to
+        :data:`_MAX_PID`) -- a holder killed between acquiring the lock
+        and recording its pid leaves this ``None``, and that is treated
+        as an ordinary, expected case, not an error.
     """
     try:
         os.lseek(fd, 0, os.SEEK_SET)
@@ -202,9 +207,10 @@ def _read_holder_pid(fd: int) -> int | None:
     except OSError:
         return None
     try:
-        return int(raw.decode("ascii").strip())
+        pid = int(raw.decode("ascii").strip())
     except (UnicodeDecodeError, ValueError):
         return None
+    return pid if 0 < pid <= _MAX_PID else None
 
 
 def _record_holder_pid(fd: int) -> None:

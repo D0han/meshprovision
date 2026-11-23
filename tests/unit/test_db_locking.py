@@ -308,6 +308,22 @@ def test_read_holder_pid_returns_none_when_the_lock_file_cannot_be_read(
     assert locking._read_holder_pid(fd) is None
 
 
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [(b"4242\n", 4242), (b"0", None), (b"-17", None), (b"99999999999", None), (b"x", None)],
+)
+def test_read_holder_pid_keeps_only_a_pid_in_range(
+    tmp_path: Path, content: bytes, expected: int | None
+) -> None:
+    path = tmp_path / "nodes_db.ods.lock"
+    path.write_bytes(content)
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        assert locking._read_holder_pid(fd) == expected
+    finally:
+        os.close(fd)
+
+
 # --- lock_path_for resolves a symlinked target (B3) -----------------------------
 
 
