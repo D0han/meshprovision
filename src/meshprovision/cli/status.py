@@ -174,9 +174,14 @@ def _build_options(
     try:
         thresholds = Thresholds.from_hours(stale_hours, offline_hours)
     except ValueError as exc:
-        raise SettingsError(
-            str(exc), hint="--stale-after must be strictly less than --offline-after."
-        ) from exc
+        rounds_to_zero = timedelta(hours=min(stale_hours, offline_hours)) <= timedelta(0)
+        hint = (
+            "--stale-after and --offline-after are hours; a value under a microsecond "
+            "rounds to zero."
+            if rounds_to_zero
+            else "--stale-after must be strictly less than --offline-after."
+        )
+        raise SettingsError(str(exc), hint=hint) from exc
 
     node_ids = tuple(dict.fromkeys(nodes))
     resolved_regions = tuple(regions) or configured_regions or ()

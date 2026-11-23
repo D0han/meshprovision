@@ -1400,3 +1400,15 @@ def test_a_429_stops_the_next_mesh_status_run_from_asking_lorastats(
     (failure,) = json.loads(result.stdout)["failures"]
     assert failure["source"] == "lorastats"
     assert "not requested: lorastats.pl rate-limited this client" in failure["message"]
+
+
+@pytest.mark.parametrize("option", ["--stale-after", "--offline-after"])
+def test_a_threshold_that_rounds_to_zero_gets_its_own_hint(
+    runner: CliRunner, env: dict[str, str], option: str
+) -> None:
+    result = invoke(runner, ["status", option, "1e-300"], env)
+
+    assert result.exit_code == 2
+    assert "must be positive" in result.stderr
+    assert "rounds to zero" in result.stderr
+    assert "strictly less than" not in result.stderr

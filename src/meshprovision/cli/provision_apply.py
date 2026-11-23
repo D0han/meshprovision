@@ -289,7 +289,13 @@ def apply_and_persist(
             # Hygiene: the freshly generated key never reached the device
             # (the run stopped before the security section was even
             # attempted), so the pending file describes a key that was
-            # never sent -- nothing to recover from it.
+            # never sent -- nothing to recover from it. When this run had
+            # recovered an earlier pending keypair and still regenerated
+            # (--force-regenerate-key), the write-ahead already replaced
+            # that file, so clearing it loses nothing more: the device
+            # still holds the recovered key, and a local read on firmware
+            # 2.8 returns it, so a later run still sees it. Restoring the
+            # old file here is not worth the extra write path.
             pending_keys.clear_pending(db.path, change_plan.node_id)
         ctx.error("Node is in an UNCERTAIN state; the database was NOT updated.")
         for failure in outcome.failures():

@@ -699,6 +699,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh status --stale-after` or `--offline-after` with a value so small
+  it rounds to zero (`1e-300`) now hints that the value rounds to zero,
+  not that `--stale-after` must be less than `--offline-after`.
 - A loranet.pl time ahead of the clock (a gateway's `seenBy` time,
   `lastDeviceMetrics` or `lastMapReport` more than 5 minutes after the
   read) no longer becomes the node's last-seen time. It used to win, and
