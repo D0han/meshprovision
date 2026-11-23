@@ -27,6 +27,7 @@ from typing import ClassVar, Final
 
 __all__ = [
     "MAX_ADMIN_KEYS",
+    "MISSING_CONTACT_HINT",
     "AdminKeyCapacityError",
     "AdminKeyError",
     "AdminKeyRotationRefusedError",

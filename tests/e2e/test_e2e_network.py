@@ -456,7 +456,7 @@ def test_absurd_device_numbers_from_loranet_are_left_out(
     _seed(seed_db)
     dump = {
         NodeId.from_hex(mini.ROUTER).decimal: {
-            "batteryLevel": 250,
+            "batteryLevel": -5,  # above 100 would be external power
             "voltage": 1e308,
             "chUtil": 1e308,
             "uptime": -100,

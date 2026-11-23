@@ -381,26 +381,6 @@ class ReconnectingSession:
             close_interface(self._iface)
             self._iface = None
 
-    def __enter__(self) -> ReconnectingSession:
-        """Open the connection and return this session.
-
-        Returns:
-            ``self``.
-        """
-        self.open()
-        return self
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        """Close the connection.
-
-        Args:
-            exc_type: Unused; part of the context-manager protocol.
-            exc: Unused; part of the context-manager protocol.
-            tb: Unused; part of the context-manager protocol.
-        """
-        del exc_type, exc, tb
-        self.close()
-
 
 @dataclass(slots=True)
 class InPlaceSession:

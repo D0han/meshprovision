@@ -17,6 +17,7 @@ from enum import StrEnum
 from itertools import pairwise
 from typing import TYPE_CHECKING, Final
 
+from meshprovision.battery import is_external_power
 from meshprovision.health.history import TelemetryPoint
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 
@@ -83,9 +84,6 @@ AIR_UTIL_TX_EPSILON: Final[float] = 0.5
 
 SAME_READING_SECONDS: Final[float] = 120.0
 """How close a history point may be to the shown reading and still be that reading."""
-
-_EXTERNAL_POWER: Final[int] = 101
-"""The battery level a node on external power reports (no discharge to follow)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -231,7 +229,9 @@ def node_trends(node: MergedNode, points: Sequence[TelemetryPoint]) -> NodeTrend
 
 def _battery_percent(level: int | None) -> float | None:
     """Return a battery level that can be followed, else ``None`` (none, 0, external power)."""
-    return float(level) if level is not None and 0 < level < _EXTERNAL_POWER else None
+    return (
+        float(level) if level is not None and level > 0 and not is_external_power(level) else None
+    )
 
 
 def load_trends(cache_dir: Path, nodes: Iterable[MergedNode]) -> dict[NodeId, NodeTrends]:

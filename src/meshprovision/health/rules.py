@@ -32,6 +32,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Final
 
+from meshprovision.battery import EXTERNAL_POWER_BATTERY_LEVEL, is_external_power
 from meshprovision.health.metrics import NodeMetrics
 from meshprovision.health.packets import FUTURE_SKEW_SECONDS
 from meshprovision.nodeid import NodeId
@@ -201,8 +202,6 @@ IMPORTANCE_MEDIUM_SCORE: Final[int] = 2
 """An importance score of this or more is ``medium``; below it ``low``."""
 
 _IMPORTANCE_LEVELS: Final[tuple[str, ...]] = ("low", "medium", "high")
-_EXTERNAL_POWER: Final[int] = 101
-"""The battery level Meshtastic reports on external power."""
 _GATEWAY_POINTS: Final[int] = 3
 _SOLE_GATEWAY_POINTS: Final[int] = 3
 _DEPENDENT_POINTS: Final[int] = 2
@@ -422,7 +421,9 @@ def battery_reading(metrics: NodeMetrics, context: NodeContext) -> BatteryReadin
     if metrics.battery is not None and metrics.battery.latest > 0:
         readings.append((metrics.battery.latest_time, metrics.battery.latest, BATTERY_FROM_HISTORY))
     if metrics.battery_powered_time is not None:
-        readings.append((metrics.battery_powered_time, _EXTERNAL_POWER, BATTERY_FROM_HISTORY))
+        readings.append(
+            (metrics.battery_powered_time, EXTERNAL_POWER_BATTERY_LEVEL, BATTERY_FROM_HISTORY)
+        )
     status_level = context.battery if context.battery is not None and context.battery > 0 else None
     if status_level is not None and context.battery_time is not None:
         readings.append((context.battery_time, status_level, BATTERY_FROM_STATUS))
@@ -487,7 +488,7 @@ def _battery_findings(metrics: NodeMetrics, context: NodeContext) -> list[Findin
     """Judge the current battery level and its trend (no trend on external power)."""
     findings = []
     level = _current_battery(metrics, context)
-    powered = level is not None and level >= _EXTERNAL_POWER
+    powered = is_external_power(level)
     if level is not None and level <= BATTERY_CRIT_PERCENT:
         findings.append(Finding(Verdict.CRIT, "battery_low", f"battery at {level}%"))
     elif level is not None and level <= BATTERY_WARN_PERCENT:

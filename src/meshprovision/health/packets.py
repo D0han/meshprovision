@@ -38,6 +38,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
+from meshprovision.battery import EXTERNAL_POWER_BATTERY_LEVEL
 from meshprovision.datasources.models import coerce_float, coerce_int, coerce_str, parse_iso8601
 from meshprovision.enums import role_table
 from meshprovision.errors import NodeIdError
@@ -86,8 +87,6 @@ _MAX_PORT: Final[int] = 1023
 _MAX_PAYLOAD_CHARS: Final[int] = 512
 _MAX_COUNTER: Final[int] = 2**32 - 1
 _MAX_PERCENT: Final[float] = 100.0
-_MAX_BATTERY: Final[int] = 101
-"""Meshtastic reports 101 for a node on external power."""
 _MAX_VOLTS: Final[float] = 10.0
 _MAX_LATITUDE: Final[float] = 90.0
 _MAX_LONGITUDE: Final[float] = 180.0
@@ -357,7 +356,7 @@ def parse_telemetry(text: str) -> Telemetry | None:
                 found[field_name] = float(match.group(1))
                 break
     telemetry = Telemetry(
-        battery=_reading_int(found.get("battery"), _MAX_BATTERY),
+        battery=_reading_int(found.get("battery"), EXTERNAL_POWER_BATTERY_LEVEL),
         voltage=_reading_float(found.get("voltage"), _MAX_VOLTS),
         channel_utilization=_reading_float(found.get("channel_utilization"), _MAX_PERCENT),
         air_util_tx=_reading_float(found.get("air_util_tx"), _MAX_PERCENT),

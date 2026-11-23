@@ -20,6 +20,7 @@ from rich.console import Console, Group, JustifyMethod, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from meshprovision.battery import is_external_power
 from meshprovision.datasources.models import parse_epoch
 from meshprovision.health.drift import DriftSource, PassiveDrift
 from meshprovision.health.metrics import NodeMetrics, RelayShare
@@ -73,9 +74,6 @@ VERDICT_STYLES: Final[dict[Verdict, str]] = {
 
 _IMPORTANCE_STYLES: Final[dict[str, str]] = {"high": "bold", "medium": "", "low": "grey50"}
 _DASH: Final[str] = "-"
-_POWERED: Final[int] = 100
-"""A battery level above this means external power."""
-
 _STALE_STYLE: Final[str] = "grey50"
 """A battery reading too old to judge (``mesh status``'s gray for unknown values)."""
 _MAX_REASONS: Final[int] = 2
@@ -166,7 +164,7 @@ def _relay_cell(relay: RelayShare | None) -> str:
 
 def _battery_text(reading: BatteryReading) -> str:
     """Render a battery level: ``powered`` above 100 %."""
-    return "powered" if reading.level > _POWERED else f"{reading.level}%"
+    return "powered" if is_external_power(reading.level) else f"{reading.level}%"
 
 
 def _battery(health: NodeHealth) -> Text:

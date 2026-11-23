@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final
 
+from meshprovision.battery import is_external_power
 from meshprovision.health.history import (
     HOUR_SECONDS,
     GatewayCheck,
@@ -77,8 +78,6 @@ BATTERY_TREND_MIN_SPAN_HOURS: Final[float] = 12.0
 MAX_RELAYS_LISTED: Final[int] = 5
 """Most relay bytes listed per node (by receptions)."""
 
-_POWERED: Final[int] = 100
-"""A battery level above this means external power."""
 _SECONDS_PER_DAY: Final[float] = 86400.0
 _NO_COUNTS: Final[Mapping[int, int]] = MappingProxyType({})
 
@@ -300,7 +299,9 @@ def _relays(
 def _battery(points: Iterable[TelemetryPoint]) -> BatteryTrend | None:
     """Return the battery readings' latest value and least-squares slope."""
     readings = [
-        (p.time, p.battery) for p in points if p.battery is not None and 0 < p.battery <= _POWERED
+        (p.time, p.battery)
+        for p in points
+        if p.battery is not None and p.battery > 0 and not is_external_power(p.battery)
     ]
     if not readings:
         return None
@@ -316,7 +317,7 @@ def _battery(points: Iterable[TelemetryPoint]) -> BatteryTrend | None:
 
 def _powered_time(points: Iterable[TelemetryPoint]) -> float | None:
     """Return when the newest external-power battery reading was heard, if any."""
-    times = [p.time for p in points if p.battery is not None and p.battery > _POWERED]
+    times = [p.time for p in points if is_external_power(p.battery)]
     return max(times, default=None)
 
 

@@ -259,7 +259,9 @@ def _loranet(node: str = _R, **fields: object) -> NodeObservation:
             DeviceHealth(external_power=True, voltage=12.8),
             id="external-power",
         ),
-        pytest.param({"battery_level": 120}, DeviceHealth(), id="above-101"),
+        pytest.param(
+            {"battery_level": 120}, DeviceHealth(external_power=True), id="above-101-is-powered"
+        ),
         pytest.param({"uptime_seconds": -100}, DeviceHealth(), id="negative-uptime"),
         pytest.param({"uptime_seconds": 2**32}, DeviceHealth(), id="uptime-past-32-bits"),
         pytest.param(

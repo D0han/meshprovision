@@ -25,11 +25,11 @@ another node usually rebroadcasts when one is gone).
 
 An attributed relay's *device health* (battery, voltage, uptime, channel
 utilization) comes from loranet's node dump when the caller passes it
-(:func:`device_health`); nothing is invented: a battery level of 101 means
-external power, and a value no device reports (a battery level of 0 or
-above 101, a voltage at or below zero or above :data:`MAX_PLAUSIBLE_VOLTAGE`,
-a percentage outside 0-100, a negative uptime or one past a 32-bit counter)
-is left out.
+(:func:`device_health`); nothing is invented: a battery level of 101 (or
+more) means external power, as everywhere else, and a value no device
+reports (a battery level of 0 or below, a voltage at or below zero or above
+:data:`MAX_PLAUSIBLE_VOLTAGE`, a percentage outside 0-100, a negative uptime or
+one past a 32-bit counter) is left out.
 
 This module imports nothing that reads files or the network (no
 ``httpx``, ``pathlib``, :mod:`meshprovision.cache` or
@@ -45,6 +45,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from meshprovision.battery import EXTERNAL_POWER_BATTERY_LEVEL, is_external_power
 from meshprovision.datasources.models import epoch_seconds, without_future_times
 from meshprovision.health.rules import BATTERY_WARN_PERCENT
 
@@ -93,7 +94,7 @@ MIN_RELAYED: Final[int] = 20
 RELYING_SHARE: Final[float] = 0.5
 """A gateway relies on a relay that carried at least this share of its relayed receptions."""
 
-EXTERNAL_POWER_LEVEL: Final[int] = 101
+EXTERNAL_POWER_LEVEL: Final[int] = EXTERNAL_POWER_BATTERY_LEVEL
 """The battery level Meshtastic reports on external power."""
 
 DEVICE_METRICS_FRESH_SECONDS: Final[float] = 24 * 3600.0
@@ -160,8 +161,8 @@ def device_health(observation: NodeObservation) -> DeviceHealth:
         observation: The node's loranet observation.
 
     Returns:
-        Its device health: level 101 is external power (no level); a level
-        of 0 or above 101, a voltage outside (0, :data:`MAX_PLAUSIBLE_VOLTAGE`],
+        Its device health: level 101 or more is external power (no level);
+        a level of 0 or below, a voltage outside (0, :data:`MAX_PLAUSIBLE_VOLTAGE`],
         a percentage outside 0-100, an uptime outside
         0-:data:`MAX_UPTIME_SECONDS` and a metrics time ahead of when the
         observation was made are left out.
@@ -172,7 +173,7 @@ def device_health(observation: NodeObservation) -> DeviceHealth:
     uptime = observation.uptime_seconds
     return DeviceHealth(
         battery_level=level if level is not None and 0 < level < EXTERNAL_POWER_LEVEL else None,
-        external_power=level == EXTERNAL_POWER_LEVEL,
+        external_power=is_external_power(level),
         voltage=voltage if voltage is not None and 0 < voltage <= MAX_PLAUSIBLE_VOLTAGE else None,
         uptime_seconds=uptime if uptime is not None and 0 <= uptime <= MAX_UPTIME_SECONDS else None,
         channel_utilization=_percent(observation.channel_utilization),

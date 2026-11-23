@@ -434,6 +434,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh network relays` shows a relay reporting a battery level above
+  101 as on external power (`ext`), as `mesh status` and `mesh health`
+  already did, instead of leaving the reading out.
 - `mesh init --json` lists every path absolute (`present` mixed relative
   and absolute ones), and hints and examples give node ids as bare hex:
   an unquoted `!deadbe01` is bash history expansion.

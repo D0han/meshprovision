@@ -1326,8 +1326,9 @@ derived from its key, or not in loranet; then `rebooted <1h ago` (its uptime,
 counted from when its metrics were sent, under an hour) and `battery low` (at
 or below 20 %, the `mesh health` warning level). **Device** is its device
 health from loranet.pl's node dump: battery (`ext` on external power, level
-101) and voltage, uptime, channel utilization (a value no device reports
-is left out: a battery level of 0 or above 101, a voltage at or below zero
+101 or above, as in `mesh status` and `mesh health`) and voltage, uptime,
+channel utilization (a value no device reports is left out: a battery
+level of 0 or below, a voltage at or below zero
 or above 100 V, a percentage outside 0-100, a negative uptime or one past
 a 32-bit counter), and `(metrics 3d old)` when loranet's device
 metrics are more than 24 hours old; `-` when loranet does not know it. The

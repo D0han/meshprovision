@@ -26,6 +26,7 @@ from rich.console import Console, JustifyMethod, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from meshprovision.battery import is_external_power
 from meshprovision.nodeid import NODE_ID_COLUMN_WIDTH
 from meshprovision.status import timefmt
 from meshprovision.status.cadence import Cadence, CadenceSource, interval_text
@@ -201,9 +202,6 @@ _AVAILABILITY_STYLES: Final[MappingProxyType[Availability, str]] = MappingProxyT
 
 _DASH: Final[str] = "-"
 
-_POWERED_BATTERY_THRESHOLD: Final[int] = 100
-"""A Meshtastic ``battery_level`` above this means external power, not a percentage."""
-
 _LAST_BOOT_TOLERANCE: Final[timedelta] = timedelta(minutes=65)
 """How much longer than the device's own uptime the time from ``LastBoot`` to
 its metrics may be before that ``LastBoot`` counts as contradicted (a newer
@@ -233,14 +231,14 @@ def _battery_cell(value: int | None) -> str:
             reports a level above 100 (101) for a node on external power.
 
     Returns:
-        ``"powered"`` above :data:`_POWERED_BATTERY_THRESHOLD`,
+        ``"powered"`` for external power (see :mod:`meshprovision.battery`),
         ``f"{value}%"`` otherwise, or :data:`_DASH` when ``value`` is
         ``None`` or not above 0 (no reading: a node without a battery
         sensor reports 0, as it reports 0 V).
     """
     if value is None or value <= 0:
         return _DASH
-    if value > _POWERED_BATTERY_THRESHOLD:
+    if is_external_power(value):
         return "powered"
     return f"{value}%"
 
@@ -356,7 +354,7 @@ def _severity(value: float | None, *, alarm: float, warn: float, low_is_bad: boo
 
 def _battery_flag(value: int | None) -> str | None:
     """Flag a low battery; external power or no reading (0 or less) is never flagged."""
-    if value is None or value <= 0 or value > _POWERED_BATTERY_THRESHOLD:
+    if value is None or value <= 0 or is_external_power(value):
         return None
     return _severity(value, alarm=BATTERY_ALARM_PERCENT, warn=BATTERY_WARN_PERCENT, low_is_bad=True)
 

@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 __all__ = [
     "device_text",
     "keys_to_json_dict",
+    "loranet_json",
     "loranet_line",
     "relays_of",
     "relays_to_json_dict",

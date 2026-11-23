@@ -55,6 +55,7 @@ from meshprovision.nodeid import NodeId, relay_byte
 __all__ = [
     "ASSUMED_LORASTATS_RETENTION_SECONDS",
     "DAY_SECONDS",
+    "FUTURE_SKEW_SECONDS",
     "HISTORY_RETENTION_SECONDS",
     "HOUR_SECONDS",
     "MAX_BOOTS",

@@ -45,6 +45,8 @@ class SectionDiff:
         state: What is known about it.
         changes: The fields that differ (empty unless :attr:`state` is DIFFERS).
         unread_fields: Desired fields the read section did not carry, in desired order.
+            Nothing reads it yet: groundwork for the live read, which
+            ``mesh remote diff`` does not have (only ``--dry-run``).
     """
 
     section: str

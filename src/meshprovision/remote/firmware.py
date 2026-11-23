@@ -106,7 +106,8 @@ class FirmwareTraits:
         remote_read_allowed: A remote read of it is allowed at all.
         private_key_redacted: A remote ``security`` read leaves out the private key.
         transaction_expires: An abandoned edit transaction is flushed after
-            :data:`TRANSACTION_IDLE_FLUSH_SECONDS` idle.
+            :data:`TRANSACTION_IDLE_FLUSH_SECONDS` idle. Nothing reads it
+            yet: groundwork for a remote write, which there is none of.
         admin_key_fallback: It decrypts an admin request from a sender it holds only
             as an admin key.
         unicast_attempts: Transmissions it makes of one unanswered reliable unicast.
