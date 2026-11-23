@@ -249,7 +249,10 @@ so nobody can mistake it for live material. There is no private key: no
 readable placeholder derives another one's public key, which `mesh db
 verify` checks for every stored pair. `mesh db verify` on the example
 reports no errors (the weak-key audit included); a test holds both the
-shipped file and a freshly generated one to that.
+shipped file and a freshly generated one to that. On a copy you made with
+`cp`, it warns that the file mode is `0644` and should be `0600`: a real
+database holds private keys, the example does not, so that warning is
+expected there.
 
 Regenerate it with:
 

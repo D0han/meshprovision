@@ -43,7 +43,8 @@ you're curious why.
 
 ## Before opening a PR
 
-Run the same checks CI runs:
+Run the checks CI runs (CI also audits dependencies with `pip-audit`,
+and runs them on Python 3.11, 3.12 and 3.13):
 
 ```bash
 ruff check .

@@ -7,6 +7,24 @@ real, hand-editable ODS spreadsheet meant to be opened and corrected in
 LibreOffice — not hidden behind commands — and reports network health
 from [loranet.pl](https://loranet.pl) and [lorastats.pl](https://lorastats.pl).
 
+## Status and limitations
+
+- **Alpha.** Commands, the template and the database layout may still
+  change between releases; the [changelog](CHANGELOG.md) says how.
+- **Firmware 2.6 to 2.8.** Firmware 2.8's own behaviour (node ids follow
+  the key, new presets and regions) was read in the firmware source and,
+  where possible, run in the firmware simulator, but not tried on a
+  device; [Firmware 2.8 and beyond](docs/firmware-compatibility.md) says
+  which parts are verified and which are inferred.
+- **No live remote access.** `mesh remote diff --dry-run` only estimates
+  what reading a node over the mesh would cost; nothing reads or writes a
+  node's configuration over the mesh. Provisioning needs a Serial, BLE or
+  TCP connection to the device itself.
+- **Read-only monitoring.** `mesh status`, `mesh health` and `mesh
+  network` read loranet.pl and lorastats.pl, which ban IP addresses that
+  send no or a dummy contact address: set your own in
+  `MESHPROVISION_CONTACT`.
+
 ## What it does
 
 - Template-driven provisioning of factory-fresh, already-provisioned, or
@@ -83,7 +101,9 @@ covered in [Installation](docs/installation.md).
 3. `mesh db verify` — confirms the database loads, the schema validates,
    and the key rows pass the weak-key audit. Run it after any hand-edit;
    if it ever fails, `mesh db restore --known-good` undoes the edit.
-4. `mesh provision --dry-run --port /dev/ttyUSB0` — prints the exact
+4. `mesh template validate` — checks the edited template (names, ranges,
+   region and preset, admin refs) without touching a device.
+5. `mesh provision --dry-run --port /dev/ttyUSB0` — prints the exact
    change plan without writing to the device or the database.
 
 ## Command cheat sheet
@@ -137,8 +157,9 @@ status` and `mesh health` on a schedule.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full contribution
 workflow (branching, tests-first convention, PR checklist, secret
-hygiene). The `quality` job's checks, kept character-identical with
-`.github/workflows/ci.yml`:
+hygiene). The `quality` job in `.github/workflows/ci.yml` runs these
+checks (it adds `--output-format=github` to `ruff check` and first
+audits the installed dependencies with `pip-audit`):
 
 ```bash
 pip install -e ".[dev]"
@@ -165,4 +186,6 @@ Extend the weak-key blocklist: `python scripts/update_known_bad_keys.py --help`.
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE) (also declared in `pyproject.toml`).
+MIT. See [`LICENSE`](LICENSE) (also declared in `pyproject.toml`). The
+`meshtastic` library it depends on is GPL-3.0-only, so an installation,
+or a bundle that ships both, is subject to the GPL as well.

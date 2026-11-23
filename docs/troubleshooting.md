@@ -100,5 +100,7 @@ Part of the meshprovision docs — see the [README](../README.md).
   visible without any flag. For the underlying library's own trace, add
   `-vv` (`meshtastic`/`httpx`) or `-vvv` (also `bleak`'s raw GATT
   chatter) before the subcommand, e.g. `mesh -vvv adopt --ble-scan`.
-- `mesh db verify` after any hand-edit; `mesh --version` to confirm which
-  build is on `PATH`; `which mesh` if you have more than one venv.
+- `mesh db verify` after any hand-edit. To see which installation runs,
+  use `which mesh` and `pip show meshprovision` (from that venv):
+  `mesh --version` prints the package version, which stays the same
+  between builds of one release.
