@@ -217,8 +217,7 @@ def test_db_verify_degrades_when_the_template_exceeds_the_admin_key_limit(
 
     result = invoke(runner, ["db", "verify", "--json"], env)
 
-    # Exit 4 (the database's own findings), not 5 (the provisioning-domain
-    # error the unguarded AdminKeyCapacityError produced).
+    # Exit 4 (the database's own findings), not the template's own error.
     assert result.exit_code == 4
     document = json.loads(result.stdout)
     kinds = {problem["kind"] for problem in document["problems"]}

@@ -12,6 +12,7 @@ import pytest
 from pydantic import BaseModel
 
 from meshprovision.config.template import (
+    TEMPLATE_VERSION,
     DefaultChannelSection,
     NeighborInfoSection,
     TelemetrySection,
@@ -21,7 +22,6 @@ from meshprovision.config.template import (
 )
 from meshprovision.enums import MODULES_WITHOUT_ENABLED
 from meshprovision.errors import (
-    AdminKeyCapacityError,
     NameCapacityError,
     NamePatternError,
     NamespaceExhaustedError,
@@ -500,11 +500,22 @@ def test_neighbor_info_in_disabled_options_is_rejected() -> None:
     assert "neighbor_info" in exc_info.value.hint
 
 
-def test_four_admin_nodes_raises_capacity_error() -> None:
-    with pytest.raises(AdminKeyCapacityError) as exc_info:
+def test_four_admin_nodes_is_a_template_error() -> None:
+    with pytest.raises(TemplateValidationError, match="admin_nodes has 4 entries") as exc_info:
         TemplateConfig(admin_nodes=["A1", "A2", "A3", "A4"])
-    assert exc_info.value.count == 4
-    assert exc_info.value.limit == 3
+    assert exc_info.value.field == "admin_nodes"
+    assert exc_info.value.exit_code == 2
+
+
+def test_a_template_version_newer_than_known_is_refused() -> None:
+    with pytest.raises(TemplateValidationError, match="Template version 2 is newer") as exc_info:
+        TemplateConfig(version=TEMPLATE_VERSION + 1)
+    assert exc_info.value.field == "version"
+    assert exc_info.value.exit_code == 2
+
+
+def test_the_known_template_version_loads() -> None:
+    assert TemplateConfig(version=TEMPLATE_VERSION).version == TEMPLATE_VERSION
 
 
 @pytest.mark.parametrize("ref", ["A1_pub", "A1_priv", "A1_psk"])
@@ -792,7 +803,7 @@ _ADMIN_CHANNEL: dict[str, Any] = {"security": {"admin_channel_enabled": True}}
         (_BOTH_LISTS, _LONG_SHORT_NAME, TemplateValidationError, "enabled_options"),
         (_LONG_SHORT_NAME, _LONG_LONG_NAME, NamePatternError, "short_name_pattern"),
         (_LONG_LONG_NAME, _FOUR_ADMINS, NamePatternError, "long_name_pattern"),
-        (_FOUR_ADMINS, _ADMIN_CHANNEL, AdminKeyCapacityError, None),
+        (_FOUR_ADMINS, _ADMIN_CHANNEL, TemplateValidationError, "admin_nodes"),
     ],
     ids=[
         "ranges-before-lists",

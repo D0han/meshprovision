@@ -787,8 +787,6 @@ class CliContext:
                 byte limit.
             NameCapacityError: If a name pattern's namespace capacity is
                 below the configured floor.
-            AdminKeyCapacityError: If more than three admin nodes are
-                configured.
         """
         template = template_module.load_template(self.settings.template_path)
         for warning in template.collect_warnings():

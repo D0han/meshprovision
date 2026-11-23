@@ -63,7 +63,6 @@ from meshprovision.db.observed_keys import (
 from meshprovision.enums import MODULE_SECTIONS, MODULES_WITHOUT_ENABLED, section_field_bounds
 from meshprovision.errors import (
     MAX_ADMIN_KEYS,
-    AdminKeyCapacityError,
     NameCapacityError,
     NamePatternError,
     TemplateValidationError,
@@ -81,6 +80,7 @@ from meshprovision.name_pattern import (
 
 __all__ = [
     "KNOWN_MODULE_OPTIONS",
+    "TEMPLATE_VERSION",
     "DefaultChannelSection",
     "DeviceSection",
     "LoraSection",
@@ -95,6 +95,9 @@ __all__ = [
 ]
 
 _logger = logging.getLogger(__name__)
+
+TEMPLATE_VERSION: Final[int] = 1
+"""The newest template ``version`` this meshprovision understands; a newer file is refused."""
 
 KNOWN_MODULE_OPTIONS: Final[frozenset[str]] = frozenset(MODULE_SECTIONS)
 """Module option names meshprovision recognizes. An option outside this
@@ -190,7 +193,7 @@ class TemplateConfig(BaseModel):
     mutates ``self``.
 
     Attributes:
-        version: Template schema version.
+        version: Template schema version, at most :data:`TEMPLATE_VERSION`.
         enabled_options: Module options to enable. An option may not
             appear in both this and :attr:`disabled_options`.
         disabled_options: Module options to disable.
@@ -316,10 +319,12 @@ class TemplateConfig(BaseModel):
             NameCapacityError: If the smaller name pattern's capacity is
                 below the configured floor and ``name_capacity_strict`` is
                 true.
-            AdminKeyCapacityError: If more than
+            TemplateValidationError: Also if ``version`` is newer than
+                :data:`TEMPLATE_VERSION`, or more than
                 :data:`~meshprovision.errors.MAX_ADMIN_KEYS` admin node
                 references are configured.
         """
+        self._check_version()
         self._check_firmware_field_ranges()
         self._check_option_lists()
         self._check_name_patterns()
@@ -438,22 +443,36 @@ class TemplateConfig(BaseModel):
             return "long_name_pattern", self.long_name_pattern, long_spec
         return "short_name_pattern", self.short_name_pattern, short
 
+    def _check_version(self) -> None:
+        """Refuse a template written for a newer meshprovision.
+
+        Raises:
+            TemplateValidationError: If ``version`` is newer than
+                :data:`TEMPLATE_VERSION`.
+        """
+        if self.version > TEMPLATE_VERSION:
+            raise TemplateValidationError(
+                f"Template version {self.version} is newer than this meshprovision "
+                f"understands (version {TEMPLATE_VERSION}).",
+                field="version",
+                hint="Upgrade meshprovision, or use a template written for this version.",
+            )
+
     def _check_admin_nodes(self) -> None:
         """Check the ``admin_nodes`` count, then each reference's format.
 
         Raises:
-            AdminKeyCapacityError: If more than
+            TemplateValidationError: If more than
                 :data:`~meshprovision.errors.MAX_ADMIN_KEYS` admin node
-                references are configured.
-            TemplateValidationError: If a reference is malformed, ends in
-                a reserved suffix, or starts with the observed prefix.
+                references are configured, or a reference is malformed,
+                ends in a reserved suffix, or starts with the observed
+                prefix.
         """
         if len(self.admin_nodes) > MAX_ADMIN_KEYS:
-            raise AdminKeyCapacityError(
+            raise TemplateValidationError(
                 f"admin_nodes has {len(self.admin_nodes)} entries; the firmware "
                 f"supports at most {MAX_ADMIN_KEYS}.",
-                count=len(self.admin_nodes),
-                limit=MAX_ADMIN_KEYS,
+                field="admin_nodes",
             )
         for ref in self.admin_nodes:
             problem = owner_ref_problem(ref)

@@ -434,6 +434,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A template with more than three `admin_nodes` is a template error,
+  exit code 2 like every other one (it was 5), and a template whose
+  `version` is newer than 1 is refused (exit code 2) instead of read
+  with fields this release does not know.
 - A missing database or template now hints at `mesh init` creating it at
   the path in use and at `--db-path`/`--template-path` (and their
   variables), not at copying repository files a pip or pipx install does

@@ -78,6 +78,11 @@ init`'s source for `config/template.yaml`) starts with:
 version: 1
 ```
 
+`version` 1 is the only template version so far; a newer one is refused
+(exit code `2`) rather than read with fields this meshprovision does not
+know. More than three `admin_nodes` is a template error (exit code `2`)
+as well.
+
 Numeric fields are checked against the firmware's own field range when
 the template loads (for example 0-4294967295 for the `*_secs`/`*_interval`
 settings); an out-of-range value is a template error, never a

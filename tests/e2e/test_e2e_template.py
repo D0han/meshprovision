@@ -165,3 +165,27 @@ def test_template_validate_refuses_an_out_of_range_field(
 
     assert result.exit_code == 2
     assert "device.node_info_broadcast_secs" in result.stderr
+
+
+def test_template_validate_four_admin_nodes_exits_two(
+    runner: CliRunner, env: dict[str, str], write_template: Callable[..., Path]
+) -> None:
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(write_template(admin_nodes=["A", "B", "C", "D"]))
+
+    result = invoke(runner, ["template", "validate"], env)
+
+    assert result.exit_code == 2
+    assert "admin_nodes has 4 entries" in result.stderr
+
+
+def test_template_validate_a_newer_version_exits_two(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    template = tmp_path / "newer.yaml"
+    template.write_text("version: 2\n", encoding="utf-8")
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(template)
+
+    result = invoke(runner, ["template", "validate"], env)
+
+    assert result.exit_code == 2
+    assert "Template version 2 is newer than this meshprovision understands" in result.stderr

@@ -67,8 +67,6 @@ def template_validate(ctx: CliContext, *, json_output: bool) -> None:
             limit.
         NameCapacityError: If a name pattern's namespace capacity is
             below the configured floor.
-        AdminKeyCapacityError: If more than three admin nodes are
-            configured.
     """
     tmpl = ctx.load_template()
 
