@@ -2093,3 +2093,61 @@ def test_loranet_self_uplink_seen_is_the_newest_of_the_nodes_own_topics(tmp_path
 
     assert obs.self_uplink_seen == datetime.fromtimestamp(1_700_000_900, tz=UTC)
     assert obs.neighbor_count == 0
+
+
+_LORANET_READ_AT = datetime.fromtimestamp(1_700_000_000, tz=UTC)
+_LORANET_NID = NodeId.from_hex("250643bc")
+_LORANET_FUTURE = 1_700_000_000 + 3600
+
+
+def test_loranet_future_device_metrics_time_does_not_hide_a_fresh_relay() -> None:
+    payload = {
+        "seenBy": {"msh/PL/2/e/LongFast/!aabbccdd": 1_700_000_000 - 600},
+        "lastDeviceMetrics": _LORANET_FUTURE,
+    }
+
+    obs = parse_node(_LORANET_NID, payload, observed_at=_LORANET_READ_AT)
+
+    assert obs.last_seen == datetime.fromtimestamp(1_700_000_000 - 600, tz=UTC)
+
+
+def test_loranet_future_map_report_time_is_not_last_seen() -> None:
+    payload = {"lastMapReport": _LORANET_FUTURE, "lastDeviceMetrics": 1_700_000_000 - 60}
+
+    obs = parse_node(_LORANET_NID, payload, observed_at=_LORANET_READ_AT)
+
+    assert obs.last_seen == datetime.fromtimestamp(1_700_000_000 - 60, tz=UTC)
+
+
+def test_loranet_one_future_seen_by_topic_is_left_out() -> None:
+    tracker = CoercionTracker()
+    payload = {
+        "seenBy": {
+            "msh/PL/2/e/LongFast/!aabbccdd": _LORANET_FUTURE,
+            "msh/PL/2/e/LongFast/!11223344": 1_700_000_000 - 120,
+        }
+    }
+
+    obs = parse_node(_LORANET_NID, payload, observed_at=_LORANET_READ_AT, coercion_tracker=tracker)
+
+    assert obs.last_seen == datetime.fromtimestamp(1_700_000_000 - 120, tz=UTC)
+    assert obs.seen_by_times == (datetime.fromtimestamp(1_700_000_000 - 120, tz=UTC),)
+    assert obs.neighbor_count == 2
+    assert tracker.failures == 0
+
+
+def test_loranet_future_own_topic_time_is_no_self_uplink() -> None:
+    payload = {"seenBy": {"msh/PL/2/e/LongFast/!250643bc": _LORANET_FUTURE}}
+
+    obs = parse_node(_LORANET_NID, payload, observed_at=_LORANET_READ_AT)
+
+    assert obs.self_uplink_seen is None
+    assert obs.last_seen is None
+
+
+def test_loranet_time_within_the_skew_is_kept() -> None:
+    payload = {"lastDeviceMetrics": 1_700_000_000 + 240}
+
+    obs = parse_node(_LORANET_NID, payload, observed_at=_LORANET_READ_AT)
+
+    assert obs.last_seen == datetime.fromtimestamp(1_700_000_000 + 240, tz=UTC)

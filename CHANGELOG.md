@@ -699,6 +699,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A loranet.pl time ahead of the clock (a gateway's `seenBy` time,
+  `lastDeviceMetrics` or `lastMapReport` more than 5 minutes after the
+  read) no longer becomes the node's last-seen time. It used to win, and
+  the merge then dropped it whole, so a node heard minutes ago showed as
+  never seen in `mesh status` and `mesh health` (and failed
+  `--fail-on-offline`); a future time on the node's own topic also showed
+  a green "recent" self-uplink mark.
 - `mesh network` no longer fails for good when a region's raw packets
   outgrow their size cap (now 128 MiB, up from 48 MiB, the HTTP client's
   ceiling; other responses keep 64 MiB) (`the response body is larger than 50331648

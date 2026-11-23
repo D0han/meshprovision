@@ -26,6 +26,7 @@ from pydantic import ValidationError
 
 from meshprovision.datasources.base import SOURCE_LORANET, BaseHTTPDataSource, require_json_object
 from meshprovision.datasources.models import (
+    LAST_SEEN_FUTURE_SKEW,
     MAX_SEEN_BY_TOPICS,
     CoercionTracker,
     NodeObservation,
@@ -541,7 +542,7 @@ def _is_own_topic(topic: str, node_id: NodeId) -> bool:
 
 
 def _parse_seen_by(
-    raw: object, tracker: CoercionTracker, node_id: NodeId
+    raw: object, tracker: CoercionTracker, node_id: NodeId, latest: datetime
 ) -> tuple[int | None, tuple[str, ...], tuple[datetime, ...], datetime | None, datetime | None]:
     """Derive ``neighbor_count``, ``seen_by``, its times, ``last_seen`` and the self uplink.
 
@@ -555,6 +556,9 @@ def _parse_seen_by(
             drift and is never counted.
         node_id: The node itself, whose own gateway topic is not another
             node hearing it.
+        latest: The newest believable relay time; a later one (a gateway
+            with a wrong clock) is left out of every result, as if the
+            topic had no time, and is not counted as a coercion failure.
 
     Returns:
         A ``(neighbor_count, seen_by, seen_by_times, last_seen, self_uplink)``
@@ -566,7 +570,7 @@ def _parse_seen_by(
         is no other node hearing it, so ``neighbor_count``, ``seen_by`` and
         ``seen_by_times`` leave it out, but its time still counts for
         ``last_seen`` (the node did send a packet). ``seen_by_times`` holds the parsed relay time of
-        every topic (unparsable values left out), uncapped, so the status
+        every topic (unparsable and future values left out), so the status
         report can count the topics seen within a day, a week and a month.
     """
     if raw is None:
@@ -583,10 +587,16 @@ def _parse_seen_by(
     parsed = {topic: parse_epoch(value) for topic, value in heard.items()}
     if any(time is None for time in parsed.values()):
         tracker.record_failure()
+    parsed = {topic: _not_after(time, latest) for topic, time in parsed.items()}
     times = tuple(t for topic in gateways if (t := parsed[topic]) is not None)
     last_seen = max((time for time in parsed.values() if time is not None), default=None)
     own = [t for topic in heard if _is_own_topic(str(topic), node_id) and (t := parsed[topic])]
     return neighbor_count, seen_by, times, last_seen, max(own, default=None)
+
+
+def _not_after(time: datetime | None, latest: datetime) -> datetime | None:
+    """Return ``time`` unless it is after ``latest``."""
+    return time if time is not None and time <= latest else None
 
 
 def parse_node(
@@ -632,8 +642,13 @@ def parse_node(
         latitude = None
         longitude = None
 
+    # loranet.pl cannot have heard the node after it was read: a later time
+    # is a wrong gateway or node clock and must not become last_seen, or a
+    # merge (which drops a future last_seen whole) would forget the node's
+    # genuine newest activity.
+    latest = observed_at + LAST_SEEN_FUTURE_SKEW
     neighbor_count, seen_by, seen_by_times, seen_by_last_seen, self_uplink_seen = _parse_seen_by(
-        payload.get("seenBy"), tracker, node_id
+        payload.get("seenBy"), tracker, node_id, latest
     )
     last_device_metrics = tracker.coerce(payload.get("lastDeviceMetrics"), parse_epoch)
     last_map_report = tracker.coerce(payload.get("lastMapReport"), parse_epoch)
@@ -645,10 +660,8 @@ def parse_node(
     # different signal (when the node last rebooted, not when it was last
     # seen) and lorastats' own last_boot is never folded into its last_seen
     # either.
-    last_seen = max(
-        (ts for ts in (seen_by_last_seen, last_device_metrics, last_map_report) if ts is not None),
-        default=None,
-    )
+    candidates = (seen_by_last_seen, last_device_metrics, last_map_report)
+    last_seen = max((ts for ts in candidates if ts is not None and ts <= latest), default=None)
 
     raw_hw_model = tracker.coerce(payload.get("hwModel"), _typed_enum_raw)
     raw_role = tracker.coerce(payload.get("role"), _typed_enum_raw)

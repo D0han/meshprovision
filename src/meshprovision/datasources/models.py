@@ -117,8 +117,10 @@ MAX_SEEN_BY_TOPICS: Final[int] = 32
 LAST_SEEN_FUTURE_SKEW: Final[timedelta] = timedelta(minutes=5)
 """How far ahead of the clock a ``last_seen`` or ``last_device_metrics`` may
 be; a later one (a gateway with a wrong clock, a corrupt epoch) is ignored
-by :func:`without_future_times`, and lorastats' parse_node drops a
-``LastSeen``/``LastBoot`` that far after the record was read."""
+by :func:`without_future_times`, lorastats' parse_node drops a
+``LastSeen``/``LastBoot`` that far after the record was read, and loranet's
+drops such a relay, device-metrics or map-report time before choosing
+``last_seen``."""
 
 
 class NodeObservation(BaseModel):
