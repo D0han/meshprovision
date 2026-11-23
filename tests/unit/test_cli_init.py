@@ -132,3 +132,25 @@ def test_reports_no_next_steps_when_nothing_was_created(tmp_path: Path) -> None:
 
     assert isinstance(ctx.err.file, io.StringIO)
     assert "Next steps:" not in ctx.err.file.getvalue()
+
+
+def test_a_non_interactive_confirmation_names_yes_and_contact(tmp_path: Path) -> None:
+    ctx = _context(tmp_path, assume_yes=False, non_interactive=True)
+    status = inspect_setup(ctx.settings, env_file=tmp_path / ".env", cwd=tmp_path)
+
+    with pytest.raises(NonInteractiveError) as exc_info:
+        run_setup(ctx, status, banner=True)
+
+    assert exc_info.value.hint == (
+        "Pass --yes --contact ADDRESS to create the missing files without prompting."
+    )
+
+
+def test_a_non_interactive_contact_prompt_names_the_contact_option(tmp_path: Path) -> None:
+    ctx = _context(tmp_path, assume_yes=True, non_interactive=True)
+    status = inspect_setup(ctx.settings, env_file=tmp_path / ".env", cwd=tmp_path)
+
+    with pytest.raises(NonInteractiveError) as exc_info:
+        run_setup(ctx, status)
+
+    assert exc_info.value.hint == "Pass --contact ADDRESS (your own email address or URL)."

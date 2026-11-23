@@ -61,6 +61,8 @@ NEXT_STEPS: Final[tuple[str, ...]] = (
 
 _CONTACT_PROMPT = "Contact address (email or URL) for lorastats.pl"
 _CONTACT_ATTEMPTS = 3
+_CONTACT_HINT = "Pass --contact ADDRESS (your own email address or URL)."
+_YES_HINT = "Pass --yes --contact ADDRESS to create the missing files without prompting."
 
 
 @dataclass(frozen=True, slots=True)
@@ -148,7 +150,7 @@ def _prompt_for_contact(ctx: CliContext) -> str:
             is still blank/invalid.
     """
     for attempt in range(_CONTACT_ATTEMPTS):
-        raw = ctx.prompt(_CONTACT_PROMPT)
+        raw = ctx.prompt(_CONTACT_PROMPT, hint=_CONTACT_HINT)
         try:
             return validate_contact(raw)
         except SettingsError as exc:
@@ -227,7 +229,8 @@ def run_setup(
         ctx.info(f"No meshprovision setup found in {cwd_hint}.")
         for item in missing:
             ctx.info(f"  {_shown(item.path)}  (missing)", soft_wrap=True)
-        if not ctx.confirm(f"Create the missing file(s) above in {cwd_hint}?", default=True):
+        question = f"Create the missing file(s) above in {cwd_hint}?"
+        if not ctx.confirm(question, default=True, hint=_YES_HINT):
             ctx.info("Skipped. Run `mesh init` any time to create them.")
             return SetupOutcome(
                 created=(),
@@ -241,7 +244,9 @@ def run_setup(
     used_contact = contact
     env_created = False
     for item in missing:
-        if not banner and not ctx.confirm(f"Create {_shown(item.path)}?", default=True):
+        if not banner and not ctx.confirm(
+            f"Create {_shown(item.path)}?", default=True, hint=_YES_HINT
+        ):
             declined.append(item.path)
             continue
         answer = _create_item(ctx, item, contact=used_contact)

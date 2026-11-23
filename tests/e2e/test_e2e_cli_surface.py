@@ -112,7 +112,7 @@ def test_missing_database_file_exits_four_with_hint(
     result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
 
     assert result.exit_code == 4
-    assert "nodes_db.example.ods" in result.stderr
+    assert "Run `mesh init` to create an empty database at" in result.stderr
 
 
 def test_provision_and_bootstrap_share_an_identical_transport_surface() -> None:

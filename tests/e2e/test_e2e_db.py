@@ -1240,3 +1240,18 @@ def test_db_backup_list_through_a_differently_named_symlink_shows_every_backup(
     assert document == json.loads(via_real.stdout)
     assert Path(document["known_good"]["path"]).name == "nodes_db.known-good.ods"
     assert document["known_good"]["provenance"] == "verified"
+
+
+def test_a_missing_database_hint_names_mesh_init_and_the_path(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path
+) -> None:
+    missing = tmp_path / "elsewhere" / "nodes.ods"
+    env = {**env, "MESHPROVISION_DB_PATH": str(missing)}
+
+    result = invoke(runner, ["db", "list"], env)
+
+    assert result.exit_code != 0
+    assert f"Node database not found: {missing}" in result.stderr
+    assert f"Run `mesh init` to create an empty database at {missing}" in result.stderr
+    assert "--db-path or MESHPROVISION_DB_PATH" in result.stderr
+    assert "nodes_db.example.ods" not in result.stderr

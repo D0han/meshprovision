@@ -825,7 +825,9 @@ def test_consistency_checks_report_the_first_group_in_documented_order(
 def test_load_template_missing_path_raises_with_hint() -> None:
     with pytest.raises(TemplateValidationError) as exc_info:
         load_template("/nonexistent/path/template.yaml")
-    assert "template.example.yaml" in (exc_info.value.hint or "")
+    assert (exc_info.value.hint or "").startswith(
+        "Run `mesh init` to create a starter template at /nonexistent/path/template.yaml"
+    )
 
 
 def test_load_template_text_malformed_yaml_raises() -> None:

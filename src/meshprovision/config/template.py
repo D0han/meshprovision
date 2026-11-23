@@ -677,8 +677,8 @@ def load_template(path: Path | str) -> TemplateConfig:
             f"Template file not found: {resolved}",
             field=None,
             hint=(
-                "Run `mesh init`, copy src/meshprovision/examples/template.example.yaml "
-                "to config/template.yaml and edit it, or set MESHPROVISION_TEMPLATE_PATH."
+                f"Run `mesh init` to create a starter template at {resolved}, or point "
+                "--template-path or MESHPROVISION_TEMPLATE_PATH at your template."
             ),
         )
     try:

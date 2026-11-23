@@ -53,6 +53,10 @@ def test_template_validate_missing_file_exits_two(
 
     assert result.exit_code == 2
     assert "Template file not found" in result.stderr
+    missing = tmp_path / "does-not-exist.yaml"
+    assert f"Run `mesh init` to create a starter template at {missing}" in result.stderr
+    assert "--template-path or MESHPROVISION_TEMPLATE_PATH" in result.stderr
+    assert "src/meshprovision/examples" not in result.stderr
 
 
 def test_template_validate_malformed_yaml_exits_two(

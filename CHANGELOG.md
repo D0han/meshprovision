@@ -434,6 +434,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A missing database or template now hints at `mesh init` creating it at
+  the path in use and at `--db-path`/`--template-path` (and their
+  variables), not at copying repository files a pip or pipx install does
+  not have. A non-interactive `mesh init` names `--yes --contact ADDRESS`
+  or `--contact ADDRESS`, whichever it needs, instead of a generic hint.
 - Runtime dependencies now declare lower bounds: protobuf 6.31 (an
   older one made every live configuration read fail), click 8.2, httpx
   0.25, pydantic 2.0, structlog 22.1, cryptography 38.0.4, rich 13.3.1,

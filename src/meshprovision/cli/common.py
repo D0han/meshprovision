@@ -645,13 +645,15 @@ class CliContext:
             terminal_safe(text, allow_newlines=True), markup=False, highlight=False, soft_wrap=True
         )
 
-    def confirm(self, question: str, *, default: bool = False) -> bool:
+    def confirm(self, question: str, *, default: bool = False, hint: str | None = None) -> bool:
         """Ask a yes/no question, honouring ``assume_yes`` and ``non_interactive``.
 
         Args:
             question: The question to ask.
             default: The default answer if the operator just presses
                 enter.
+            hint: What a non-interactive run should pass instead; by
+                default, ``--yes``.
 
         Returns:
             ``True`` immediately if :attr:`assume_yes` is set (logged at
@@ -670,17 +672,19 @@ class CliContext:
             raise NonInteractiveError(
                 f"Confirmation required but this run is non-interactive: {question}",
                 prompt=question,
-                hint="Pass --yes to confirm without prompting.",
+                hint=hint or "Pass --yes to confirm without prompting.",
             )
         return bool(click.confirm(question, default=default, err=True))
 
-    def prompt(self, question: str, *, default: str | None = None) -> str:
+    def prompt(self, question: str, *, default: str | None = None, hint: str | None = None) -> str:
         """Ask an open-ended question, honouring ``non_interactive``.
 
         Args:
             question: The question to ask.
             default: The default answer if the operator just presses
                 enter.
+            hint: The option a non-interactive run should pass instead; by
+                default, a generic "use a command-line option".
 
         Returns:
             The operator's stripped answer.
@@ -692,7 +696,7 @@ class CliContext:
             raise NonInteractiveError(
                 f"Input required but this run is non-interactive: {question}",
                 prompt=question,
-                hint="Supply the value via a command-line option instead.",
+                hint=hint or "Supply the value via a command-line option instead.",
             )
         answer = click.prompt(
             question, default=default, err=True, show_default=default is not None, type=str
@@ -966,8 +970,8 @@ class CliContext:
                 raise SchemaError(
                     f"Node database not found: {path}",
                     hint=(
-                        "Run `mesh init`, copy data/nodes_db.example.ods to "
-                        "data/nodes_db.ods, or set MESHPROVISION_DB_PATH."
+                        f"Run `mesh init` to create an empty database at {path}, or point "
+                        "--db-path or MESHPROVISION_DB_PATH at your database."
                     ),
                 )
             else:
