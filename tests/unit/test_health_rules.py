@@ -6,7 +6,7 @@ import dataclasses
 
 import pytest
 
-from meshprovision.health import rules
+from meshprovision.health import importance, rules
 from meshprovision.health.history import GatewayCheck, NodeHistory
 from meshprovision.health.metrics import BatteryTrend, NodeMetrics, RelayShare, compute_metrics
 from meshprovision.health.packets import FUTURE_SKEW_SECONDS
@@ -558,7 +558,7 @@ def test_importance_of_a_gateway(metrics: NodeMetrics, expected: int) -> None:
     ],
 )
 def test_importance_levels(score: int, level: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(rules, "_ROUTER_POINTS", score)
+    monkeypatch.setattr(importance, "_ROUTER_POINTS", score)
 
     assert rank_importance({_NODE: _m()}, {_NODE: "ROUTER_LATE"})[_NODE].level == level
 
