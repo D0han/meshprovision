@@ -434,6 +434,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A template enum value mesh does not know (`lora.region`,
+  `modem_preset`, `device.role`, ...) now lists every valid name, not
+  the first eight starting with `UNSET`, and suggests the closest ones;
+  `region: PL` (or `POLAND`, `POLSKA`) hints that Poland uses `EU_868`.
 - A template with more than three `admin_nodes` is a template error,
   exit code 2 like every other one (it was 5), and a template whose
   `version` is newer than 1 is refused (exit code 2) instead of read

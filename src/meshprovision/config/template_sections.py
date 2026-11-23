@@ -12,6 +12,7 @@ owns every cross-section consistency check.
 
 from __future__ import annotations
 
+import difflib
 from collections.abc import Mapping
 from typing import Final
 
@@ -109,11 +110,28 @@ def _canonicalize_enum_field(value: object, *, table: EnumTable, field: str) -> 
     try:
         return table.to_name(value)
     except EnumMappingError as exc:
-        known = ", ".join(table.names()[:8])
+        valid = [name for name in table.names() if name != "UNSET"]
         raise TemplateValidationError(
-            f"{field} {value!r} is not a known {table.name}. Known values include: {known}.",
+            f"{field} {value!r} is not a known {table.name}. Valid values: {', '.join(valid)}.",
             field=field,
+            hint=_enum_hint(value, valid, field=field),
         ) from exc
+
+
+_POLAND_REGION_ALIASES: Final[frozenset[str]] = frozenset({"PL", "POLAND", "POLSKA"})
+"""What a Polish operator may write for ``lora.region``; the region code is ``EU_868``."""
+
+
+def _enum_hint(value: int | str, valid: list[str], *, field: str) -> str | None:
+    """Suggest the value meant: ``EU_868`` for Poland, else the closest valid names."""
+    text = str(value).strip().upper()
+    if field == "lora.region" and text in _POLAND_REGION_ALIASES:
+        return (
+            "Poland uses EU_868: there is no PL region code (see 'Region: EU_868, not PL' "
+            "in the configuration docs, configuration.md#region-eu_868-not-pl)."
+        )
+    close = difflib.get_close_matches(text, valid, n=3)
+    return f"Did you mean {' or '.join(close)}?" if close else None
 
 
 class DeviceSection(BaseModel):

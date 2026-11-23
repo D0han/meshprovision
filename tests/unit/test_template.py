@@ -996,3 +996,30 @@ def test_position_precision_is_at_most_32_bits(precision: int, loads: bool) -> N
     else:
         with pytest.raises(TemplateValidationError):
             load_template_text(text)
+
+
+@pytest.mark.parametrize("region", ["PL", "poland", "Polska"])
+def test_a_polish_region_name_hints_at_eu_868(region: str) -> None:
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig.model_validate({"lora": {"region": region}})
+
+    assert exc_info.value.hint is not None
+    assert exc_info.value.hint.startswith("Poland uses EU_868")
+    assert "configuration.md#region-eu_868-not-pl" in exc_info.value.hint
+
+
+def test_an_unknown_enum_value_lists_every_valid_name_but_unset() -> None:
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig.model_validate({"lora": {"region": "XX"}})
+
+    message = str(exc_info.value)
+    assert "EU_868" in message
+    assert "UNSET" not in message
+
+
+def test_a_misspelled_enum_value_suggests_the_closest_names() -> None:
+    with pytest.raises(TemplateValidationError) as exc_info:
+        TemplateConfig.model_validate({"lora": {"modem_preset": "LONG_FASTT"}})
+
+    assert exc_info.value.hint is not None
+    assert exc_info.value.hint.startswith("Did you mean LONG_FAST")
