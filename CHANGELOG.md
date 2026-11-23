@@ -434,6 +434,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A global option given after the subcommand (`mesh status --no-cache`)
+  now says it is a global option and shows where it goes
+  (`mesh --no-cache status`), instead of only "No such option".
 - A template enum value mesh does not know (`lora.region`,
   `modem_preset`, `device.role`, ...) now lists every valid name, not
   the first eight starting with `UNSET`, and suggests the closest ones;

@@ -200,6 +200,57 @@ class MeshCommand(click.Command):
         if self.help is not None:
             self.help = clean_help_text(self.help)
 
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Parse, saying where a global option goes when it was put after a subcommand.
+
+        Args:
+            ctx: This command's freshly built context.
+            args: The raw arguments remaining for this command to parse.
+
+        Returns:
+            Whatever :meth:`click.Command.parse_args` returns.
+
+        Raises:
+            click.NoSuchOption: For an unknown option; when it is one of the
+                root group's (``mesh --no-cache status``, not ``mesh status
+                --no-cache``), the message says so.
+        """
+        try:
+            return super().parse_args(ctx, args)
+        except click.NoSuchOption as exc:
+            option = _root_options(ctx).get(exc.option_name) if ctx.parent else None
+            if option is None:
+                raise
+            subcommand = ctx.command_path.split(" ", 1)[-1]
+            usage = f"{exc.option_name} {_value_name(option)}".rstrip()
+            raise click.NoSuchOption(
+                exc.option_name,
+                message=(
+                    f"No such option {exc.option_name!r}: it is a global option, so put it "
+                    f'before the subcommand, as in "mesh {usage} {subcommand}".'
+                ),
+                ctx=ctx,
+            ) from None
+
+
+def _root_options(ctx: click.Context) -> dict[str, click.Option]:
+    """The root group's own options by every spelling (``--db-path``, ``-v``, ...)."""
+    return {
+        name: param
+        for param in ctx.find_root().command.params
+        if isinstance(param, click.Option)
+        for name in (*param.opts, *param.secondary_opts)
+    }
+
+
+def _value_name(option: click.Option) -> str:
+    """The placeholder for an option's value in an example (``PATH``), or ``""`` for a flag."""
+    if option.is_flag or option.count:
+        return ""
+    if option.metavar:
+        return option.metavar
+    return "PATH" if isinstance(option.type, click.Path) else "VALUE"
+
 
 class MeshGroup(MeshCommand, click.Group):
     """A :class:`click.Group` that mints :class:`MeshCommand`/:class:`MeshGroup`.

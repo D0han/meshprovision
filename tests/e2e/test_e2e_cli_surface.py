@@ -140,3 +140,32 @@ def test_adopt_help_lists_the_from_backup_surface(runner: CliRunner, env: dict[s
     assert result.exit_code == 0
     for flag in ("--from-backup", "--node-id", "--no-lookup", "--no-channel-psk"):
         assert flag in result.output
+
+
+@pytest.mark.parametrize(
+    ("args", "option", "example"),
+    [
+        (["status", "--no-cache"], "--no-cache", "mesh --no-cache status"),
+        (["db", "list", "--db-path", "x.ods"], "--db-path", "mesh --db-path PATH db list"),
+        (["status", "--cache-ttl", "60"], "--cache-ttl", "mesh --cache-ttl VALUE status"),
+        (["health", "-v"], "-v", "mesh -v health"),
+    ],
+)
+def test_a_global_option_after_the_subcommand_says_where_it_goes(
+    runner: CliRunner, env: dict[str, str], args: list[str], option: str, example: str
+) -> None:
+    result = invoke(runner, args, env)
+
+    assert result.exit_code == 2
+    assert f"No such option '{option}': it is a global option" in result.stderr
+    assert f'"{example}"' in result.stderr
+
+
+def test_an_unknown_option_that_is_not_global_keeps_clicks_message(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    result = invoke(runner, ["status", "--no-such-thing"], env)
+
+    assert result.exit_code == 2
+    assert "No such option '--no-such-thing'." in result.stderr
+    assert "global option" not in result.stderr
