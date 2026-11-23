@@ -45,7 +45,7 @@ from meshprovision.crypto import weakkeys
 from meshprovision.db import schema
 from meshprovision.db.schema import KeyType
 from meshprovision.errors import WeakKeySeverity
-from meshprovision.nodeid import NodeId
+from meshprovision.nodeid import NODE_ID_HEX_WIDTH, NodeId
 
 if TYPE_CHECKING:
     from meshprovision.config.template import TemplateConfig
@@ -263,7 +263,7 @@ def build_admin_table(summaries: tuple[AdminSummary, ...]) -> Table:
     table.add_column("Fingerprint")
     table.add_column("Private held")
     table.add_column("In template")
-    table.add_column("Node")
+    table.add_column("Node", no_wrap=True, min_width=NODE_ID_HEX_WIDTH)
     table.add_column("Audit")
     table.add_column("Authorized on")
     table.add_column("Pending on")

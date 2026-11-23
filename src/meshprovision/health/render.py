@@ -40,6 +40,7 @@ from meshprovision.health.rules import (
     Verdict,
     chatty_limit,
 )
+from meshprovision.nodeid import NODE_ID_COLUMN_WIDTH
 from meshprovision.status import timefmt
 from meshprovision.status.cadence import CadenceSource, interval_text
 from meshprovision.status.merge import humanize_age
@@ -203,7 +204,10 @@ def build_table(report: HealthReport) -> Table:
         ("Reasons", "left"),
     )
     for column, justify in columns:
-        table.add_column(column, justify=justify)
+        node = column == "Node"
+        table.add_column(
+            column, justify=justify, no_wrap=node, min_width=NODE_ID_COLUMN_WIDTH if node else None
+        )
     now = report.generated_at
     for health in report.nodes:
         reasons = "; ".join(f.text for f in health.findings[:_MAX_REASONS])

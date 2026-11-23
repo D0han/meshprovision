@@ -31,6 +31,7 @@ from meshprovision.errors import NodeIdError
 __all__ = [
     "BROADCAST_NODE_NUM",
     "KEY_DERIVED_ID_KEY_BYTES",
+    "NODE_ID_COLUMN_WIDTH",
     "NODE_ID_HEX_WIDTH",
     "NODE_ID_MAX",
     "RESERVED_NODE_NUMS_BELOW",
@@ -49,6 +50,9 @@ NODE_ID_MAX: Final[int] = 0xFFFFFFFF
 
 NODE_ID_HEX_WIDTH: Final[int] = 8
 """Width, in hex digits, of the zero-padded hex form of a node id."""
+
+NODE_ID_COLUMN_WIDTH: Final[int] = NODE_ID_HEX_WIDTH + 1
+"""Width of a table column showing :attr:`NodeId.display` (``!`` and the hex digits)."""
 
 BROADCAST_NODE_NUM: Final[int] = NODE_ID_MAX
 """The broadcast address (firmware ``NODENUM_BROADCAST``); never a node's own id."""

@@ -16,6 +16,12 @@ to STDERR, and so does the human-readable result of `mesh init`, `mesh db list`,
 and `mesh template validate` (with `--json`, their document goes to
 STDOUT). So `mesh status --json | jq .` never needs filtering.
 
+Tables fit the terminal width, or 80 columns when the output is piped:
+long cells wrap or are cut with `…`, though node ids are never cut. Set
+`COLUMNS` (for example `COLUMNS=200 mesh db list`) for wider tables, or use
+`--json` for everything. Messages on STDERR are never wrapped, so a path
+or a command in them stays on one line for copying.
+
 ## Global options
 
 | Option | Meaning |

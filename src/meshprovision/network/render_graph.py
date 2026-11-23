@@ -38,6 +38,7 @@ from meshprovision.network.render_common import (
     refresh_lines,
     text_cell,
 )
+from meshprovision.nodeid import NODE_ID_HEX_WIDTH
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -146,7 +147,8 @@ def _ours_table(graph: RelayGraph, known: Mapping[str, str]) -> Table:
         "Gateways",
         "Note",
     ):
-        grid.add_column(column)
+        node = column == "Node"
+        grid.add_column(column, no_wrap=node, min_width=NODE_ID_HEX_WIDTH if node else None)
     for entry in graph.ours:
         cells = (
             entry.node,

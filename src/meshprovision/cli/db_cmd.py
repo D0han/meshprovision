@@ -77,6 +77,7 @@ from meshprovision.errors import (
     MeshprovisionError,
     SchemaError,
 )
+from meshprovision.nodeid import NODE_ID_HEX_WIDTH
 from meshprovision.termsafe import terminal_safe
 
 if TYPE_CHECKING:
@@ -608,7 +609,7 @@ def db_list(ctx: CliContext, *, json_output: bool) -> None:
         return
 
     table = Table(box=box.SIMPLE_HEAVY, header_style="bold")
-    table.add_column("Node")
+    table.add_column("Node", no_wrap=True, min_width=NODE_ID_HEX_WIDTH)
     table.add_column("Short")
     table.add_column("Long")
     table.add_column("Mgmt")

@@ -1255,3 +1255,20 @@ def test_a_missing_database_hint_names_mesh_init_and_the_path(
     assert f"Run `mesh init` to create an empty database at {missing}" in result.stderr
     assert "--db-path or MESHPROVISION_DB_PATH" in result.stderr
     assert "nodes_db.example.ods" not in result.stderr
+
+
+def test_db_list_keeps_node_ids_whole_on_a_narrow_terminal(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(
+        nodes=[
+            NodeRecord(
+                node_id="deadbe01", short_name="MT00", long_name="Meshtastic MT00", region="EU_868"
+            )
+        ]
+    )
+
+    result = invoke(runner, ["db", "list"], {**env, "COLUMNS": "60"})
+
+    assert result.exit_code == 0
+    assert "deadbe01" in result.stderr

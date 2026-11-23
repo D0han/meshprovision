@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import io
 import json
@@ -519,3 +520,17 @@ class TestCliContextKnownBadKeys:
         )
 
         assert set(SMALL_ORDER_POINTS) <= ctx.known_bad_keys()
+
+
+@pytest.mark.parametrize("method", ["info", "success", "warn", "error"])
+def test_stderr_messages_keep_a_long_path_on_one_line(tmp_path: Path, method: str) -> None:
+    buf = io.StringIO()
+    ctx = dataclasses.replace(
+        _context(tmp_path / "t.yaml", buf), err=Console(file=buf, no_color=True, width=40)
+    )
+    path = "/srv/meshprovision/" + "deep/" * 12 + "nodes_db.ods"
+
+    getattr(ctx, method)(f"Run chmod 600 {path} now.")
+
+    assert f"chmod 600 {path} now." in buf.getvalue()
+    assert "\n" not in buf.getvalue().rstrip("\n")

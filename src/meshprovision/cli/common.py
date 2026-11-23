@@ -290,7 +290,9 @@ def _emit_error(text: str) -> None:
             depth before being printed.
     """
     safe_text = terminal_safe(text, allow_newlines=True)
-    _ERR_CONSOLE.print(redact.scrub_text(safe_text), style="red", markup=False, highlight=False)
+    _ERR_CONSOLE.print(
+        redact.scrub_text(safe_text), style="red", markup=False, highlight=False, soft_wrap=True
+    )
 
 
 P = ParamSpec("P")
@@ -567,15 +569,16 @@ class CliContext:
         """
         return replace(self, settings=settings)
 
-    def info(self, message: str, *, soft_wrap: bool = False) -> None:
+    def info(self, message: str, *, soft_wrap: bool = True) -> None:
         """Print an informational message to stderr, unstyled.
 
         Args:
             message: The message to print. Passed through
                 :func:`~meshprovision.termsafe.terminal_safe` first --
                 this may echo a device- or datasource-reported string.
-            soft_wrap: Print it on one line, never wrapped at the
-                console width (for a line carrying a path).
+            soft_wrap: Leave long lines to the terminal instead of wrapping
+                them at the console width, so a path or command stays whole
+                (the default).
         """
         self.err.print(
             terminal_safe(message, allow_newlines=True),
@@ -597,6 +600,7 @@ class CliContext:
             style="yellow",
             markup=False,
             highlight=False,
+            soft_wrap=True,
         )
 
     def error(self, message: str) -> None:
@@ -612,17 +616,19 @@ class CliContext:
             style="red",
             markup=False,
             highlight=False,
+            soft_wrap=True,
         )
 
-    def success(self, message: str, *, soft_wrap: bool = False) -> None:
+    def success(self, message: str, *, soft_wrap: bool = True) -> None:
         """Print a success message to stderr, styled green.
 
         Args:
             message: The message to print. Passed through
                 :func:`~meshprovision.termsafe.terminal_safe` first --
                 this may echo a device- or datasource-reported string.
-            soft_wrap: Print it on one line, never wrapped at the
-                console width (for a line carrying a path).
+            soft_wrap: Leave long lines to the terminal instead of wrapping
+                them at the console width, so a path or command stays whole
+                (the default).
         """
         self.err.print(
             terminal_safe(message, allow_newlines=True),

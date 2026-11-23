@@ -37,7 +37,7 @@ from meshprovision.network.render_common import (
     refresh_lines,
     text_cell,
 )
-from meshprovision.nodeid import relay_byte
+from meshprovision.nodeid import NODE_ID_HEX_WIDTH, relay_byte
 from meshprovision.termsafe import json_dumps_safe, terminal_safe
 
 if TYPE_CHECKING:
@@ -84,7 +84,8 @@ def _impact_table(fleet: FleetImpact, known: Mapping[str, str]) -> Table:
         "Only gateway for",
         "Level",
     ):
-        grid.add_column(column)
+        node = column == "Node"
+        grid.add_column(column, no_wrap=node, min_width=NODE_ID_HEX_WIDTH if node else None)
     for impact in fleet.nodes:
         cells = (
             impact.node,

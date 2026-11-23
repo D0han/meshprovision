@@ -26,6 +26,7 @@ from rich.console import Console, JustifyMethod, RenderableType
 from rich.table import Table
 from rich.text import Text
 
+from meshprovision.nodeid import NODE_ID_COLUMN_WIDTH
 from meshprovision.status import timefmt
 from meshprovision.status.cadence import Cadence, CadenceSource, interval_text
 from meshprovision.status.merge import Availability, MergedNode, Thresholds, humanize_age
@@ -598,7 +599,10 @@ def build_table(
 
     table = Table(title=None, box=box.SIMPLE_HEAVY, header_style="bold")
     for header, justify in columns:
-        table.add_column(header, justify=justify)
+        node = header == "Node"
+        table.add_column(
+            header, justify=justify, no_wrap=node, min_width=NODE_ID_COLUMN_WIDTH if node else None
+        )
     for row in rows:
         table.add_row(*row)
     table.caption = _caption(report, extra)
