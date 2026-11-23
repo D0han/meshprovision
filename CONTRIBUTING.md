@@ -54,7 +54,7 @@ pre-commit run detect-secrets --all-files
 pytest --cov --cov-report=term-missing
 ```
 
-- Coverage floor is 85% (`[tool.coverage.report] fail_under` in
+- Coverage floor is 97% (`[tool.coverage.report] fail_under` in
   `pyproject.toml`); the suite currently sits well above it. A PR that
   drops the project below the floor won't pass CI.
 - Tests are marked `unit` (fast, pure-logic, no I/O) or `e2e` (full CLI

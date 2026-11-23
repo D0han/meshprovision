@@ -167,7 +167,7 @@ ruff check .
 ruff format --check .
 mypy --strict src
 pre-commit run detect-secrets --all-files
-pytest --cov --cov-report=term-missing --cov-fail-under=85
+pytest --cov --cov-report=term-missing --cov-fail-under=97
 ```
 
 A separate `package` job builds the sdist/wheel (`python -m build`),
@@ -178,7 +178,7 @@ before you push. Run `pre-commit` from the same virtualenv where you ran
 `pip install -e ".[dev]"` — the mypy and no-tracked-secrets hooks are
 `language: system` and use the tools already installed there.
 
-Coverage floor is 85% (`[tool.coverage.report] fail_under`). CI runs the
+Coverage floor is 97% (`[tool.coverage.report] fail_under`). CI runs the
 3.11/3.12/3.13 matrix plus a package-build job.
 
 Regenerate the example database: `python scripts/generate_example_db.py`.

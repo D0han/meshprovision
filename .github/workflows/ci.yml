@@ -80,7 +80,7 @@ jobs:
         #
         # `--cov` with no value picks up [tool.coverage.run] source =
         # ["src/meshprovision"] from pyproject.toml. [tool.coverage.report]
-        # fail_under = 85 already enforces the floor; --cov-fail-under=85 is
+        # fail_under = 97 already enforces the floor; --cov-fail-under=97 is
         # passed anyway so the floor is visible directly in the CI log and in
         # this file.
         #
@@ -89,7 +89,7 @@ jobs:
         # _isolated_cwd_and_env fixture strips every MESHPROVISION_* variable
         # and chdirs into tmp_path, so setting one in the job env would be
         # dead weight at best and could mask a real settings-layering bug.
-        run: pytest --cov --cov-report=term-missing --cov-fail-under=85
+        run: pytest --cov --cov-report=term-missing --cov-fail-under=97
 
   package:
     name: package build

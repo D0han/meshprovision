@@ -167,11 +167,17 @@ LORASTATS_NODES_PAGE_REGIONS: Final[tuple[str, ...]] = (
 def _isolated_cwd_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Isolate every test's working directory, environment, ``time.sleep`` and ``os.fsync``.
 
+    ``HOME`` and ``XDG_CACHE_HOME`` point into ``tmp_path`` too, so a code
+    path that falls back to the platform cache or home directory never
+    touches the developer's own.
+
     Args:
         tmp_path: Pytest's per-test temporary directory.
         monkeypatch: Pytest's monkeypatch fixture.
     """
     monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "xdg-cache"))
     for name in list(os.environ):
         if name.startswith("MESHPROVISION_"):
             monkeypatch.delenv(name, raising=False)

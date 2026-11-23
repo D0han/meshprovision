@@ -159,13 +159,11 @@ pretty = true
 module = ["meshtastic.*", "odf.*", "defusedxml.*", "serial.*", "bleak.*", "responses.*", "pubsub.*"]
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = ["tests.*"]
-disallow_untyped_defs = false
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers --strict-config"
+# A warning is a failure, so a deprecation shows up the day it starts.
+filterwarnings = ["error"]
 markers = [
   "unit: fast, pure-logic tests with no I/O",
   "e2e: end-to-end CLI tests against a fully mocked environment",
@@ -176,11 +174,13 @@ source = ["src/meshprovision"]
 branch = true
 
 [tool.coverage.report]
-fail_under = 85
+fail_under = 97
 show_missing = true
 exclude_lines = [
   "pragma: no cover",
   "if TYPE_CHECKING:",
   "raise NotImplementedError",
   "@overload",
+  # A Protocol method's or overload's body.
+  "^\\s*\\.\\.\\.$",
 ]
