@@ -16,6 +16,10 @@ to STDERR, and so does the human-readable result of `mesh init`, `mesh db list`,
 and `mesh template validate` (with `--json`, their document goes to
 STDOUT). So `mesh status --json | jq .` never needs filtering.
 
+Node ids are 8 hex digits (`deadbe01`), the form every example here uses.
+`!deadbe01` works too, but quote it in a shell (`'!deadbe01'`): bash reads
+an unquoted `!` as history expansion.
+
 Tables fit the terminal width, or 80 columns when the output is piped:
 long cells wrap or are cut with `…`, though node ids are never cut. Set
 `COLUMNS` (for example `COLUMNS=200 mesh db list`) for wider tables, or use
@@ -446,7 +450,7 @@ mesh adopt --port /dev/ttyUSB0
 mesh adopt --dry-run --interface tcp --host 192.168.1.50
 mesh adopt --port /dev/ttyUSB0 --yes --show-admin-keys
 mesh adopt --port /dev/ttyUSB0 --force
-mesh adopt --from-backup Meshtastic_MT01.cfg --node-id !a0cb5cc4
+mesh adopt --from-backup Meshtastic_MT01.cfg --node-id a0cb5cc4
 mesh adopt --from-backup profile.cfg --from-backup nodedb.json --yes
 ```
 
@@ -1778,8 +1782,8 @@ template errors, 5 for more than three `admin_nodes`).
 ## `mesh remote`
 
 ```bash
-mesh remote diff --dry-run !deadbe01
-mesh remote diff --dry-run !deadbe01 --gateway !deadbe0a --section lora --json
+mesh remote diff --dry-run deadbe01
+mesh remote diff --dry-run deadbe01 --gateway deadbe0a --section lora --json
 ```
 
 `mesh remote diff --dry-run NODE` works out what a read-only diff of NODE

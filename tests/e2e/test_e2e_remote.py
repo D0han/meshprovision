@@ -136,7 +136,8 @@ def test_without_dry_run_it_refuses_before_reading_anything(
 
     assert result.exit_code == 2
     assert "no live mode" in result.stderr
-    assert "mesh remote diff --dry-run !deadbe01" in result.stderr
+    # Bare hex: an unquoted "!deadbe01" is bash history expansion.
+    assert "`mesh remote diff --dry-run deadbe01`" in result.stderr
     assert "Template file not found" not in result.stderr
     assert "Node database not found" not in result.stderr
     assert result.stdout == ""

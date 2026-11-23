@@ -434,6 +434,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `mesh init --json` lists every path absolute (`present` mixed relative
+  and absolute ones), and hints and examples give node ids as bare hex:
+  an unquoted `!deadbe01` is bash history expansion.
 - `mesh health` says when the database has no active nodes instead of
   printing an empty table, warns when a node it is asked about is not in
   the database, and no longer calls the interval of a node whose role is

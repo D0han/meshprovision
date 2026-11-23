@@ -123,12 +123,14 @@ def _outcome_json(outcome: SetupOutcome) -> dict[str, list[str]]:
         outcome: What :func:`run_setup` did.
 
     Returns:
-        The same four lists whether or not anything was missing.
+        The same four lists whether or not anything was missing, every
+        path absolute (a relative ``--db-path`` is made so against the
+        working directory, like the ``.env`` path already is).
     """
     return {
-        "created": [str(p) for p in outcome.created],
-        "present": [str(p) for p in outcome.present],
-        "declined": [str(p) for p in outcome.declined],
+        "created": [str(p.absolute()) for p in outcome.created],
+        "present": [str(p.absolute()) for p in outcome.present],
+        "declined": [str(p.absolute()) for p in outcome.declined],
         "notes": list(outcome.notes),
     }
 

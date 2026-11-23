@@ -116,6 +116,18 @@ def test_json_lists_the_created_paths(runner: CliRunner, tmp_path: Path) -> None
     assert len(payload["created"]) == 3
     assert payload["declined"] == []
     assert set(payload) == {"created", "present", "declined", "notes"}
+    assert sorted(payload["created"]) == sorted(
+        str(tmp_path / name) for name in (".env", "config/template.yaml", "data/nodes_db.ods")
+    )
+
+
+def test_json_paths_are_absolute_when_already_present(runner: CliRunner, tmp_path: Path) -> None:
+    invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], _BARE_ENV)
+
+    result = invoke(runner, ["init", "--json"], _BARE_ENV)
+
+    assert result.exit_code == 0
+    assert all(Path(path).is_absolute() for path in json.loads(result.stdout)["present"])
 
 
 def test_non_interactive_without_a_contact_exits_five(runner: CliRunner, tmp_path: Path) -> None:

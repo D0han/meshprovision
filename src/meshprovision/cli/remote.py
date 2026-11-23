@@ -163,8 +163,7 @@ def diff(
         raise SettingsError(
             LIVE_READ_UNAVAILABLE,
             hint=(
-                "Add --dry-run for the offline estimate: "
-                f"`mesh remote diff --dry-run {node.display}`."
+                f"Add --dry-run for the offline estimate: `mesh remote diff --dry-run {node.hex}`."
             ),
         )
     template = ctx.load_template()
