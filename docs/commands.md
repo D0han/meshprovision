@@ -1195,7 +1195,7 @@ notes](design-notes.md)), so it keeps to a budget. Per selected region:
 | `/API/{region}/Nodes/JSON` (no `node=`) | kept in the HTTP cache for at least an hour | 0.1-2 MB |
 | `--no-fetch` | nothing | |
 
-The raw packets are fetched fresh, at most 48 MiB each, and never kept in the
+The raw packets are fetched fresh, at most 128 MiB each, and never kept in the
 HTTP cache: they are summarized and dropped, one region at a time. The node
 list is capped at 4 MiB; global `--no-cache` applies to it. A 429, a 5xx or
 a transport error (after the client's retries) stops the run's requests:

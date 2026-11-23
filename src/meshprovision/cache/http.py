@@ -99,6 +99,7 @@ __all__ = [
     "DEFAULT_BACKOFF_BASE",
     "DEFAULT_BACKOFF_MAX",
     "DEFAULT_MAX_RETRIES",
+    "DEFAULT_RESPONSE_BYTES",
     "DEFAULT_TIMEOUT_SECONDS",
     "DEFAULT_TTL_SECONDS",
     "MAX_RESPONSE_BYTES",
@@ -120,12 +121,17 @@ CACHE_ENTRY_VERSION: Final[int] = 1
 DEFAULT_TTL_SECONDS: Final[float] = 300.0
 """Default freshness window for a cache entry, in seconds."""
 
-MAX_RESPONSE_BYTES: Final[int] = 64 * 1024 * 1024
-"""Upper bound on a response body, counted after ``Content-Encoding`` decoding.
+MAX_RESPONSE_BYTES: Final[int] = 128 * 1024 * 1024
+"""Upper bound on any response body, counted after ``Content-Encoding`` decoding.
 
-The largest real body (the loranet.pl node dump) is about 13 MB; the cap
-keeps a hostile or broken server from filling memory and the cache with a
-small compressed response that decodes to gigabytes."""
+A call can only lower it. Most bodies are far smaller (the loranet.pl node
+dump is about 13 MB), so a call that does not name its own cap gets
+:data:`DEFAULT_RESPONSE_BYTES`; only a call that must (a busy region's raw
+packets) asks for more. The cap keeps a hostile or broken server from
+filling memory with a small compressed response that decodes to gigabytes."""
+
+DEFAULT_RESPONSE_BYTES: Final[int] = 64 * 1024 * 1024
+"""The body cap of a call that names none."""
 
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 15.0
 """Default per-request ``httpx`` timeout, in seconds."""
@@ -984,7 +990,7 @@ class CachedHTTPClient:
         force_refresh: bool | None = None,
         source: str | None = None,
         accept_statuses: Collection[int] = (),
-        max_bytes: int = MAX_RESPONSE_BYTES,
+        max_bytes: int = DEFAULT_RESPONSE_BYTES,
         max_retries: int | None = None,
         store: bool = True,
     ) -> CachedResponse:
@@ -1052,7 +1058,7 @@ class CachedHTTPClient:
         force_refresh: bool | None = None,
         source: str | None = None,
         accept_statuses: Collection[int] = (),
-        max_bytes: int = MAX_RESPONSE_BYTES,
+        max_bytes: int = DEFAULT_RESPONSE_BYTES,
         max_retries: int | None = None,
         store: bool = True,
     ) -> CachedResponse:
@@ -1086,7 +1092,8 @@ class CachedHTTPClient:
                 must hold.
             max_bytes: The largest response body accepted for this call,
                 counted after decoding; a larger one fails like one past
-                :data:`MAX_RESPONSE_BYTES`, which a call can only lower.
+                :data:`DEFAULT_RESPONSE_BYTES`; never more than
+                :data:`MAX_RESPONSE_BYTES`.
             max_retries: Retries of a 5xx or transport failure for this
                 call; defaults to the client's constructor ``max_retries``.
             store: Write the fetched response to the disk cache (the

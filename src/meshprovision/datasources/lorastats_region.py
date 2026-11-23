@@ -55,8 +55,13 @@ __all__ = [
 LORASTATS_PACKETS_RAW_PATH: Final[str] = "/API/{region}/PacketsRaw/JSON"
 """Region-scoped raw packets (base64 ``MeshPacket`` per gateway uplink), filterable by ``since``."""
 
-REGION_RAW_MAX_BYTES: Final[int] = 48 * 1024 * 1024
-"""The largest raw-packets answer accepted: about twice a busy region's day."""
+REGION_RAW_MAX_BYTES: Final[int] = 128 * 1024 * 1024
+"""The largest raw-packets answer accepted (the HTTP client's own ceiling).
+
+A busy region's day was about 25 MB once and has outgrown 48 MB; the answer
+is decoded whole in memory, so this is the most a refresh may ask of it. A
+larger answer is retried with a shorter window (see
+:mod:`meshprovision.network.refresh`)."""
 
 REGION_NODES_MAX_BYTES: Final[int] = 4 * 1024 * 1024
 """The largest node-list answer accepted (0.1-1.8 MB seen)."""

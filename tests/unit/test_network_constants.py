@@ -49,7 +49,7 @@ def test_the_feed_and_store_sizes() -> None:
         lorastats_region.REGION_NODES_TTL_SECONDS,
         rawpackets.RAW_DATA_MAX_CHARS,
         rawpackets.PUBLIC_KEY_BYTES,
-    ) == (48 * _MIB, 4 * _MIB, 3600.0, 1024, 32)
+    ) == (128 * _MIB, 4 * _MIB, 3600.0, 1024, 32)
     assert (
         buckets.NETWORK_RETENTION_DAYS,
         store.DAY_MAX_BYTES,

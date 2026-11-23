@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import email.utils
 import gzip
+import inspect
 import json
 import os
 import ssl
@@ -1739,3 +1740,11 @@ def test_a_response_without_store_still_makes_the_cache_root_owner_only(tmp_path
     _make_client(tmp_path, now=[1000.0]).get(URL, store=False)
 
     assert stat.S_IMODE((tmp_path / "cache").stat().st_mode) == 0o700
+
+
+def test_a_call_naming_no_cap_gets_the_default_and_none_exceeds_the_ceiling() -> None:
+    assert http_module.DEFAULT_RESPONSE_BYTES == 64 * 1024 * 1024
+    assert http_module.MAX_RESPONSE_BYTES == 128 * 1024 * 1024
+    for method in (http_module.CachedHTTPClient.get, http_module.CachedHTTPClient.request):
+        default = inspect.signature(method).parameters["max_bytes"].default
+        assert default == http_module.DEFAULT_RESPONSE_BYTES
