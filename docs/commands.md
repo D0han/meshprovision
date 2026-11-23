@@ -56,14 +56,14 @@ missing setup keeps failing exactly as it always has, with the same hint.
 
 ```bash
 mesh init                                      # prompts for everything missing
-mesh init --yes --contact ops@example.org      # fully scriptable
+mesh init --yes --contact YOUR_EMAIL           # fully scriptable
 mesh init --json                               # machine-readable summary
 ```
 
 | Option | Meaning |
 |---|---|
 | `-y`, `--yes` | Create every missing file without asking |
-| `--contact` | Value for `MESHPROVISION_CONTACT`; skips the prompt |
+| `--contact` | Value for `MESHPROVISION_CONTACT` (your own email address or `http(s)://` URL); skips the prompt |
 | `--json` | Emit JSON instead of human text |
 
 `--json` prints `created`, `present` and `declined` (lists of paths) and

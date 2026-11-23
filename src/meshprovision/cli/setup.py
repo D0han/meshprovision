@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
 
-from meshprovision.config.settings import find_env_file
+from meshprovision.config.settings import contact_problem, find_env_file
 from meshprovision.db import fs_primitives
 from meshprovision.errors import ConfigError, SettingsError
 
@@ -292,7 +292,8 @@ def validate_contact(raw: str) -> str:
     Raises:
         SettingsError: If ``raw`` is blank/whitespace-only, or contains
             a carriage return or newline, any other non-printable
-            character, or ``${``.
+            character, or ``${``, or is a placeholder (see
+            :func:`~meshprovision.config.settings.contact_problem`).
     """
     stripped = raw.strip()
     if not stripped:
@@ -316,6 +317,9 @@ def validate_contact(raw: str) -> str:
             "variable reference.",
             hint="Enter a plain email address or URL.",
         )
+    problem = contact_problem(stripped)
+    if problem is not None:
+        raise SettingsError(problem, hint="Enter your own email address or URL.")
     return stripped
 
 

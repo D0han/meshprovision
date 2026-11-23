@@ -56,12 +56,12 @@ def test_creates_all_three_artifacts_with_a_supplied_contact(tmp_path: Path) -> 
     ctx = _context(tmp_path, assume_yes=True, non_interactive=False)
     status = inspect_setup(ctx.settings, env_file=tmp_path / ".env", cwd=tmp_path)
 
-    outcome = run_setup(ctx, status, contact="ops@example.org")
+    outcome = run_setup(ctx, status, contact="d0hanzibi+ops@gmail.com")
 
     assert outcome.changed is True
     assert len(outcome.created) == 3
     assert outcome.declined == ()
-    assert outcome.contact == "ops@example.org"
+    assert outcome.contact == "d0hanzibi+ops@gmail.com"
     assert (tmp_path / ".env").is_file()
     assert (tmp_path / "config" / "template.yaml").is_file()
     assert (tmp_path / "data" / "nodes_db.ods").is_file()
@@ -73,7 +73,7 @@ def test_skips_artifacts_that_already_exist(tmp_path: Path) -> None:
     ctx = _context(tmp_path, assume_yes=True, non_interactive=False)
     status = inspect_setup(ctx.settings, env_file=tmp_path / ".env", cwd=tmp_path)
 
-    outcome = run_setup(ctx, status, contact="ops@example.org")
+    outcome = run_setup(ctx, status, contact="d0hanzibi+ops@gmail.com")
 
     assert tmp_path / "config" / "template.yaml" not in outcome.created
     assert tmp_path / "config" / "template.yaml" in outcome.present
@@ -82,7 +82,7 @@ def test_skips_artifacts_that_already_exist(tmp_path: Path) -> None:
 
 def test_returns_immediately_when_nothing_is_missing(tmp_path: Path) -> None:
     ctx = _context(tmp_path, assume_yes=True, non_interactive=False)
-    complete_settings = ctx.settings.with_overrides(contact="ops@example.org")
+    complete_settings = ctx.settings.with_overrides(contact="d0hanzibi+ops@gmail.com")
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "template.yaml").write_text("version: 1\n", encoding="utf-8")
     (tmp_path / "data").mkdir()
@@ -111,7 +111,7 @@ def test_reports_the_next_steps_on_stderr(tmp_path: Path) -> None:
     ctx = _context(tmp_path, assume_yes=True, non_interactive=False)
     status = inspect_setup(ctx.settings, env_file=tmp_path / ".env", cwd=tmp_path)
 
-    run_setup(ctx, status, contact="ops@example.org")
+    run_setup(ctx, status, contact="d0hanzibi+ops@gmail.com")
 
     assert isinstance(ctx.err.file, io.StringIO)
     output = ctx.err.file.getvalue()
@@ -121,7 +121,7 @@ def test_reports_the_next_steps_on_stderr(tmp_path: Path) -> None:
 
 def test_reports_no_next_steps_when_nothing_was_created(tmp_path: Path) -> None:
     ctx = _context(tmp_path, assume_yes=True, non_interactive=False)
-    complete_settings = ctx.settings.with_overrides(contact="ops@example.org")
+    complete_settings = ctx.settings.with_overrides(contact="d0hanzibi+ops@gmail.com")
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "template.yaml").write_text("version: 1\n", encoding="utf-8")
     (tmp_path / "data").mkdir()

@@ -12,6 +12,7 @@ from meshprovision.config.settings import (
     DEFAULT_CACHE_TTL,
     PROCESS_ENV_ONLY,
     Settings,
+    contact_problem,
     default_cache_dir,
     format_validation_error,
     load_settings,
@@ -25,30 +26,32 @@ pytestmark = pytest.mark.unit
 
 def test_load_settings_from_env_file_alone(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\nMESHPROVISION_LOG_LEVEL=DEBUG\n")
+    env_file.write_text(
+        "MESHPROVISION_CONTACT=d0hanzibi+me@gmail.com\nMESHPROVISION_LOG_LEVEL=DEBUG\n"
+    )
     settings = load_settings(env_file=env_file, environ={}, search_dotenv=False)
-    assert settings.contact == "me@example.invalid"
+    assert settings.contact == "d0hanzibi+me@gmail.com"
     assert settings.log_level == "DEBUG"
 
 
 def test_environ_overrides_env_file(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("MESHPROVISION_CONTACT=fromfile@example.invalid\n")
+    env_file.write_text("MESHPROVISION_CONTACT=d0hanzibi+fromfile@gmail.com\n")
     settings = load_settings(
-        env_file=env_file, environ={"MESHPROVISION_CONTACT": "fromenv@example.invalid"}
+        env_file=env_file, environ={"MESHPROVISION_CONTACT": "d0hanzibi+fromenv@gmail.com"}
     )
-    assert settings.contact == "fromenv@example.invalid"
+    assert settings.contact == "d0hanzibi+fromenv@gmail.com"
 
 
 def test_overrides_beat_both(tmp_path: Path) -> None:
     env_file = tmp_path / ".env"
-    env_file.write_text("MESHPROVISION_CONTACT=fromfile@example.invalid\n")
+    env_file.write_text("MESHPROVISION_CONTACT=d0hanzibi+fromfile@gmail.com\n")
     settings = load_settings(
         env_file=env_file,
-        environ={"MESHPROVISION_CONTACT": "fromenv@example.invalid"},
-        overrides={"contact": "fromoverride@example.invalid"},
+        environ={"MESHPROVISION_CONTACT": "d0hanzibi+fromenv@gmail.com"},
+        overrides={"contact": "d0hanzibi+fromoverride@gmail.com"},
     )
-    assert settings.contact == "fromoverride@example.invalid"
+    assert settings.contact == "d0hanzibi+fromoverride@gmail.com"
 
 
 def test_blank_value_treated_as_unset(tmp_path: Path) -> None:
@@ -59,7 +62,7 @@ def test_blank_value_treated_as_unset(tmp_path: Path) -> None:
 def test_os_environ_never_mutated(tmp_path: Path) -> None:
     snapshot = dict(os.environ)
     env_file = tmp_path / ".env"
-    env_file.write_text("MESHPROVISION_CONTACT=me@example.invalid\n")
+    env_file.write_text("MESHPROVISION_CONTACT=d0hanzibi+me@gmail.com\n")
     load_settings(env_file=env_file, environ={}, search_dotenv=False)
     assert os.environ == snapshot
 
@@ -89,7 +92,9 @@ def test_unrecognized_env_var_from_dotenv_logs_a_warning(
 
 def test_recognized_env_vars_never_log_a_warning(caplog: pytest.LogCaptureFixture) -> None:
     with caplog.at_level("WARNING", logger="meshprovision.config.settings"):
-        load_settings(environ={"MESHPROVISION_CONTACT": "me@example.invalid"}, search_dotenv=False)
+        load_settings(
+            environ={"MESHPROVISION_CONTACT": "d0hanzibi+me@gmail.com"}, search_dotenv=False
+        )
     assert caplog.records == []
 
 
@@ -138,10 +143,74 @@ def test_require_contact_whitespace_only_is_unset() -> None:
         settings.require_contact()
 
 
+_PLACEHOLDER_CONTACTS = (
+    "you@example.com",
+    "ops@example.org",
+    "ops@EXAMPLE.NET",
+    "ops@mail.example.com",
+    "me@site.example",
+    "t@example.invalid",
+    "a@b.test",
+    "root@localhost",
+    "root@localhost.",
+    "Ops <ops@example.org>",
+    "https://example.com/contact",
+    "http://localhost:8080/",
+)
+
+
+@pytest.mark.parametrize("contact", _PLACEHOLDER_CONTACTS)
+def test_contact_problem_names_a_reserved_domain(contact: str) -> None:
+    problem = contact_problem(contact)
+    assert problem is not None
+    assert "placeholder" in problem
+
+
+@pytest.mark.parametrize("contact", ["example", "ops at example dot org", "ftp://x.pl/"])
+def test_contact_problem_wants_an_email_address_or_a_url(contact: str) -> None:
+    assert contact_problem(contact) == (
+        f"Contact '{contact}' is neither an email address nor an http(s):// URL."
+    )
+
+
+@pytest.mark.parametrize("contact", ["ops@", "https://", "http://[::1"])
+def test_contact_problem_wants_a_domain(contact: str) -> None:
+    assert contact_problem(contact) == f"Contact '{contact}' has no domain."
+
+
+@pytest.mark.parametrize(
+    "contact",
+    [
+        "d0hanzibi+meshprovision-dev@gmail.com",
+        "Jan <jan@mesh-example.pl>",
+        "ops@examples.org",
+        "ops@example.org.pl",
+        "https://github.com/someone",
+        "HTTPS://lorastats.pl/contact",
+    ],
+)
+def test_contact_problem_accepts_a_real_looking_contact(contact: str) -> None:
+    assert contact_problem(contact) is None
+
+
+@pytest.mark.parametrize("required", [True, False])
+def test_user_agent_refuses_a_placeholder_contact(required: bool) -> None:
+    settings = Settings(contact="you@example.com")
+    with pytest.raises(SettingsError, match="placeholder") as exc_info:
+        settings.user_agent(version="9.9.9", require_contact=required)
+    assert exc_info.value.hint is not None
+    assert "own email address" in exc_info.value.hint
+
+
+def test_require_contact_refuses_a_placeholder_contact() -> None:
+    with pytest.raises(SettingsError, match=r"^MESHPROVISION_CONTACT: Contact 'a@b\.test'"):
+        Settings(contact="a@b.test").require_contact()
+
+
 def test_user_agent_format() -> None:
-    settings = Settings(contact="me@example.invalid")
+    settings = Settings(contact="d0hanzibi+me@gmail.com")
     agent = settings.user_agent(version="9.9.9")
-    assert agent == "meshprovision/9.9.9 (+me@example.invalid)"
+    assert agent == "meshprovision/9.9.9 (+d0hanzibi+me@gmail.com)"
 
 
 def test_user_agent_requires_contact_by_default() -> None:
@@ -162,13 +231,13 @@ def test_user_agent_omits_contact_when_not_required_and_unset() -> None:
 
 
 def test_user_agent_still_includes_contact_when_set_and_not_required() -> None:
-    settings = Settings(contact="me@example.invalid")
+    settings = Settings(contact="d0hanzibi+me@gmail.com")
     agent = settings.user_agent(version="9.9.9", require_contact=False)
-    assert agent == "meshprovision/9.9.9 (+me@example.invalid)"
+    assert agent == "meshprovision/9.9.9 (+d0hanzibi+me@gmail.com)"
 
 
 def test_with_overrides_returns_new_revalidated_instance() -> None:
-    settings = Settings(contact="me@example.invalid")
+    settings = Settings(contact="d0hanzibi+me@gmail.com")
     updated = settings.with_overrides(log_level="debug")
     assert updated is not settings
     assert updated.log_level == "DEBUG"

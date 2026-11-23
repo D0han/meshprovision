@@ -58,7 +58,7 @@ def _make_client(
 ) -> CachedHTTPClient:
     return CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="meshprovision/test (+t@example.invalid)",
+        user_agent="meshprovision/test (+d0hanzibi+t@gmail.com)",
         ttl=ttl,
         clock=lambda: now[0],
         sleep=sleep,
@@ -1180,7 +1180,7 @@ def test_internal_client_verifies_tls_certificates(tmp_path: Path) -> None:
     what ``verify`` was passed.
     """
     with CachedHTTPClient(
-        cache_dir=tmp_path / "cache", user_agent="meshprovision/test (+t@example.invalid)"
+        cache_dir=tmp_path / "cache", user_agent="meshprovision/test (+d0hanzibi+t@gmail.com)"
     ) as client:
         context = client._client._transport._pool._ssl_context
 
@@ -1197,7 +1197,7 @@ def test_caller_user_agent_header_is_ignored(tmp_path: Path) -> None:
 
     client.get(URL, headers={"User-Agent": "evil/1.0", "X-Custom": "yes"})
     request = route.calls[0].request
-    assert request.headers["user-agent"] == "meshprovision/test (+t@example.invalid)"
+    assert request.headers["user-agent"] == "meshprovision/test (+d0hanzibi+t@gmail.com)"
     assert request.headers["x-custom"] == "yes"
 
 
@@ -1210,7 +1210,7 @@ def test_caller_user_agent_is_ignored_in_any_spelling(tmp_path: Path) -> None:
     client.get(URL, headers={"user-agent": "evil/1.0"})
 
     request = route.calls[0].request
-    assert request.headers.get_list("user-agent") == ["meshprovision/test (+t@example.invalid)"]
+    assert request.headers.get_list("user-agent") == ["meshprovision/test (+d0hanzibi+t@gmail.com)"]
 
 
 @respx.mock
@@ -1675,7 +1675,7 @@ def test_a_cool_down_that_cannot_be_stored_still_applies_to_its_client(tmp_path:
     (tmp_path / "blocker").write_text("a file, not a directory")
     client = CachedHTTPClient(
         cache_dir=tmp_path / "blocker" / "cache",
-        user_agent="meshprovision/test (+t@example.invalid)",
+        user_agent="meshprovision/test (+d0hanzibi+t@gmail.com)",
         clock=lambda: 1000.0,
     )
     with pytest.raises(RateLimitError):

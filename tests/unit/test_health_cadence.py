@@ -332,7 +332,7 @@ def test_assess_status_uses_the_report_floors(tmp_path: Path) -> None:
     node = dataclasses.replace(_merged(10, _ROLE), last_seen=seen)
     floor = Thresholds(stale_after=timedelta(hours=30), offline_after=timedelta(hours=40))
     report = StatusReport(generated_at=seen, nodes=(node,), thresholds=floor)
-    client = CachedHTTPClient(cache_dir=tmp_path, user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(cache_dir=tmp_path, user_agent="mp/1 (+d0hanzibi+t@gmail.com)")
     try:
         health = assess_status(report, refresher, client=client)
     finally:

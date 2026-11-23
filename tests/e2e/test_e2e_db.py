@@ -719,7 +719,7 @@ def _fleet_env(tmp_path: Path, name: str) -> dict[str, str]:
     sharing one CWD/config root but never a backup directory.
     """
     return {
-        "MESHPROVISION_CONTACT": "meshprovision-tests@example.invalid",
+        "MESHPROVISION_CONTACT": "d0hanzibi+meshprovision-dev@gmail.com",
         "MESHPROVISION_CACHE_DIR": str(tmp_path / "cache"),
         "MESHPROVISION_LOG_LEVEL": "WARNING",
         "COLUMNS": WIDE_TERMINAL_COLUMNS,
@@ -889,7 +889,7 @@ def _symlinked_fleet_env(tmp_path: Path, *, link: Path, real_target: Path) -> di
     link.parent.mkdir(parents=True, exist_ok=True)
     link.symlink_to(real_target)
     return {
-        "MESHPROVISION_CONTACT": "meshprovision-tests@example.invalid",
+        "MESHPROVISION_CONTACT": "d0hanzibi+meshprovision-dev@gmail.com",
         "MESHPROVISION_CACHE_DIR": str(tmp_path / "cache"),
         "MESHPROVISION_LOG_LEVEL": "WARNING",
         "COLUMNS": WIDE_TERMINAL_COLUMNS,

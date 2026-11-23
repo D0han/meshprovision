@@ -126,7 +126,7 @@ class TestInspectSetup:
         work = shared / "work"
         work.mkdir(parents=True)
         shared.chmod(0o777)
-        (shared / ".env").write_text("MESHPROVISION_CONTACT=planted@example.org\n")
+        (shared / ".env").write_text("MESHPROVISION_CONTACT=d0hanzibi+planted@gmail.com\n")
         pretend_owned_by_someone_else(monkeypatch, shared / ".env")
         settings = Settings(db_path=work / "db.ods", template_path=work / "tpl.yaml")
         status = inspect_setup(settings, env_file=None, cwd=work)
@@ -202,15 +202,15 @@ class TestValidateContact:
             validate_contact(raw)
 
     def test_strips_surrounding_whitespace(self) -> None:
-        assert validate_contact("  ops@example.org  ") == "ops@example.org"
+        assert validate_contact("  d0hanzibi+ops@gmail.com  ") == "d0hanzibi+ops@gmail.com"
 
     @pytest.mark.parametrize(
         "raw",
         [
-            pytest.param("ops\x1b]52;c;SGVsbG8=\x07@example.org", id="escape-sequence"),
-            pytest.param("ops\t@example.org", id="inner-tab"),
-            pytest.param("ops\u202e@example.org", id="bidi-override"),
-            pytest.param("ops\ud800@example.org", id="lone-surrogate"),
+            pytest.param("d0hanzibi+ops\x1b]52;c;SGVsbG8=\x07@gmail.com", id="escape-sequence"),
+            pytest.param("d0hanzibi+ops\t@gmail.com", id="inner-tab"),
+            pytest.param("d0hanzibi+ops\u202e@gmail.com", id="bidi-override"),
+            pytest.param("d0hanzibi+ops\ud800@gmail.com", id="lone-surrogate"),
         ],
     )
     def test_rejects_non_printable_characters(self, raw: str) -> None:
@@ -219,30 +219,38 @@ class TestValidateContact:
 
     def test_a_line_break_is_reported_as_such_even_beside_other_controls(self) -> None:
         with pytest.raises(SettingsError, match="line break"):
-            validate_contact("ops\x1b@example.org\nX=1")
+            validate_contact("d0hanzibi+ops\x1b@gmail.com\nX=1")
 
-    @pytest.mark.parametrize("raw", ["${HOME}", "ops+${USER}@example.org"])
+    @pytest.mark.parametrize("raw", ["${HOME}", "d0hanzibi+${USER}@gmail.com"])
     def test_rejects_a_variable_reference_the_env_loader_would_expand(self, raw: str) -> None:
         with pytest.raises(SettingsError, match=r"cannot contain '\$\{'"):
             validate_contact(raw)
+
+    @pytest.mark.parametrize("raw", ["you@example.com", "ops@example.org", "a@b.test", "nobody"])
+    def test_rejects_a_placeholder_or_an_unreachable_contact(self, raw: str) -> None:
+        with pytest.raises(SettingsError, match=f"Contact '{raw}'") as exc_info:
+            validate_contact(raw)
+        assert exc_info.value.hint == "Enter your own email address or URL."
 
 
 class TestRenderEnvText:
     def test_replaces_the_contact_assignment_and_keeps_every_comment(self) -> None:
         example = "# a comment\nMESHPROVISION_CONTACT=\n# another comment\n"
-        rendered = render_env_text(example, contact="ops@example.org")
+        rendered = render_env_text(example, contact="d0hanzibi+ops@gmail.com")
         assert "# a comment" in rendered
         assert "# another comment" in rendered
-        assert "MESHPROVISION_CONTACT=ops@example.org" in rendered
+        assert "MESHPROVISION_CONTACT=d0hanzibi+ops@gmail.com" in rendered
 
     def test_uses_the_real_bundled_example(self) -> None:
-        rendered = render_env_text(read_example_text(ENV_EXAMPLE_NAME), contact="ops@example.org")
-        assert "MESHPROVISION_CONTACT=ops@example.org" in rendered
+        rendered = render_env_text(
+            read_example_text(ENV_EXAMPLE_NAME), contact="d0hanzibi+ops@gmail.com"
+        )
+        assert "MESHPROVISION_CONTACT=d0hanzibi+ops@gmail.com" in rendered
         assert rendered.count("MESHPROVISION_CONTACT=") == 1
 
     def test_appends_a_contact_line_when_the_example_has_none(self) -> None:
-        rendered = render_env_text("# nothing here\n", contact="ops@example.org")
-        assert "MESHPROVISION_CONTACT=ops@example.org" in rendered
+        rendered = render_env_text("# nothing here\n", contact="d0hanzibi+ops@gmail.com")
+        assert "MESHPROVISION_CONTACT=d0hanzibi+ops@gmail.com" in rendered
 
     def test_quotes_a_value_containing_whitespace(self) -> None:
         rendered = render_env_text("MESHPROVISION_CONTACT=\n", contact="Ops Team <a@b.c>")
@@ -255,22 +263,23 @@ class TestRenderEnvText:
     @pytest.mark.parametrize(
         "contact",
         [
-            pytest.param("ops@example.org", id="plain"),
+            pytest.param("d0hanzibi+ops@gmail.com", id="plain"),
             pytest.param("Ops Team <a@b.c>", id="spaces"),
             pytest.param("a@b.c #note", id="hash"),
-            pytest.param("https://example.org/\\d", id="regex-escape"),
-            pytest.param("me\\1@example.org", id="group-reference"),
+            pytest.param("https://github.com/d0hanzibi/\\d", id="regex-escape"),
+            pytest.param("d0hanzibi+me\\1@gmail.com", id="group-reference"),
             pytest.param(
-                "ops@example.org\\nMESHPROVISION_DB_PATH=/tmp/other.ods", id="escaped-newline"
+                "d0hanzibi+ops@gmail.com\\nMESHPROVISION_DB_PATH=/tmp/other.ods",
+                id="escaped-newline",
             ),
             pytest.param('Ops "Team" <a@b.c>', id="double-quotes"),
-            pytest.param('"ops@example.org"', id="leading-double-quote"),
-            pytest.param("'ops@example.org'", id="leading-single-quote"),
-            pytest.param("o'brien@example.org", id="apostrophe"),
-            pytest.param("ops@example.org\\", id="trailing-backslash"),
-            pytest.param('a\\"b@example.org', id="backslash-quote"),
-            pytest.param("$HOME@example.org", id="bare-dollar"),
-            pytest.param("Łódź 📡 ops@example.org", id="non-ascii"),
+            pytest.param('"d0hanzibi+ops@gmail.com"', id="leading-double-quote"),
+            pytest.param("'d0hanzibi+ops@gmail.com'", id="leading-single-quote"),
+            pytest.param("d0hanzibi+o'brien@gmail.com", id="apostrophe"),
+            pytest.param("d0hanzibi+ops@gmail.com\\", id="trailing-backslash"),
+            pytest.param('d0hanzibi+a\\"b@gmail.com', id="backslash-quote"),
+            pytest.param("d0hanzibi+$HOME@gmail.com", id="bare-dollar"),
+            pytest.param("Łódź 📡 d0hanzibi+ops@gmail.com", id="non-ascii"),
         ],
     )
     def test_the_env_loader_reads_back_exactly_the_contact(self, contact: str) -> None:
@@ -408,8 +417,8 @@ class TestWriteNewFile:
 class TestCreateEnvFile:
     def test_writes_a_rendered_env_file_that_is_owner_readable_only(self, tmp_path: Path) -> None:
         target = tmp_path / ".env"
-        create_env_file(target, contact="ops@example.org")
-        assert "MESHPROVISION_CONTACT=ops@example.org" in target.read_text(encoding="utf-8")
+        create_env_file(target, contact="d0hanzibi+ops@gmail.com")
+        assert "MESHPROVISION_CONTACT=d0hanzibi+ops@gmail.com" in target.read_text(encoding="utf-8")
         assert stat.S_IMODE(target.stat().st_mode) == 0o600
 
     def test_refuses_to_overwrite_an_existing_env_file(self, tmp_path: Path) -> None:
@@ -417,7 +426,7 @@ class TestCreateEnvFile:
         existing = "MESHPROVISION_CONTACT=already-here\n"  # pragma: allowlist secret
         target.write_text(existing, encoding="utf-8")
         with pytest.raises(ConfigError):
-            create_env_file(target, contact="new@example.org")
+            create_env_file(target, contact="d0hanzibi+new@gmail.com")
         assert "already-here" in target.read_text(encoding="utf-8")
 
 

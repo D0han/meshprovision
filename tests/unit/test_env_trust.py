@@ -27,7 +27,7 @@ from tests.unit.conftest import pretend_owned_by_someone_else
 
 pytestmark = pytest.mark.unit
 
-_CONTENT = "MESHPROVISION_CONTACT=me@example.invalid\n"
+_CONTENT = "MESHPROVISION_CONTACT=d0hanzibi+me@gmail.com\n"
 _SELF_USER = "mesh-test-self"
 _OTHER_USER = "mesh-test-other"
 _GROUP_NAME = "mesh-test-group"
@@ -209,9 +209,9 @@ def test_load_settings_finds_dotenv_by_default(
     (``find_env_file`` searches upward from the CWD), and call
     ``load_settings`` with the kwarg omitted entirely.
     """
-    discovered_env(0o600, content="MESHPROVISION_CONTACT=found@example.invalid\n")
+    discovered_env(0o600, content="MESHPROVISION_CONTACT=d0hanzibi+found@gmail.com\n")
     settings = load_settings(environ={})
-    assert settings.contact == "found@example.invalid"
+    assert settings.contact == "d0hanzibi+found@gmail.com"
 
 
 def test_find_env_file_walks_upward(tmp_path: Path) -> None:
@@ -377,7 +377,7 @@ def test_discovered_env_trust_matrix(
 ) -> None:
     path = discovered_env(mode, own_uid=own_uid, primary_gid=primary_gid)
     if not fixes:
-        assert load_settings(environ={}).contact == "me@example.invalid"
+        assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
     else:
         with pytest.raises(SettingsError) as exc_info:
             load_settings(environ={})
@@ -407,7 +407,7 @@ def test_discovered_env_refusal_hint_command_makes_it_loadable(
         load_settings(environ={})
     command = (exc_info.value.hint or "").split("`")[1]
     subprocess.run(["/bin/sh", "-c", command], check=True)
-    assert load_settings(environ={}).contact == "me@example.invalid"
+    assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
 
 
 _SHARED_REASON = f"it is group-writable and its group {_GROUP_NAME} is shared with other users"
@@ -443,7 +443,7 @@ def test_discovered_env_group_write_needs_a_private_primary_group(
         0o664, primary_gid=primary_gid, group_members=group_members, private_group=private_group
     )
     if reason is None:
-        assert load_settings(environ={}).contact == "me@example.invalid"
+        assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
         return
     with pytest.raises(SettingsError) as exc_info:
         load_settings(environ={})
@@ -478,7 +478,7 @@ def test_discovered_env_symlink_to_trusted_target_loads(
 ) -> None:
     path = discovered_env(0o600, symlink=True)
     assert path.is_symlink()
-    assert load_settings(environ={}).contact == "me@example.invalid"
+    assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
 
 
 def test_discovered_env_symlink_to_untrusted_target_is_refused(
@@ -551,14 +551,14 @@ def test_discovered_env_is_parsed_from_the_checked_open_file(
     ) -> list[object]:
         if stat.S_ISREG(st.st_mode) and not swapped:
             replacement = tmp_path / "replacement.env"
-            replacement.write_text("MESHPROVISION_CONTACT=swapped@example.invalid\n")
+            replacement.write_text("MESHPROVISION_CONTACT=d0hanzibi+swapped@gmail.com\n")
             replacement.chmod(0o600)
             replacement.replace(path)
             swapped.append(True)
         return real_problems(checked, st, acl)  # type: ignore[arg-type]
 
     monkeypatch.setattr(env_trust, "_env_trust_problems", swap_then_check)
-    assert load_settings(environ={}).contact == "me@example.invalid"
+    assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
     assert swapped == [True]
 
 
@@ -568,7 +568,7 @@ def test_discovered_env_is_not_checked_without_getuid(
     """On platforms without ``os.getuid`` (Windows) the file is read unchecked."""
     discovered_env(0o666, primary_gid=False)
     monkeypatch.delattr(os, "getuid")
-    assert load_settings(environ={}).contact == "me@example.invalid"
+    assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
 
 
 def test_parse_posix_acl_decodes_every_entry() -> None:
@@ -690,7 +690,7 @@ def test_discovered_env_acl_trust_matrix(
         acl=_acl(*entries, (_MASK, mask, _NO_ID), group_obj=group_obj),
     )
     if not reasons:
-        assert load_settings(environ={}).contact == "me@example.invalid"
+        assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
         return
     with pytest.raises(SettingsError) as exc_info:
         load_settings(environ={})
@@ -719,7 +719,7 @@ def test_discovered_env_acl_read_failure_refuses_unless_there_is_no_acl(
 
     monkeypatch.setattr(os, "getxattr", failing_getxattr, raising=False)
     if loads:
-        assert load_settings(environ={}).contact == "me@example.invalid"
+        assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
         return
     with pytest.raises(SettingsError) as exc_info:
         load_settings(environ={})
@@ -749,7 +749,7 @@ def test_discovered_env_acl_is_not_checked_without_getxattr(
     """Where ``os.getxattr`` doesn't exist (macOS, the BSDs) only the mode bits are checked."""
     discovered_env(0o644, acl=_acl((_USER, _RW, 12345), (_MASK, _RW, _NO_ID)))
     monkeypatch.delattr(os, "getxattr")
-    assert load_settings(environ={}).contact == "me@example.invalid"
+    assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
 
 
 def test_discovered_env_acl_is_read_from_the_checked_open_file(
@@ -766,7 +766,7 @@ def test_discovered_env_acl_is_read_from_the_checked_open_file(
         raise OSError(errno.ENODATA, os.strerror(errno.ENODATA))
 
     monkeypatch.setattr(os, "getxattr", recording_getxattr, raising=False)
-    assert load_settings(environ={}).contact == "me@example.invalid"
+    assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
     assert len(seen) == 1
 
 
@@ -788,4 +788,4 @@ def test_discovered_env_real_acl_write_entry_is_refused_until_the_hint_runs(
     assert str(exc_info.value) == f"Refusing to load discovered .env file {path}: {_ACL_REASON}."
     command = (exc_info.value.hint or "").split("`")[1]
     subprocess.run(["/bin/sh", "-c", command], check=True)
-    assert load_settings(environ={}).contact == "me@example.invalid"
+    assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"

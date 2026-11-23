@@ -80,8 +80,12 @@ EXAMPLE_TEMPLATE: Final[Path] = (
 )
 """Path to the shipped, read-only example provisioning template."""
 
-TEST_CONTACT: Final[str] = "meshprovision-tests@example.invalid"
-"""A syntactically valid, obviously-fake ``MESHPROVISION_CONTACT`` value."""
+TEST_CONTACT: Final[str] = "d0hanzibi+meshprovision-dev@gmail.com"
+"""The project's development contact address, as ``MESHPROVISION_CONTACT``.
+
+Not a reserved example address: mesh refuses those (lorastats.pl bans IP
+addresses that send a dummy contact), and if a test ever did reach the
+network, the request would carry a contact that reaches the developers."""
 
 #: ``COLUMNS`` for CLI test runs. Rich hard-wraps stderr at this width (a path
 #: longer than it is split mid-word), so it must exceed any message embedding a

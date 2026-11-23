@@ -61,6 +61,14 @@ identifiable contact information in every request and bans IP addresses
 that send missing, dummy, or third-party contact details — a default
 would make someone else wear your traffic.
 
+The contact must be an email address (with `@`) or an `http://`/`https://`
+URL. A placeholder is refused with exit code `2` before any request: a
+domain reserved for examples or tests (`example.com`, `example.org`,
+`example.net`, any `*.example`, `*.test` or `*.invalid` name, or
+`localhost`, including their subdomains). `mesh init` refuses one the same
+way, and so does every command that sends the contact, even one that only
+asks loranet.
+
 ## Template walkthrough (`config/template.yaml`)
 
 The bundled `src/meshprovision/examples/template.example.yaml` (`mesh

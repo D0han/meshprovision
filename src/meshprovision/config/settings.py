@@ -28,10 +28,12 @@ from __future__ import annotations
 import io
 import logging
 import os
+import re
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
+from urllib.parse import urlsplit
 
 import dotenv
 import platformdirs
@@ -39,7 +41,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from meshprovision.config.env_trust import find_env_file, read_discovered_env_file
 from meshprovision.datasources.lorastats import validate_regions
-from meshprovision.errors import MissingContactError, SettingsError
+from meshprovision.errors import MISSING_CONTACT_HINT, MissingContactError, SettingsError
 
 _logger = logging.getLogger(__name__)
 
@@ -54,6 +56,7 @@ __all__ = [
     "PROCESS_ENV_ONLY",
     "LogLevel",
     "Settings",
+    "contact_problem",
     "default_cache_dir",
     "find_env_file",
     "format_validation_error",
@@ -101,6 +104,53 @@ PROCESS_ENV_ONLY: Final[frozenset[str]] = frozenset(
 """``MESHPROVISION_*`` variables read straight from the process environment by
 :mod:`meshprovision.crypto.known_bad_keys` and :mod:`meshprovision.db.locking`
 -- never from ``.env``, and not :class:`Settings` fields."""
+
+
+_RESERVED_CONTACT_DOMAINS: Final[frozenset[str]] = frozenset(
+    {"example.com", "example.org", "example.net", "example", "test", "invalid", "localhost"}
+)
+"""Domains reserved for documentation and testing (RFC 2606, RFC 6761), or
+this machine. A contact under one of them, or under a subdomain of one,
+never reaches anyone."""
+
+_EMAIL_HOST_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9.-]*")
+"""The host-name characters at the start of an email address's domain part."""
+
+
+def contact_problem(contact: str) -> str | None:
+    """Say why a contact string cannot identify the operator, if it cannot.
+
+    lorastats.pl bans IP addresses that send a dummy contact, so a contact
+    must be an email address or an ``http(s)://`` URL, and its domain must
+    not be a reserved example domain (``example.com``, ``*.example``,
+    ``*.test``, ``*.invalid``, ``localhost``, ...).
+
+    Args:
+        contact: The contact string, as configured.
+
+    Returns:
+        ``None`` for a usable contact; otherwise a one-sentence reason.
+    """
+    text = contact.strip()
+    if text.lower().startswith(("http://", "https://")):
+        try:
+            host = urlsplit(text).hostname or ""
+        except ValueError:
+            host = ""
+    elif "@" in text:
+        match = _EMAIL_HOST_RE.match(text.rsplit("@", 1)[1])
+        host = match.group(0) if match else ""
+    else:
+        return f"Contact '{text}' is neither an email address nor an http(s):// URL."
+    labels = host.lower().rstrip(".").split(".")
+    if not host.strip("."):
+        return f"Contact '{text}' has no domain."
+    if any(".".join(labels[i:]) in _RESERVED_CONTACT_DOMAINS for i in range(len(labels))):
+        return (
+            f"Contact '{text}' is a placeholder: its domain is reserved for examples "
+            "and reaches nobody."
+        )
+    return None
 
 
 def default_cache_dir() -> Path:
@@ -255,9 +305,14 @@ class Settings(BaseModel):
 
         Raises:
             MissingContactError: If :attr:`contact` is ``None``.
+            SettingsError: If :attr:`contact` is a placeholder (see
+                :func:`contact_problem`).
         """
         if self.contact is None:
             raise MissingContactError()
+        problem = contact_problem(self.contact)
+        if problem is not None:
+            raise SettingsError(f"MESHPROVISION_CONTACT: {problem}", hint=MISSING_CONTACT_HINT)
         return self.contact
 
     def user_agent(self, *, version: str | None = None, require_contact: bool = True) -> str:
@@ -280,6 +335,9 @@ class Settings(BaseModel):
             MissingContactError: If :attr:`contact` is unset **and**
                 ``require_contact`` is ``True`` -- this is the single
                 startup gate lorastats.pl access requires.
+            SettingsError: If :attr:`contact` is set but is a
+                placeholder (see :func:`contact_problem`), whatever
+                ``require_contact`` says.
         """
         if version is None:
             from meshprovision import __version__ as package_version

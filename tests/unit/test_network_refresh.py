@@ -274,7 +274,7 @@ def test_a_503_storm_costs_one_request_and_its_retries(tmp_path: Path) -> None:
     )
     slept: list[float] = []
     client = CachedHTTPClient(
-        cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", sleep=slept.append
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)", sleep=slept.append
     )
     refresher = RegionRefresher(
         RegionStore(tmp_path / "network"),

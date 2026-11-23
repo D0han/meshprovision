@@ -29,7 +29,7 @@ def test_wizard_fires_on_an_interactive_first_run_and_the_command_then_succeeds(
     runner: CliRunner, tmp_path: Path
 ) -> None:
     result = invoke(
-        runner, ["--interactive", "db", "verify"], _BARE_ENV, input="y\nops@example.org\n"
+        runner, ["--interactive", "db", "verify"], _BARE_ENV, input="y\nd0hanzibi+ops@gmail.com\n"
     )
 
     assert result.exit_code == 0, result.output
@@ -99,7 +99,7 @@ def test_wizard_does_not_fire_when_setup_is_already_complete(
 
 
 def test_wizard_does_not_double_run_for_mesh_init_itself(runner: CliRunner, tmp_path: Path) -> None:
-    result = invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], _BARE_ENV)
+    result = invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], _BARE_ENV)
 
     assert result.exit_code == 0
     assert result.output.count("Created ") == 3
@@ -107,9 +107,9 @@ def test_wizard_does_not_double_run_for_mesh_init_itself(runner: CliRunner, tmp_
 
 def test_wizard_writes_the_env_relative_to_the_cwd(runner: CliRunner, tmp_path: Path) -> None:
     result = invoke(
-        runner, ["--interactive", "db", "verify"], _BARE_ENV, input="y\nops@example.org\n"
+        runner, ["--interactive", "db", "verify"], _BARE_ENV, input="y\nd0hanzibi+ops@gmail.com\n"
     )
 
     assert result.exit_code == 0, result.output
     env_text = (tmp_path / ".env").read_text(encoding="utf-8")
-    assert "MESHPROVISION_CONTACT=ops@example.org" in env_text
+    assert "MESHPROVISION_CONTACT=d0hanzibi+ops@gmail.com" in env_text

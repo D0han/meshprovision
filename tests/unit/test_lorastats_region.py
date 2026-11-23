@@ -38,7 +38,7 @@ def _url(path: str, region: str = "Zach%C3%B3d") -> str:
 def _client(tmp_path: Path, *, ttl: float = 60.0) -> CachedHTTPClient:
     return CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="mp/1 (+t@example.invalid)",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
         ttl=ttl,
         sleep=lambda _s: None,
     )
@@ -63,7 +63,7 @@ def test_raw_asks_for_the_region_since_a_time_and_keeps_nothing_cached(tmp_path:
     assert route.call_count == 2
     request = route.calls[0].request
     assert dict(request.url.params) == {"since": "2026-10-20T08:48:30"}
-    assert "t@example.invalid" in request.headers["User-Agent"]
+    assert "d0hanzibi+t@gmail.com" in request.headers["User-Agent"]
     assert client.stats.writes == 0
     assert _cached_entries(tmp_path) == []
 
@@ -168,7 +168,7 @@ def test_nodes_ask_for_the_whole_region_at_most_hourly(
     now = [_SINCE]
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="mp/1 (+t@example.invalid)",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
         ttl=ttl,
         sleep=lambda _s: None,
         clock=lambda: now[0],

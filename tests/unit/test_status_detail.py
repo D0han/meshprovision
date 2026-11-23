@@ -191,7 +191,9 @@ def test_assess_status_refreshes_the_reported_nodes_without_gateway_checks(
     store = HistoryStore(tmp_path / "cache" / HISTORY_DIRNAME, clock=clock)
     packets = _Packets()
     refresher = HealthRefresher(store, packets, clock=clock)  # type: ignore[arg-type]
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     boot = _NOW - timedelta(hours=5)
     report = _report(
         MergedNode(node_id=_A, lorastats_region="PL", last_boot=boot), MergedNode(node_id=_B)

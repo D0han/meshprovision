@@ -577,6 +577,24 @@ def test_missing_contact_exits_two(runner: CliRunner, env: dict[str, str]) -> No
     assert "lorastats.pl" in result.stderr
 
 
+@pytest.mark.parametrize("source", ["lorastats", "loranet"])
+def test_a_placeholder_contact_exits_two_before_any_request(
+    runner: CliRunner,
+    env: dict[str, str],
+    mock_sources: Callable[..., respx.MockRouter],
+    source: str,
+) -> None:
+    env = {**env, "MESHPROVISION_CONTACT": "you@example.com"}
+
+    with mock_sources(nodes={}) as router:
+        result = invoke(runner, ["status", "--json", "--source", source], env)
+        assert all(route.call_count == 0 for route in router.routes)
+
+    assert result.exit_code == 2
+    assert result.stdout == ""
+    assert "MESHPROVISION_CONTACT: Contact 'you@example.com' is a placeholder" in result.stderr
+
+
 def test_source_filter_makes_zero_lorastats_requests(
     runner: CliRunner,
     env: dict[str, str],

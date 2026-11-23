@@ -111,7 +111,7 @@ def test_fetching_passes_the_interval_to_mesh_status(
     settings = Settings(
         db_path=Path(env["MESHPROVISION_DB_PATH"]),
         cache_dir=Path(env["MESHPROVISION_CACHE_DIR"]),
-        contact="t@example.invalid",
+        contact="d0hanzibi+t@gmail.com",
     )
     seen: list[StatusOptions] = []
 
@@ -123,7 +123,9 @@ def test_fetching_passes_the_interval_to_mesh_status(
     options = HealthOptions(
         expected_interval=timedelta(hours=5), template_interval=timedelta(hours=4)
     )
-    client = CachedHTTPClient(cache_dir=settings.cache_dir, user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=settings.cache_dir, user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     try:
         run_health(settings, options, client=client)
     finally:

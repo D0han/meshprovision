@@ -33,13 +33,13 @@ _BARE_ENV: dict[str, str] = {"COLUMNS": WIDE_TERMINAL_COLUMNS, "NO_COLOR": "1"}
 def test_creates_env_template_and_database_in_an_empty_directory(
     runner: CliRunner, tmp_path: Path
 ) -> None:
-    result = invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], _BARE_ENV)
+    result = invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], _BARE_ENV)
 
     assert result.exit_code == 0
     assert (tmp_path / ".env").is_file()
     assert (tmp_path / "config" / "template.yaml").is_file()
     assert (tmp_path / "data" / "nodes_db.ods").is_file()
-    assert "MESHPROVISION_CONTACT=ops@example.org" in (tmp_path / ".env").read_text(
+    assert "MESHPROVISION_CONTACT=d0hanzibi+ops@gmail.com" in (tmp_path / ".env").read_text(
         encoding="utf-8"
     )
 
@@ -50,17 +50,17 @@ def test_prompts_interactively_for_the_contact(runner: CliRunner, tmp_path: Path
     # confirm -- unlike the auto-offer path, this is already an explicit
     # request.
     result = invoke(
-        runner, ["--interactive", "init"], _BARE_ENV, input="y\nops@example.org\ny\ny\n"
+        runner, ["--interactive", "init"], _BARE_ENV, input="y\nd0hanzibi+ops@gmail.com\ny\ny\n"
     )
 
     assert result.exit_code == 0, result.output
-    assert "MESHPROVISION_CONTACT=ops@example.org" in (tmp_path / ".env").read_text(
+    assert "MESHPROVISION_CONTACT=d0hanzibi+ops@gmail.com" in (tmp_path / ".env").read_text(
         encoding="utf-8"
     )
 
 
 def test_run_twice_never_rewrites_an_existing_file(runner: CliRunner, tmp_path: Path) -> None:
-    invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], _BARE_ENV)
+    invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], _BARE_ENV)
     before = {
         path: db_fingerprint(path)
         for path in (
@@ -70,7 +70,9 @@ def test_run_twice_never_rewrites_an_existing_file(runner: CliRunner, tmp_path: 
         )
     }
 
-    result = invoke(runner, ["init", "--yes", "--contact", "someone-else@example.org"], _BARE_ENV)
+    result = invoke(
+        runner, ["init", "--yes", "--contact", "d0hanzibi+someone-else@gmail.com"], _BARE_ENV
+    )
 
     assert result.exit_code == 0
     assert "already complete" in result.output
@@ -85,7 +87,7 @@ def test_honors_db_path_and_template_path_overrides(runner: CliRunner, tmp_path:
     env["MESHPROVISION_DB_PATH"] = str(db_path)
     env["MESHPROVISION_TEMPLATE_PATH"] = str(template_path)
 
-    result = invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], env)
+    result = invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], env)
 
     assert result.exit_code == 0
     assert db_path.is_file()
@@ -96,7 +98,7 @@ def test_honors_db_path_and_template_path_overrides(runner: CliRunner, tmp_path:
 def test_honors_an_explicit_env_file(runner: CliRunner, tmp_path: Path) -> None:
     explicit = tmp_path / "custom.env"
 
-    args = ["--env-file", str(explicit), "init", "--yes", "--contact", "ops@example.org"]
+    args = ["--env-file", str(explicit), "init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"]
     result = invoke(runner, args, _BARE_ENV)
 
     assert result.exit_code == 0
@@ -105,7 +107,9 @@ def test_honors_an_explicit_env_file(runner: CliRunner, tmp_path: Path) -> None:
 
 
 def test_json_lists_the_created_paths(runner: CliRunner, tmp_path: Path) -> None:
-    result = invoke(runner, ["init", "--yes", "--contact", "ops@example.org", "--json"], _BARE_ENV)
+    result = invoke(
+        runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com", "--json"], _BARE_ENV
+    )
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
@@ -124,7 +128,7 @@ def test_non_interactive_without_a_contact_exits_five(runner: CliRunner, tmp_pat
 def test_creates_an_empty_database_not_the_fake_example_rows(
     runner: CliRunner, tmp_path: Path, repo_root: Path
 ) -> None:
-    result = invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], _BARE_ENV)
+    result = invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], _BARE_ENV)
     assert result.exit_code == 0
 
     db_path = tmp_path / "data" / "nodes_db.ods"
@@ -138,7 +142,7 @@ def test_creates_an_empty_database_not_the_fake_example_rows(
 
 
 def test_init_then_db_verify_succeeds(runner: CliRunner, tmp_path: Path) -> None:
-    invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], _BARE_ENV)
+    invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], _BARE_ENV)
 
     result = invoke(runner, ["db", "verify"], _BARE_ENV)
 
@@ -150,7 +154,7 @@ def test_declining_one_artifact_leaves_only_it_uncreated(runner: CliRunner, tmp_
     # mesh init confirms env, template, database individually; decline
     # only the template.
     result = invoke(
-        runner, ["--interactive", "init"], _BARE_ENV, input="y\nops@example.org\nn\ny\n"
+        runner, ["--interactive", "init"], _BARE_ENV, input="y\nd0hanzibi+ops@gmail.com\nn\ny\n"
     )
 
     assert result.exit_code == 0, result.output
@@ -171,11 +175,11 @@ def test_reprompts_after_a_whitespace_only_contact_answer(
         runner,
         ["--interactive", "init"],
         _BARE_ENV,
-        input="y\n   \nops@example.org\ny\ny\n",
+        input="y\n   \nd0hanzibi+ops@gmail.com\ny\ny\n",
     )
 
     assert result.exit_code == 0, result.output
-    assert "MESHPROVISION_CONTACT=ops@example.org" in (tmp_path / ".env").read_text(
+    assert "MESHPROVISION_CONTACT=d0hanzibi+ops@gmail.com" in (tmp_path / ".env").read_text(
         encoding="utf-8"
     )
 
@@ -199,8 +203,18 @@ def test_gives_up_after_three_invalid_contact_answers(runner: CliRunner, tmp_pat
     assert not (tmp_path / ".env").exists()
 
 
+def test_a_placeholder_contact_is_refused_and_nothing_is_created(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    result = invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], _BARE_ENV)
+
+    assert result.exit_code == 2, result.output
+    assert "Contact 'ops@example.org' is a placeholder" in result.stderr
+    assert not (tmp_path / ".env").exists()
+
+
 def test_already_complete_json_lists_only_present_paths(runner: CliRunner, tmp_path: Path) -> None:
-    invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], _BARE_ENV)
+    invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], _BARE_ENV)
 
     result = invoke(runner, ["init", "--json"], _BARE_ENV)
 
@@ -216,7 +230,7 @@ def test_a_contact_with_backslashes_is_written_so_it_reads_back_unchanged(
     runner: CliRunner, tmp_path: Path
 ) -> None:
     """A backslash in ``--contact`` used to crash init (re.error) or smuggle in a second line."""
-    contact = "https://example.org/\\d?a=\\nMESHPROVISION_DB_PATH=/tmp/other.ods"
+    contact = "https://github.com/d0hanzibi/\\d?a=\\nMESHPROVISION_DB_PATH=/tmp/other.ods"
 
     result = invoke(runner, ["init", "--yes", "--contact", contact], _BARE_ENV)
 
@@ -230,12 +244,14 @@ def test_a_contact_with_backslashes_is_written_so_it_reads_back_unchanged(
 def test_a_contact_given_with_an_existing_env_is_reported_ignored(
     runner: CliRunner, tmp_path: Path, missing: str | None
 ) -> None:
-    invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], _BARE_ENV)
+    invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], _BARE_ENV)
     if missing == "template":
         (tmp_path / "config" / "template.yaml").unlink()
     before = (tmp_path / ".env").read_text(encoding="utf-8")
 
-    result = invoke(runner, ["init", "--yes", "--contact", "someone-else@example.org"], _BARE_ENV)
+    result = invoke(
+        runner, ["init", "--yes", "--contact", "d0hanzibi+someone-else@gmail.com"], _BARE_ENV
+    )
 
     assert result.exit_code == 0
     assert "--contact ignored: .env already exists" in result.stderr
@@ -248,7 +264,7 @@ def test_created_paths_are_shown_relative_and_never_wrapped(
     deep = Path("a-directory-name-long-enough", "to-pass-the-console-width", "template.yaml")
     env = {**_BARE_ENV, "COLUMNS": "30", "MESHPROVISION_TEMPLATE_PATH": str(tmp_path / deep)}
 
-    result = invoke(runner, ["init", "--yes", "--contact", "ops@example.org"], env)
+    result = invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], env)
 
     assert result.exit_code == 0
     created = [line for line in result.stderr.splitlines() if line.startswith("Created ")]

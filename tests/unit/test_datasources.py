@@ -429,8 +429,10 @@ def test_lorastats_percent_encodes_a_non_ascii_region_in_the_request_path(tmp_pa
             json=[{"NodeId": "deadbe01", "ShortName": "D0h7", "LastBoot": "2026-06-05T01:29:46Z"}],
         )
     )
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=["Zachód"])
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=["Zachód"])
 
     obs = source.fetch_node("deadbe01")
 
@@ -445,8 +447,10 @@ def test_lorastats_requests_an_nfd_region_by_its_nfc_spelling(tmp_path: Path) ->
     route = respx.get(url__startswith=f"{LORASTATS_BASE_URL}/API/Zach%C3%B3d/Nodes/JSON").mock(
         return_value=httpx.Response(200, json=[])
     )
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=[_ZACHOD_NFD])
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=[_ZACHOD_NFD])
 
     assert source.fetch_node("deadbe01") is None
     assert route.call_count == 1
@@ -455,7 +459,7 @@ def test_lorastats_requests_an_nfd_region_by_its_nfc_spelling(tmp_path: Path) ->
 def test_lorastats_blank_contact_raises(tmp_path: Path) -> None:
     from meshprovision.cache.http import CachedHTTPClient as _Client
 
-    client = _Client(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = _Client(cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)")
     try:
         with pytest.raises(MissingContactError):
             LorastatsSource(client, contact="   ")
@@ -468,8 +472,10 @@ def test_lorastats_fetch_node_empty_array_returns_none(tmp_path: Path) -> None:
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=[]))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
     assert source.fetch_node("deadbe01") is None
 
 
@@ -479,8 +485,10 @@ def test_lorastats_fetch_node_matches_by_node_id(tmp_path: Path) -> None:
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
     obs = source.fetch_node("deadbe01")
     assert obs is not None
     assert obs.short_name == "found"
@@ -495,8 +503,10 @@ def test_lorastats_present_but_uncoercible_field_counted_as_a_field_coercion_not
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
 
     obs = source.fetch_node("deadbe01")
 
@@ -513,8 +523,10 @@ def test_lorastats_fetch_node_ignores_a_record_for_a_different_node(tmp_path: Pa
     route = respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
     assert source.fetch_node("deadbe01") is None
     assert route.called  # the request was made; None is a match failure, not a short-circuit
 
@@ -525,8 +537,10 @@ def test_lorastats_fetch_node_tolerant_id_forms_still_match(tmp_path: Path) -> N
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
     obs = source.fetch_node("deadbe01")
     assert obs is not None
     assert obs.short_name == "found"
@@ -543,8 +557,10 @@ def test_lorastats_fetch_node_tries_next_region_after_a_malformed_record(tmp_pat
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='XX')}"
     ).mock(return_value=httpx.Response(200, json=[{"NodeId": "deadbe01", "ShortName": "found"}]))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL", "XX"))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL", "XX"))
     obs = source.fetch_node("deadbe01")
     assert obs is not None
     assert obs.short_name == "found"
@@ -563,8 +579,10 @@ def test_lorastats_fetch_nodes_last_fetch_skipped_sums_across_ids_and_resets(
             200, json=[{"NodeId": "deadbe03", "ShortName": "found"}, {"ShortName": "no id"}]
         )
     )
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
 
     # Neither id is found (the PL records are deadbe03's and a malformed
     # one), and each of the two lookups skips exactly the malformed record
@@ -594,8 +612,10 @@ def test_lorastats_fetch_nodes_sums_field_coercions_across_ids(tmp_path: Path) -
             ],
         )
     )
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
 
     result = source.fetch_nodes([NodeId.from_hex("deadbe01"), NodeId.from_hex("deadbe02")])
 
@@ -611,8 +631,10 @@ def test_lorastats_fetch_node_is_none_before_any_fetch_but_set_after_a_miss(
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=[]))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
     assert source.last_fetch_data_as_of is None
 
     assert source.fetch_node("deadbe01") is None
@@ -640,10 +662,10 @@ def test_lorastats_fetch_nodes_last_fetch_data_as_of_is_the_oldest_across_ids(
     clock_values = iter([1_700_000_000.0, 1_700_000_050.0])
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="mp/1 (+t@example.invalid)",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
         clock=lambda: next(clock_values),
     )
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
 
     result = source.fetch_nodes([NodeId.from_hex("deadbe01"), NodeId.from_hex("deadbe02")])
 
@@ -660,14 +682,14 @@ def test_lorastats_fetch_nodes_last_fetch_data_as_of_resets_between_calls(tmp_pa
     clock_values = iter([1_700_000_000.0, 1_700_001_000.0])
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="mp/1 (+t@example.invalid)",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
         # Bypass the cache read on every call so both fetches genuinely
         # hit the network (same URL+params would otherwise be a cache
         # hit the second time, never advancing the clock).
         force_refresh=True,
         clock=lambda: next(clock_values),
     )
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
 
     source.fetch_nodes([NodeId.from_hex("deadbe01")])
     assert source.last_fetch_data_as_of == datetime.fromtimestamp(1_700_000_000.0, tz=UTC)
@@ -684,11 +706,11 @@ def _lorastats_source_at(
     ).mock(return_value=httpx.Response(200, json=[{"NodeId": "deadbe01", "ShortName": "a"}]))
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="mp/1 (+t@example.invalid)",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
         ttl=ttl,
         clock=lambda: now[0],
     )
-    return LorastatsSource(client, contact="t@example.invalid", regions=("PL",)), route
+    return LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",)), route
 
 
 @respx.mock
@@ -737,8 +759,10 @@ def test_lorastats_fetch_nodes_never_files_an_observation_under_a_foreign_id(
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=records))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
     assert source.fetch_nodes([NodeId.from_hex("cafefeed")]) == {}
 
 
@@ -747,8 +771,10 @@ def test_lorastats_fetch_node_passes_lowercase_hex_query(tmp_path: Path) -> None
     route = respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json=[]))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
     source.fetch_node("DEADBE01")
     assert route.calls[0].request.url.params.get("node") == "deadbe01"
 
@@ -758,8 +784,10 @@ def test_lorastats_html_body_raises_invalid_response(tmp_path: Path) -> None:
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, html="<html>nope</html>"))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
     with pytest.raises(InvalidResponseError):
         source.fetch_node("deadbe01")
 
@@ -769,8 +797,10 @@ def test_lorastats_json_object_instead_of_array_raises(tmp_path: Path) -> None:
     respx.get(
         url__startswith=f"{LORASTATS_BASE_URL}{LORASTATS_NODES_PATH.format(region='PL')}"
     ).mock(return_value=httpx.Response(200, json={"not": "a list"}))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
-    source = LorastatsSource(client, contact="t@example.invalid", regions=("PL",))
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
+    source = LorastatsSource(client, contact="d0hanzibi+t@gmail.com", regions=("PL",))
     with pytest.raises(InvalidResponseError):
         source.fetch_node("deadbe01")
 
@@ -816,7 +846,9 @@ def test_match_record_skips_an_unparsable_node_id_without_crashing() -> None:
 @respx.mock
 def test_loranet_raw_index_memoizes(tmp_path: Path) -> None:
     route = respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     source.raw_index()
@@ -827,7 +859,7 @@ def test_loranet_raw_index_memoizes(tmp_path: Path) -> None:
 def _loranet_client_at(tmp_path: Path, now: list[float], *, ttl: float) -> CachedHTTPClient:
     return CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="mp/1 (+t@example.invalid)",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
         ttl=ttl,
         clock=lambda: now[0],
     )
@@ -883,7 +915,7 @@ def test_loranet_raw_index_memo_short_circuits_before_get_json(tmp_path: Path, m
     """
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
     client = CachedHTTPClient(
-        cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", ttl=10000
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)", ttl=10000
     )
     source = LoranetSource(client)
     real_get_json = source.get_json
@@ -926,7 +958,7 @@ def test_loranet_raw_index_force_refresh_returns_the_fresh_value_over_a_live_mem
         return_value=httpx.Response(200, json={key: {"shortName": "stale"}})
     )
     client = CachedHTTPClient(
-        cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", ttl=10000
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)", ttl=10000
     )
     source = LoranetSource(client)
 
@@ -942,7 +974,9 @@ def test_loranet_raw_index_force_refresh_returns_the_fresh_value_over_a_live_mem
 
 @respx.mock
 def test_loranet_last_fetch_data_as_of_is_none_before_any_fetch(tmp_path: Path) -> None:
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
     assert source.last_fetch_data_as_of is None
 
@@ -954,7 +988,9 @@ def test_loranet_fetch_all_sets_last_fetch_data_as_of_to_the_network_fetch_time(
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={"1": {}}))
     epoch = 1_700_000_000.0
     client = CachedHTTPClient(
-        cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", clock=lambda: epoch
+        cache_dir=tmp_path / "cache",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
+        clock=lambda: epoch,
     )
     source = LoranetSource(client)
 
@@ -976,7 +1012,7 @@ def test_loranet_raw_index_memo_preserves_the_original_fetch_time(tmp_path: Path
     clock_state = {"now": 1_700_000_000.0}
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="mp/1 (+t@example.invalid)",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
         ttl=10000,
         clock=lambda: clock_state["now"],
     )
@@ -999,7 +1035,7 @@ def test_loranet_invalidate_then_force_refresh_advances_last_fetch_data_as_of(
     clock_state = {"now": 1_700_000_000.0}
     client = CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="mp/1 (+t@example.invalid)",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
         ttl=10000,
         clock=lambda: clock_state["now"],
     )
@@ -1025,7 +1061,9 @@ def test_loranet_empty_dump_is_a_source_failure_that_degrades_the_report(tmp_pat
     """
     nid = NodeId.from_hex("deadbe01")
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json={}))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     with pytest.raises(InvalidResponseError, match="empty"):
@@ -1050,7 +1088,9 @@ def test_loranet_hex_keyed_dump_is_a_source_failure(tmp_path: Path) -> None:
     respx.get(LORANET_NODES_URL).mock(
         return_value=httpx.Response(200, json={"!deadbe01": {"shortName": "abcd"}})
     )
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     with pytest.raises(InvalidResponseError, match="decimal node ids"):
@@ -1069,7 +1109,9 @@ def test_loranet_one_bad_key_among_good_ones_does_not_fail_the_source(tmp_path: 
         nid.decimal: {"shortName": "abcd"},
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     collected = collect_observations([source], [nid])
@@ -1083,7 +1125,9 @@ def test_loranet_decimal_key_parsed_with_from_decimal(tmp_path: Path) -> None:
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"shortName": "abcd"}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1096,7 +1140,9 @@ def test_loranet_zero_zero_position_becomes_none(tmp_path: Path) -> None:
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"latitude": 0, "longitude": 0}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1121,7 +1167,9 @@ def test_loranet_seen_by_derives_neighbor_count_and_last_seen(tmp_path: Path) ->
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"seenBy": {"gw1": 1_700_000_000, "gw2": 1_700_000_100}}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1146,7 +1194,9 @@ def test_loranet_seen_by_does_not_count_the_map_report_topic_as_a_gateway(
     gateway = "msh/PL/2/e/ShortSlow/!0f145928"
     payload = {nid.decimal: {"seenBy": {gateway: 1_700_000_000, map_topic: 1_700_000_500}}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
 
     obs = LoranetSource(client).fetch_all()[nid]
 
@@ -1167,7 +1217,9 @@ def test_loranet_seen_by_does_not_count_the_node_uplinking_itself(
     gateway = "msh/PL/2/e/ShortSlow/!0f145928"
     payload = {nid.decimal: {"seenBy": {own_topic: 1_700_000_900, gateway: 1_700_000_000}}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
 
     obs = LoranetSource(client).fetch_all()[nid]
 
@@ -1184,7 +1236,9 @@ def test_loranet_a_node_seen_only_by_itself_has_no_gateways(tmp_path: Path) -> N
     own = "msh/PL/2/e/ShortSlow/!250643bc"
     payload = {nid.decimal: {"seenBy": {own: 1_700_000_900, "msh/PL/2/map/": 1_700_001_000}}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
 
     obs = LoranetSource(client).fetch_all()[nid]
 
@@ -1198,7 +1252,9 @@ def test_loranet_another_nodes_topic_is_still_a_gateway(tmp_path: Path) -> None:
     nid = NodeId.from_hex("250643bc")
     payload = {nid.decimal: {"seenBy": {"msh/PL/2/e/ShortSlow/!250643bd": 1_700_000_000}}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
 
     assert LoranetSource(client).fetch_all()[nid].neighbor_count == 1
 
@@ -1208,7 +1264,9 @@ def test_loranet_seen_by_with_only_the_map_topic_is_present_but_empty(tmp_path: 
     nid = NodeId.from_hex("250643bc")
     payload = {nid.decimal: {"seenBy": {"msh/PL/2/map/": 1_700_000_500}}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
 
     obs = LoranetSource(client).fetch_all()[nid]
 
@@ -1220,7 +1278,9 @@ def test_loranet_a_topic_that_merely_ends_in_map_text_is_still_a_gateway(tmp_pat
     nid = NodeId.from_hex("250643bc")
     payload = {nid.decimal: {"seenBy": {"msh/PL/2/e/Long/!bigmap": 1_700_000_000}}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
 
     assert LoranetSource(client).fetch_all()[nid].neighbor_count == 1
 
@@ -1230,7 +1290,9 @@ def test_loranet_seen_by_times_leave_out_an_unparsable_relay_time(tmp_path: Path
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"seenBy": {"gw1": 1_700_000_000, "gw2": "never"}}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     obs = source.fetch_all()[nid]
@@ -1295,7 +1357,9 @@ def test_loranet_seen_by_shapes_tracked_as_coercion_failures(
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"seenBy": seen_by_value}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1309,7 +1373,9 @@ def test_loranet_seen_by_absent_key_not_counted_as_a_coercion_failure(tmp_path: 
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"shortName": "no-seen-by-key-at-all"}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1335,7 +1401,9 @@ def test_loranet_mass_uncoercible_seen_by_degrades_the_status_report(tmp_path: P
         nid2.decimal: {"seenBy": {"gw1": "1758700100"}},
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     collected = collect_observations([source], [nid1, nid2])
@@ -1371,7 +1439,9 @@ def test_loranet_last_seen_prefers_the_most_recent_of_all_three_activity_signals
         }
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1402,7 +1472,9 @@ def test_loranet_last_seen_falls_back_to_device_metrics_with_no_seen_by(tmp_path
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"lastDeviceMetrics": 1_700_000_900}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1420,7 +1492,9 @@ def test_loranet_malformed_entry_skipped_not_fatal(tmp_path: Path) -> None:
         "9999999999": "not-a-dict",
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1442,7 +1516,9 @@ def test_loranet_present_but_uncoercible_field_counted_as_a_field_coercion_not_a
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"shortName": "good", "voltage": "not-a-number"}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1462,7 +1538,9 @@ def test_loranet_uncoercible_position_counted_as_field_coercions(tmp_path: Path)
         nid.decimal: {"shortName": "good", "latitude": "not-a-number", "longitude": 12345678}
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1481,7 +1559,9 @@ def test_loranet_uncoercible_hw_model_counted_as_one_field_coercion_not_two(
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"shortName": "good", "hwModel": [1, 2, 3]}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1500,7 +1580,9 @@ def test_loranet_unresolvable_but_well_typed_enum_value_not_counted_as_a_coercio
     nid = NodeId.from_hex("deadbe01")
     payload = {nid.decimal: {"shortName": "good", "hwModel": 99999}}
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1522,7 +1604,9 @@ def test_loranet_fetch_nodes_last_fetch_field_coercions_resets_between_calls(
         good_nid.decimal: {"shortName": "good", "voltage": 3.7},
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     source.fetch_nodes([bad_nid])
@@ -1550,7 +1634,9 @@ def test_loranet_fetch_nodes_last_fetch_skipped_resets_and_excludes_absent_ids(
         malformed_nid.decimal: "not-a-dict",
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_nodes([good_nid, absent_nid, malformed_nid])
@@ -1580,7 +1666,9 @@ def test_loranet_fetch_nodes_counts_a_present_null_entry_as_skipped(tmp_path: Pa
         null_nid.decimal: None,
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_nodes([good_nid, null_nid])
@@ -1698,7 +1786,9 @@ def test_loranet_fetch_all_skipped_counts_every_skip_not_just_the_first(tmp_path
         NodeId.from_hex("deadbe03").decimal: 12345,
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_all()
@@ -1719,7 +1809,9 @@ def test_loranet_fetch_nodes_skipped_counts_every_skip_not_just_the_first(tmp_pa
     payload: dict[str, object] = {good_nid.decimal: {"shortName": "good"}}
     payload.update({nid.decimal: "not-a-dict" for nid in bad_nids})
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
 
     result = source.fetch_nodes([good_nid, *bad_nids])
@@ -1773,7 +1865,9 @@ def test_loranet_parse_node_treats_a_boolean_enum_field_as_uncoercible() -> None
 @respx.mock
 def test_loranet_json_array_payload_raises_invalid_response(tmp_path: Path) -> None:
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=[1, 2, 3]))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     source = LoranetSource(client)
     with pytest.raises(InvalidResponseError):
         source.raw_index()
@@ -1830,7 +1924,9 @@ _VALID_DUMP = {NodeId.from_hex("deadbe01").decimal: {"shortName": "good"}}
 
 
 def _client(tmp_path: Path) -> CachedHTTPClient:
-    return CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    return CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
 
 
 @pytest.mark.parametrize(
@@ -1907,11 +2003,11 @@ def test_lorastats_rejected_node_response_is_fetched_again_on_the_next_run(
     )
 
     with pytest.raises(InvalidResponseError):
-        LorastatsSource(_client(tmp_path), contact="t@example.invalid", regions=("PL",)).fetch_node(
-            "deadbe01"
-        )
+        LorastatsSource(
+            _client(tmp_path), contact="d0hanzibi+t@gmail.com", regions=("PL",)
+        ).fetch_node("deadbe01")
     obs = LorastatsSource(
-        _client(tmp_path), contact="t@example.invalid", regions=("PL",)
+        _client(tmp_path), contact="d0hanzibi+t@gmail.com", regions=("PL",)
     ).fetch_node("deadbe01")
 
     assert route.call_count == 2
@@ -1926,11 +2022,11 @@ def test_lorastats_a_non_array_json_body_is_evicted(tmp_path: Path) -> None:
     ).mock(side_effect=[httpx.Response(200, json={"error": "busy"}), httpx.Response(200, json=[])])
 
     with pytest.raises(InvalidResponseError):
-        LorastatsSource(_client(tmp_path), contact="t@example.invalid", regions=("PL",)).fetch_node(
-            "deadbe01"
-        )
+        LorastatsSource(
+            _client(tmp_path), contact="d0hanzibi+t@gmail.com", regions=("PL",)
+        ).fetch_node("deadbe01")
     obs = LorastatsSource(
-        _client(tmp_path), contact="t@example.invalid", regions=("PL",)
+        _client(tmp_path), contact="d0hanzibi+t@gmail.com", regions=("PL",)
     ).fetch_node("deadbe01")
 
     assert route.call_count == 2
@@ -1989,7 +2085,9 @@ def test_loranet_self_uplink_seen_is_the_newest_of_the_nodes_own_topics(tmp_path
         }
     }
     respx.get(LORANET_NODES_URL).mock(return_value=httpx.Response(200, json=payload))
-    client = CachedHTTPClient(cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
 
     obs = LoranetSource(client).fetch_all()[nid]
 

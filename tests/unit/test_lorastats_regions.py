@@ -100,7 +100,7 @@ def _mock_seen(last_seen: Mapping[str, str]) -> _Lorastats:
 def _client(tmp_path: Path, now: list[float], *, ttl: float = 300.0) -> CachedHTTPClient:
     return CachedHTTPClient(
         cache_dir=tmp_path / "cache",
-        user_agent="mp/1 (+t@example.invalid)",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
         ttl=ttl,
         clock=lambda: now[0],
         sleep=lambda _s: None,
@@ -120,7 +120,9 @@ def _source(
     ttl: float = 300.0,
 ) -> tuple[LorastatsSource, CachedHTTPClient]:
     client = _client(tmp_path, now, ttl=ttl)
-    source = LorastatsSource(client, contact="t@example.invalid", regions=regions, region_memo=memo)
+    source = LorastatsSource(
+        client, contact="d0hanzibi+t@gmail.com", regions=regions, region_memo=memo
+    )
     return source, client
 
 

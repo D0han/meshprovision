@@ -343,7 +343,7 @@ def test_a_503_storm_costs_one_node_its_retries_and_nothing_more(tmp_path: Path)
     )
     slept: list[float] = []
     client = CachedHTTPClient(
-        cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", sleep=slept.append
+        cache_dir=tmp_path / "cache", user_agent="mp/1 (+d0hanzibi+t@gmail.com)", sleep=slept.append
     )
     store = HistoryStore(tmp_path / "cache" / HISTORY_DIRNAME)
     refresher = HealthRefresher(store, LorastatsPackets(client))
@@ -643,7 +643,7 @@ def test_a_cool_down_stored_by_another_process_stops_the_refresh_without_a_reque
         json.dumps({"version": 1, "hosts": {"lorastats.pl": _NOW + 3600}})
     )
     client = CachedHTTPClient(
-        cache_dir=cache_dir, user_agent="mp/1 (+t@example.invalid)", clock=lambda: _NOW
+        cache_dir=cache_dir, user_agent="mp/1 (+d0hanzibi+t@gmail.com)", clock=lambda: _NOW
     )
     refresher = HealthRefresher(
         HistoryStore(cache_dir / HISTORY_DIRNAME, clock=lambda: _NOW),

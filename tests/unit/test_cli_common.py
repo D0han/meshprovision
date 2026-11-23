@@ -454,11 +454,11 @@ class TestCliContextWithSettings:
 
     def test_replaces_settings_without_mutating_the_original_context(self) -> None:
         original = CliContext.build(settings=Settings(), non_interactive=True, force_refresh=False)
-        updated_settings = original.settings.with_overrides(contact="ops@example.org")
+        updated_settings = original.settings.with_overrides(contact="d0hanzibi+ops@gmail.com")
 
         updated = original.with_settings(updated_settings)
 
-        assert updated.settings.contact == "ops@example.org"
+        assert updated.settings.contact == "d0hanzibi+ops@gmail.com"
         assert original.settings.contact is None
 
     def test_preserves_every_other_field(self, tmp_path: Path) -> None:

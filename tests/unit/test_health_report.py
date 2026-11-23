@@ -212,7 +212,7 @@ def test_a_last_seen_in_the_future_does_not_hide_a_silent_node() -> None:
 
 
 def _settings(tmp_path: Path, db: Path) -> Settings:
-    return Settings(db_path=db, cache_dir=tmp_path / "cache", contact="t@example.invalid")
+    return Settings(db_path=db, cache_dir=tmp_path / "cache", contact="d0hanzibi+t@gmail.com")
 
 
 def test_without_fetching_the_whole_fleet_counts_and_nothing_is_asked(
@@ -236,7 +236,9 @@ def test_without_fetching_the_whole_fleet_counts_and_nothing_is_asked(
     HistoryStore(settings.cache_dir / HISTORY_DIRNAME).update(
         _B, lambda _old: NodeHistory(node=_B, hours=(sole,))
     )
-    client = CachedHTTPClient(cache_dir=settings.cache_dir, user_agent="mp/1 (+t@example.invalid)")
+    client = CachedHTTPClient(
+        cache_dir=settings.cache_dir, user_agent="mp/1 (+d0hanzibi+t@gmail.com)"
+    )
     with respx.mock:
         respx.get("https://example.invalid/").mock(return_value=httpx.Response(200, json=[]))
         client.get("https://example.invalid/")

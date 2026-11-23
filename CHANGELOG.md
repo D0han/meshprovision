@@ -434,6 +434,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `MESHPROVISION_CONTACT` (and `mesh init --contact`) must be an email
+  address or an `http(s)://` URL, and a placeholder under a domain
+  reserved for examples or tests (`example.com`, `example.org`,
+  `example.net`, `*.example`, `*.test`, `*.invalid`, `localhost`) is
+  refused with exit code 2 before any request: lorastats.pl bans IP
+  addresses that send a dummy contact. `docs/commands.md` no longer
+  shows such an address.
 - Firmware 2.8.2 checked against the firmware source: the node-identity
   behaviour meshprovision relies on is unchanged; documented what changed
   (signing policy meanings, key clamping, own-number drop, my_info re-send

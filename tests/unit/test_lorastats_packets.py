@@ -35,7 +35,9 @@ def _url(path: str, region: str = "Zach%C3%B3d") -> str:
 
 def _client(tmp_path: Path) -> CachedHTTPClient:
     return CachedHTTPClient(
-        cache_dir=tmp_path / "cache", user_agent="mp/1 (+t@example.invalid)", sleep=lambda _s: None
+        cache_dir=tmp_path / "cache",
+        user_agent="mp/1 (+d0hanzibi+t@gmail.com)",
+        sleep=lambda _s: None,
     )
 
 
@@ -70,7 +72,7 @@ def test_reports_ask_for_the_node_since_a_time_and_keep_nothing_cached(tmp_path:
     assert route.call_count == 2
     request = route.calls[0].request
     assert dict(request.url.params) == {"fromNode": "ab446357", "since": "2026-10-20T08:48:30"}
-    assert "t@example.invalid" in request.headers["User-Agent"]
+    assert "d0hanzibi+t@gmail.com" in request.headers["User-Agent"]
     assert _cached_entries(tmp_path) == []
 
 
