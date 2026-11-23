@@ -652,7 +652,10 @@ def db_list(ctx: CliContext, *, json_output: bool) -> None:
 @pass_cli
 @handle_cli_errors
 def db_forget(ctx: CliContext, *, node_id: NodeId, yes: bool, json_output: bool) -> None:
-    """Archive (soft-delete) a node -- exclude it from mesh status/provision/adopt/admin bootstrap.
+    """Archive (soft-delete) a node: status/health/network leave it out, writes refuse it.
+
+    mesh status, mesh health and mesh network leave it out of their default
+    reports; mesh provision, mesh adopt and mesh admin bootstrap refuse it.
 
     Never deletes the row: every field, including ``authorized_admin_keys``
     and ``notes``, is preserved for audit history -- only ``archived_at``
@@ -684,9 +687,9 @@ def db_forget(ctx: CliContext, *, node_id: NodeId, yes: bool, json_output: bool)
             return
 
         question = (
-            f"Archive {display.display}? It will be excluded from `mesh status` and refused "
-            "by `mesh provision`/`mesh admin bootstrap`/`mesh adopt`, but its row (admin keys, "
-            "notes) stays in the database."
+            f"Archive {display.display}? It will be left out of `mesh status`, `mesh health` "
+            "and `mesh network`, and refused by `mesh provision`/`mesh admin bootstrap`/"
+            "`mesh adopt`, but its row (admin keys, notes) stays in the database."
         )
         if not ctx.confirm(question, default=False):
             raise click.Abort()

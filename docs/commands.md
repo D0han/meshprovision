@@ -14,7 +14,13 @@ the `mesh remote diff --dry-run` report, `--dry-run` change lines and the
 `mesh db backup --list` listing. Logging, prompts, warnings and errors go
 to STDERR, and so does the human-readable result of `mesh init`, `mesh db list`, `mesh admin list`, `mesh db verify`
 and `mesh template validate` (with `--json`, their document goes to
-STDOUT). So `mesh status --json | jq .` never needs filtering.
+STDOUT). So `mesh status --json | jq .` never needs filtering. A command
+that stops on an error prints nothing on STDOUT, `--json` or not; the
+error goes to STDERR and the exit code says which kind it was (see
+[Exit codes](#exit-codes)). A non-zero exit code that reports findings
+comes after the document: `7` from `mesh status` and `mesh health`, `4`
+from `mesh db verify`, `5` from a `mesh remote diff --dry-run` refusal,
+`2` from `mesh admin list` for a template admin missing from `Keys`.
 
 Node ids are 8 hex digits (`deadbe01`), the form every example here uses.
 `!deadbe01` works too, but quote it in a shell (`'!deadbe01'`): bash reads
@@ -1576,7 +1582,11 @@ mesh admin list --json
   audit result (`-` when no key is present, else `clean`, `warning`, or
   `compromised`), which nodes authorize it, and which authorizations are
   pending. Exits `2` if a
-  template-listed admin is missing from the `Keys` sheet.
+  template-listed admin is missing from the `Keys` sheet. `--json` prints
+  `admins`, each with `ref`, `key_ref`, `present`, `fingerprint`,
+  `has_private`, `in_template`, `node_id`, `audit` (`compromised`,
+  `severity`, `summary`; `null` without a key), `authorized_on` and
+  `pending_on`.
 
 A REF is a label, never a key, and must not end in `_pub`/`_priv`/`_psk`
 or start with `observed-` (reserved for `mesh adopt`'s own synthetic
@@ -1609,6 +1619,18 @@ mesh db renumber deadbe01 3a7c19e2
 | `-y`/`--yes` (`restore`, `forget`, `renumber`) | Assume yes to the confirmation |
 | `--force` (`renumber`) | Move the row even when `NEW` is not the id derived from a key `OLD` is known to hold (the other guards still apply) |
 | `--json` | Emit JSON instead of human text |
+
+With `--json`, each subcommand prints one document:
+
+| Subcommand | Keys |
+|---|---|
+| `verify` | `path`, `node_count`, `key_count`, `problems` (each `kind`, `severity`, `message`, `sheet`, `ref`) |
+| `backup` | `source`, `backup`, `created_at`, `size_bytes` |
+| `backup --list` | `backups` (each `path`, `created_at`, `size_bytes`); `known_good` (the same and `provenance`) when there is one; `legacy_backup_notice` when backups sit in an old location |
+| `restore` | `target`, `restored_from`, `pre_restore_backup` |
+| `list` | `nodes` (each `node_id`, `short_name`, `long_name`, `hw_model`, `firmware_type`, `firmware_version`, `management`, `region`, `role`, `authorized_admin_keys`, `notes`, `archived_at`) |
+| `forget` | `node_id`, `archived_at` |
+| `renumber` | see below |
 
 - `verify` layers cross-reference checks, a weak-key audit over every key
   row, and alias-aware cross-fleet duplicate detection on top of the
@@ -1651,8 +1673,8 @@ mesh db renumber deadbe01 3a7c19e2
   management mode, region, role, authorized admin key refs, notes) —
   no device connection, no `MESHPROVISION_CONTACT`, no network round
   trip. Shows an `Archived` column/field for every node, archived or not.
-- `forget` archives (soft-deletes) a node: it's excluded from `mesh
-  status`'s default report and refused by `mesh provision`/`mesh admin
+- `forget` archives (soft-deletes) a node: it's excluded from the default
+  reports of `mesh status`, `mesh health` and `mesh network`, and refused by `mesh provision`/`mesh admin
   bootstrap`/`mesh adopt` (not bypassable with `--force`), but its row —
   including `authorized_admin_keys` and `notes` — is never deleted, so
   audit history survives. `mesh db list` still shows it by default. Its
@@ -1777,7 +1799,8 @@ renders within 4 bytes of the firmware's limit), `role_never_announces`
 (`LONG_SLOW`) and `duty_cycle_overridden` (`lora.override_duty_cycle` in
 a region with a duty-cycle limit). A template that fails validation prints no
 document; the error goes to STDERR with a non-zero exit code (2 for most
-template errors, 5 for more than three `admin_nodes`).
+template errors, more than three `admin_nodes` and a newer `version`
+included).
 
 ## `mesh remote`
 
@@ -1944,7 +1967,9 @@ adopt` and the other commands that write do not. A crontab line needs:
   failed source or history refresh; both exit `0` otherwise. `2` (a
   configuration error, for example no `MESHPROVISION_CONTACT`) and `4`
   (the database could not be read) mean no report was made; see
-  [Exit codes](#exit-codes). Append `|| echo "... exited $?"` to be
+  [Exit codes](#exit-codes). A command that would have to ask something
+  exits `5` instead (`NonInteractiveError`; its hint names the option
+  that answers it, often `--yes`). Append `|| echo "... exited $?"` to be
   mailed about a non-zero exit.
 - **Rate limits and caching.** A host that answered HTTP 429 is not
   asked again by any `mesh` process using the same cache directory for
@@ -1996,6 +2021,16 @@ the `AtomicWriteError` raised on a filesystem failure
 (read-only filesystem, missing parent) while creating the lock file
 itself — both share exit code 4, since the message text is the intended
 disambiguation channel between them, not the exit code.
+
+Exit code 3 (`DATASOURCE`) also covers a node id that is not in the
+database for `mesh db forget` and `mesh db renumber` (`NodeNotFoundError`),
+not exit code 4: the database was read fine, the node is not in it.
+
+Exit code 5 (`PROVISIONING`) also covers `NonInteractiveError`: a run
+without a terminal, or with `--non-interactive`, reached a prompt (a
+confirmation, the contact address of `mesh init`, a choice between
+devices). Its hint names the option that answers the prompt; a
+scheduled run must pass it (see [Running from cron](#running-from-cron)).
 
 Exit code 5 (`PROVISIONING`) also covers `NodeRenumberedError`: `mesh
 provision`/`mesh adopt` met a database node under the id firmware >= 2.8
