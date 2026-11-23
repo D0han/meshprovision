@@ -292,6 +292,12 @@ makes it exit `6`.
   `SecretBytes`, whose `repr`/`str` render `<redacted:sha256:ab12...>`,
   and a structlog processor scrubs event dicts as the last step before
   rendering. A unit test asserts no raw key material reaches log output.
+- At `-vv`/`-vvv` the `meshtastic` and `bleak` libraries log raw frames
+  and protobuf text. Any of their records that may hold key bytes (a
+  bytes literal, an escaped byte string, a secret field name, a
+  `payload:` field, a run of 64 or more hex digits, a
+  `TORADIO`/`FROMRADIO` frame line) is replaced by a one-line `record
+  withheld` notice.
 - Tracebacks use a plain formatter, never rich's `show_locals=True`, so a
   crash cannot dump local variables holding key bytes into the log.
 - The 6-digit BLE PIN is treated as a secret like any other.

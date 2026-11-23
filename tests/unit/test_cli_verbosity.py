@@ -238,6 +238,41 @@ class TestLibrarySecretFilter:
         assert repr(admin.SerializeToString()) not in output
         assert "withheld" in output
 
+    def test_ble_frame_hex_carrying_a_private_key_is_withheld(self, keypair_factory) -> None:
+        """``ble_interface``'s ``TORADIO write: {b.hex()}``: the key is mid-run."""
+        kp = keypair_factory()
+        buf = io.StringIO()
+        configure_logging("DEBUG", stream=buf, colors=False, verbosity=2)
+
+        admin = _build_admin_message(kp.private.reveal(), kp.public)
+        to_radio = mesh_pb2.ToRadio()
+        to_radio.packet.decoded.payload = admin.SerializeToString()
+        frame_hex = to_radio.SerializeToString().hex()
+        assert kp.private.reveal().hex() in frame_hex
+
+        logging.getLogger("meshtastic.ble_interface").debug(f"TORADIO write: {frame_hex}")
+        logging.getLogger("meshtastic.ble_interface").debug(f"FROMRADIO read: {frame_hex}")
+
+        output = buf.getvalue()
+        assert kp.private.reveal().hex() not in output
+        assert "TORADIO" not in output
+        assert output.count("withheld") == 2
+
+    def test_bleak_characteristic_value_is_withheld(self, keypair_factory) -> None:
+        """The ``bleak`` Windows backend logs each value it reads, at ``-vvv``."""
+        kp = keypair_factory()
+        buf = io.StringIO()
+        configure_logging("DEBUG", stream=buf, colors=False, verbosity=3)
+
+        value = bytearray(b"\x0a" + kp.private.reveal())
+        logging.getLogger("bleak.backends.winrt.client").debug(
+            "Read Characteristic %04X : %s", 18, value
+        )
+
+        output = buf.getvalue()
+        assert repr(bytes(value)) not in output
+        assert "withheld" in output
+
     def test_benign_meshtastic_record_passes_through_unchanged(self) -> None:
         """Guards against over-filtering: ordinary connection chatter is untouched."""
         buf = io.StringIO()

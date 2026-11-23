@@ -138,6 +138,17 @@ or hex byte escape, e.g. ``private_key: "\\320Z\\300..."`` -- how the
 installed ``meshtastic`` library's own ``str(FromRadio(...))``/
 ``str(ToRadio(...))`` renders non-printable key bytes."""
 
+_LIBRARY_LONG_HEX_RE: Final[re.Pattern[str]] = re.compile(r"[0-9A-Fa-f]{64,}")
+"""Matches a run of 64 or more hex digits, whatever surrounds it -- how the
+``meshtastic`` BLE interface logs every frame it sends or reads
+(``TORADIO write: <hex>``/``FROMRADIO read: <hex>``). A 32-byte key sits
+inside that longer run, so :data:`_HEX_KEY_RE`, which needs a run of
+exactly 64, never sees it."""
+
+_LIBRARY_RADIO_FRAME_RE: Final[re.Pattern[str]] = re.compile(r"^(?:TORADIO|FROMRADIO)\b")
+"""Matches the start of a ``meshtastic`` BLE frame log line, so a short
+frame is withheld too: its bytes may still hold part of a key."""
+
 _LIBRARY_SECRET_FIELD_RE: Final[re.Pattern[str]] = re.compile(
     r"\b(?:private_key|privateKey|admin_key|adminKey|psk|fixed_pin|fixedPin|"
     r"session_passkey|sessionPasskey)\b"
@@ -355,7 +366,10 @@ def library_record_may_leak(message: str) -> bool:
     non-printable bytes as C-style octal/hex escapes inside a quoted
     field (``private_key: "\320Z..."``), or dumps a raw serialized frame
     as a Python ``bytes`` literal (``b'...'``) -- neither shape is caught
-    by ``scrub_text``. This is a coarse, message-shape predicate meant to
+    by ``scrub_text``. Over BLE it also logs every frame as one long
+    hex string (``TORADIO write: <hex>``), where a key is a 64-digit
+    stretch of a longer run that ``scrub_text`` does not match either.
+    This is a coarse, message-shape predicate meant to
     be paired with withholding the whole message, not a scrubber: it
     deliberately over-matches (e.g. any admin response containing a
     ``payload:`` field) rather than risk missing a real leak.
@@ -367,7 +381,9 @@ def library_record_may_leak(message: str) -> bool:
 
     Returns:
         ``True`` if the message contains a Python bytes-literal prefix,
-        a protobuf text-format escaped byte string, a secret field name
+        a protobuf text-format escaped byte string, a run of 64 or more
+        hex digits, a ``TORADIO``/``FROMRADIO`` frame line, a secret
+        field name
         (``private_key``, ``admin_key``, ``psk``, ``fixed_pin``,
         ``session_passkey``, in snake_case or camelCase), or a
         ``payload:`` field (which can carry a serialized ``AdminMessage``
@@ -376,6 +392,8 @@ def library_record_may_leak(message: str) -> bool:
     return bool(
         _LIBRARY_BYTES_LITERAL_RE.search(message)
         or _LIBRARY_ESCAPED_QUOTE_RE.search(message)
+        or _LIBRARY_LONG_HEX_RE.search(message)
+        or _LIBRARY_RADIO_FRAME_RE.search(message)
         or _LIBRARY_SECRET_FIELD_RE.search(message)
         or "payload:" in message
     )

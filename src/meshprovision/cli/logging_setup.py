@@ -60,6 +60,10 @@ detail no matter how loud requested; ``-vv``/``-vvv`` now can.
 """
 
 
+_FILTERED_LIBRARIES: Final[frozenset[str]] = frozenset({"meshtastic", "bleak"})
+"""Top-level logger names whose records :class:`_LibrarySecretFilter` checks."""
+
+
 class _LibrarySecretFilter(logging.Filter):
     """Withholds ``meshtastic`` library records that may carry secret material.
 
@@ -73,10 +77,13 @@ class _LibrarySecretFilter(logging.Filter):
     serialized frames (a Python ``bytes`` repr) at ``-vv``/``-vvv``. A
     handler-level filter sees every record the handler emits, regardless
     of which logger in the hierarchy produced it.
+
+    ``bleak`` records get the same check: its Windows backend logs every
+    characteristic value it reads at ``-vvv``, as a ``bytearray(b'...')``.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        """Rewrite a risky ``meshtastic`` record's message in place; never drop it.
+        """Rewrite a risky library record's message in place; never drop it.
 
         Args:
             record: The candidate log record.
@@ -86,7 +93,7 @@ class _LibrarySecretFilter(logging.Filter):
             traffic happened, at the withheld record's original level
             and logger name -- only the risky content is replaced.
         """
-        if record.name == "meshtastic" or record.name.startswith("meshtastic."):
+        if record.name.split(".", 1)[0] in _FILTERED_LIBRARIES:
             message = record.getMessage()
             if redact.library_record_may_leak(message):
                 record.msg = (

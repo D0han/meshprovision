@@ -165,6 +165,8 @@ class TestLibraryRecordMayLeak:
             "adminKey: AAAA",
             "fixedPin: 123456",
             "sessionPasskey: 1",
+            "frame " + "0a1b2c3d" * 9,
+            "FROMRADIO read: 0a02",
         ],
         ids=[
             "bytes-literal",
@@ -174,6 +176,8 @@ class TestLibraryRecordMayLeak:
             "adminKey",
             "fixedPin",
             "sessionPasskey",
+            "long-hex-run",
+            "radio-frame-line",
         ],
     )
     def test_a_single_risky_shape_is_withheld(self, message: str) -> None:
@@ -181,6 +185,17 @@ class TestLibraryRecordMayLeak:
 
     def test_ordinary_library_chatter_is_not_withheld(self) -> None:
         assert not redact_module.library_record_may_leak("Connecting to 192.168.1.5")
+
+    def test_a_key_inside_a_longer_hex_frame_is_withheld(self) -> None:
+        """The BLE frame shape: ``scrub_text`` alone misses a key in a longer run."""
+        key_hex = bytes(range(32)).hex()
+        message = f"TORADIO write: 2a4f{key_hex}1801"
+        assert scrub_text(message) == message
+        assert redact_module.library_record_may_leak(message)
+        assert redact_module.library_record_may_leak(message.removeprefix("TORADIO write: "))
+
+    def test_a_63_digit_hex_run_alone_is_not_withheld(self) -> None:
+        assert not redact_module.library_record_may_leak("node " + "a" * 63)
 
 
 class TestRedactProcessor:

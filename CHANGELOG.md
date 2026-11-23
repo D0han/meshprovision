@@ -1891,6 +1891,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `mesh -vv` and `-vvv` no longer print a private key pushed to or read
+  back from a node over Bluetooth. The meshtastic library logs every BLE
+  frame it writes or reads as one long hex string (`TORADIO write: ...`,
+  `FROMRADIO read: ...`), where a key is a stretch of a longer run that
+  the log scrubber did not match; those records are now withheld like
+  the library's other risky records. bleak's own records (its Windows
+  backend logs each value it reads at `-vvv`) get the same check.
 - The HTTP client no longer reads a redirect's body before following it.
   `httpx` read every 3xx body in full (with no size limit, so a few hundred
   KiB of gzip could decode to hundreds of MiB) and kept each hop's body in
