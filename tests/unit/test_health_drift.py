@@ -13,6 +13,7 @@ from meshprovision.health.drift import (
     passive_drift,
 )
 from meshprovision.health.history import NodeInfoSeen
+from meshprovision.health.packets import parse_nodeinfo
 
 pytestmark = pytest.mark.unit
 
@@ -51,6 +52,45 @@ def test_a_renamed_node_drifts_on_both_names() -> None:
 
 def test_observed_names_are_compared_stripped() -> None:
     assert passive_drift(_REC, _info(short=" AB12 "), None, now=NOW) == ()
+
+
+def _heard(payload: str) -> NodeInfoSeen:
+    parsed = parse_nodeinfo(payload)
+    assert parsed is not None
+    return _info(parsed.short_name, parsed.long_name, parsed.role)
+
+
+@pytest.mark.parametrize("long_name", ["Alpha, Poznan", "Alpha , Poznan", "Alpha ,Poznan"])
+def test_a_long_name_with_a_comma_matches_its_own_node_info(long_name: str) -> None:
+    record = dataclasses.replace(_REC, long_name=long_name)
+
+    found = passive_drift(record, _heard(f"AB12, {long_name}, Client"), None, now=NOW)
+
+    assert found == ()
+
+
+def test_a_long_name_with_a_comma_still_drifts_when_renamed() -> None:
+    record = dataclasses.replace(_REC, long_name="Alpha , Poznan")
+
+    found = passive_drift(record, _heard("AB12, Beta, Client"), None, now=NOW)
+
+    assert [(d.field, d.recorded, d.observed) for d in found] == [
+        ("long_name", "Alpha , Poznan", "Beta")
+    ]
+
+
+def test_a_recorded_short_name_is_compared_stripped() -> None:
+    record = dataclasses.replace(_REC, short_name="AB12 ")
+
+    assert passive_drift(record, _heard("AB12, Alpha, Client"), None, now=NOW) == ()
+
+
+def test_a_short_name_with_a_comma_gives_no_name_drift() -> None:
+    record = dataclasses.replace(_REC, short_name="A, B")
+
+    found = passive_drift(record, _heard("A, B, Alpha, Client"), None, now=NOW)
+
+    assert found == ()
 
 
 @pytest.mark.parametrize("field", ["short_name", "long_name", "role", "hw_model"])

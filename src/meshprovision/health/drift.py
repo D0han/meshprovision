@@ -118,16 +118,39 @@ def _current(seen_at: float, recorded: RecordedIdentity, now: float) -> bool:
     return recorded.updated_at is None or seen_at > recorded.updated_at + RECORD_GRACE_SECONDS
 
 
+def _as_heard(name: str) -> str:
+    """A recorded long name as a node-info payload gives it back.
+
+    The payload joins the names with ``", "`` and the parser strips every
+    part, so ``"Foo , Bar"`` comes back as ``"Foo, Bar"``.
+    """
+    return ", ".join(part.strip() for part in name.split(", "))
+
+
 def _name_drift(recorded: RecordedIdentity, nodeinfo: NodeInfoSeen) -> tuple[PassiveDrift, ...]:
     """The names and role the node's newest node info disagrees with, in fixed order."""
+    if ", " in recorded.short_name:
+        # The payload cannot say where such a short name ends and the long
+        # name starts, so neither name can be compared.
+        return ()
     pairs = (
-        ("short_name", recorded.short_name, nodeinfo.short_name.strip()),
-        ("long_name", recorded.long_name, nodeinfo.long_name.strip()),
+        (
+            "short_name",
+            recorded.short_name,
+            recorded.short_name.strip(),
+            nodeinfo.short_name.strip(),
+        ),
+        (
+            "long_name",
+            recorded.long_name,
+            _as_heard(recorded.long_name),
+            nodeinfo.long_name.strip(),
+        ),
     )
     found = [
         PassiveDrift(name, was, heard, DriftSource.NODE_INFO, nodeinfo.time)
-        for name, was, heard in pairs
-        if was and was != heard
+        for name, was, expected, heard in pairs
+        if was and expected != heard
     ]
     return tuple(found)
 
