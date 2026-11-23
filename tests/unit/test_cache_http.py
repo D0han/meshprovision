@@ -10,6 +10,7 @@ import json
 import os
 import ssl
 import stat
+import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -1516,13 +1517,14 @@ def test_a_client_made_before_another_ones_429_is_refused_too(tmp_path: Path) ->
 @respx.mock
 def test_the_cool_down_file_is_owner_only_and_replaced_whole(tmp_path: Path) -> None:
     respx.get(URL).mock(return_value=httpx.Response(429))
-    (tmp_path / "cache").mkdir(mode=0o755)
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache").chmod(0o755)  # mkdir's mode is cut by the umask
     with pytest.raises(RateLimitError):
         _make_client(tmp_path, now=[1000.0]).get(URL)
 
     path = _rate_limit_file(tmp_path)
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
-    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o755
     assert list(path.parent.glob("*.tmp-*")) == []
     assert _stored_hosts(tmp_path) == {"example.invalid": 1600.0}
 
@@ -1733,13 +1735,119 @@ def test_a_request_without_store_is_never_written(tmp_path: Path) -> None:
 
 
 @respx.mock
-def test_a_response_without_store_still_makes_the_cache_root_owner_only(tmp_path: Path) -> None:
+def test_a_cache_root_it_creates_is_owner_only_even_without_store(tmp_path: Path) -> None:
     respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
-    (tmp_path / "cache").mkdir(mode=0o755)
 
     _make_client(tmp_path, now=[1000.0]).get(URL, store=False)
 
     assert stat.S_IMODE((tmp_path / "cache").stat().st_mode) == 0o700
+
+
+@respx.mock
+def test_an_existing_private_cache_root_keeps_its_mode(tmp_path: Path) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    (tmp_path / "cache").mkdir()
+    (tmp_path / "cache").chmod(0o755)  # mkdir's mode is cut by the umask
+
+    _make_client(tmp_path, now=[1000.0]).get(URL)
+
+    assert stat.S_IMODE((tmp_path / "cache").stat().st_mode) == 0o755
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+@respx.mock
+def test_a_cache_root_others_can_write_is_refused_before_any_request(tmp_path: Path) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    root = tmp_path / "cache"
+    root.mkdir()
+    root.chmod(0o757)
+
+    with pytest.raises(SettingsError, match="Refusing to use the cache directory") as exc_info:
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+
+    assert route.call_count == 0
+    assert exc_info.value.hint is not None
+    assert f"chmod go-w {root}" in exc_info.value.hint
+    assert stat.S_IMODE(root.stat().st_mode) == 0o757
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+@respx.mock
+def test_a_cache_root_owned_by_another_user_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    uid = tmp_path.stat().st_uid
+    (tmp_path / "cache").mkdir(mode=0o700)
+    monkeypatch.setattr(os, "getuid", lambda: uid + 1)
+
+    with pytest.raises(SettingsError, match="owned by another user"):
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+
+
+def _plant_fresh_entry_elsewhere(tmp_path: Path, client: CachedHTTPClient) -> Path:
+    """Cache a response, move its entry out of the cache, and return where it went."""
+    with respx.mock:
+        respx.get(URL).mock(return_value=httpx.Response(200, json={"planted": True}))
+        response = client.get(URL)
+    path = client.path_for_key(response.cache_key)
+    moved = tmp_path / "elsewhere.json"
+    path.replace(moved)
+    return moved
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="needs O_NOFOLLOW")
+@respx.mock
+def test_a_symlinked_cache_entry_is_a_miss(tmp_path: Path) -> None:
+    client = _make_client(tmp_path, now=[1000.0])
+    planted = _plant_fresh_entry_elsewhere(tmp_path, client)
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"real": True}))
+    path = client.path_for_key(cache_key("GET", URL, None))
+    path.symlink_to(planted)
+
+    response = client.get(URL)
+
+    assert route.call_count == 1
+    assert response.from_cache is False
+    assert json.loads(response.content) == {"real": True}
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs mkfifo")
+@respx.mock
+def test_a_fifo_in_place_of_a_cache_entry_is_a_miss_without_blocking(tmp_path: Path) -> None:
+    client = _make_client(tmp_path, now=[1000.0])
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"real": True}))
+    path = client.path_for_key(cache_key("GET", URL, None))
+    path.parent.mkdir(parents=True)
+    os.mkfifo(path)
+    responses: list[CachedResponse] = []
+    # In a thread: a regression that blocks opening the FIFO fails the test
+    # instead of hanging the run.
+    worker = threading.Thread(target=lambda: responses.append(client.get(URL)), daemon=True)
+
+    worker.start()
+    worker.join(timeout=10)
+
+    assert not worker.is_alive(), "reading the FIFO entry blocked"
+    assert route.call_count == 1
+    assert responses[0].from_cache is False
+
+
+@respx.mock
+def test_an_oversized_cache_entry_is_a_miss(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    client = _make_client(tmp_path, now=[1000.0])
+    planted = _plant_fresh_entry_elsewhere(tmp_path, client)
+    path = client.path_for_key(cache_key("GET", URL, None))
+    planted.replace(path)
+    monkeypatch.setattr(http_module, "_MAX_ENTRY_BYTES", path.stat().st_size - 1)
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"real": True}))
+
+    response = client.get(URL)
+
+    assert route.call_count == 1
+    assert json.loads(response.content) == {"real": True}
 
 
 def test_a_call_naming_no_cap_gets_the_default_and_none_exceeds_the_ceiling() -> None:

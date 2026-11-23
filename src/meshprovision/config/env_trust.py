@@ -26,6 +26,7 @@ from typing import Final, NamedTuple
 from meshprovision.errors import SettingsError
 
 __all__ = [
+    "directory_is_private",
     "find_env_file",
     "read_discovered_env_file",
 ]
@@ -49,7 +50,7 @@ def find_env_file(start: Path | None = None) -> Path | None:
     ``start`` (the working directory) is always a resolved path.
 
     A ``.env`` owned by another user, in a directory that is not private
-    to the current user (see :func:`_directory_is_private`), is skipped
+    to the current user (see :func:`directory_is_private`), is skipped
     and the walk goes on: whoever can create files there -- every local
     user, in ``/tmp`` -- could have planted it, and refusing it would let
     them break every command run below that directory. It is logged at
@@ -115,12 +116,12 @@ def _planted_by(candidate: Path) -> int | None:
         owner = candidate.stat().st_uid
     except OSError:
         return None
-    if owner == os.getuid() or _directory_is_private(candidate.parent):
+    if owner == os.getuid() or directory_is_private(candidate.parent):
         return None
     return owner
 
 
-def _directory_is_private(directory: Path) -> bool:
+def directory_is_private(directory: Path) -> bool:
     """Return whether only the current user (or root) can create files in ``directory``.
 
     The directory must be owned by the current user and pass the same

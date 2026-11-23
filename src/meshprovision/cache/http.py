@@ -69,6 +69,8 @@ import hashlib
 import json
 import logging
 import os
+import shlex
+import stat
 import time
 import uuid
 from collections.abc import Callable, Collection, Mapping, Sequence
@@ -79,6 +81,7 @@ from urllib.parse import urlencode
 
 import httpx
 
+from meshprovision.config.env_trust import directory_is_private
 from meshprovision.datasources.json_store import read_json, write_json
 from meshprovision.errors import (
     CacheError,
@@ -157,7 +160,19 @@ _CACHE_SHARD_WIDTH: Final[int] = 2
 """Number of leading hex characters of a cache key used as a shard directory."""
 
 _CACHE_ROOT_MODE: Final[int] = 0o700
-"""Permission bits applied to the cache root on first write (contains node data)."""
+"""Permission bits of a cache root this tool creates (it holds node data)."""
+
+_MAX_ENTRY_BYTES: Final[int] = MAX_RESPONSE_BYTES // 3 * 4 + 1024 * 1024
+"""Largest cache entry file read: a body at :data:`MAX_RESPONSE_BYTES`, base64-coded, plus room
+for the rest of the entry. A larger file was not written by this tool."""
+
+_READ_ENTRY_FLAGS: Final[int] = (
+    os.O_RDONLY
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_NONBLOCK", 0)
+    | getattr(os, "O_BINARY", 0)
+)
+"""Never follow a symlink to an entry, and never block opening a FIFO planted in its place."""
 
 _FETCHED_AT_FUTURE_SKEW_SECONDS: Final[float] = 300.0
 """How far ahead of the clock a cached ``fetched_at`` may be and still count as fresh.
@@ -793,6 +808,34 @@ def _status_error(
     return None
 
 
+def _read_entry_bytes(path: Path) -> bytes:
+    """Read a cache entry file, refusing anything this tool did not write.
+
+    Args:
+        path: The entry's path.
+
+    Returns:
+        The file's bytes.
+
+    Raises:
+        FileNotFoundError: If there is no entry.
+        OSError: If the path is a symlink, not a regular file, owned by
+            another user, larger than :data:`_MAX_ENTRY_BYTES`, or cannot be
+            read.
+    """
+    fd = os.open(path, _READ_ENTRY_FLAGS)
+    with os.fdopen(fd, "rb") as handle:
+        st = os.fstat(handle.fileno())
+        if not stat.S_ISREG(st.st_mode):
+            raise OSError("not a regular file")
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
+            raise OSError("owned by another user")
+        raw = handle.read(_MAX_ENTRY_BYTES + 1)
+    if len(raw) > _MAX_ENTRY_BYTES:
+        raise OSError(f"larger than {_MAX_ENTRY_BYTES} bytes")
+    return raw
+
+
 class CachedHTTPClient:
     """Disk-backed TTL cache wrapping ``httpx.Client``.
 
@@ -908,7 +951,7 @@ class CachedHTTPClient:
         self._sleep = sleep
         self._clock = clock
         self._stats = CacheStats()
-        self._chmod_done = False
+        self._root_checked = False
         self._cooldown_until: Mapping[str, float] = {}
 
         self._owns_client = client is None
@@ -1123,6 +1166,7 @@ class CachedHTTPClient:
             raise ValueError("HTTP 429 cannot be an accepted status")
         refresh = self._force_refresh if force_refresh is None else force_refresh
 
+        self._check_cache_root()
         key = cache_key(method, url, params)
         path = self.path_for_key(key)
 
@@ -1153,8 +1197,6 @@ class CachedHTTPClient:
             max_retries=self._max_retries if max_retries is None else max_retries,
         )
         if not store:
-            # The root's 0o700 holds whatever the first call of a process was.
-            self._chmod_cache_root()
             return replace(response, from_cache=False)
         try:
             self._write_entry(path, response)
@@ -1237,7 +1279,7 @@ class CachedHTTPClient:
             which are treated as a miss, never a crash).
         """
         try:
-            raw = path.read_bytes()
+            raw = _read_entry_bytes(path)
         except FileNotFoundError:
             return None
         except OSError as exc:
@@ -1277,8 +1319,6 @@ class CachedHTTPClient:
                 not swallowed, since a silently dead cache means every
                 run re-downloads the full dataset.
         """
-        self._chmod_cache_root()
-
         entry = {
             "version": CACHE_ENTRY_VERSION,
             "key": response.cache_key,
@@ -1308,26 +1348,40 @@ class CachedHTTPClient:
             with contextlib.suppress(OSError):
                 tmp.unlink(missing_ok=True)
 
-    def _chmod_cache_root(self) -> None:
-        """Restrict the cache root to owner-only access, once per instance.
+    def _check_cache_root(self) -> None:
+        """Create the cache root owner-only, or refuse one other users can write, once.
 
-        Ignores a ``PermissionError`` on platforms that do not support
-        this (logged at debug); the cache still functions, just with
-        looser filesystem permissions.
+        A root this tool creates gets :data:`_CACHE_ROOT_MODE`; an existing
+        one (``MESHPROVISION_CACHE_DIR`` may name any directory) is never
+        chmod-ed. Another user who can create files in the root could plant
+        entries that ``mesh status`` and ``mesh health`` would trust, so on
+        POSIX it must be owned by the current user and writable by no one
+        else, as a discovered ``.env`` file's directory (see
+        :func:`~meshprovision.config.env_trust.directory_is_private`).
 
-        Callers must invoke this *before* creating any subdirectory
-        under the root: the root would otherwise be created at the
-        process umask by a ``mkdir(parents=True)`` and only tightened
-        afterwards.
+        Raises:
+            SettingsError: If the existing root is owned by another user or
+                writable by others.
         """
-        if self._chmod_done:
+        if self._root_checked:
             return
-        self._chmod_done = True
+        root = self._cache_dir
         try:
-            self._cache_dir.mkdir(parents=True, exist_ok=True)
-            self._cache_dir.chmod(_CACHE_ROOT_MODE)
+            root.mkdir(parents=True, mode=_CACHE_ROOT_MODE)
+        except FileExistsError:
+            if hasattr(os, "getuid") and not directory_is_private(root):
+                raise SettingsError(
+                    f"Refusing to use the cache directory {root}: it is owned by another "
+                    "user or others can write to it, so its entries cannot be trusted.",
+                    hint=(
+                        f"Run `chmod go-w {shlex.quote(str(root))}` if it is yours, or set "
+                        "MESHPROVISION_CACHE_DIR to a directory of your own."
+                    ),
+                ) from None
         except OSError as exc:
-            _logger.debug("could not chmod cache root %s: %s", self._cache_dir, exc)
+            # Writing an entry reports it; a read just misses.
+            _logger.debug("could not create cache root %s: %s", root, exc)
+        self._root_checked = True
 
     def _fetch_with_retry(
         self,
@@ -1561,7 +1615,6 @@ class CachedHTTPClient:
         hosts = self._persisted_cooldowns(now)
         hosts[host] = max(until, hosts.get(host, until))
         latest = sorted(hosts.items(), key=lambda item: item[1], reverse=True)
-        self._chmod_cache_root()
         write_json(
             self._cache_dir / RATE_LIMIT_FILENAME,
             {"version": RATE_LIMIT_VERSION, "hosts": dict(latest[:_RATE_LIMIT_MAX_HOSTS])},

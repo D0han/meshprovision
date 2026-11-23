@@ -1913,6 +1913,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The HTTP cache directory is refused (exit code 2, before any request)
+  when it is owned by another user or others can write to it, since they
+  could plant cached answers for `mesh status` and `mesh health`; a cache
+  entry that is a symlink, not a regular file, owned by another user or
+  larger than any answer could be is read as a miss. mesh no longer
+  chmods an existing `MESHPROVISION_CACHE_DIR` to `0700`, only a
+  directory it creates.
 - `mesh -vv` and `-vvv` no longer print a private key pushed to or read
   back from a node over Bluetooth. The meshtastic library logs every BLE
   frame it writes or reads as one long hex string (`TORADIO write: ...`,
