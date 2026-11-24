@@ -716,8 +716,9 @@ def test_an_empty_database_says_there_is_nothing_to_assess(
     result = invoke(runner, ["health", "--no-fetch"], env)
 
     assert result.exit_code == 0
-    assert "No active nodes in" in result.stderr
+    assert result.stderr.startswith("No active nodes in")
     assert "`mesh adopt` or `mesh provision`" in result.stderr
+    assert result.stdout == ""
 
 
 def test_an_unknown_node_without_a_role_names_the_default_interval(

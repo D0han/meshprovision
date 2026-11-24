@@ -753,6 +753,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh network <view> --no-fetch` with nothing stored for any selected
+  region still exits 3, but now says so on STDERR (`No stored data for
+  <regions>; run without --no-fetch to fetch it.`) instead of a normal
+  looking report alone, and `mesh health` on a database with no active
+  nodes prints only its notice, not an empty table, as the entry above
+  under Changed already said.
 - `mesh db renumber` of an archived node now gets the same hint as
   `mesh provision` and `mesh adopt` (clear its `archived_at` cell by
   hand), as the docs said; `mesh adopt --no-lookup` and

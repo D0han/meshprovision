@@ -356,6 +356,7 @@ def test_no_fetch_without_stored_data_exits_three(
     result, _ = _run(runner, env, ["keys", "--region", "PL", "--no-fetch"])
 
     assert result.exit_code == 3, result.output
+    assert "No stored data for PL; run without --no-fetch to fetch it." in result.stderr
 
 
 @pytest.mark.parametrize(

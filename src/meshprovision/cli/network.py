@@ -24,7 +24,7 @@ from meshprovision.cli.common import (
     pass_cli,
 )
 from meshprovision.cli.help_format import MeshCommand, MeshGroup
-from meshprovision.errors import SettingsError
+from meshprovision.errors import ExitCode, SettingsError
 from meshprovision.network import render, render_graph, render_impact
 from meshprovision.network.report import (
     DEFAULT_KEYS_DAYS,
@@ -143,6 +143,19 @@ def _collect(
         return run_network(ctx.settings, options, client=client, known_bad=known_bad)
 
 
+def _exit(ctx: CliContext, report: NetworkReport, code: int) -> None:
+    """End a view with ``code``, saying why when no region had any data.
+
+    Raises:
+        SystemExit: With ``code``, when it is not 0.
+    """
+    if code == ExitCode.DATASOURCE and report.refresh is None:
+        regions = ", ".join(region.region for region in report.regions)
+        ctx.error(f"No stored data for {regions}; run without --no-fetch to fetch it.")
+    if code:
+        raise SystemExit(code)
+
+
 @network.command(name="keys", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
 @_common_options(DEFAULT_KEYS_DAYS)
 @pass_cli
@@ -182,9 +195,7 @@ def keys(
         click.echo(render.render_keys_json(report))
     else:
         render.render_keys_console(report, console=ctx.out)
-    code = report.exit_code(crypto=report.keys_critical)
-    if code:
-        raise SystemExit(code)
+    _exit(ctx, report, report.exit_code(crypto=report.keys_critical))
 
 
 @network.command(name="relays", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
@@ -254,9 +265,7 @@ def relays(
         click.echo(render.render_relays_json(report, everything=everything))
     else:
         render.render_relays_console(report, console=ctx.out, everything=everything, limit=limit)
-    code = report.exit_code()
-    if code:
-        raise SystemExit(code)
+    _exit(ctx, report, report.exit_code())
 
 
 @network.command(name="impact", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
@@ -302,9 +311,7 @@ def impact(
         click.echo(render_impact.render_impact_json(report, nodes=detail))
     else:
         render_impact.render_impact_console(report, console=ctx.out, nodes=detail)
-    code = report.exit_code()
-    if code:
-        raise SystemExit(code)
+    _exit(ctx, report, report.exit_code())
 
 
 @network.command(name="graph", cls=MeshCommand, context_settings=CONTEXT_SETTINGS)
@@ -356,6 +363,4 @@ def graph(
         click.echo(render_graph.render_graph_json(report))
     else:
         render_graph.render_graph_console(report, console=ctx.out)
-    code = report.exit_code()
-    if code:
-        raise SystemExit(code)
+    _exit(ctx, report, report.exit_code())

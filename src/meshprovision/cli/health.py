@@ -139,7 +139,7 @@ def health(
             )
     if json_output:
         click.echo(render.render_json(report))
-    else:
+    elif report.nodes:
         render.render_console(report, console=ctx.out, detail=bool(nodes))
     code = report.exit_code()
     if code:

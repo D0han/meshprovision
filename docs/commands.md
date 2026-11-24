@@ -18,9 +18,11 @@ STDOUT). So `mesh status --json | jq .` never needs filtering. A command
 that stops on an error prints nothing on STDOUT, `--json` or not; the
 error goes to STDERR and the exit code says which kind it was (see
 [Exit codes](#exit-codes)). A non-zero exit code that reports findings
-comes after the document: `7` from `mesh status` and `mesh health`, `4`
-from `mesh db verify`, `5` from a `mesh remote diff --dry-run` refusal,
-`2` from `mesh admin list` for a template admin missing from `Keys`.
+comes after the document: `7` from `mesh status` and `mesh health`, `3`
+(no data for any selected region; STDERR says so), `6` and `7` from
+`mesh network`, `4` from `mesh db verify`, `5` from a `mesh remote diff
+--dry-run` refusal, `2` from `mesh admin list` for a template admin
+missing from `Keys`.
 
 Node ids are 8 hex digits (`deadbe01`), the form every example here uses.
 `!deadbe01` works too, but quote it in a shell (`'!deadbe01'`): bash reads
