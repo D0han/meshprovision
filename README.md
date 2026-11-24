@@ -44,7 +44,8 @@ from [loranet.pl](https://loranet.pl) and [lorastats.pl](https://lorastats.pl).
   OpenFormula formulas for every derived column, dropdown validation,
   a frozen header row, and a free-form `notes` column that's yours
   alone, except that a node id change (`mesh db renumber`, or `mesh
-  provision` following a firmware 2.8 renumber) appends one line to it.
+  provision` following a firmware 2.8 renumber) appends a `; node id was
+  ...` entry to it.
   A known-good safety copy is refreshed on every successful read or
   write, so a hand-edit gone wrong is always recoverable via `mesh db
   restore --known-good`.

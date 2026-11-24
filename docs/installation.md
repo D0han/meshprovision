@@ -75,7 +75,9 @@ This installs the `mesh` script. If you already have a `mesh` on `PATH`:
 pipx install --suffix=-mp .
 ```
 
-installs it as `mesh-mp` instead.
+installs it as `mesh-mp` instead. Hints, `--help` text and these docs
+still say `mesh`: type `mesh-mp` wherever they do, and name the venv
+`meshprovision-mp` for `pipx runpip`.
 
 **Name note:** the distribution is `meshprovision`; only the console
 script is named `mesh`. It does not collide with the unrelated, abandoned

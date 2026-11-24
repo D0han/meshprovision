@@ -62,6 +62,9 @@ pytest --cov --cov-report=term-missing
   in this suite ever touches a real serial port, BLE radio, or network
   endpoint). Add new tests to the matching directory (`tests/unit/` or
   `tests/e2e/`) and mark them accordingly.
+- Warnings are errors (`filterwarnings = ["error"]` in `pyproject.toml`):
+  a new `DeprecationWarning` from a dependency fails the suite. Fix the
+  cause, or add a narrowly scoped filter with a comment saying why.
 - `mypy --strict` must pass with zero errors on `src/`. This project has
   no untyped functions and no `# type: ignore` used casually -- if you
   need one, leave a comment explaining why.
@@ -104,9 +107,10 @@ Please keep to its existing convention:
 
 ## Regenerating generated files
 
-- Example database: `python scripts/generate_example_db.py` (deterministic
-  -- re-running it with no source changes should produce a byte-identical
-  file).
+- Example database: `python scripts/generate_example_db.py`. Its content
+  is deterministic (the sheets are byte-identical across runs) but the
+  zip entries' timestamps are not, so `git status` shows the file changed
+  after every run: check it in only when the content changed.
 - Weak-key blocklist: `python scripts/update_known_bad_keys.py --help`.
 
 ## Questions

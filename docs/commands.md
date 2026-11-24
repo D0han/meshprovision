@@ -1027,10 +1027,12 @@ from and the stale and offline thresholds it gives, every metric with its
 sample size, the gateways, hop counts, relays (with the node of ours each
 byte likely is), decoded packets per port, battery trend, local stats, boots,
 neighbours, the gateway check, every finding and suggestion, the drift from the
-database, and the limits below. `--json` carries all of it per node (`expected_interval_seconds`,
-`expected_interval_source`, `stale_after_seconds`, `offline_after_seconds`,
-`verdict`, `findings`, `importance`, `suggestions`, `drift`, `metrics`), plus `failures` (per source or node)
-and `refresh` (`refreshed`, `no_region`, `skipped_rows`).
+database, and the limits below. `--json` carries all of it:
+
+| Level | Keys |
+|---|---|
+| top | `generated_at`, `days`, `fetched`, `network_requests`, `failures` (per source or node), `refresh` (`refreshed`, `no_region`, `skipped_rows`; `null` with `--no-fetch`), `nodes` |
+| each node | `node_id`, `display`, `short_name`, `long_name`, `lorastats_region`, `role`, `history_fetched_at`, `expected_interval_seconds`, `expected_interval_source`, `stale_after_seconds`, `offline_after_seconds`, `modem_preset`, `online_local_nodes`, `verdict`, `findings`, `importance`, `suggestions`, `drift`, `metrics` |
 
 **Verdict.** `crit` if any rule below says so, else `warn` if any does, else
 `ok`; `unknown` when there is no history and no last-seen time at all. Each
@@ -1635,7 +1637,10 @@ mesh db renumber deadbe01 3a7c19e2
 | `--force` (`renumber`) | Move the row even when `NEW` is not the id derived from a key `OLD` is known to hold (the other guards still apply) |
 | `--json` | Emit JSON instead of human text |
 
-With `--json`, each subcommand prints one document:
+With `--json`, each subcommand prints one document. A path is printed as
+given when it came from you (`--db-path`, a backup you named) and
+absolute when mesh made it (a new backup, the known-good copy), so join
+them with care:
 
 | Subcommand | Keys |
 |---|---|
@@ -1706,8 +1711,9 @@ With `--json`, each subcommand prints one document:
   from 2.7 comes back under a new id on its first 2.8 boot, and a 2.8
   node after every key change. Offline, under the write lock, after a
   backup and a confirmation (`--yes` to skip it), it moves the `Nodes`
-  row (with `node id was !OLD until <date> (firmware 2.8 key-derived id)`
-  appended to `notes`), the `OLD_pub`/`OLD_priv`/`OLD_psk` key rows
+  row (with `; node id was !OLD until <date> (firmware 2.8 key-derived
+  id)` appended to `notes` on the same line, `<date>` being the UTC
+  date), the `OLD_pub`/`OLD_priv`/`OLD_psk` key rows
   (material, origin and timestamp kept) and every `authorized_admin_keys`
   reference to them, on every row; then, after the save, the node's
   pending-keypair file and its lorastats region memo entry. Its `mesh
