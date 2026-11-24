@@ -12,6 +12,7 @@ from meshprovision.crypto.redact import fingerprint
 from meshprovision.health.history import HOUR_SECONDS, floor_hour
 from meshprovision.network import render
 from meshprovision.network.keys import (
+    MIGRATION_MAX_GAP_SECONDS,
     FindingKind,
     FleetKey,
     KeyAudit,
@@ -285,6 +286,58 @@ def test_a_clone_heard_only_long_before_our_derived_id_stays_critical() -> None:
     assert [(f.kind, f.severity) for f in scan.findings] == [
         (FindingKind.OUR_KEY_ELSEWHERE, Severity.CRITICAL)
     ]
+
+
+def _seen_at(node: str, first: float, last: float, digest: str = _DIGEST) -> KeySeen:
+    return KeySeen(node, digest, first, last, (floor_hour(last),), derived=False)
+
+
+def _pair(scan_findings: tuple[KeyFinding, ...], other: str) -> list[tuple[str, str]]:
+    """The finding about our key on ``other``, as (kind, severity)."""
+    return [(f.kind.value, f.severity.value) for f in scan_findings if other in f.nodes]
+
+
+def test_our_key_on_an_old_id_is_no_migration_when_our_id_is_not_key_derived() -> None:
+    """rs67 T2: only a move to the key-derived id is a migration; this is a clone."""
+    ours = "0000beef"
+    assert key_derived_id(_KEY).hex != ours
+    mine = _seen_at(ours, _H - 14 * HOUR_SECONDS, _H)
+    stranger = _seen_at("a", _H - 30 * HOUR_SECONDS, _H - 24 * HOUR_SECONDS)
+
+    scan = scan_keys((stranger, mine), (fleet_key(ours, _KEY),), start=_START)
+
+    assert _pair(scan.findings, "a") == [("our-key-elsewhere", "critical")]
+    assert scan.fleet_critical
+
+
+@pytest.mark.parametrize(
+    ("gap", "kind"),
+    [
+        pytest.param(MIGRATION_MAX_GAP_SECONDS, "migration", id="exactly-7-days"),
+        pytest.param(MIGRATION_MAX_GAP_SECONDS + 1, "our-key-elsewhere", id="7-days-and-1-s"),
+        pytest.param(0, "our-key-elsewhere", id="no-gap"),
+    ],
+)
+def test_the_migration_gap_ends_at_exactly_seven_days(gap: float, kind: str) -> None:
+    """rs67 T11: the old id must go quiet before ours is first heard, at most 7 d before."""
+    new_id, _, new = _renumbered()
+    old = _seen_at("a", new.first - gap - HOUR_SECONDS, new.first - gap)
+
+    scan = scan_keys((old, new), (fleet_key(new_id, _KEY),), start=_START)
+
+    assert [k for k, _ in _pair(scan.findings, "a")] == [kind]
+
+
+def test_the_migration_gap_runs_from_our_first_sighting_under_any_key() -> None:
+    """rs67 T11: our node heard twice (an older key too): the earliest sighting counts."""
+    new_id, _, new = _renumbered()
+    older_key = fingerprint(hashlib.sha256(b"older").digest(), chars=16)
+    earlier = KeySeen(new_id, older_key, new.first - 9 * 24 * HOUR_SECONDS, new.first - 1, ())
+    old = _seen_at("a", earlier.first - 2 * HOUR_SECONDS, earlier.first - HOUR_SECONDS)
+
+    scan = scan_keys((old, earlier, new), (fleet_key(new_id, _KEY),), start=_START)
+
+    assert _pair(scan.findings, "a") == [("migration", "info")]
 
 
 def test_another_of_our_nodes_holding_our_key_is_no_migration() -> None:
