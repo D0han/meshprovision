@@ -247,6 +247,65 @@ def test_restore_backup_restores_and_backs_up_current(tmp_path: Path) -> None:
     assert pre_restore.path in [b.path for b in backups]
 
 
+def _full_backup_dir(target: Path, backup_dir: Path) -> list[Path]:
+    """Fill ``backup_dir`` with exactly the default retention of backups, oldest first."""
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    paths = []
+    for index in range(backups.DEFAULT_RETENTION):
+        target.write_bytes(f"v{index}".encode())
+        info = create_backup(target, backup_dir=backup_dir, now=start + timedelta(hours=index))
+        assert info is not None
+        paths.append(info.path)
+    return paths
+
+
+def test_restoring_the_oldest_backup_keeps_it_when_the_write_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    oldest = _full_backup_dir(target, backup_dir)[0]
+
+    def failing_write(*_args: object, **_kwargs: object) -> None:
+        raise AtomicWriteError("disk full", path=str(target))
+
+    monkeypatch.setattr(atomic_writer, "write_bytes_atomic", failing_write)
+
+    with pytest.raises(AtomicWriteError, match="disk full"):
+        restore_backup(oldest, target, backup_dir=backup_dir)
+
+    assert oldest.read_bytes() == b"v0"
+
+
+def test_restoring_the_oldest_backup_prunes_to_the_retention_afterwards(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    backup_dir = tmp_path / "backups"
+    oldest = _full_backup_dir(target, backup_dir)[0]
+
+    pre_restore = restore_backup(oldest, target, backup_dir=backup_dir)
+
+    assert target.read_bytes() == b"v0"
+    assert pre_restore is not None
+    kept = [info.path for info in list_backups(target, backup_dir=backup_dir)]
+    assert len(kept) == backups.DEFAULT_RETENTION
+    assert pre_restore.path in kept
+    assert oldest not in kept
+
+
+def test_restore_backup_puts_the_pre_restore_backup_in_the_given_dir(tmp_path: Path) -> None:
+    target = tmp_path / "data.txt"
+    target.write_bytes(b"v2")
+    source = tmp_path / "saved.bak"
+    source.write_bytes(b"v1")
+    elsewhere = tmp_path / "elsewhere"
+
+    pre_restore = restore_backup(source, target, backup_dir=elsewhere)
+
+    assert pre_restore is not None
+    assert pre_restore.path.parent == elsewhere
+    assert not backup_dir_for(target, None).exists()
+
+
 def test_restore_backup_onto_a_missing_target_reports_no_pre_restore_backup(
     tmp_path: Path,
 ) -> None:

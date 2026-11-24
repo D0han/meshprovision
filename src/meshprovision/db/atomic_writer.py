@@ -32,7 +32,12 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 from meshprovision.db import fs_primitives
-from meshprovision.db.backups import DEFAULT_RETENTION, BackupInfo, create_backup
+from meshprovision.db.backups import (
+    DEFAULT_RETENTION,
+    BackupInfo,
+    create_backup,
+    prune_backups_quietly,
+)
 from meshprovision.db.fs_primitives import FILE_MODE
 from meshprovision.errors import AtomicWriteError
 
@@ -194,7 +199,9 @@ def restore_backup(
 
     Absent ``validate``, or once it passes, backs up the *current*
     ``target`` first (so the restore itself is reversible), then
-    atomically replaces ``target`` with the backup's contents.
+    atomically replaces ``target`` with the backup's contents, and only
+    then prunes old backups (see
+    :func:`~meshprovision.db.backups.create_backup`'s retention).
 
     Args:
         backup: Path to the backup file to restore from.
@@ -223,6 +230,13 @@ def restore_backup(
         raise AtomicWriteError(f"Failed to read backup {backup}: {exc}", path=str(backup)) from exc
     if validate is not None:
         validate(data)
-    pre_restore = create_backup(target, backup_dir=backup_dir)
+    # Pruned only once the replace is done: the backup being restored may
+    # be the oldest one, which pruning first would delete while the write
+    # could still fail.
+    pre_restore = create_backup(target, backup_dir=backup_dir, retention=0)
     write_bytes_atomic(target, data, backup=False)
+    if pre_restore is not None:
+        prune_backups_quietly(
+            target, backup_dir=backup_dir, retention=DEFAULT_RETENTION, keep=pre_restore.path
+        )
     return pre_restore

@@ -746,6 +746,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh db restore` of the oldest of 20 backups no longer deletes that
+  backup before the database is replaced: the pre-restore backup pruned
+  it first, so a failing write lost its content. Old backups are now
+  pruned only after the restore succeeded.
 - `mesh network keys` no longer reports a node renumbered with
   `mesh db renumber` as critical "our key on another id" (exit code 6) for
   the 30 days its old id stays stored: the old id heard only before the

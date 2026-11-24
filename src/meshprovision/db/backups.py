@@ -45,6 +45,7 @@ __all__ = [
     "legacy_backup_notice",
     "list_backups",
     "prune_backups",
+    "prune_backups_quietly",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -495,10 +496,7 @@ def create_backup(
     # prune, but not from a concurrent writer's prune (possible only when
     # that one's retention is 1).
     size_bytes = destination.stat().st_size
-    try:
-        prune_backups(target, backup_dir=resolved_dir, retention=retention, keep=destination)
-    except AtomicWriteError as exc:
-        _logger.warning("Backup created, but pruning old backups failed: %s", exc)
+    prune_backups_quietly(target, backup_dir=resolved_dir, retention=retention, keep=destination)
 
     return BackupInfo(
         path=destination,
@@ -623,6 +621,20 @@ def list_backups(target: Path, *, backup_dir: Path | None = None) -> tuple[Backu
         BackupInfo(path=path, source=target, created_at=sort_key[0], size_bytes=size_bytes)
         for path, sort_key, size_bytes in keyed
     )
+
+
+def prune_backups_quietly(
+    target: Path, *, backup_dir: Path | None, retention: int, keep: Path
+) -> None:
+    """Prune like :func:`prune_backups`, logging a failure instead of raising it.
+
+    For a caller whose backup ``keep`` is already safely in place, so a
+    failed prune must not undo an otherwise-successful operation.
+    """
+    try:
+        prune_backups(target, backup_dir=backup_dir, retention=retention, keep=keep)
+    except AtomicWriteError as exc:
+        _logger.warning("Backup created, but pruning old backups failed: %s", exc)
 
 
 def prune_backups(
