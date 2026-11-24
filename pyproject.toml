@@ -16,6 +16,7 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Intended Audience :: System Administrators",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
@@ -114,6 +115,10 @@ include = [
   "scripts",
   "docs",
   "data/known_bad_keys.txt",
+  # Read by the tests the sdist ships (test_packaging_metadata pins this).
+  "data/nodes_db.example.ods",
+  ".github",
+  ".pre-commit-config.yaml",
   "README.md",
   "CHANGELOG.md",
   "CONTRIBUTING.md",
