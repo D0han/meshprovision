@@ -6,9 +6,11 @@ import hashlib
 import io
 import logging
 import re
+from collections.abc import Callable
 
 import pytest
 import structlog
+from meshtastic.protobuf import mesh_pb2
 
 import meshprovision.crypto.redact as redact_module
 from meshprovision.cli.logging_setup import configure_logging
@@ -24,6 +26,7 @@ from meshprovision.crypto.redact import (
     scrub_text,
 )
 from meshprovision.nodeid import NodeId
+from meshprovision.provisioning.detect_types import SECRET_FIELDS
 
 pytestmark = pytest.mark.unit
 
@@ -196,6 +199,51 @@ class TestLibraryRecordMayLeak:
 
     def test_a_63_digit_hex_run_alone_is_not_withheld(self) -> None:
         assert not redact_module.library_record_may_leak("node " + "a" * 63)
+
+    @pytest.mark.parametrize(
+        ("message", "leaks"),
+        [
+            pytest.param("x" + "a" * 64 + "x", True, id="64-digits-glued"),
+            pytest.param("x" + "a" * 63 + "x", False, id="63-digits-glued"),
+        ],
+    )
+    def test_the_long_hex_run_starts_at_64_digits(self, message: str, leaks: bool) -> None:
+        assert redact_module.library_record_may_leak(message) is leaks
+
+    @pytest.mark.parametrize(
+        "fill",
+        [
+            pytest.param(lambda m: setattr(m.config.network, "wifi_psk", "hunter2pass"), id="wifi"),
+            pytest.param(lambda m: setattr(m.moduleConfig.mqtt, "password", "mqttpw"), id="mqtt"),
+            pytest.param(
+                lambda m: setattr(m.config.security, "private_key", b"A" * 32), id="printable-key"
+            ),
+        ],
+    )
+    def test_a_printable_secret_in_a_from_radio_log_is_withheld(
+        self, fill: Callable[[mesh_pb2.FromRadio], None]
+    ) -> None:
+        """The library's ``Received from radio: {fromRadio}`` line at -vv."""
+        message = mesh_pb2.FromRadio()
+        fill(message)
+
+        text = f"Received from radio: {message}"
+
+        assert scrub_text(text) == text
+        assert redact_module.library_record_may_leak(text)
+
+    @pytest.mark.parametrize("field", ["wifiPsk", "mqtt_password", "channel_psk"])
+    def test_a_secret_field_name_with_a_prefix_or_in_camel_case_is_withheld(
+        self, field: str
+    ) -> None:
+        assert redact_module.library_record_may_leak(f"{field}: plain")
+
+    @pytest.mark.parametrize("word", ["passwords_seen", "pskless", "public_keys"])
+    def test_a_longer_word_holding_a_secret_field_name_is_not_withheld(self, word: str) -> None:
+        assert not redact_module.library_record_may_leak(f"{word}: 3")
+
+    def test_every_secret_device_field_is_a_library_secret_field(self) -> None:
+        assert {name for _, name in SECRET_FIELDS} <= set(redact_module.LIBRARY_SECRET_FIELDS)
 
 
 class TestRedactProcessor:

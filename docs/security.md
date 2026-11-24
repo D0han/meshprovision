@@ -294,7 +294,8 @@ makes it exit `6`.
   rendering. A unit test asserts no raw key material reaches log output.
 - At `-vv`/`-vvv` the `meshtastic` and `bleak` libraries log raw frames
   and protobuf text. Any of their records that may hold key bytes (a
-  bytes literal, an escaped byte string, a secret field name, a
+  bytes literal, an escaped byte string, a secret field name such as
+  `private_key`, `wifi_psk` or `password` in snake_case or camelCase, a
   `payload:` field, a run of 64 or more hex digits, a
   `TORADIO`/`FROMRADIO` frame line) is replaced by a one-line `record
   withheld` notice.

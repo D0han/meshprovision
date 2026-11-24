@@ -33,6 +33,7 @@ from typing import Any, Final
 from meshprovision.termsafe import terminal_safe
 
 __all__ = [
+    "LIBRARY_SECRET_FIELDS",
     "REDACTED",
     "REDACTION_DIGEST_CHARS",
     "SAFE_KEY_NAMES",
@@ -149,14 +150,45 @@ _LIBRARY_RADIO_FRAME_RE: Final[re.Pattern[str]] = re.compile(r"^(?:TORADIO|FROMR
 """Matches the start of a ``meshtastic`` BLE frame log line, so a short
 frame is withheld too: its bytes may still hold part of a key."""
 
+LIBRARY_SECRET_FIELDS: Final[tuple[str, ...]] = (
+    "private_key",
+    "public_key",
+    "admin_key",
+    "psk",
+    "wifi_psk",
+    "password",
+    "fixed_pin",
+    "session_passkey",
+)
+"""Protobuf field names whose value may be secret, in snake_case.
+
+Every field of ``provisioning.detect_types.SECRET_FIELDS`` (which a test
+pins, as this module cannot import it), plus a channel's ``psk`` and an
+admin session's ``session_passkey``."""
+
+
+def _camel_case(name: str) -> str:
+    """Turn ``wifi_psk`` into ``wifiPsk``."""
+    head, *rest = name.split("_")
+    return head + "".join(part.capitalize() for part in rest)
+
+
 _LIBRARY_SECRET_FIELD_RE: Final[re.Pattern[str]] = re.compile(
-    r"\b(?:private_key|privateKey|admin_key|adminKey|psk|fixed_pin|fixedPin|"
-    r"session_passkey|sessionPasskey)\b"
+    r"(?<![A-Za-z0-9])(?:"
+    + "|".join(
+        sorted(
+            {form for name in LIBRARY_SECRET_FIELDS for form in (name, _camel_case(name))},
+            key=lambda form: (-len(form), form),
+        )
+    )
+    + r")(?![A-Za-z0-9])"
 )
 """Matches a secret protobuf field name, snake_case or camelCase, as it
 appears in protobuf text format (``field_name: value``) regardless of
 whether the value itself needed an escape -- e.g. a private key made
-entirely of printable ASCII bytes renders with no octal escape at all."""
+entirely of printable ASCII bytes, or a Wi-Fi or MQTT password, renders
+with no escape at all. An underscore may precede it, so ``wifi_psk``
+would be caught by ``psk`` alone."""
 
 
 class SecretBytes:
@@ -383,9 +415,8 @@ def library_record_may_leak(message: str) -> bool:
         ``True`` if the message contains a Python bytes-literal prefix,
         a protobuf text-format escaped byte string, a run of 64 or more
         hex digits, a ``TORADIO``/``FROMRADIO`` frame line, a secret
-        field name
-        (``private_key``, ``admin_key``, ``psk``, ``fixed_pin``,
-        ``session_passkey``, in snake_case or camelCase), or a
+        field name (one of :data:`LIBRARY_SECRET_FIELDS`, in snake_case
+        or camelCase), or a
         ``payload:`` field (which can carry a serialized ``AdminMessage``
         including a pushed private key).
     """

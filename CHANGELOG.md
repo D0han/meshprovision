@@ -1957,6 +1957,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `mesh -vv` and `-vvv` no longer print a node's Wi-Fi password or MQTT
+  password. The meshtastic library logs every message it receives in
+  protobuf text (`Received from radio: ...`), where a printable
+  `wifi_psk` or `password` value needs no escape; the withheld-record
+  check now knows every secret field the tool itself redacts, in
+  snake_case and camelCase.
 - The HTTP cache directory is refused (exit code 2, before any request)
   when it is owned by another user or others can write to it, since they
   could plant cached answers for `mesh status` and `mesh health`; a cache
