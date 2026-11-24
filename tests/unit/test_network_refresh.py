@@ -24,6 +24,7 @@ from meshprovision.errors import (
     SettingsError,
 )
 from meshprovision.health.history import HOUR_SECONDS, floor_hour
+from meshprovision.health.refresh import SINCE_MARGIN_SECONDS
 from meshprovision.network.keystore import KeyStore
 from meshprovision.network.refresh import (
     NETWORK_DEFAULT_MAX_REGIONS,
@@ -365,19 +366,37 @@ def test_a_first_refresh_too_large_for_everything_asks_for_the_last_day(tmp_path
     assert store.state("Zachód") == RegionState(fetched_at=NOW)
 
 
+@pytest.mark.parametrize("days_ago", [2.5, 7, 60])
+def test_a_long_window_too_large_starts_over_from_the_last_day(
+    tmp_path: Path, days_ago: float
+) -> None:
+    refresher, feed, _store, now = _setup(tmp_path)
+    refresher.refresh(["Zachód"])
+    now[0] = NOW + days_ago * 24 * HOUR_SECONDS
+    feed.calls.clear()
+    feed.fail_for[("raw", "Zachód")] = _too_large()
+
+    refresher.refresh(["Zachód"])
+
+    asked = [since for kind, _, since in feed.calls if kind == "raw"]
+    assert asked == [
+        NOW - SINCE_MARGIN_SECONDS,
+        *(now[0] - hours * HOUR_SECONDS - SINCE_MARGIN_SECONDS for hours in (24, 12, 6, 3)),
+    ]
+
+
 def test_a_window_too_large_is_halved_until_it_is_too_short_to_try(tmp_path: Path) -> None:
     refresher, feed, store, now = _setup(tmp_path)
     refresher.refresh(["Zachód"])
-    now[0] = NOW + 8 * HOUR_SECONDS
+    now[0] = NOW + 8.5 * HOUR_SECONDS
     feed.calls.clear()
     feed.fail_for[("raw", "Zachód")] = _too_large()
 
     outcome = refresher.refresh(["Zachód"])
 
     asked = [since for kind, _, since in feed.calls if kind == "raw"]
-    assert len(asked) >= 2
-    assert all(a is not None for a in asked)
-    assert asked == sorted(asked)  # type: ignore[type-var]
-    assert len(set(asked)) == len(asked)
+    # 8.5 h, then half of it from the hour before (4.25 h -> 4 h, 2.25 h
+    # -> 6 h); 2.5 h left halves to 1.25 h, too short to try.
+    assert asked == [NOW + hours * HOUR_SECONDS - SINCE_MARGIN_SECONDS for hours in (0, 4, 6)]
     assert [f.region for f in outcome.failures] == ["Zachód"]
     assert store.state("Zachód") == RegionState(fetched_at=NOW)

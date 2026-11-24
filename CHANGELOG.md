@@ -779,7 +779,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   outgrow their size cap (now 128 MiB, up from 48 MiB, the HTTP client's
   ceiling; other responses keep 64 MiB) (`the response body is larger than 50331648
   bytes`). A refresh that is too large is retried with a shorter window
-  (the last day for a first refresh, then halved down to a few hours); the
+  (the last day for a first refresh or one more than two days after the
+  previous fetch, then halved down to a few hours); the
   hours left out stay unanswered, never read as silence.
 - `mesh network relays` no longer reads a loranet device-metrics time
   ahead of the observation as when a relay's metrics were taken: a relay

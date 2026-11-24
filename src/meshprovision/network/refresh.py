@@ -285,13 +285,19 @@ class RegionRefresher:
 def _narrower_since(since: int | None, now: float) -> int | None:
     """Return a shorter window start after an answer was too large, or ``None`` to give up.
 
-    Asking for everything retries with the last day; a window is halved
+    Asking for everything, or more than two days, retries with the last
+    day (lorastats keeps about a day of raw packets, and every refused
+    answer streams up to the size cap first); a shorter window is halved,
     until it is shorter than the hour the next one would need. The hours
     left out stay unanswered (see
     :func:`~meshprovision.health.history.answered_hours`), so the gap is
     never read as silence.
     """
-    span = _FIRST_NARROWED_SPAN_SECONDS if since is None else (now - since) / 2
+    span = (
+        _FIRST_NARROWED_SPAN_SECONDS
+        if since is None
+        else min((now - since) / 2, _FIRST_NARROWED_SPAN_SECONDS)
+    )
     if since is not None and span < 2 * HOUR_SECONDS:
         return None
     return floor_hour(now - span)
