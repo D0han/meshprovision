@@ -10,9 +10,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import click
 import pytest
 
 from meshprovision.cli.admin import admin_bootstrap
+from meshprovision.cli.main import cli
 from meshprovision.cli.provision import provision
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
 
@@ -169,3 +171,42 @@ def test_an_unknown_option_that_is_not_global_keeps_clicks_message(
     assert result.exit_code == 2
     assert "No such option '--no-such-thing'." in result.stderr
     assert "global option" not in result.stderr
+
+
+def _command_paths(group: click.Group, prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
+    paths = []
+    for name, command in sorted(group.commands.items()):
+        paths.append((*prefix, name))
+        if isinstance(command, click.Group):
+            paths.extend(_command_paths(command, (*prefix, name)))
+    return paths
+
+
+@pytest.mark.parametrize("path", _command_paths(cli), ids=" ".join)
+def test_every_help_page_fits_80_columns(
+    runner: CliRunner, env: dict[str, str], path: tuple[str, ...]
+) -> None:
+    result = invoke(runner, [*path, "--help"], {**env, "COLUMNS": "80"})
+
+    assert result.exit_code == 0
+    assert [line for line in result.output.splitlines() if len(line) > 80] == []
+
+
+@pytest.mark.parametrize(
+    ("args", "says"),
+    [
+        (["db", "backup", "--help"], "0 keeps them all"),
+        (["adopt", "--help"], "8 hex digits, '!'-prefixed, or decimal"),
+        (["status", "--help"], "Needs MESHPROVISION_CONTACT"),
+        (["status", "--help"], "use mesh db list"),
+        (["remote", "diff", "--help"], "--section SECTION"),
+    ],
+)
+def test_help_says_what_the_option_takes(
+    runner: CliRunner, env: dict[str, str], args: list[str], says: str
+) -> None:
+    result = invoke(runner, args, env)
+
+    assert says in " ".join(result.output.split())
+    assert "NodeId.parse" not in result.output
+    assert "by default" not in invoke(runner, ["db", "forget", "--help"], env).output

@@ -434,6 +434,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Help text: `mesh db backup --retention 0` is said to keep every
+  backup; `mesh adopt --node-id` lists the id forms it takes instead of
+  naming an internal function; `mesh db forget` no longer implies `mesh
+  db list` can hide archived nodes; `mesh remote diff --section` lists
+  its choices in the wrapped text instead of a 200-character line;
+  `mesh status --help` says it needs `MESHPROVISION_CONTACT`, when it
+  exits 7 and that `mesh db list` is the offline view; `mesh init`'s
+  next steps and the README ask to check `lora.region` (`EU_868` for
+  Poland, as shipped) rather than to edit it.
 - pydantic is now required at 2.8 or later, the first that runs on
   Python 3.13; the source distribution includes `CONTRIBUTING.md`, which
   the README links; a `.devN` release tag is published as a GitHub

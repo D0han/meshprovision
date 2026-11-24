@@ -53,7 +53,8 @@ __all__ = [
 ]
 
 NEXT_STEPS: Final[tuple[str, ...]] = (
-    "Edit config/template.yaml -- at minimum lora.region, the name patterns, and admin_nodes.",
+    "Edit config/template.yaml -- check lora.region (EU_868 for Poland), and edit the name "
+    "patterns and admin_nodes.",
     "mesh template validate",
     "mesh db verify",
     "mesh provision --dry-run --port /dev/ttyUSB0",

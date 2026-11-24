@@ -497,7 +497,10 @@ def status(
 
     Queries loranet.pl and lorastats.pl (through the shared HTTP cache)
     and merges the results with each node's database record. Never writes
-    to the database or to any device.
+    to the database or to any device. Needs MESHPROVISION_CONTACT for
+    lorastats.pl; exits 7 when a node is offline or a source failed (see
+    --no-fail-on-offline). For an offline view of the database, use mesh
+    db list.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.

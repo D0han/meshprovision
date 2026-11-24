@@ -95,8 +95,8 @@ covered in [Installation](docs/installation.md).
    creates an empty `data/nodes_db.ods`. Safe to re-run. Any `mesh`
    command offers to do the same thing whenever setup is incomplete, so
    this step is optional but recommended first.
-2. Edit `config/template.yaml` — at minimum `lora.region`, the name
-   patterns, and `admin_nodes`. See the
+2. Edit `config/template.yaml` — check `lora.region` (`EU_868` for
+   Poland, as shipped), and edit the name patterns and `admin_nodes`. See the
    [template walkthrough](docs/configuration.md#template-walkthrough-configtemplateyaml).
 3. `mesh db verify` — confirms the database loads, the schema validates,
    and the key rows pass the weak-key audit. Run it after any hand-edit;

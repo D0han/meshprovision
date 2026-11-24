@@ -108,9 +108,10 @@ def remote() -> None:
     "sections",
     multiple=True,
     type=click.Choice(SECTION_CHOICES),
+    metavar="SECTION",
     help=(
         "Plan only this section (repeatable); required on LONG_MODERATE and LONG_SLOW. "
-        "Default: every section the template sets."
+        f"Default: every section the template sets. One of: {', '.join(SECTION_CHOICES)}."
     ),
 )
 @click.option(

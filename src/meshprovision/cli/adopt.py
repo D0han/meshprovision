@@ -509,7 +509,7 @@ def _refuse_admin_key_rotation(
     default=None,
     callback=node_id_callback,
     metavar="ID",
-    help="Authoritative node id for --from-backup (any form NodeId.parse accepts).",
+    help="Authoritative node id for --from-backup: 8 hex digits, '!'-prefixed, or decimal.",
 )
 @click.option(
     "--no-lookup",

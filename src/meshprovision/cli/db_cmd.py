@@ -264,7 +264,7 @@ def _print_backup_list(
     type=click.IntRange(min=0),
     default=backups.DEFAULT_RETENTION,
     show_default=True,
-    help="Number of backups to retain.",
+    help="Number of backups to retain; 0 keeps them all.",
 )
 @click.option(
     "--list",
@@ -664,8 +664,8 @@ def db_forget(ctx: CliContext, *, node_id: NodeId, yes: bool, json_output: bool)
 
     Never deletes the row: every field, including ``authorized_admin_keys``
     and ``notes``, is preserved for audit history -- only ``archived_at``
-    is set. ``mesh db list`` still shows an archived node (with its
-    ``Archived`` column filled in) by default.
+    is set. ``mesh db list`` still shows an archived node, with its
+    ``Archived`` column filled in.
 
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
