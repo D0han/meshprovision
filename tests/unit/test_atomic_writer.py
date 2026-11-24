@@ -165,12 +165,31 @@ def test_claim_backup_path_never_overwrites_an_existing_name(tmp_path: Path) -> 
     source = directory / ".tmp-copy"
     source.write_bytes(b"new")
 
-    claimed = _claim_backup_path(directory, "data-20260825T031410.123456Z.txt", source)
+    claimed = _claim_backup_path(
+        directory, "data-20260825T031410.123456Z.txt", source, suffix=".txt"
+    )
 
     assert claimed.name == "data-20260825T031410.123456Z-1.txt"
     assert (directory / "data-20260825T031410.123456Z.txt").read_bytes() == b"existing"
     assert claimed.read_bytes() == b"new"
     assert not source.exists()
+
+
+def test_a_suffix_less_targets_collision_name_is_still_one_of_its_backups(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "fleet"
+    name = backup_name(target, datetime(2026, 8, 25, 3, 14, 10, 123456, tzinfo=UTC))
+    directory = tmp_path / "backups"
+    directory.mkdir()
+    (directory / name).write_bytes(b"existing")
+    source = directory / ".tmp-copy"
+    source.write_bytes(b"new")
+
+    claimed = _claim_backup_path(directory, name, source, suffix=target.suffix)
+
+    assert claimed.name == f"{name}-1"
+    assert _backup_name_re(target).fullmatch(claimed.name)
 
 
 def test_prune_backups_keeps_exactly_retention_newest(tmp_path: Path) -> None:
@@ -975,7 +994,9 @@ def test_claim_backup_path_falls_back_and_still_claims_first_free_name(
 
     monkeypatch.setattr(atomic_writer.os, "link", unsupported_link)
 
-    claimed = _claim_backup_path(directory, "data-20260825T031410.123456Z.txt", source)
+    claimed = _claim_backup_path(
+        directory, "data-20260825T031410.123456Z.txt", source, suffix=".txt"
+    )
 
     assert claimed.name == "data-20260825T031410.123456Z-1.txt"
     assert (directory / "data-20260825T031410.123456Z.txt").read_bytes() == b"existing"

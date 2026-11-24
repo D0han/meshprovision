@@ -746,6 +746,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A database file without a suffix (`--db-path fleet`) no longer gets a
+  backup that `mesh db backup --list`, restore and pruning never see when
+  two backups claim the same timestamp: the `-1` collision mark went
+  into the timestamp instead of after it.
 - `mesh db restore` of the oldest of 20 backups no longer deletes that
   backup before the database is replaced: the pre-restore backup pruned
   it first, so a failing write lost its content. Old backups are now

@@ -311,7 +311,7 @@ def legacy_backup_notice(target: Path, *, backup_dir: Path | None = None) -> str
     )
 
 
-def _claim_backup_path(directory: Path, name: str, source: Path) -> Path:
+def _claim_backup_path(directory: Path, name: str, source: Path, *, suffix: str) -> Path:
     """Link a finished backup copy into the first free name, atomically.
 
     :func:`~meshprovision.db.fs_primitives.link_no_clobber` fails with
@@ -332,6 +332,9 @@ def _claim_backup_path(directory: Path, name: str, source: Path) -> Path:
         name: The proposed backup file name, from :func:`backup_name`.
         source: The completed temp copy to link into place. Consumed on
             success, leaving exactly one name for the new inode.
+        suffix: The target's suffix, which ``name`` ends with (``""`` for
+            a suffix-less target, whose name's last dot is the
+            timestamp's).
 
     Returns:
         The path the backup now occupies -- ``directory / name`` if it
@@ -342,9 +345,8 @@ def _claim_backup_path(directory: Path, name: str, source: Path) -> Path:
         OSError: If linking fails for any reason other than the
             candidate name already existing.
     """
-    base = directory / name
-    stem, suffix = base.stem, base.suffix
-    candidate = base
+    stem = name.removesuffix(suffix) if suffix else name
+    candidate = directory / name
     counter = 0
     while True:
         try:
@@ -482,7 +484,9 @@ def create_backup(
         # Flushed before it gets its final name, so that name never points
         # at a copy the disk does not hold yet.
         fs_primitives.fsync_file(tmp_destination)
-        destination = _claim_backup_path(resolved_dir, name, tmp_destination)
+        destination = _claim_backup_path(
+            resolved_dir, name, tmp_destination, suffix=name_targets[0].suffix
+        )
     except OSError as exc:
         with contextlib.suppress(OSError):
             tmp_destination.unlink()
