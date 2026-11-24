@@ -998,6 +998,19 @@ def test_admin_import_registers_a_held_public_key(runner: CliRunner, env: dict[s
     assert KeyRecord.from_row(rows["ADMIN9_pub"]).origin is KeyOrigin.IMPORTED
 
 
+def test_admin_import_names_the_ref_whose_key_is_not_base64(
+    runner: CliRunner, env: dict[str, str]
+) -> None:
+    kp = generate_keypair()
+
+    result = invoke(runner, ["admin", "import", f"ADMIN1={kp.public_b64}", "ADMIN3=abc"], env)
+
+    assert result.exit_code == ExitCode.CRYPTO
+    assert "ADMIN3: the public key is not valid base64" in result.stderr
+    assert "public_key" not in result.stderr
+    assert "Hint: Copy the node's public key" in result.stderr
+
+
 def test_admin_import_dry_run_reports_without_registering(
     runner: CliRunner, env: dict[str, str]
 ) -> None:

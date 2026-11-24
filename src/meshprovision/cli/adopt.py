@@ -650,8 +650,20 @@ def adopt(
     transport_given = any((port, ble_address, ble_scan, host, interface))
     if backup_paths and transport_given:
         raise click.UsageError(f"--from-backup cannot be combined with {_TRANSPORT_FLAG_NAMES}.")
-    if node_id_opt is not None and not backup_paths:
-        raise click.UsageError("--node-id only applies together with --from-backup.")
+    if not backup_paths:
+        backup_only = [
+            flag
+            for flag, given in (
+                ("--node-id", node_id_opt is not None),
+                ("--no-lookup", no_lookup),
+                ("--no-channel-psk", no_channel_psk),
+            )
+            if given
+        ]
+        if backup_only:
+            raise click.UsageError(
+                f"{', '.join(backup_only)} only applies together with --from-backup."
+            )
 
     ctx = ctx.with_assume_yes(yes)
     template = ctx.load_template()

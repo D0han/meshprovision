@@ -1568,7 +1568,9 @@ mesh admin list --json
   whose recorded key already backs an admin ref is refused the same way,
   with no bypass flag.
 - `import` registers a public key you already hold, without touching a
-  device. It validates length and canonical base64, runs the weak-key
+  device. It validates length and canonical base64 (malformed key
+  material exits `6`, naming the `REF` whose key it is; a missing `=`
+  exits `2`), runs the weak-key
   audit, and refuses a key already registered under a different reference
   unless `--allow-alias` — except when that other reference is one of
   `mesh adopt`'s own `observed-*` refs, which is not a collision to

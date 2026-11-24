@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Final, NoReturn
 from meshprovision.db.keys import KeyRecord, KeyRepository
 from meshprovision.db.nodes import NodeRepository
 from meshprovision.db.schema import KeyType, is_canonical_node_owner, ref_for
-from meshprovision.errors import RenumberRefusedError
+from meshprovision.errors import ARCHIVED_NODE_HINT, RenumberRefusedError
 from meshprovision.nodeid import NodeId, is_reserved_id, key_derived_id
 
 if TYPE_CHECKING:
@@ -152,7 +152,12 @@ def check_renumber(
             public key (which no other node row may hold).
     """
     if nodes.get(old).is_archived:
-        _refuse(f"Node {old.display} was archived via `mesh db forget`.", old=old, new=new)
+        _refuse(
+            f"Node {old.display} was archived via `mesh db forget`.",
+            old=old,
+            new=new,
+            hint=ARCHIVED_NODE_HINT,
+        )
     check_new_id(nodes, keys, old=old, new=new)
     if new_has_pending:
         _refuse(

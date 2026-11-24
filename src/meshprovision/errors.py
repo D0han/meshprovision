@@ -26,6 +26,7 @@ from enum import IntEnum, StrEnum
 from typing import ClassVar, Final
 
 __all__ = [
+    "ARCHIVED_NODE_HINT",
     "CONTACT_POLICY",
     "MAX_ADMIN_KEYS",
     "MISSING_CONTACT_HINT",
@@ -138,6 +139,13 @@ MISSING_CONTACT_MESSAGE: Final = (
     "MESHPROVISION_CONTACT is not set. lorastats.pl requires identifiable contact "
     "information in the User-Agent header of every request."
 )
+ARCHIVED_NODE_HINT: Final = (
+    "This node was archived via `mesh db forget`. If it's back in service, "
+    "clear the archive first (there is no CLI command for that yet -- edit "
+    "the Nodes sheet's archived_at cell by hand and re-run `mesh db verify`)."
+)
+"""The way back for an archived node, which every refusal of one names."""
+
 CONTACT_POLICY: Final = (
     "There is deliberately no default: lorastats.pl bans IP addresses that send "
     "missing, dummy or third-party contact details."
@@ -1041,11 +1049,7 @@ class NodeArchivedError(ProvisioningError):
         message: str,
         *,
         node_id: str,
-        hint: str | None = (
-            "This node was archived via `mesh db forget`. If it's back in service, "
-            "clear the archive first (there is no CLI command for that yet -- edit "
-            "the Nodes sheet's archived_at cell by hand and re-run `mesh db verify`)."
-        ),
+        hint: str | None = ARCHIVED_NODE_HINT,
     ) -> None:
         """Initialize the error.
 

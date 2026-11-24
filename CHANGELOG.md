@@ -753,6 +753,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh db renumber` of an archived node now gets the same hint as
+  `mesh provision` and `mesh adopt` (clear its `archived_at` cell by
+  hand), as the docs said; `mesh adopt --no-lookup` and
+  `--no-channel-psk` without `--from-backup` are refused (exit code 2)
+  like `--node-id`, instead of being silently ignored; the no-device hint
+  no longer repeats the error; and `mesh admin import` names the `REF`
+  whose key is not valid base64, with a hint where to copy it from,
+  instead of an internal `public_key` field.
 - A command named in a hint now repeats the `--db-path`, `--template-path`
   and `--env-file` given on the command line. Run as printed, `mesh db
   restore --known-good` from a run with `--db-path ex.ods` restored the

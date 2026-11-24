@@ -179,6 +179,18 @@ def test_db_renumber_refuses_without_confirmation_when_non_interactive(
     assert db_fingerprint(db_path) == before
 
 
+def test_db_renumber_of_an_archived_node_names_the_way_back(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    seed_db(nodes=[NodeRecord(node_id=_OLD.hex, archived_at=datetime(2026, 1, 1, tzinfo=UTC))])
+
+    result = invoke(runner, ["db", "renumber", _OLD.hex, "cafe0002", "--force", "--yes"], env)
+
+    assert result.exit_code == ExitCode.DB
+    assert "was archived via `mesh db forget`" in result.stderr
+    assert "edit the Nodes sheet's archived_at cell by hand" in " ".join(result.stderr.split())
+
+
 def test_db_renumber_of_an_unknown_node_is_not_found(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:

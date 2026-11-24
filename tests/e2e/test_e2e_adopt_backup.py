@@ -241,6 +241,16 @@ def test_node_id_without_from_backup_is_rejected(runner: CliRunner, env: dict[st
     assert "--node-id only applies together with --from-backup" in result.stderr
 
 
+@pytest.mark.parametrize("flag", ["--no-lookup", "--no-channel-psk"])
+def test_a_backup_only_flag_without_from_backup_is_rejected(
+    runner: CliRunner, env: dict[str, str], flag: str
+) -> None:
+    result = invoke(runner, ["adopt", flag], env)
+
+    assert result.exit_code == 2
+    assert f"{flag} only applies together with --from-backup" in result.stderr
+
+
 def test_from_backup_rejects_an_unparseable_node_id_as_a_usage_error(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:

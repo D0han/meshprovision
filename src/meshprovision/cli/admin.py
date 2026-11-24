@@ -17,7 +17,7 @@ redact.SecretBytes`. Keys are always identified by
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import click
 
@@ -46,6 +46,7 @@ from meshprovision.db.keys import KeyRecord
 from meshprovision.db.schema import KeyOrigin, KeyType
 from meshprovision.errors import (
     ExitCode,
+    KeyMaterialError,
     KeyVerificationError,
     SettingsError,
     WeakKeyError,
@@ -106,6 +107,12 @@ def _validate_admin_ref(ref: str) -> None:
                 "unrecognized admin key. Choose a different name."
             ),
         )
+
+
+_PUBLIC_KEY_HINT: Final = (
+    "Copy the node's public key (44 base64 characters, 32 bytes) from the Meshtastic "
+    "app (Settings > Security) or `meshtastic --info`."
+)
 
 
 def parse_assignment(raw: str) -> tuple[str, str]:
@@ -496,7 +503,16 @@ def admin_import(
 
         for raw in assignments:
             ref, b64 = parse_assignment(raw)
-            material = crypto_keys.decode_key(b64, field="public_key")
+            try:
+                material = crypto_keys.decode_key(b64, field=f"{ref}: the public key")
+            except KeyMaterialError as exc:
+                raise KeyMaterialError(
+                    exc.message,
+                    reason=exc.reason,
+                    expected_length=exc.expected_length,
+                    actual_length=exc.actual_length,
+                    hint=_PUBLIC_KEY_HINT,
+                ) from exc
             key_ref = schema.ref_for(ref, KeyType.ADMIN_PUBLIC)
 
             existing = db.keys.find(key_ref)

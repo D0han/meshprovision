@@ -627,8 +627,8 @@ def _select_auto(
     raise DeviceNotFoundError(
         "No serial or BLE device found.",
         hint=(
-            "No serial or BLE device found. Pass --host <ip> for TCP, --ble-scan to scan "
-            "for BLE devices, or --port <path>."
+            "Plug the node in (see docs/troubleshooting.md#usb-serial), or pass "
+            "--port /dev/ttyUSB0, --ble-scan, or --host <ip> for TCP."
         ),
     )
 

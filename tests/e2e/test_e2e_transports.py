@@ -292,7 +292,8 @@ def test_zero_port_fallback_non_interactive(
 
     assert result.exit_code == 5
     assert "No serial or BLE device found." in result.stderr
-    for hint in ("--host", "--ble-scan", "--port"):
+    assert result.stderr.count("No serial or BLE device found.") == 1
+    for hint in ("--host", "--ble-scan", "--port", "docs/troubleshooting.md#usb-serial"):
         assert hint in result.stderr
 
 
