@@ -19,9 +19,9 @@ from meshprovision.db.keys import KeyRecord
 from meshprovision.db.locking import lock_path_for
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin
-from meshprovision.errors import AtomicWriteError
+from meshprovision.errors import AtomicWriteError, ExitCode
 from tests.conftest import WIDE_TERMINAL_COLUMNS, rezip_ods
-from tests.e2e.conftest import invoke
+from tests.e2e.conftest import db_fingerprint, invoke
 from tests.unit.conftest import edit_ods_cell
 
 if TYPE_CHECKING:
@@ -264,6 +264,28 @@ def test_db_restore_refuses_without_confirmation_when_non_interactive(
 
     assert result.exit_code == 5
     assert db_path.read_bytes() == before
+
+
+def test_db_restore_declined_at_the_prompt_changes_nothing(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    backup_dir = tmp_path / "backups"
+    db_path = seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="OLD1", region="EU_868")])
+    invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir)], env)
+    old_backup = next(backup_dir.glob("*.ods"))
+    seed_db(nodes=[NodeRecord(node_id="deadbe02", short_name="NEW2", region="EU_868")])
+    before = db_fingerprint(db_path)
+
+    result = invoke(
+        runner,
+        ["--interactive", "db", "restore", str(old_backup), "--backup-dir", str(backup_dir)],
+        env,
+        input="n\n",
+    )
+
+    assert result.exit_code == ExitCode.INTERRUPTED
+    assert "Aborted." in result.stderr
+    assert db_fingerprint(db_path) == before
 
 
 def test_db_restore_of_an_unparsable_backup_reports_a_clear_error(
@@ -735,6 +757,19 @@ def test_db_forget_refuses_without_confirmation_when_non_interactive(
     assert result.exit_code == 5
     loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
     assert loaded.nodes[0]["archived_at"] == ""
+
+
+def test_db_forget_declined_at_the_prompt_changes_nothing(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    db_path = seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00")])
+    before = db_fingerprint(db_path)
+
+    result = invoke(runner, ["--interactive", "db", "forget", "deadbe01"], env, input="n\n")
+
+    assert result.exit_code == ExitCode.INTERRUPTED
+    assert "Aborted." in result.stderr
+    assert db_fingerprint(db_path) == before
 
 
 def test_db_forget_unknown_node_id_fails(

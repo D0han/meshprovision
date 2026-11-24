@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, NoReturn
 
 import pytest
 
@@ -22,7 +22,7 @@ from meshprovision.db import ods, pending_keys
 from meshprovision.db.keys import KeyRecord
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import KeyOrigin, KeyType, ManagementMode
-from meshprovision.errors import ExitCode
+from meshprovision.errors import AtomicWriteError, ExitCode
 from meshprovision.nodeid import NodeId, key_derived_id
 from meshprovision.provisioning import apply as apply_mod
 from tests.e2e.conftest import FakeMeshInterface, db_fingerprint, invoke
@@ -177,6 +177,51 @@ def test_db_renumber_refuses_without_confirmation_when_non_interactive(
 
     assert result.exit_code == ExitCode.PROVISIONING
     assert db_fingerprint(db_path) == before
+
+
+def test_db_renumber_declined_at_the_prompt_changes_nothing(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], keypair: KeyPair
+) -> None:
+    db_path = _seed_keyed(seed_db, keypair)
+    before = db_fingerprint(db_path)
+    new = key_derived_id(keypair.public)
+
+    result = invoke(
+        runner, ["--interactive", "db", "renumber", _OLD.hex, new.hex], env, input="n\n"
+    )
+
+    assert result.exit_code == ExitCode.INTERRUPTED
+    assert "Aborted." in result.stderr
+    assert db_fingerprint(db_path) == before
+
+
+def test_db_renumber_warns_when_the_pending_keypair_cannot_be_moved(
+    runner: CliRunner,
+    env: dict[str, str],
+    seed_db: Callable[..., Path],
+    keypair: KeyPair,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The row is already saved: a failed move warns and leaves the key where it was."""
+    db_path = _seed_keyed(seed_db, keypair)
+    pending_keys.write_pending(db_path, _OLD, generate_keypair(), now=datetime.now(tz=UTC))
+    new = key_derived_id(keypair.public)
+
+    def _disk_full(*_args: object, **_kwargs: object) -> NoReturn:
+        raise AtomicWriteError("No space left on device", path=str(db_path))
+
+    monkeypatch.setattr(pending_keys, "move_pending", _disk_full)
+
+    result = invoke(runner, ["db", "renumber", _OLD.hex, new.hex, "--yes"], env)
+
+    assert result.exit_code == 0, result.stderr
+    assert (
+        f"The pending keypair of {_OLD.display} could not be moved to {new.display} "
+        "(No space left on device); it stays at "
+        f"{pending_keys.pending_key_path(db_path, _OLD)}."
+    ) in " ".join(result.stderr.split())
+    assert {row["node_id"] for row in ods.load_database(db_path).nodes} == {new.hex, "cafe0003"}
+    assert pending_keys.load_pending(db_path, _OLD) is not None
 
 
 def test_db_renumber_of_an_archived_node_names_the_way_back(
