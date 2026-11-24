@@ -124,7 +124,7 @@ def health(
         template_interval=interval_of_template,
         template_preset=preset_of_template,
     )
-    with ctx.http_client(require_contact=not no_fetch) as client:
+    with ctx.http_client(sends=not no_fetch) as client:
         report = run_health(ctx.settings, options, client=client)
     if not report.nodes:
         ctx.info(

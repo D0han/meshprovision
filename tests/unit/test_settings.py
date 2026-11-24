@@ -10,6 +10,7 @@ import pytest
 from meshprovision.config.settings import (
     APP_NAME,
     DEFAULT_CACHE_TTL,
+    FROM_ENVIRONMENT,
     PROCESS_ENV_ONLY,
     Settings,
     contact_problem,
@@ -173,9 +174,69 @@ def test_contact_problem_wants_an_email_address_or_a_url(contact: str) -> None:
     )
 
 
-@pytest.mark.parametrize("contact", ["ops@", "https://", "http://[::1"])
+@pytest.mark.parametrize("contact", ["ops@", "https://", "http://[::1", "ops@.", "https://./"])
 def test_contact_problem_wants_a_domain(contact: str) -> None:
-    assert contact_problem(contact) == f"Contact '{contact}' has no domain."
+    assert contact_problem(contact) == f"Contact '{contact}' has no valid domain."
+
+
+@pytest.mark.parametrize(
+    "contact",
+    ["http://127.0.0.1", "https://[::1]/", "ops@[10.0.0.1]", "ops@[IPv6:fe80::1]", "a@[192.0.2.1]"],
+)
+def test_contact_problem_refuses_an_address_that_reaches_nobody(contact: str) -> None:
+    assert contact_problem(contact) == (
+        f"Contact '{contact}' names a loopback, private or reserved address, which reaches nobody."
+    )
+
+
+@pytest.mark.parametrize("contact", ["a@b", "https://intranet/", "ops@mailhost."])
+def test_contact_problem_refuses_a_single_label_domain(contact: str) -> None:
+    assert contact_problem(contact) == (
+        f"Contact '{contact}' has a single-label domain, which reaches nobody."
+    )
+
+
+@pytest.mark.parametrize("contact", ["Paweł Nowak <pawel@wp.pl>", "kontakt@łódź.pl"])
+def test_contact_problem_refuses_non_ascii_with_a_punycode_hint(contact: str) -> None:
+    problem = contact_problem(contact)
+
+    assert problem is not None
+    assert problem.startswith(f"Contact '{contact}' has characters other than ASCII")
+    assert "punycode (xn--...)" in problem
+
+
+@pytest.mark.parametrize("contact", ["ops@x.pl\r\nX-Evil: 1", "ops@x.pl\x00", "ops@x\x7f.pl"])
+def test_contact_problem_refuses_a_control_character_without_echoing_it(contact: str) -> None:
+    assert contact_problem(contact) == (
+        "Contact has a line break or other control character, which no header can carry."
+    )
+
+
+@pytest.mark.parametrize(
+    "contact", ["me@gmail.com, https://site.org", "me@exa mple.org", "me@gmail.com;x", "me@x.pl ("]
+)
+def test_contact_problem_wants_only_a_domain_after_the_last_at_sign(contact: str) -> None:
+    assert contact_problem(contact) == (
+        f"Contact '{contact}': the text after the last '@' must be only a domain; "
+        "add a name as `Name <me@host>`."
+    )
+
+
+@pytest.mark.parametrize(
+    "contact", ["me@mesh.local", "me@x.internal", "me@router.home.arpa", "https://nas.local/"]
+)
+def test_contact_problem_refuses_a_local_only_domain(contact: str) -> None:
+    problem = contact_problem(contact)
+
+    assert problem is not None
+    assert "placeholder" in problem
+
+
+def test_contact_problem_takes_the_domain_after_the_last_at_sign() -> None:
+    problem = contact_problem("ops@x@example.com")
+
+    assert problem is not None
+    assert "placeholder" in problem
 
 
 @pytest.mark.parametrize(
@@ -187,6 +248,12 @@ def test_contact_problem_wants_a_domain(contact: str) -> None:
         "ops@example.org.pl",
         "https://github.com/someone",
         "HTTPS://lorastats.pl/contact",
+        "kontakt@xn--dz-fja.pl",
+        "d0hanzibi+ops@gmail.com (Jan Kowalski)",
+        "Jan <jan@mesh-example.pl> (ops)",
+        "ops@[8.8.8.8]",
+        "ops@[IPv6:2606:4700:4700::1111]",
+        "https://[2606:4700:4700::1111]/",
     ],
 )
 def test_contact_problem_accepts_a_real_looking_contact(contact: str) -> None:
@@ -205,6 +272,53 @@ def test_user_agent_refuses_a_placeholder_contact(required: bool) -> None:
 def test_require_contact_refuses_a_placeholder_contact() -> None:
     with pytest.raises(SettingsError, match=r"^MESHPROVISION_CONTACT: Contact 'a@b\.test'"):
         Settings(contact="a@b.test").require_contact()
+
+
+def test_a_contact_from_dotenv_is_fixed_in_that_file(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_CONTACT=you@example.com\n", encoding="utf-8")
+    settings = load_settings(env_file=env_file, environ={}, search_dotenv=False)
+
+    with pytest.raises(SettingsError) as exc_info:
+        settings.require_contact()
+
+    assert settings.contact_source == str(env_file.absolute())
+    assert exc_info.value.hint is not None
+    assert exc_info.value.hint.startswith(
+        f"Set MESHPROVISION_CONTACT in {env_file.absolute()} to your own email address or URL."
+    )
+
+
+def test_a_contact_from_the_environment_overrides_dotenv_and_says_so(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_CONTACT=d0hanzibi+me@gmail.com\n", encoding="utf-8")
+    settings = load_settings(
+        env_file=env_file,
+        environ={"MESHPROVISION_CONTACT": "you@example.com"},
+        search_dotenv=False,
+    )
+
+    assert settings.contact_source == FROM_ENVIRONMENT
+    assert settings.contact_hint().startswith(
+        "MESHPROVISION_CONTACT is set in your environment, which overrides .env: unset it, "
+        "or export your own email address or URL."
+    )
+
+
+def test_a_contact_override_forgets_where_the_old_one_came_from() -> None:
+    settings = load_settings(
+        environ={"MESHPROVISION_CONTACT": "you@example.com"},
+        overrides={"contact": "d0hanzibi+me@gmail.com"},
+        search_dotenv=False,
+    )
+
+    assert settings.contact_source is None
+
+
+def test_a_client_that_sends_nothing_neither_needs_nor_checks_the_contact() -> None:
+    for contact in (None, "you@example.com"):
+        agent = Settings(contact=contact).user_agent(version="9.9.9", sends=False)
+        assert agent == "meshprovision/9.9.9"
 
 
 def test_user_agent_format() -> None:

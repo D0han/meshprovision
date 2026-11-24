@@ -71,9 +71,10 @@ Part of the meshprovision docs — see the [README](../README.md).
   isolation on a guest SSID will silently block this.
 - Separately, `mesh status`, `mesh health` and `mesh network` need
   outbound HTTPS to loranet.pl and lorastats.pl, and fail at startup with
-  a clear message if `MESHPROVISION_CONTACT` is unset (`mesh health
-  --no-fetch` and `mesh network <view> --no-fetch`, for any of `keys`,
-  `relays`, `impact` and `graph`, ask nothing and need neither). Do not
+  a clear message if `MESHPROVISION_CONTACT` is unset or a placeholder
+  (`mesh health --no-fetch` and `mesh network <view> --no-fetch`, for any
+  of `keys`, `relays`, `impact` and `graph`, ask nothing, need neither
+  and do not check the contact). Do not
   work around a lorastats block by retrying — that site bans IP
   addresses.
 - `not asked: lorastats failed for <node or region> (...)`: an earlier

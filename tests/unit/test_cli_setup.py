@@ -221,6 +221,15 @@ class TestValidateContact:
         with pytest.raises(SettingsError, match="line break"):
             validate_contact("d0hanzibi+ops\x1b@gmail.com\nX=1")
 
+    def test_rejects_a_non_ascii_contact_with_a_punycode_hint(self) -> None:
+        with pytest.raises(SettingsError, match=r"punycode \(xn--\.\.\.\)"):
+            validate_contact("Łódź d0hanzibi+ops@gmail.com")
+
+    def test_a_given_hint_replaces_every_answer_hint(self) -> None:
+        with pytest.raises(SettingsError) as exc_info:
+            validate_contact("you@example.com", hint="Pass --contact with yours.")
+        assert exc_info.value.hint == "Pass --contact with yours."
+
     @pytest.mark.parametrize("raw", ["${HOME}", "d0hanzibi+${USER}@gmail.com"])
     def test_rejects_a_variable_reference_the_env_loader_would_expand(self, raw: str) -> None:
         with pytest.raises(SettingsError, match=r"cannot contain '\$\{'"):
@@ -265,21 +274,20 @@ class TestRenderEnvText:
         [
             pytest.param("d0hanzibi+ops@gmail.com", id="plain"),
             pytest.param("Ops Team <a@b.c>", id="spaces"),
-            pytest.param("a@b.c #note", id="hash"),
+            pytest.param("Ops #1 <d0hanzibi+ops@gmail.com>", id="hash"),
             pytest.param("https://github.com/d0hanzibi/\\d", id="regex-escape"),
             pytest.param("d0hanzibi+me\\1@gmail.com", id="group-reference"),
             pytest.param(
-                "d0hanzibi+ops@gmail.com\\nMESHPROVISION_DB_PATH=/tmp/other.ods",
+                "https://github.com/d0hanzibi\\nMESHPROVISION_DB_PATH=/tmp/other.ods",
                 id="escaped-newline",
             ),
             pytest.param('Ops "Team" <a@b.c>', id="double-quotes"),
-            pytest.param('"d0hanzibi+ops@gmail.com"', id="leading-double-quote"),
-            pytest.param("'d0hanzibi+ops@gmail.com'", id="leading-single-quote"),
+            pytest.param('"Ops" <d0hanzibi+ops@gmail.com>', id="leading-double-quote"),
+            pytest.param("'Ops' <d0hanzibi+ops@gmail.com>", id="leading-single-quote"),
             pytest.param("d0hanzibi+o'brien@gmail.com", id="apostrophe"),
-            pytest.param("d0hanzibi+ops@gmail.com\\", id="trailing-backslash"),
+            pytest.param("https://github.com/d0hanzibi\\", id="trailing-backslash"),
             pytest.param('d0hanzibi+a\\"b@gmail.com', id="backslash-quote"),
             pytest.param("d0hanzibi+$HOME@gmail.com", id="bare-dollar"),
-            pytest.param("Łódź 📡 d0hanzibi+ops@gmail.com", id="non-ascii"),
         ],
     )
     def test_the_env_loader_reads_back_exactly_the_contact(self, contact: str) -> None:

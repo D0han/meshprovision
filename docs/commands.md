@@ -925,7 +925,7 @@ mesh health --refresh           # refresh even if refreshed in the last 10 minut
 |---|---|
 | `NODE` (any number) | Report on these nodes in detail instead of every active node in a table; also checks what each uplinked as an MQTT gateway |
 | `--days N` | Window of the history to judge, 1 to 30 days (default 7) |
-| `--no-fetch` | Ask nothing: use the local history and the database only (no `MESHPROVISION_CONTACT` needed) |
+| `--no-fetch` | Ask nothing: use the local history and the database only (no `MESHPROVISION_CONTACT` needed, nor checked) |
 | `--refresh` | Refresh the history even if it was refreshed in the last 10 minutes (still at most once a minute per node); refused with `--no-fetch` |
 | `--expected-interval HOURS` | Every reported node's expected interval (above 0, at most 48), as for `mesh status`; without it each node's is learned from its history, else taken from the template or its role |
 | `--json` | Emit one JSON document instead of text |
@@ -1186,7 +1186,7 @@ mesh network graph --json             # relay graph, single points, every edge
 |---|---|
 | `--days N` | Window of the stored data, 1 to 30 days (default: 30 for `keys`, 1 for the others) |
 | `--region R` | A lorastats region to look at (repeatable, at most 16); default: our nodes' regions |
-| `--no-fetch` | Ask nothing: use the stored data only (no `MESHPROVISION_CONTACT` needed) |
+| `--no-fetch` | Ask nothing: use the stored data only (no `MESHPROVISION_CONTACT` needed, nor checked) |
 | `--refresh` | Fetch even if fetched in the last 15 minutes (still at most once a minute per region); refused with `--no-fetch` |
 | `--json` | Emit one JSON document instead of text |
 

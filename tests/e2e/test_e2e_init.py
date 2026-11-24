@@ -225,6 +225,41 @@ def test_a_placeholder_contact_is_refused_and_nothing_is_created(
     assert not (tmp_path / ".env").exists()
 
 
+def test_a_placeholder_contact_option_hint_names_the_option(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    result = invoke(runner, ["init", "--yes", "--contact", "you@example.com"], _BARE_ENV)
+
+    assert result.exit_code == 2, result.output
+    assert "Hint: Pass --contact with your own email address or URL." in result.stderr
+
+
+def test_a_placeholder_contact_from_the_environment_gets_a_note(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    env = {**_BARE_ENV, "MESHPROVISION_CONTACT": "you@example.com"}
+
+    result = invoke(runner, ["init", "--yes"], env)
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "data" / "nodes_db.ods").is_file()
+    assert "MESHPROVISION_CONTACT: Contact 'you@example.com' is a placeholder" in result.stderr
+    assert "set in your environment, which overrides .env: unset it" in result.stderr
+
+
+def test_a_placeholder_contact_in_dotenv_gets_a_note_naming_the_file(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    (tmp_path / ".env").write_text("MESHPROVISION_CONTACT=you@example.com\n", encoding="utf-8")
+
+    result = invoke(runner, ["init", "--yes", "--json"], _BARE_ENV)
+
+    assert result.exit_code == 0, result.output
+    [note] = json.loads(result.stdout)["notes"]
+    assert note.startswith("MESHPROVISION_CONTACT: Contact 'you@example.com' is a placeholder")
+    assert f"Set MESHPROVISION_CONTACT in {tmp_path / '.env'} to your own" in note
+
+
 def test_already_complete_json_lists_only_present_paths(runner: CliRunner, tmp_path: Path) -> None:
     invoke(runner, ["init", "--yes", "--contact", "d0hanzibi+ops@gmail.com"], _BARE_ENV)
 

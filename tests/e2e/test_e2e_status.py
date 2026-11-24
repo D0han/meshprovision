@@ -593,6 +593,20 @@ def test_a_placeholder_contact_exits_two_before_any_request(
     assert result.exit_code == 2
     assert result.stdout == ""
     assert "MESHPROVISION_CONTACT: Contact 'you@example.com' is a placeholder" in result.stderr
+    assert "set in your environment, which overrides .env" in result.stderr
+
+
+def test_a_non_ascii_contact_exits_two_instead_of_failing_in_the_header(
+    runner: CliRunner, env: dict[str, str], mock_sources: Callable[..., respx.MockRouter]
+) -> None:
+    env = {**env, "MESHPROVISION_CONTACT": "Paweł Nowak <d0hanzibi+pn@gmail.com>"}
+
+    with mock_sources(nodes={}) as router:
+        result = invoke(runner, ["status", "--json"], env)
+        assert all(route.call_count == 0 for route in router.routes)
+
+    assert result.exit_code == 2, result.output
+    assert "punycode (xn--...)" in result.stderr
 
 
 def test_source_filter_makes_zero_lorastats_requests(

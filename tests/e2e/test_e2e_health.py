@@ -278,6 +278,19 @@ def test_no_fetch_asks_nothing_and_needs_no_contact(
     assert [node["metrics"]["receptions"] for node in document["nodes"]] == [36, 36]
 
 
+def test_no_fetch_ignores_a_placeholder_contact_it_never_sends(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    env = {**env, "MESHPROVISION_CONTACT": "you@example.com"}
+
+    with respx.mock(assert_all_mocked=True) as router:
+        result = invoke(runner, ["health", "--no-fetch", "--json"], env)
+
+    assert result.exit_code == 0, result.output
+    assert router.calls.call_count == 0
+
+
 def test_no_fetch_without_history_reports_unknown(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:

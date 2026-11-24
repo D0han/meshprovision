@@ -62,6 +62,7 @@ NEXT_STEPS: Final[tuple[str, ...]] = (
 _CONTACT_PROMPT = "Contact address (email or URL) for lorastats.pl"
 _CONTACT_ATTEMPTS = 3
 _CONTACT_HINT = "Pass --contact ADDRESS (your own email address or URL)."
+_CONTACT_OPTION_HINT = "Pass --contact with your own email address or URL."
 _YES_HINT = "Pass --yes --contact ADDRESS to create the missing files without prompting."
 
 
@@ -179,7 +180,11 @@ def _create_item(ctx: CliContext, item: SetupItem, *, contact: str | None) -> st
     if item.kind == "env":
         # An explicitly supplied --contact is validated directly, with no
         # re-prompt loop, since it isn't a shape the operator can retype.
-        answer = validate_contact(contact) if contact is not None else _prompt_for_contact(ctx)
+        answer = (
+            validate_contact(contact, hint=_CONTACT_OPTION_HINT)
+            if contact is not None
+            else _prompt_for_contact(ctx)
+        )
         create_env_file(item.path, contact=answer)
         return answer
     if item.kind == "template":
@@ -339,3 +344,6 @@ def init(ctx: CliContext, *, yes: bool, contact: str | None, json_output: bool) 
     outcome = run_setup(ctx, status, contact=contact)
     if json_output:
         echo_json(_outcome_json(outcome))
+    else:
+        for note in outcome.notes:
+            ctx.warn(note)

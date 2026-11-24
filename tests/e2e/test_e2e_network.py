@@ -318,6 +318,20 @@ def test_no_fetch_asks_nothing_and_needs_no_contact(
     assert "CRITICAL  clone (outsiders)" in result.stdout
 
 
+def test_no_fetch_ignores_a_placeholder_contact_it_never_sends(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    _run(runner, env, ["keys", "--region", "PL"])
+    placeholder = {**env, "MESHPROVISION_CONTACT": "you@example.com"}
+
+    result, lorastats = _run(runner, placeholder, ["keys", "--region", "PL", "--no-fetch"])
+
+    assert result.exit_code == 0, result.output
+    assert (lorastats.raw, lorastats.listed) == ([], [])
+    assert "MESHPROVISION_CONTACT" not in result.stderr
+
+
 def test_no_fetch_without_stored_data_exits_three(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
 ) -> None:

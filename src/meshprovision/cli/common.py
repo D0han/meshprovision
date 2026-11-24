@@ -998,13 +998,16 @@ class CliContext:
 
         return DbSession(db=db, nodes=NodeRepository(db), keys=KeyRepository(db))
 
-    def http_client(self, *, require_contact: bool = True) -> CachedHTTPClient:
+    def http_client(self, *, require_contact: bool = True, sends: bool = True) -> CachedHTTPClient:
         """Build a :class:`~meshprovision.cache.http.CachedHTTPClient` from settings.
 
         Args:
             require_contact: Whether a missing ``MESHPROVISION_CONTACT``
                 should raise. Set to ``False`` on paths that never query
                 lorastats.
+            sends: ``False`` when the command will send nothing
+                (``--no-fetch``): the contact is then neither required
+                nor checked, as it is never sent.
 
         Returns:
             A new cache-backed HTTP client, configured from
@@ -1020,7 +1023,7 @@ class CliContext:
 
         return CachedHTTPClient(
             cache_dir=self.settings.cache_dir,
-            user_agent=self.settings.user_agent(require_contact=require_contact),
+            user_agent=self.settings.user_agent(require_contact=require_contact, sends=sends),
             ttl=self.settings.cache_ttl,
             force_refresh=self.force_refresh,
         )

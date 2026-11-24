@@ -26,6 +26,7 @@ other invalid setting.
 from __future__ import annotations
 
 import io
+import ipaddress
 import logging
 import os
 import re
@@ -41,7 +42,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from meshprovision.config.env_trust import find_env_file, read_discovered_env_file
 from meshprovision.datasources.lorastats import validate_regions
-from meshprovision.errors import MISSING_CONTACT_HINT, MissingContactError, SettingsError
+from meshprovision.errors import (
+    CONTACT_POLICY,
+    MISSING_CONTACT_HINT,
+    MissingContactError,
+    SettingsError,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -53,6 +59,7 @@ __all__ = [
     "DEFAULT_TEMPLATE_PATH",
     "ENV_FIELD_MAP",
     "ENV_PREFIX",
+    "FROM_ENVIRONMENT",
     "PROCESS_ENV_ONLY",
     "LogLevel",
     "Settings",
@@ -106,24 +113,92 @@ PROCESS_ENV_ONLY: Final[frozenset[str]] = frozenset(
 -- never from ``.env``, and not :class:`Settings` fields."""
 
 
+FROM_ENVIRONMENT: Final[str] = "environment"
+""":attr:`Settings.contact_source` for a contact from the process environment."""
+
+
 _RESERVED_CONTACT_DOMAINS: Final[frozenset[str]] = frozenset(
-    {"example.com", "example.org", "example.net", "example", "test", "invalid", "localhost"}
+    {
+        "example.com",
+        "example.org",
+        "example.net",
+        "example",
+        "test",
+        "invalid",
+        "localhost",
+        "local",
+        "internal",
+        "home.arpa",
+    }
 )
-"""Domains reserved for documentation and testing (RFC 2606, RFC 6761), or
+"""Domains reserved for documentation and testing (RFC 2606, RFC 6761), for
+local networks only (``.local``, RFC 6762; ``home.arpa``, RFC 8375; ``.internal``), or
 this machine. A contact under one of them, or under a subdomain of one,
 never reaches anyone."""
 
-_EMAIL_HOST_RE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9.-]*")
-"""The host-name characters at the start of an email address's domain part."""
+_EMAIL_DOMAIN_RE: Final[re.Pattern[str]] = re.compile(
+    r"[A-Za-z0-9.-]+|\[(?:IPv6:)?([0-9A-Fa-f:.]+)\]"
+)
+"""An email address's whole domain part: a host name, or a bracketed IP
+address literal (RFC 5321, ``[192.0.2.1]`` or ``[IPv6:2001:db8::1]``)."""
+
+_TRAILING_COMMENT_RE: Final[re.Pattern[str]] = re.compile(r"\s+\([^()]*\)\Z")
+"""A trailing RFC 5322 comment after an email address, ``me@host (Jan)``."""
+
+
+def _ip_literal(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    """Parse ``host`` as an IP address, or return ``None`` for a host name."""
+    try:
+        return ipaddress.ip_address(host)
+    except ValueError:
+        return None
+
+
+def _email_domain(text: str) -> str:
+    """Return what follows an email contact's last ``@``, without ``>`` or a comment."""
+    domain = _TRAILING_COMMENT_RE.sub("", text.rsplit("@", 1)[1])
+    return domain.removesuffix(">") if "<" in text else domain
+
+
+def _text_after_domain(text: str) -> bool:
+    """Tell whether an email contact has more than a domain after its last ``@``."""
+    if text.lower().startswith(("http://", "https://")) or "@" not in text:
+        return False
+    domain = _email_domain(text)
+    match = _EMAIL_DOMAIN_RE.match(domain)
+    return match is not None and match.end() < len(domain)
+
+
+def _contact_host(text: str) -> str | None:
+    """Return the host an email address or URL contact names, ``""`` for none.
+
+    Returns ``None`` when ``text`` is neither an email address nor an
+    ``http(s)://`` URL.
+    """
+    if text.lower().startswith(("http://", "https://")):
+        try:
+            return urlsplit(text).hostname or ""
+        except ValueError:
+            return ""
+    if "@" not in text:
+        return None
+    domain = _email_domain(text)
+    match = _EMAIL_DOMAIN_RE.fullmatch(domain)
+    if match is None:
+        return ""
+    return match.group(1) or match.group(0)
 
 
 def contact_problem(contact: str) -> str | None:
     """Say why a contact string cannot identify the operator, if it cannot.
 
     lorastats.pl bans IP addresses that send a dummy contact, so a contact
-    must be an email address or an ``http(s)://`` URL, and its domain must
-    not be a reserved example domain (``example.com``, ``*.example``,
-    ``*.test``, ``*.invalid``, ``localhost``, ...).
+    must be an email address or an ``http(s)://`` URL in printable ASCII
+    (it travels in an HTTP header), its domain must have two labels or
+    more and must not be a reserved example domain (``example.com``,
+    ``*.example``, ``*.test``, ``*.invalid``, ``localhost``, ...), and an
+    IP address in it must be a public one. Only reserved domains are
+    recognised as placeholders: any other domain is taken to be yours.
 
     Args:
         contact: The contact string, as configured.
@@ -132,24 +207,38 @@ def contact_problem(contact: str) -> str | None:
         ``None`` for a usable contact; otherwise a one-sentence reason.
     """
     text = contact.strip()
-    if text.lower().startswith(("http://", "https://")):
-        try:
-            host = urlsplit(text).hostname or ""
-        except ValueError:
-            host = ""
-    elif "@" in text:
-        match = _EMAIL_HOST_RE.match(text.rsplit("@", 1)[1])
-        host = match.group(0) if match else ""
-    else:
+    if any(char < " " or char == "\x7f" for char in text):
+        return "Contact has a line break or other control character, which no header can carry."
+    if not text.isascii():
+        return (
+            f"Contact '{text}' has characters other than ASCII, which an HTTP header cannot "
+            "carry: write the domain in punycode (xn--...) and drop diacritics from any name."
+        )
+    if _text_after_domain(text):
+        return (
+            f"Contact '{text}': the text after the last '@' must be only a domain; "
+            "add a name as `Name <me@host>`."
+        )
+    host = _contact_host(text)
+    if host is None:
         return f"Contact '{text}' is neither an email address nor an http(s):// URL."
-    labels = host.lower().rstrip(".").split(".")
     if not host.strip("."):
-        return f"Contact '{text}' has no domain."
+        return f"Contact '{text}' has no valid domain."
+    address = _ip_literal(host)
+    if address is not None:
+        if address.is_global:
+            return None
+        return (
+            f"Contact '{text}' names a loopback, private or reserved address, which reaches nobody."
+        )
+    labels = host.lower().rstrip(".").split(".")
     if any(".".join(labels[i:]) in _RESERVED_CONTACT_DOMAINS for i in range(len(labels))):
         return (
             f"Contact '{text}' is a placeholder: its domain is reserved for examples "
             "and reaches nobody."
         )
+    if len(labels) < 2:
+        return f"Contact '{text}' has a single-label domain, which reaches nobody."
     return None
 
 
@@ -181,6 +270,9 @@ class Settings(BaseModel):
         contact: Operator contact string sent to lorastats.pl in the
             ``User-Agent`` header. ``None`` when unset -- there is
             deliberately no default value.
+        contact_source: Where :attr:`contact` came from, for hints:
+            :data:`FROM_ENVIRONMENT`, or the absolute path of the
+            ``.env`` file. ``None`` when not known (set directly).
         lorastats_regions: The lorastats regions ``mesh status`` queries
             when no ``--region`` is given, validated and NFC-normalized by
             :func:`~meshprovision.datasources.lorastats.validate_regions`.
@@ -206,6 +298,7 @@ class Settings(BaseModel):
     cache_dir: Path = Field(default_factory=default_cache_dir)
     cache_ttl: float = Field(default=DEFAULT_CACHE_TTL, ge=0.0)
     contact: str | None = None
+    contact_source: str | None = None
     lorastats_regions: tuple[str, ...] | None = None
     log_level: LogLevel = DEFAULT_LOG_LEVEL
 
@@ -312,10 +405,35 @@ class Settings(BaseModel):
             raise MissingContactError()
         problem = contact_problem(self.contact)
         if problem is not None:
-            raise SettingsError(f"MESHPROVISION_CONTACT: {problem}", hint=MISSING_CONTACT_HINT)
+            raise SettingsError(f"MESHPROVISION_CONTACT: {problem}", hint=self.contact_hint())
         return self.contact
 
-    def user_agent(self, *, version: str | None = None, require_contact: bool = True) -> str:
+    def contact_hint(self) -> str:
+        """Say how to fix the contact where it is actually set.
+
+        The environment overrides ``.env``, so editing ``.env`` cannot fix
+        a contact exported in the shell.
+
+        Returns:
+            A hint naming :attr:`contact_source`.
+        """
+        if self.contact_source == FROM_ENVIRONMENT:
+            where = (
+                "MESHPROVISION_CONTACT is set in your environment, which overrides .env: "
+                "unset it, or export your own email address or URL."
+            )
+        elif self.contact_source is not None:
+            where = (
+                f"Set MESHPROVISION_CONTACT in {self.contact_source} to your own email "
+                "address or URL."
+            )
+        else:
+            return MISSING_CONTACT_HINT
+        return f"{where} {CONTACT_POLICY}"
+
+    def user_agent(
+        self, *, version: str | None = None, require_contact: bool = True, sends: bool = True
+    ) -> str:
         """Build the ``User-Agent`` string sent to lorastats.pl.
 
         Args:
@@ -325,11 +443,14 @@ class Settings(BaseModel):
                 raise. Set to ``False`` on paths that never query
                 lorastats, where contact-bearing identification is not
                 required.
+            sends: ``False`` for a client that sends nothing (``--no-fetch``):
+                the agent is then the bare product token, and the contact
+                is neither required nor checked.
 
         Returns:
             A string of the form ``"meshprovision/<version> (+<contact>)"``,
-            or bare ``"meshprovision/<version>"`` when ``require_contact``
-            is ``False`` and no contact is configured.
+            or bare ``"meshprovision/<version>"`` when nothing is sent, or
+            ``require_contact`` is ``False`` and no contact is configured.
 
         Raises:
             MissingContactError: If :attr:`contact` is unset **and**
@@ -337,13 +458,13 @@ class Settings(BaseModel):
                 startup gate lorastats.pl access requires.
             SettingsError: If :attr:`contact` is set but is a
                 placeholder (see :func:`contact_problem`), whatever
-                ``require_contact`` says.
+                ``require_contact`` says, unless nothing is sent.
         """
         if version is None:
             from meshprovision import __version__ as package_version
 
             version = package_version
-        if not require_contact and self.contact is None:
+        if not sends or (not require_contact and self.contact is None):
             return f"meshprovision/{version}"
         contact = self.require_contact()
         return f"meshprovision/{version} (+{contact})"
@@ -440,20 +561,23 @@ def load_settings(
             :class:`Settings` validation.
     """
     values: dict[str, str] = {}
+    origins: dict[str, str] = {}
     unrecognized: set[str] = set()
     if search_dotenv or env_file is not None:
         dotenv_values: dict[str, str | None] | None = None
+        dotenv_path: Path | None
         if env_file is not None:
-            explicit_path = Path(env_file)
-            if explicit_path.is_file():
-                dotenv_values = dotenv.dotenv_values(explicit_path)
+            dotenv_path = Path(env_file)
+            if dotenv_path.is_file():
+                dotenv_values = dotenv.dotenv_values(dotenv_path)
         else:
-            discovered_path = find_env_file()
-            if discovered_path is not None:
-                text = read_discovered_env_file(discovered_path)
+            dotenv_path = find_env_file()
+            if dotenv_path is not None:
+                text = read_discovered_env_file(dotenv_path)
                 dotenv_values = dotenv.dotenv_values(stream=io.StringIO(text))
-        if dotenv_values is not None:
+        if dotenv_values is not None and dotenv_path is not None:
             values.update({k: v for k, v in dotenv_values.items() if v is not None})
+            origins.update(dict.fromkeys(values, str(dotenv_path.absolute())))
             unrecognized.update(_unrecognized_env_keys(dotenv_values))
             env_only = sorted(PROCESS_ENV_ONLY.intersection(dotenv_values))
             if env_only:
@@ -465,7 +589,9 @@ def load_settings(
                 )
 
     source_environ = environ if environ is not None else os.environ
-    values.update({k: v for k, v in source_environ.items() if k in ENV_FIELD_MAP})
+    from_environ = {k: v for k, v in source_environ.items() if k in ENV_FIELD_MAP}
+    values.update(from_environ)
+    origins.update(dict.fromkeys(from_environ, FROM_ENVIRONMENT))
     unrecognized.update(_unrecognized_env_keys(source_environ))
 
     if unrecognized:
@@ -482,8 +608,12 @@ def load_settings(
         if raw is not None and raw.strip():
             data[field] = raw.strip()
 
+    if "contact" in data:
+        data["contact_source"] = origins["MESHPROVISION_CONTACT"]
     if overrides:
         data.update({k: v for k, v in overrides.items() if v is not None})
+        if overrides.get("contact") is not None and overrides.get("contact_source") is None:
+            data.pop("contact_source", None)
 
     try:
         return Settings.model_validate(data)

@@ -139,7 +139,7 @@ def _collect(
         neighbors=neighbors,
     )
     known_bad = ctx.known_bad_keys()
-    with ctx.http_client(require_contact=not no_fetch) as client:
+    with ctx.http_client(sends=not no_fetch) as client:
         return run_network(ctx.settings, options, client=client, known_bad=known_bad)
 
 

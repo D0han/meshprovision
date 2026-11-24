@@ -220,7 +220,15 @@ def inspect_setup(
         found = find_env_file(base)
         env_path = found if found is not None else base / ".env"
 
-    if settings.contact is not None:
+    problem = None if settings.contact is None else contact_problem(settings.contact)
+    if problem is not None:
+        env_item = SetupItem(
+            kind="env",
+            path=env_path,
+            present=True,
+            note=f"MESHPROVISION_CONTACT: {problem} {settings.contact_hint()}",
+        )
+    elif settings.contact is not None:
         env_item = SetupItem(kind="env", path=env_path, present=True)
     elif env_path.is_file():
         env_item = SetupItem(
@@ -273,7 +281,7 @@ def should_offer_setup(
     return not status.complete
 
 
-def validate_contact(raw: str) -> str:
+def validate_contact(raw: str, *, hint: str | None = None) -> str:
     """Validate an operator-supplied contact string.
 
     Mirrors :meth:`~meshprovision.config.settings.Settings.
@@ -285,6 +293,8 @@ def validate_contact(raw: str) -> str:
 
     Args:
         raw: The raw answer to validate.
+        hint: The hint every refusal carries instead of its own
+            prompt-answer wording, for a value given as ``--contact``.
 
     Returns:
         ``raw``, stripped of leading/trailing whitespace.
@@ -299,27 +309,27 @@ def validate_contact(raw: str) -> str:
     if not stripped:
         raise SettingsError(
             "Contact address cannot be blank.",
-            hint="Enter your own email address or URL.",
+            hint=hint or "Enter your own email address or URL.",
         )
     if "\n" in stripped or "\r" in stripped:
         raise SettingsError(
             "Contact address cannot contain a line break.",
-            hint="Enter a single-line email address or URL.",
+            hint=hint or "Enter a single-line email address or URL.",
         )
     if not stripped.isprintable():
         raise SettingsError(
             "Contact address cannot contain control or other non-printable characters.",
-            hint="Enter a plain email address or URL.",
+            hint=hint or "Enter a plain email address or URL.",
         )
     if "${" in stripped:
         raise SettingsError(
             "Contact address cannot contain '${': the .env loader would expand it as a "
             "variable reference.",
-            hint="Enter a plain email address or URL.",
+            hint=hint or "Enter a plain email address or URL.",
         )
     problem = contact_problem(stripped)
     if problem is not None:
-        raise SettingsError(problem, hint="Enter your own email address or URL.")
+        raise SettingsError(problem, hint=hint or "Enter your own email address or URL.")
     return stripped
 
 

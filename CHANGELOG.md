@@ -477,8 +477,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reserved for examples or tests (`example.com`, `example.org`,
   `example.net`, `*.example`, `*.test`, `*.invalid`, `localhost`) is
   refused with exit code 2 before any request: lorastats.pl bans IP
-  addresses that send a dummy contact. `docs/commands.md` no longer
-  shows such an address.
+  addresses that send a dummy contact. So are a local-only domain
+  (`*.local`, `*.internal`, `home.arpa`), text after an email domain
+  (other than a `(comment)`; the hint asks for `Name <me@host>`), a
+  single-label domain, a loopback, private or reserved IP address, and
+  anything but printable ASCII (a non-ASCII name or domain made every
+  lorastats request fail with a raw `UnicodeEncodeError`; the hint asks
+  for punycode). The hint names where the value comes from: the `.env`
+  file by its path, or the environment, which overrides `.env`.
+  `--no-fetch` runs, which send nothing, do not check the contact, and
+  `mesh init` warns about one set in the environment or `.env`.
+  `docs/commands.md` no longer shows such an address.
 - Firmware 2.8.2 checked against the firmware source: the node-identity
   behaviour meshprovision relies on is unchanged; documented what changed
   (signing policy meanings, key clamping, own-number drop, my_info re-send

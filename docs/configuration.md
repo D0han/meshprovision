@@ -62,12 +62,23 @@ that send missing, dummy, or third-party contact details — a default
 would make someone else wear your traffic.
 
 The contact must be an email address (with `@`) or an `http://`/`https://`
-URL. A placeholder is refused with exit code `2` before any request: a
-domain reserved for examples or tests (`example.com`, `example.org`,
-`example.net`, any `*.example`, `*.test` or `*.invalid` name, or
-`localhost`, including their subdomains). `mesh init` refuses one the same
-way, and so does every command that sends the contact, even one that only
-asks loranet.
+URL, in printable ASCII since it travels in an HTTP header (write an
+internationalised domain in punycode, `xn--...`, and drop diacritics from
+a name). Every command that sends the contact, even one that only asks
+loranet, refuses with exit code `2`, before any request, a contact that
+cannot reach you: a domain reserved for examples or tests (`example.com`,
+`example.org`, `example.net`, any `*.example`, `*.test` or `*.invalid`
+name, `localhost`, and the local-only `*.local`, `*.internal` and
+`home.arpa`, including their subdomains), a single-label domain
+(`ops@mailhost`), or a loopback, private or reserved IP address (a public
+one in brackets is fine). The text after the last `@` must be only a
+domain (a trailing `(comment)` is allowed): add a name as `Name
+<me@host>`. Only these are recognised:
+any other domain is assumed to be yours. The hint says where to fix it:
+the `.env` file by its path, or your shell, whose exported value
+overrides `.env`. A `--no-fetch` run sends nothing and does not check the
+contact. `mesh init` refuses such a `--contact`, and warns (exit code `0`)
+about one already set in the environment or `.env`.
 
 ## Template walkthrough (`config/template.yaml`)
 

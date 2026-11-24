@@ -26,6 +26,7 @@ from enum import IntEnum, StrEnum
 from typing import ClassVar, Final
 
 __all__ = [
+    "CONTACT_POLICY",
     "MAX_ADMIN_KEYS",
     "MISSING_CONTACT_HINT",
     "AdminKeyCapacityError",
@@ -137,10 +138,15 @@ MISSING_CONTACT_MESSAGE: Final = (
     "MESHPROVISION_CONTACT is not set. lorastats.pl requires identifiable contact "
     "information in the User-Agent header of every request."
 )
-MISSING_CONTACT_HINT: Final = (
-    "Set MESHPROVISION_CONTACT in your .env file to your own email address or URL. "
+CONTACT_POLICY: Final = (
     "There is deliberately no default: lorastats.pl bans IP addresses that send "
     "missing, dummy or third-party contact details."
+)
+"""The reason every contact hint ends with."""
+
+MISSING_CONTACT_HINT: Final = (
+    "Set MESHPROVISION_CONTACT in your .env file to your own email address or URL. "
+    + CONTACT_POLICY
 )
 
 
