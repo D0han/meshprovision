@@ -20,6 +20,7 @@ still missing, via :func:`~meshprovision.cli.init_cmd.maybe_offer_setup`
 
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 from typing import Final
 
@@ -179,7 +180,10 @@ def cli(
         raise SettingsError(
             f"--env-file {env_file} is not an existing file; refusing to fall back to "
             "the default settings.",
-            hint=f"Check the path, or create it with `mesh --env-file {env_file} init`.",
+            hint=(
+                "Check the path, or create it with "
+                f"`mesh --env-file {shlex.quote(str(env_file))} init`."
+            ),
         )
     settings = build_settings(
         env_file=env_file,

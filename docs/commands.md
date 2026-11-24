@@ -52,6 +52,12 @@ or a command in them stays on one line for copying.
 turns every prompt into an error — which is what makes `mesh` cron-safe
 (see [Running from cron](#running-from-cron)).
 
+A `mesh` command named in a hint or message (`Run: mesh db restore
+--known-good`, `mesh init`'s next steps) repeats the `--env-file`,
+`--db-path` and `--template-path` given on the command line, so running
+it acts on the same files; values from the environment or `.env` carry
+over by themselves and are not repeated.
+
 ## `mesh init`
 
 Creates whatever first-run artifacts (`.env`, `config/template.yaml`,

@@ -62,6 +62,7 @@ CLI_HELPER_MODULES: Final[frozenset[str]] = frozenset(
     {
         "__init__",
         "adopt_backup",
+        "command_text",
         "common",
         "help_format",
         "logging_setup",
@@ -146,6 +147,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("provisioning/discovery.py", ("meshtastic", "meshprovision.provisioning.connection")),
     ("config/settings.py", ("meshprovision.config.template",)),
     ("cli/help_format.py", ("meshprovision",)),
+    ("cli/command_text.py", ("meshprovision",)),
     ("cli/logging_setup.py", ("meshprovision.cli",)),
     ("cli/adopt_backup.py", _CLI_COMMANDS),
     ("cli/common.py", _CLI_COMMANDS),

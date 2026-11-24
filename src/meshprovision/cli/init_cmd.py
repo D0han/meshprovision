@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Final
 
 import click
 
+from meshprovision.cli.command_text import mesh_command
 from meshprovision.cli.common import (
     CONTEXT_SETTINGS,
     echo_json,
@@ -266,7 +267,8 @@ def run_setup(
     if created:
         ctx.info("Next steps:")
         for index, step in enumerate(NEXT_STEPS, start=1):
-            ctx.info(f"  {index}. {step}")
+            shown = mesh_command(step.removeprefix("mesh ")) if step.startswith("mesh ") else step
+            ctx.info(f"  {index}. {shown}")
 
     present = tuple(item.path for item in status.items if item.present)
     return SetupOutcome(

@@ -746,6 +746,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A command named in a hint now repeats the `--db-path`, `--template-path`
+  and `--env-file` given on the command line. Run as printed, `mesh db
+  restore --known-good` from a run with `--db-path ex.ods` restored the
+  default database instead (after a confirmation naming it), `mesh init`
+  created nothing at the path in question, and `mesh db backup --list`
+  listed another database's backups.
 - A template that gives one key twice in a mapping (a pasted second
   `region:` in `lora:`) is refused with exit code 2, naming both lines,
   instead of silently meaning the last value. A key a YAML `<<` merge

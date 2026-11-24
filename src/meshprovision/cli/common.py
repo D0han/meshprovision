@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any, Final, ParamSpec, TypeVar
 import click
 from rich.console import Console
 
+from meshprovision.cli.command_text import with_invocation_globals
 from meshprovision.config import template as template_module
 from meshprovision.config.settings import Settings, load_settings
 from meshprovision.crypto import known_bad_keys, redact
@@ -287,9 +288,11 @@ def _emit_error(text: str) -> None:
         text: The error text to print. Passed through
             :func:`meshprovision.termsafe.terminal_safe` and then
             :func:`meshprovision.crypto.redact.scrub_text` as defence in
-            depth before being printed.
+            depth before being printed. A ``mesh`` command it names gets
+            this invocation's file options (see
+            :func:`~meshprovision.cli.command_text.with_invocation_globals`).
     """
-    safe_text = terminal_safe(text, allow_newlines=True)
+    safe_text = terminal_safe(with_invocation_globals(text), allow_newlines=True)
     _ERR_CONSOLE.print(
         redact.scrub_text(safe_text), style="red", markup=False, highlight=False, soft_wrap=True
     )
@@ -581,7 +584,7 @@ class CliContext:
                 (the default).
         """
         self.err.print(
-            terminal_safe(message, allow_newlines=True),
+            terminal_safe(with_invocation_globals(message), allow_newlines=True),
             markup=False,
             highlight=False,
             soft_wrap=soft_wrap,
@@ -596,7 +599,7 @@ class CliContext:
                 this may echo a device- or datasource-reported string.
         """
         self.err.print(
-            f"warning: {terminal_safe(message, allow_newlines=True)}",
+            f"warning: {terminal_safe(with_invocation_globals(message), allow_newlines=True)}",
             style="yellow",
             markup=False,
             highlight=False,
@@ -612,7 +615,7 @@ class CliContext:
                 this may echo a device- or datasource-reported string.
         """
         self.err.print(
-            f"error: {terminal_safe(message, allow_newlines=True)}",
+            f"error: {terminal_safe(with_invocation_globals(message), allow_newlines=True)}",
             style="red",
             markup=False,
             highlight=False,
