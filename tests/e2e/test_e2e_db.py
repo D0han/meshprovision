@@ -1286,15 +1286,33 @@ def test_db_backup_list_through_a_differently_named_symlink_shows_every_backup(
     assert document["known_good"]["provenance"] == "verified"
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["db", "list"],
+        ["status"],
+        ["status", "--json"],
+        ["health", "--no-fetch"],
+        ["health"],
+        ["network", "keys", "--no-fetch"],
+        ["network", "relays", "--no-fetch"],
+        ["network", "graph", "--no-fetch"],
+        ["network", "impact", "--no-fetch"],
+    ],
+    ids=" ".join,
+)
 def test_a_missing_database_hint_names_mesh_init_and_the_path(
-    runner: CliRunner, env: dict[str, str], tmp_path: Path
+    runner: CliRunner, env: dict[str, str], tmp_path: Path, args: list[str]
 ) -> None:
+    """Every command that reads the database says it is missing, not unreadable."""
     missing = tmp_path / "elsewhere" / "nodes.ods"
     env = {**env, "MESHPROVISION_DB_PATH": str(missing)}
 
-    result = invoke(runner, ["db", "list"], env)
+    result = invoke(runner, args, env)
 
-    assert result.exit_code != 0
+    assert result.exit_code == 4
+    assert "Could not read" not in result.stderr
+    assert "chown" not in result.stderr
     assert f"Node database not found: {missing}" in result.stderr
     assert f"Run `mesh init` to create an empty database at {missing}" in result.stderr
     assert "--db-path or MESHPROVISION_DB_PATH" in result.stderr

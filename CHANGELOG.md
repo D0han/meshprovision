@@ -774,6 +774,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A missing database now gets the same "Node database not found" error
+  and `mesh init` hint (exit code 4) from `mesh status`, `mesh health`
+  and every `mesh network` view, also with `--no-fetch`, as from `mesh db
+  list`; they said "Could not read ...: No such file or directory" with a
+  `sudo chown` hint.
 - A contact whose domain has an empty label (`me@x..pl`) or a number as
   its last label (`me@999.1.1.1`, `me@1.2.3`, which are no IP addresses)
   is now refused like the other contacts that reach nobody (exit code 2).

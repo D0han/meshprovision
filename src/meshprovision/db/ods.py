@@ -46,6 +46,7 @@ from meshprovision.errors import (
     AtomicWriteError,
     DbConcurrentModificationError,
     DbIntegrityError,
+    DbReadError,
     DuplicateNodeError,
     MeshprovisionError,
     SchemaError,
@@ -56,6 +57,7 @@ __all__ = [
     "IntegrityWarningKind",
     "LoadedDatabase",
     "OdsDatabase",
+    "database_not_found",
     "load_database",
     "parse_database",
 ]
@@ -473,6 +475,28 @@ def parse_database(data: bytes, *, source: Path) -> LoadedDatabase:
     return LoadedDatabase(path=source, nodes=nodes, keys=keys, warnings=tuple(warnings))
 
 
+def database_not_found(path: Path) -> SchemaError:
+    """Build the error for a node database that does not exist.
+
+    One wording for every command: the ones that open the database through
+    the CLI session and the read-only reports (``mesh status``, ``mesh
+    health``, ``mesh network``) that load it directly.
+
+    Args:
+        path: The database path, as configured.
+
+    Returns:
+        The error to raise, with a ``mesh init`` hint.
+    """
+    return SchemaError(
+        f"Node database not found: {path}",
+        hint=(
+            f"Run `mesh init` to create an empty database at {path}, or point "
+            "--db-path or MESHPROVISION_DB_PATH at your database."
+        ),
+    )
+
+
 def _read_and_parse(path: Path) -> tuple[LoadedDatabase, bytes, os.stat_result]:
     """Read and validate an ODS database, handing back the raw bytes/stat too.
 
@@ -690,14 +714,20 @@ class OdsDatabase:
 
         Raises:
             DbReadError: If the file cannot be opened or read (permissions, I/O).
-            SchemaError: If the file is not valid ODF content or does not match its schema.
+            SchemaError: If the file does not exist (:func:`database_not_found`),
+                is not valid ODF content or does not match its schema.
             DbValidationError: If any cell fails validation.
             DuplicateNodeError: If ``Nodes.node_id`` has a duplicate.
             DbIntegrityError: If ``Keys.key_ref`` has a duplicate.
         """
         if self._loaded and not force:
             return
-        loaded, data, stat_result = _read_and_parse(self._path)
+        try:
+            loaded, data, stat_result = _read_and_parse(self._path)
+        except DbReadError as exc:
+            if isinstance(exc.__cause__, FileNotFoundError):
+                raise database_not_found(self._path) from exc
+            raise
         # Calls refresh_known_good itself, rather than going through
         # load_database(), so the file is read exactly once per load --
         # load_database()'s own public signature returns only a

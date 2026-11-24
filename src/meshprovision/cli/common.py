@@ -53,7 +53,6 @@ from meshprovision.errors import (
     MeshprovisionError,
     NodeIdError,
     NonInteractiveError,
-    SchemaError,
     exit_code_for,
 )
 from meshprovision.nodeid import NodeId
@@ -946,7 +945,7 @@ class CliContext:
         from meshprovision.db.keys import KeyRepository
         from meshprovision.db.known_good import known_good_remediation
         from meshprovision.db.nodes import NodeRepository
-        from meshprovision.db.ods import OdsDatabase
+        from meshprovision.db.ods import OdsDatabase, database_not_found
 
         path = self.settings.db_path
         # First, before any lock or load: a symlink loop is then the one
@@ -974,13 +973,7 @@ class CliContext:
             if path.is_file():
                 db.load()
             elif must_exist:
-                raise SchemaError(
-                    f"Node database not found: {path}",
-                    hint=(
-                        f"Run `mesh init` to create an empty database at {path}, or point "
-                        "--db-path or MESHPROVISION_DB_PATH at your database."
-                    ),
-                )
+                raise database_not_found(path)
             else:
                 ods_write.create_empty(path)
                 db.load(force=True)
