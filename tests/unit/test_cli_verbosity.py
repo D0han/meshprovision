@@ -13,7 +13,11 @@ from click.testing import CliRunner
 from google.protobuf.text_format import text_encoding
 from meshtastic.protobuf import admin_pb2, localonly_pb2, mesh_pb2
 
-from meshprovision.cli.logging_setup import configure_logging, resolve_log_level
+from meshprovision.cli.logging_setup import (
+    _LibrarySecretFilter,
+    configure_logging,
+    resolve_log_level,
+)
 from meshprovision.cli.main import cli
 from meshprovision.config.settings import Settings
 from meshprovision.crypto.keys import KeyPair, generate_keypair
@@ -381,6 +385,23 @@ class TestLibraryTracebacks:
         output = buf.getvalue()
         assert key.hex() not in output
         assert "traceback withheld" in output
+
+    @pytest.mark.parametrize("field", ["exc_text", "stack_info"])
+    def test_a_rendered_traceback_or_stack_carrying_a_key_is_withheld(self, field: str) -> None:
+        """rs67 T3: the text a handler already rendered, or a stack, is checked too."""
+        key_hex = generate_keypair().private.reveal().hex()
+        record = logging.LogRecord(
+            "meshtastic.mesh_interface", logging.DEBUG, __file__, 1, "write failed", (), None
+        )
+        setattr(record, field, f"Traceback (most recent call last):\n  frame {key_hex}")
+
+        assert _LibrarySecretFilter().filter(record)
+        output = logging.Formatter().format(record)
+
+        assert key_hex not in output
+        assert record.exc_text is None
+        assert record.stack_info is None
+        assert output == "write failed [traceback withheld; may contain key material]"
 
     def test_an_ordinary_library_traceback_is_kept(self) -> None:
         buf = io.StringIO()

@@ -291,7 +291,19 @@ class TestLibraryRecordMayLeak:
     ) -> None:
         assert redact_module.library_record_may_leak(f"{field}: plain")
 
-    @pytest.mark.parametrize("word", ["passwords_seen", "pskless", "public_keys"])
+    @pytest.mark.parametrize(
+        "word",
+        [
+            "passwords_seen",
+            "pskless",
+            "public_keys",
+            # rs67 T14: a letter or digit before the name, not an underscore.
+            "autopsk",
+            "mypassword",
+            "unpin",
+            "v2psk",
+        ],
+    )
     def test_a_longer_word_holding_a_secret_field_name_is_not_withheld(self, word: str) -> None:
         assert not redact_module.library_record_may_leak(f"{word}: 3")
 
