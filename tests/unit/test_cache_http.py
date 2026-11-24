@@ -1904,3 +1904,57 @@ def test_a_body_too_slow_to_arrive_fails_once_without_a_retry(
         _make_client(tmp_path, now=[1000.0]).get(URL)
 
     assert route.call_count == 1
+
+
+def _real_entry(tmp_path: Path) -> Path:
+    path = tmp_path / "entry.json"
+    path.write_bytes(b"{}")
+    return path
+
+
+def test_an_entry_that_is_not_a_regular_file_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _real_entry(tmp_path)
+    real_fstat = os.fstat
+
+    def char_device_fstat(fd: int) -> os.stat_result:
+        fields = list(real_fstat(fd))
+        fields[stat.ST_MODE] = stat.S_IFCHR | 0o600
+        return os.stat_result(fields)
+
+    monkeypatch.setattr(os, "fstat", char_device_fstat)
+
+    with pytest.raises(OSError, match="not a regular file"):
+        http_module._read_entry_bytes(path)
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_an_entry_owned_by_another_user_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _real_entry(tmp_path)
+    uid = path.stat().st_uid
+    monkeypatch.setattr(os, "getuid", lambda: uid + 1)
+
+    with pytest.raises(OSError, match="owned by another user"):
+        http_module._read_entry_bytes(path)
+
+
+@respx.mock
+def test_an_entry_of_the_largest_answer_fits_the_entry_cap(tmp_path: Path) -> None:
+    """Computed from a small entry's overhead, without a 128 MiB body."""
+    body = b"x" * 3000
+    respx.get(URL).mock(
+        return_value=httpx.Response(
+            200, content=body, headers={"Content-Type": "application/json", "ETag": '"a" * 40'}
+        )
+    )
+    client = _make_client(tmp_path, now=[1000.0])
+    response = client.get(URL)
+    entry_size = client.path_for_key(response.cache_key).stat().st_size
+    overhead = entry_size - len(base64.b64encode(body))
+
+    largest = -(-http_module.MAX_RESPONSE_BYTES // 3) * 4 + overhead
+
+    assert largest <= http_module._MAX_ENTRY_BYTES
