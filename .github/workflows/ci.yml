@@ -46,18 +46,30 @@ jobs:
 
       - name: Install
         run: |
-          python -m pip install --upgrade pip "setuptools>=84.1.0"
+          python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
       - name: pip-audit
-        # Known advisories in the installed dependency tree. setuptools is
-        # not a dependency, but the runner's copy sits in this environment,
-        # so the Install step upgrades it past its fixed releases. The editable
-        # project itself is skipped; meshtastic is checked as the release
-        # its metadata names, not as the pinned commit.
+        # Known advisories in what the project pulls in, at the installed
+        # versions. The runner's own tooling (pip, setuptools, wheel) is
+        # not a dependency and is left out, and so is the editable project;
+        # meshtastic is checked as the release its metadata names, not as
+        # the pinned commit. The list is taken before pip-audit is
+        # installed, so its own dependencies are not audited either.
         run: |
+          python - > "$RUNNER_TEMP/audit-requirements.txt" <<'EOF'
+          import importlib.metadata as metadata
+
+          SKIP = {"pip", "setuptools", "wheel", "meshprovision"}
+          pins = sorted(
+              f"{dist.metadata['Name']}=={dist.version}"
+              for dist in metadata.distributions()
+              if dist.metadata["Name"].lower() not in SKIP
+          )
+          print("\n".join(pins))
+          EOF
           pip install pip-audit==2.10.1
-          pip-audit --skip-editable
+          pip-audit --no-deps -r "$RUNNER_TEMP/audit-requirements.txt"
 
       - name: ruff check
         run: ruff check --output-format=github .
