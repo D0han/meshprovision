@@ -618,10 +618,53 @@ def load_settings(
     try:
         return Settings.model_validate(data)
     except ValidationError as exc:
-        raise SettingsError(
-            format_validation_error(exc, source="environment/.env"),
-            hint="Run `mesh init` or see the bundled env.example for every supported variable.",
-        ) from exc
+        raise _settings_error(exc, origins, overrides or {}) from exc
+
+
+_ENV_NAME_OF_FIELD: Final[Mapping[str, str]] = MappingProxyType(
+    {field: env_name for env_name, field in ENV_FIELD_MAP.items()}
+)
+
+
+def _settings_error(
+    exc: ValidationError, origins: Mapping[str, str], overrides: Mapping[str, object]
+) -> SettingsError:
+    """Turn a :class:`Settings` validation failure into an error naming each variable.
+
+    Each problem names the ``MESHPROVISION_*`` variable the user set, not
+    the field, and where its value came from: the environment (which
+    overrides ``.env``), the ``.env`` file by its path, or the command
+    line. Like :func:`format_validation_error`, it never echoes a value.
+
+    Args:
+        exc: The validation failure.
+        origins: Where each variable's value came from, by variable name
+            (:data:`FROM_ENVIRONMENT` or a ``.env`` path).
+        overrides: The command-line overrides, by field name.
+
+    Returns:
+        The error to raise.
+    """
+    lines = [f"Settings failed validation ({exc.error_count()} problem(s)):"]
+    for err in exc.errors():
+        field = str(err["loc"][0]) if err["loc"] else ""
+        env_name = _ENV_NAME_OF_FIELD.get(field)
+        if overrides.get(field) is not None or env_name is None:
+            name = f"{field or '<root>'} (from the command line)"
+        elif origins.get(env_name) == FROM_ENVIRONMENT:
+            name = f"{env_name} (from the environment)"
+        elif env_name in origins:
+            name = f"{env_name} (from {origins[env_name]})"
+        else:
+            name = env_name
+        lines.append(f"  {name}: {err['msg'].removeprefix('Value error, ')}")
+    return SettingsError(
+        "\n".join(lines),
+        hint=(
+            "Fix or unset it; every variable is described in "
+            "docs/configuration.md#environment-variables."
+        ),
+    )
 
 
 def format_validation_error(exc: ValidationError, *, source: str) -> str:

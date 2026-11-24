@@ -697,7 +697,8 @@ def validate_regions(regions: Sequence[str]) -> tuple[str, ...]:
     for token in deduplicated:
         if not REGION_PATTERN.match(token):
             raise SettingsError(
-                f"Invalid lorastats region {token!r}: must match {REGION_PATTERN.pattern}"
+                f"Invalid lorastats region {token!r}: a region is 1-64 characters without "
+                "'/', '\\', '?', '#', '%' or control characters, and not '.' or '..'."
             )
 
     return tuple(deduplicated)

@@ -88,7 +88,7 @@ def test_a_malformed_region_setting_is_a_configuration_error(
     result = invoke(runner, ["status", "--json"], env)
 
     assert result.exit_code == ExitCode.CONFIG
-    assert "lorastats_regions" in result.stderr
+    assert "MESHPROVISION_LORASTATS_REGIONS (from the environment)" in result.stderr
 
 
 _PAGE_URL = "https://lorastats.pl/Nodes"

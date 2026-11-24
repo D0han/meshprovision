@@ -434,6 +434,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- An invalid `MESHPROVISION_*` setting is now reported by its variable
+  name and where it came from (the environment, which overrides `.env`,
+  or the `.env` file by its path) instead of the internal field name and
+  "environment/.env", with a hint to fix or unset it pointing at
+  `docs/configuration.md#environment-variables` instead of `mesh init`,
+  which cannot fix it. A malformed lorastats region is described in words
+  instead of as a regular expression.
 - `mesh network relays` shows a relay reporting a battery level above
   101 as on external power (`ext`), as `mesh status` and `mesh health`
   already did, instead of leaving the reading out.

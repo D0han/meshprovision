@@ -378,6 +378,45 @@ def test_format_validation_error_lists_field_paths_never_input() -> None:
         pytest.fail("expected a ValidationError")
 
 
+def test_an_invalid_variable_from_the_environment_is_named_with_its_source() -> None:
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={"MESHPROVISION_CACHE_TTL": "abc"}, search_dotenv=False)
+
+    text = str(exc_info.value)
+    assert "MESHPROVISION_CACHE_TTL (from the environment): Input should be a valid number" in text
+    assert "cache_ttl" not in text
+    assert "abc" not in text
+    assert exc_info.value.hint == (
+        "Fix or unset it; every variable is described in "
+        "docs/configuration.md#environment-variables."
+    )
+
+
+def test_an_invalid_variable_from_dotenv_names_the_file(tmp_path: Path) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("MESHPROVISION_LOG_LEVEL=foo\n", encoding="utf-8")
+
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(env_file=env_file, environ={}, search_dotenv=False)
+
+    assert f"MESHPROVISION_LOG_LEVEL (from {env_file.absolute()}): Input should be" in str(
+        exc_info.value
+    )
+
+
+def test_an_invalid_region_is_described_in_words() -> None:
+    with pytest.raises(SettingsError) as exc_info:
+        load_settings(environ={"MESHPROVISION_LORASTATS_REGIONS": "a/b"}, search_dotenv=False)
+
+    text = str(exc_info.value)
+    assert (
+        "MESHPROVISION_LORASTATS_REGIONS (from the environment): Invalid lorastats region" in text
+    )
+    assert "1-64 characters without '/'" in text
+    assert "Value error" not in text
+    assert "\\x00" not in text
+
+
 def test_default_cache_ttl_constant() -> None:
     assert DEFAULT_CACHE_TTL == 300.0
 
@@ -419,7 +458,7 @@ def test_lorastats_regions_is_read_from_a_dotenv_file(tmp_path: Path) -> None:
 def test_a_malformed_lorastats_region_fails_settings_validation() -> None:
     with pytest.raises(SettingsError) as exc_info:
         load_settings(environ={"MESHPROVISION_LORASTATS_REGIONS": "PL,a/b"}, search_dotenv=False)
-    assert "lorastats_regions" in exc_info.value.message
+    assert "MESHPROVISION_LORASTATS_REGIONS (from the environment)" in exc_info.value.message
 
 
 def test_lorastats_regions_rejects_a_non_string_entry() -> None:
