@@ -852,3 +852,50 @@ def test_the_docs_list_the_json_node_keys_in_order() -> None:
     (node,) = json.loads(render.render_json(_report(_health())))["nodes"]
 
     assert [key for key in node if key in listed] == listed
+
+
+@pytest.mark.parametrize("width", [40, 60, 80, 100, 120])
+def test_a_narrow_table_keeps_node_verdict_and_importance_whole(width: int) -> None:
+    long_reason = Finding(Verdict.WARN, "quiet", "no lorastats data and no last-seen time")
+    report = _report(
+        _health(
+            verdict=Verdict.UNKNOWN, importance=Importance("medium", 1), findings=(long_reason,)
+        )
+    )
+    buffer = io.StringIO()
+
+    render.render_console(
+        report, console=Console(file=buffer, width=width, color_system=None), detail=False
+    )
+
+    text = buffer.getvalue()
+    assert all(len(line) <= width for line in text.splitlines())
+    kept = ("!ab446357", "UNKNOWN", "Verdict", "Reasons")
+    for whole in (*kept, "medium", "Importance") if width >= 60 else kept:
+        assert whole in text
+    assert "…" not in text.split("━")[0]
+    assert "lorastats" in "".join(text.split())
+
+
+def test_a_narrow_table_leaves_out_the_least_telling_columns_first() -> None:
+    assert render.columns_to_hide(250) == frozenset()
+    assert "Importance" in render.columns_to_hide(40)
+    assert "Importance" not in render.columns_to_hide(60)
+    assert render.columns_to_hide(80) == {
+        "Top relay",
+        "Hops\nmax/limit",
+        "Direct",
+        "GWs",
+        "SNR\nmedian",
+        "Pkt/h",
+        "Every",
+    }
+
+
+def test_a_hidden_column_takes_its_cells_with_it() -> None:
+    table = render.build_table(_report(_health()), hidden=frozenset({"Short", "Every"}))
+
+    headers = [str(column.header) for column in table.columns]
+    assert "Short" not in headers
+    assert "Every" not in headers
+    assert str(table.columns[headers.index("Verdict")]._cells[0]) == "OK"

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 from typing import TYPE_CHECKING
 
 import pytest
+from rich.console import Console
 
 from meshprovision.cli import admin
 from meshprovision.crypto.weakkeys import AuditResult, WeakKeyCheck, WeakKeyFinding
@@ -88,6 +90,33 @@ def test_admin_list_table_column_order() -> None:
         "In template",
         "Node",
         "Audit",
-        "Authorized on",
-        "Pending on",
+        "Authorized\non",
+        "Pending\non",
     ]
+
+
+def test_admin_list_at_80_columns_keeps_every_id_whole_one_per_line() -> None:
+    summary = admin_custody.AdminSummary(
+        ref="example-admin",
+        key_ref="example-admin_pub",
+        present=True,
+        fingerprint="sha256:091f6e9d",
+        has_private=False,
+        in_template=True,
+        node_id="cafe0001",
+        audit=None,
+        authorized_on=("deadbe01", "deadbe02"),
+        pending_on=("deadbe03",),
+    )
+    buffer = io.StringIO()
+
+    Console(file=buffer, width=80, color_system=None).print(
+        admin_custody.build_admin_table((summary,))
+    )
+
+    lines = buffer.getvalue().splitlines()
+    assert all(len(line) <= 80 for line in lines)
+    text = "\n".join(lines)
+    for node in ("cafe0001", "deadbe01", "deadbe02", "deadbe03"):
+        assert node in text
+    assert not any("deadbe01" in line and "deadbe02" in line for line in lines)

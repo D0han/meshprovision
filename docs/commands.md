@@ -29,7 +29,11 @@ Node ids are 8 hex digits (`deadbe01`), the form every example here uses.
 an unquoted `!` as history expansion.
 
 Tables fit the terminal width, or 80 columns when the output is piped:
-long cells wrap or are cut with `…`, though node ids are never cut. Set
+long cells wrap or are cut with `…`, though node ids are never cut (nor
+`mesh health`'s verdict and importance, or, at 80 columns or more,
+`mesh admin list`'s refs and fingerprints, which wrap instead; a narrow
+`mesh health` table leaves out its metric columns first, and its
+importance below about 60 columns). Set
 `COLUMNS` (for example `COLUMNS=200 mesh db list`) for wider tables, or use
 `--json` for everything. Messages on STDERR are never wrapped, so a path
 or a command in them stays on one line for copying.
@@ -1681,7 +1685,8 @@ With `--json`, each subcommand prints one document:
   which is also exactly what a load-failure error's hint points at.
 - `list` is the offline counterpart to `mesh status`: a plain dump of the
   `Nodes` sheet's own content (short/long name, hardware model, firmware,
-  management mode, region, role, authorized admin key refs, notes) —
+  management mode, region, role, authorized admin key refs; `--json`
+  also gives `notes`) —
   no device connection, no `MESHPROVISION_CONTACT`, no network round
   trip. Shows an `Archived` column/field for every node, archived or not.
 - `forget` archives (soft-deletes) a node: it's excluded from the default
@@ -1967,8 +1972,9 @@ adopt` and the other commands that write do not. A crontab line needs:
   cache, the `mesh health` histories and the rate-limit cool-down below.
 - **Output.** STDOUT carries only the report or the `--json` document;
   logging, warnings and errors go to STDERR (see the output contract at
-  the top). Without a terminal, tables and messages are 80 columns wide,
-  so long cells such as node ids are cut short: set `COLUMNS=200` for a
+  the top). Without a terminal, tables are 80 columns wide, so long
+  cells such as names and roles are cut short (node ids never are): set
+  `COLUMNS=200` for a
   table you keep in a log, and use `--json` for anything a script reads.
   No prompt can wait for an answer, as stdin is not a TTY. `--watch` is
   for a terminal; cron runs each command once.

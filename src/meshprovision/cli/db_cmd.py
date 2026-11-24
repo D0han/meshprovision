@@ -576,6 +576,11 @@ def db_list(ctx: CliContext, *, json_output: bool) -> None:
     ``MESHPROVISION_CONTACT`` configured, or without any of the fleet
     actually reachable over the network.
 
+    Its ten columns need a wide terminal: piped, or below about 150
+    columns, long cells are cut short (node ids never are). Set COLUMNS,
+    as in COLUMNS=200 mesh db list, or use --json, which also gives each
+    node's notes.
+
     Args:
         ctx: The shared CLI context, injected by :data:`~meshprovision.
             cli.common.pass_cli`.

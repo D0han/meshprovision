@@ -257,16 +257,19 @@ def build_admin_table(summaries: tuple[AdminSummary, ...]) -> Table:
         A ``rich.table.Table``, one row per summary, styled by weak-key
         audit severity.
     """
-    table = Table(box=box.SIMPLE_HEAVY, header_style="bold")
-    table.add_column("Ref")
+    table = Table(box=box.SIMPLE_HEAVY, header_style="bold", collapse_padding=True)
+    # Refs, fingerprints and node ids are never cut: a long ref or
+    # fingerprint folds onto the next line, and a list of ids takes one
+    # line per id.
+    table.add_column("Ref", overflow="fold")
     table.add_column("Present")
-    table.add_column("Fingerprint")
+    table.add_column("Fingerprint", overflow="fold")
     table.add_column("Private held")
     table.add_column("In template")
     table.add_column("Node", no_wrap=True, min_width=NODE_ID_HEX_WIDTH)
     table.add_column("Audit")
-    table.add_column("Authorized on")
-    table.add_column("Pending on")
+    table.add_column("Authorized\non", no_wrap=True, min_width=len("Authorized"))
+    table.add_column("Pending\non", no_wrap=True, min_width=NODE_ID_HEX_WIDTH)
     for summary in summaries:
         audit_label, audit_style = _audit_cell(summary.audit)
         table.add_row(
@@ -277,8 +280,8 @@ def build_admin_table(summaries: tuple[AdminSummary, ...]) -> Table:
             "yes" if summary.in_template else "no",
             summary.node_id or "-",
             audit_label,
-            ", ".join(summary.authorized_on) or "-",
-            ", ".join(summary.pending_on) or "-",
+            "\n".join(summary.authorized_on) or "-",
+            "\n".join(summary.pending_on) or "-",
             style=audit_style,
         )
     return table

@@ -56,6 +56,7 @@ __all__ = [
     "VERDICT_STYLES",
     "build_detail",
     "build_table",
+    "columns_to_hide",
     "health_to_json_dict",
     "node_health_to_json_dict",
     "render_console",
@@ -74,6 +75,12 @@ VERDICT_STYLES: Final[dict[Verdict, str]] = {
 
 _IMPORTANCE_STYLES: Final[dict[str, str]] = {"high": "bold", "medium": "", "low": "grey50"}
 _DASH: Final[str] = "-"
+_KEY_COLUMN_WIDTHS: Final[dict[str, int]] = {
+    "Node": NODE_ID_COLUMN_WIDTH,
+    "Verdict": max(len("Verdict"), *(len(verdict.value) for verdict in Verdict)),
+    "Importance": max(len("Importance"), *(len(level) for level in _IMPORTANCE_STYLES)),
+}
+"""The table's key columns, as wide as their header and longest value: the others give way."""
 _STALE_STYLE: Final[str] = "grey50"
 """A battery reading too old to judge (``mesh status``'s gray for unknown values)."""
 _MAX_REASONS: Final[int] = 2
@@ -180,11 +187,12 @@ def _name(health: NodeHealth) -> str:
     return terminal_safe(health.node.short_name) if health.node.short_name else _DASH
 
 
-def build_table(report: HealthReport) -> Table:
+def build_table(report: HealthReport, *, hidden: frozenset[str] = frozenset()) -> Table:
     """Build the compact table: one row per node.
 
     Args:
         report: The report.
+        hidden: Headers of the columns to leave out.
 
     Returns:
         The ``rich`` table, with a caption summing up the run.
@@ -201,17 +209,22 @@ def build_table(report: HealthReport) -> Table:
         ("Batt", "right"),
         ("Reasons", "left"),
     )
-    for column, justify in columns:
-        node = column == "Node"
-        table.add_column(
-            column, justify=justify, no_wrap=node, min_width=NODE_ID_COLUMN_WIDTH if node else None
-        )
+    shown = [column not in hidden for column, _ in columns]
+    for (column, justify), show in zip(columns, shown, strict=True):
+        if show:
+            table.add_column(
+                column,
+                justify=justify,
+                no_wrap=column == "Node",
+                min_width=_KEY_COLUMN_WIDTHS.get(column),
+                overflow="fold" if column in _FOLDING_COLUMNS else "ellipsis",
+            )
     now = report.generated_at
     for health in report.nodes:
         reasons = "; ".join(f.text for f in health.findings[:_MAX_REASONS])
         if len(health.findings) > _MAX_REASONS:
             reasons += f" (+{len(health.findings) - _MAX_REASONS})"
-        table.add_row(
+        cells: list[str | Text] = [
             health.node.node_id.display,
             _name(health),
             Text(health.verdict.value.upper(), style=VERDICT_STYLES[health.verdict]),
@@ -221,7 +234,8 @@ def build_table(report: HealthReport) -> Table:
             *_metric_cells(health.metrics),
             _battery(health),
             terminal_safe(reasons) if reasons else _DASH,
-        )
+        ]
+        table.add_row(*(cell for cell, show in zip(cells, shown, strict=True) if show))
     table.caption = _caption(report)
     return table
 
@@ -279,6 +293,62 @@ _METRIC_COLUMNS: Final[tuple[tuple[str, JustifyMethod], ...]] = (
     ("Top relay", "right"),
 )
 """The metric columns shared by the health table and ``mesh status --detail full``."""
+
+_FOLDING_COLUMNS: Final[frozenset[str]] = frozenset({*_KEY_COLUMN_WIDTHS, "Reasons"})
+"""Columns whose long words break onto the next line instead of being cut."""
+_TABLE_COLUMN_COUNT: Final[int] = 14
+"""How many columns :func:`build_table` has."""
+_COLUMN_GAP: Final[int] = 3
+"""What each column of the table's box costs besides its cells (padding, separator)."""
+_USEFUL_WIDTH: Final[int] = 5
+"""The narrowest a column other than the key ones is still worth showing."""
+_REASONS_USEFUL_WIDTH: Final[int] = 12
+
+
+def columns_to_hide(width: int) -> frozenset[str]:
+    """Pick the columns a table this wide leaves out.
+
+    Args:
+        width: The console width.
+
+    Returns:
+        The first headers of :data:`_NARROW_DROP_ORDER`, as few as leave
+        every other column at least :data:`_USEFUL_WIDTH` (the key
+        columns their whole values, Reasons a few words).
+    """
+    others = _TABLE_COLUMN_COUNT - len(_KEY_COLUMN_WIDTHS) - 1
+    needed = (
+        _TABLE_COLUMN_COUNT * _COLUMN_GAP
+        + sum(_KEY_COLUMN_WIDTHS.values())
+        + _REASONS_USEFUL_WIDTH
+        + others * _USEFUL_WIDTH
+    )
+    hidden: list[str] = []
+    for column in _NARROW_DROP_ORDER:
+        if needed <= width:
+            break
+        hidden.append(column)
+        needed -= _COLUMN_GAP + _KEY_COLUMN_WIDTHS.get(column, _USEFUL_WIDTH)
+    return frozenset(hidden)
+
+
+_NARROW_DROP_ORDER: Final[tuple[str, ...]] = (
+    "Top relay",
+    "Hops\nmax/limit",
+    "Direct",
+    "GWs",
+    "SNR\nmedian",
+    "Pkt/h",
+    "Every",
+    "Short",
+    "Batt",
+    "Last heard",
+    "Importance",
+)
+"""The health table's columns a narrow console leaves out, first to last.
+
+Node, Verdict and Reasons always stay (Importance does down to about 60
+columns): ``--json`` and a wider ``COLUMNS`` show the rest."""
 
 
 def _metric_cells(metrics: NodeMetrics) -> list[str]:
@@ -568,13 +638,20 @@ def build_detail(report: HealthReport) -> Group:
 def render_console(report: HealthReport, *, console: Console, detail: bool) -> None:
     """Print the table, or the detailed report.
 
+    A table too wide for the console leaves out its least telling
+    columns (see :func:`columns_to_hide`) rather than cut the node,
+    verdict and importance it is for.
+
     Args:
         report: The report.
         console: Where to print it.
         detail: The detailed report instead of the table.
     """
-    renderable = build_detail(report) if detail else build_table(report)
-    console.print(renderable, markup=False, highlight=False)
+    if detail:
+        console.print(build_detail(report), markup=False, highlight=False)
+        return
+    table = build_table(report, hidden=columns_to_hide(console.width))
+    console.print(table, markup=False, highlight=False)
 
 
 def _iso(value: float | None) -> str | None:

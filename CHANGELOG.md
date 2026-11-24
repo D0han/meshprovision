@@ -457,7 +457,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path or command in them stays whole for copying, and table columns
   holding node ids (`mesh db list`, `mesh health`, `mesh status`,
   `mesh admin list`, `mesh network`) are never cut to `dead…` when the
-  output is piped.
+  output is piped; `mesh admin list` puts one id per line in its
+  `Authorized on` and `Pending on` columns and, at 80 columns or more,
+  wraps a long ref or fingerprint instead of cutting it. A `mesh health`
+  table too wide for the terminal leaves out its metric columns, then
+  `Every`, `Short`, `Batt` and `Last heard` (and below about 60 columns
+  `Importance`), and wraps long words in `Reasons`, so its node,
+  verdict, importance and reasons stay readable at 80 columns (`--json`
+  and a wider `COLUMNS` show the rest); `mesh db list --help` says how
+  to see all of its columns.
 - A global option given after the subcommand (`mesh status --no-cache`)
   now says it is a global option and shows where it goes
   (`mesh --no-cache status`), instead of only "No such option".
