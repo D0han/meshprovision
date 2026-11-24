@@ -400,3 +400,13 @@ def test_a_window_too_large_is_halved_until_it_is_too_short_to_try(tmp_path: Pat
     assert asked == [NOW + hours * HOUR_SECONDS - SINCE_MARGIN_SECONDS for hours in (0, 4, 6)]
     assert [f.region for f in outcome.failures] == ["Zachód"]
     assert store.state("Zachód") == RegionState(fetched_at=NOW)
+
+
+def test_a_plain_request_failure_is_not_retried_with_a_shorter_window(tmp_path: Path) -> None:
+    refresher, feed, _, _ = _setup(tmp_path)
+    feed.fail_for[("raw", "Zachód")] = HttpError("boom", url="u")
+
+    outcome = refresher.refresh(["Zachód"])
+
+    assert [call for call in feed.calls if call[0] == "raw"] == [("raw", "Zachód", None)]
+    assert [f.region for f in outcome.failures] == ["Zachód"]

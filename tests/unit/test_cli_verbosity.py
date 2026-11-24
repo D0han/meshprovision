@@ -361,3 +361,36 @@ class TestMeshtasticProtobufTextRedactionMatrix:
 
         output = buf.getvalue()
         assert "withheld" not in output
+
+
+class TestLibraryTracebacks:
+    """A library exception whose text carries a frame must not print it in a traceback."""
+
+    @pytest.mark.parametrize("logger_name", ["meshtastic.ble_interface", "bleak.backends.winrt"])
+    def test_a_traceback_carrying_a_key_is_withheld(self, logger_name: str) -> None:
+        key = generate_keypair().private.reveal()
+        frame = b"\x0a\x22" + key
+        buf = io.StringIO()
+        configure_logging("DEBUG", stream=buf, colors=False, verbosity=3)
+
+        try:
+            raise RuntimeError(f"write failed: {frame.hex()}")
+        except RuntimeError:
+            logging.getLogger(logger_name).exception("write failed")
+
+        output = buf.getvalue()
+        assert key.hex() not in output
+        assert "traceback withheld" in output
+
+    def test_an_ordinary_library_traceback_is_kept(self) -> None:
+        buf = io.StringIO()
+        configure_logging("DEBUG", stream=buf, colors=False, verbosity=3)
+
+        try:
+            raise RuntimeError("device went away")
+        except RuntimeError:
+            logging.getLogger("meshtastic.ble_interface").exception("write failed")
+
+        output = buf.getvalue()
+        assert "device went away" in output
+        assert "withheld" not in output

@@ -1958,3 +1958,14 @@ def test_an_entry_of_the_largest_answer_fits_the_entry_cap(tmp_path: Path) -> No
     largest = -(-http_module.MAX_RESPONSE_BYTES // 3) * 4 + overhead
 
     assert largest <= http_module._MAX_ENTRY_BYTES
+
+
+@respx.mock
+def test_only_a_size_refusal_is_a_response_too_large_error(tmp_path: Path) -> None:
+    respx.get(URL).mock(side_effect=httpx.ConnectError("refused"))
+    client = _make_client(tmp_path, now=[0.0], max_retries=0)
+
+    with pytest.raises(HttpError) as excinfo:
+        client.get(URL)
+
+    assert not isinstance(excinfo.value, ResponseTooLargeError)

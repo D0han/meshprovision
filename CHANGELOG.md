@@ -774,6 +774,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- At `-vvv`, a `meshtastic` or `bleak` log record's traceback is withheld
+  when it may carry key material (an exception raised with a raw frame in
+  its text used to print the frame in full); the record itself still
+  appears.
 - `mesh network <view> --no-fetch` with nothing stored for any selected
   region still exits 3, but now says so on STDERR (`No stored data for
   <regions>; run without --no-fetch to fetch it.`) instead of a normal

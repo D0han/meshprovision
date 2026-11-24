@@ -101,7 +101,29 @@ class _LibrarySecretFilter(logging.Filter):
                     "may contain key material]"
                 )
                 record.args = ()
+            self._withhold_traceback(record)
         return True
+
+    @staticmethod
+    def _withhold_traceback(record: logging.LogRecord) -> None:
+        """Drop a record's traceback or stack text when it may carry key material.
+
+        The message check above never sees ``exc_info``/``stack_info``: an
+        exception raised with a raw frame in its text would print it in full.
+        """
+        rendered = []
+        if record.exc_info and record.exc_info[0] is not None:
+            rendered.append(logging.Formatter().formatException(record.exc_info))
+        if record.exc_text:
+            rendered.append(record.exc_text)
+        if record.stack_info:
+            rendered.append(record.stack_info)
+        if any(redact.library_record_may_leak(text) for text in rendered):
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+            record.msg = f"{record.getMessage()} [traceback withheld; may contain key material]"
+            record.args = ()
 
 
 def _build_shared_processors() -> list[structlog.typing.Processor]:
