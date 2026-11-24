@@ -9,8 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 from pydantic import BaseModel
 
+from meshprovision.config import template as template_module
 from meshprovision.config.template import (
     TEMPLATE_VERSION,
     DefaultChannelSection,
@@ -872,6 +874,28 @@ def test_load_template_text_lets_a_key_override_a_merged_one() -> None:
         load_template_text(text, source="<test>")
     except TemplateValidationError as exc:
         assert "duplicate key" not in str(exc)
+
+
+@pytest.mark.parametrize(
+    ("lora", "expected"),
+    [
+        pytest.param("  <<: *a\n  hop_limit: 4\n", {"hop_limit": 4}, id="merge-then-override"),
+        pytest.param(
+            "  <<: *a\n  <<: *b\n  hop_limit: 5\n",
+            {"hop_limit": 5, "region": "EU_868"},
+            id="two-merges",
+        ),
+    ],
+)
+def test_the_unique_key_loader_lets_merge_keys_through(
+    lora: str, expected: dict[str, object]
+) -> None:
+    """rs67 T8: `<<` is not a repeated key, even twice in one mapping."""
+    text = f"a: &a {{hop_limit: 3}}\nb: &b {{region: EU_868}}\nlora:\n{lora}"
+
+    loaded = yaml.load(text, Loader=template_module._UniqueKeySafeLoader)  # noqa: S506
+
+    assert loaded["lora"] == expected
 
 
 def test_load_template_text_lets_a_merge_chain_through() -> None:

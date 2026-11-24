@@ -1787,6 +1787,22 @@ def test_a_cache_root_owned_by_another_user_is_refused(
         _make_client(tmp_path, now=[1000.0]).get(URL)
 
 
+def test_a_cache_root_that_is_a_file_is_not_refused_as_untrusted(tmp_path: Path) -> None:
+    """rs67 T9: nothing can be planted under a file; a write reports it, not a trust refusal."""
+    root = tmp_path / "cache"
+    root.write_bytes(b"not a directory")
+    root.chmod(0o666)
+
+    http_module.check_cache_root(root)
+
+    assert root.read_bytes() == b"not a directory"
+
+
+def test_a_body_gets_ten_minutes_to_arrive() -> None:
+    """rs67 T12: the whole-body deadline the module docs promise."""
+    assert http_module.BODY_READ_DEADLINE_SECONDS == 600.0
+
+
 def _plant_fresh_entry_elsewhere(tmp_path: Path, client: CachedHTTPClient) -> Path:
     """Cache a response, move its entry out of the cache, and return where it went."""
     with respx.mock:

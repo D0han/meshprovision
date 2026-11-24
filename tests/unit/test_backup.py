@@ -448,6 +448,12 @@ def test_parse_profile_yaml_refuses_a_marked_value_that_is_not_base64(value: str
     [
         ("config:\n  device:\n    role: 1.5", "device.role"),
         ("module_config:\n  serial:\n    mode: 2.25", "serial.mode"),
+        # rs67 T7: camelCase keys, one level and nested in a repeated message.
+        ("config:\n  lora:\n    modemPreset: 1.5", "lora.modem_preset"),
+        (
+            "module_config:\n  remoteHardware:\n    availablePins:\n    - type: 1.5",
+            "remote_hardware.available_pins.type",
+        ),
     ],
 )
 def test_parse_profile_yaml_refuses_a_fractional_enum(section: str, field: str) -> None:
