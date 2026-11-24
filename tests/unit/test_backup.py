@@ -433,6 +433,36 @@ def test_parse_profile_yaml_rejects_invalid_config_shape() -> None:
         )
 
 
+@pytest.mark.parametrize("value", ["base64:!!!", "base64:QUJ", "base64:QU JD"])
+def test_parse_profile_yaml_refuses_a_marked_value_that_is_not_base64(value: str) -> None:
+    text = f"owner: Test\nconfig:\n  security:\n    privateKey: '{value}'\n"
+
+    with pytest.raises(BackupParseError, match="is not valid base64") as exc_info:
+        backup.parse_profile_yaml(text, source="s.yaml")
+
+    assert value.removeprefix("base64:") not in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("config:\n  device:\n    role: 1.5", "device.role"),
+        ("module_config:\n  serial:\n    mode: 2.25", "serial.mode"),
+    ],
+)
+def test_parse_profile_yaml_refuses_a_fractional_enum(section: str, field: str) -> None:
+    with pytest.raises(BackupParseError, match=rf"{field} is an enum, given a fractional number"):
+        backup.parse_profile_yaml(f"owner: Test\n{section}\n", source="s.yaml")
+
+
+def test_parse_profile_yaml_takes_a_whole_number_for_an_enum() -> None:
+    parsed = backup.parse_profile_yaml(
+        "owner: Test\nconfig:\n  device:\n    role: 2.0\n", source="s.yaml"
+    )
+
+    assert parsed.local_config.device.role == 2
+
+
 @pytest.mark.parametrize(
     ("location", "field"),
     [
@@ -590,6 +620,24 @@ def test_parse_nodedb_json_skips_malformed_entries() -> None:
     assert parsed.entries[0].num == 42
 
 
+@pytest.mark.parametrize("number", [0, 3, 0xFFFFFFFF])
+def test_parse_nodedb_json_refuses_a_reserved_my_node_num(number: int) -> None:
+    raw = json.dumps(_nodedb_payload(my_node_num=number)).encode()
+
+    with pytest.raises(BackupParseError, match="reserved or broadcast number"):
+        backup.parse_nodedb_json(raw, source="nodedb.json")
+
+
+@pytest.mark.parametrize("number", [0, 3, 0xFFFFFFFF])
+def test_parse_nodedb_json_skips_an_entry_with_a_reserved_num(number: int) -> None:
+    payload = {"schemaVersion": 1, "nodes": [{"num": number}, {"num": 42}]}
+
+    parsed = backup.parse_nodedb_json(json.dumps(payload).encode(), source="nodedb.json")
+
+    assert [entry.num for entry in parsed.entries] == [42]
+    assert any("reserved or broadcast" in warning for warning in parsed.warnings)
+
+
 @pytest.mark.parametrize(
     "literal", ["Infinity", "-Infinity", "NaN", "1e400", "3.7", "-5", "4294967296"]
 )
@@ -608,13 +656,13 @@ def test_parse_nodedb_json_refuses_the_whole_file_for_an_invalid_node_num(litera
         backup.parse_nodedb_json(raw, source="nodedb.json")
 
 
-def test_parse_nodedb_json_accepts_whole_number_floats_and_the_range_ends() -> None:
-    raw = b'{"nodes": [{"num": 0}, {"num": 4294967295}, {"num": 42.0}], "myNodeNum": 42.0}'
+def test_parse_nodedb_json_accepts_whole_number_floats_and_the_node_range_ends() -> None:
+    raw = b'{"nodes": [{"num": 4}, {"num": 4294967294}, {"num": 42.0}], "myNodeNum": 42.0}'
 
     parsed = backup.parse_nodedb_json(raw, source="nodedb.json")
 
     assert parsed.my_node_num == 42
-    assert [entry.num for entry in parsed.entries] == [0, 0xFFFFFFFF, 42]
+    assert [entry.num for entry in parsed.entries] == [4, 0xFFFFFFFE, 42]
 
 
 def test_parse_nodedb_json_treats_a_boolean_num_as_absent() -> None:
@@ -808,7 +856,7 @@ def test_merge_backups_agreeing_names_and_key_succeeds() -> None:
 
 def test_merge_backups_warns_when_my_node_num_matches_nothing() -> None:
     payload = _nodedb_payload()
-    payload["myNodeNum"] = 1
+    payload["myNodeNum"] = 4
     nodedb = backup.parse_nodedb_json(json.dumps(payload).encode(), source="n.json")
     bundle = backup.merge_backups(nodedb=nodedb)
     assert any("was not found" in warning for warning in bundle.warnings)

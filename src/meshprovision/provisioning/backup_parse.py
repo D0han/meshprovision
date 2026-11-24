@@ -18,6 +18,7 @@ import base64
 import binascii
 import json
 import math
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,7 @@ from meshtastic.protobuf import apponly_pb2, clientonly_pb2, localonly_pb2
 from meshprovision.crypto.keys import X25519_KEY_SIZE
 from meshprovision.crypto.redact import SecretBytes
 from meshprovision.errors import BackupParseError
-from meshprovision.nodeid import NODE_ID_MAX, NodeId
+from meshprovision.nodeid import NODE_ID_MAX, NodeId, is_reserved_id
 from meshprovision.provisioning.backup_models import (
     BackupFormat,
     ChannelInfo,
@@ -258,14 +259,52 @@ def _strip_base64_prefix(value: object) -> object:
         ``value`` with every string starting with :data:`_B64_PREFIX`
         having that prefix removed, recursively through lists and dicts.
         Non-string, non-container values are returned unchanged.
+
+    Raises:
+        ValueError: If a marked value is not valid base64: ``ParseDict``
+            would silently decode it to some other bytes (``!!!`` to none
+            at all), and a key must never be guessed.
     """
     if isinstance(value, str):
-        return value[len(_B64_PREFIX) :] if value.startswith(_B64_PREFIX) else value
+        if not value.startswith(_B64_PREFIX):
+            return value
+        encoded = value[len(_B64_PREFIX) :]
+        try:
+            base64.b64decode(encoded, validate=True)
+        except binascii.Error:
+            raise ValueError("a base64: value is not valid base64") from None
+        return encoded
     if isinstance(value, list):
         return [_strip_base64_prefix(item) for item in value]
     if isinstance(value, dict):
         return {key: _strip_base64_prefix(item) for key, item in value.items()}
     return value
+
+
+def _fractional_enum(value: Mapping[str, object], descriptor: Any) -> str | None:
+    """Return the dotted name of an enum field given a fractional number, if any.
+
+    ``ParseDict`` truncates one (role ``1.5`` becomes ``CLIENT_MUTE``)
+    where an integer field refuses it.
+    """
+    for key, item in value.items():
+        field = descriptor.fields_by_name.get(key) or next(
+            (candidate for candidate in descriptor.fields if candidate.json_name == key), None
+        )
+        if field is None:
+            continue
+        items = item if isinstance(item, list) else [item]
+        if field.enum_type is not None:
+            if any(isinstance(entry, float) and not entry.is_integer() for entry in items):
+                return str(field.name)
+        elif field.message_type is not None:
+            for entry in items:
+                nested = (
+                    _fractional_enum(entry, field.message_type) if isinstance(entry, dict) else None
+                )
+                if nested is not None:
+                    return f"{field.name}.{nested}"
+    return None
 
 
 def _apply_yaml_section(section: object, target: Any, *, source: str, name: str) -> None:
@@ -283,11 +322,21 @@ def _apply_yaml_section(section: object, target: Any, *, source: str, name: str)
     Raises:
         BackupParseError: If ``section`` is not a mapping, or its
             contents do not match the target message's shape (a value of
-            the wrong type, or a number the field cannot hold).
+            the wrong type, a number the field cannot hold, a fractional
+            number for an enum, or a ``base64:`` value that is not
+            base64).
     """
     if not isinstance(section, dict):
         raise BackupParseError(f"{source}: {name!r} must be a mapping.", source=source)
-    cleaned = {key: _strip_base64_prefix(item) for key, item in section.items()}
+    try:
+        cleaned = {key: _strip_base64_prefix(item) for key, item in section.items()}
+        fractional = _fractional_enum(cleaned, target.DESCRIPTOR)
+        if fractional is not None:
+            raise ValueError(f"{fractional} is an enum, given a fractional number")
+    except ValueError as exc:
+        raise BackupParseError(
+            f"{source}: invalid {name!r} section: {exc}.", source=source
+        ) from exc
     try:
         json_format.ParseDict(cleaned, target, ignore_unknown_fields=True)
     except (json_format.ParseError, OverflowError) as exc:
@@ -613,7 +662,9 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
             ``myNodeNum`` or any entry's ``num`` is a number that cannot
             be a node number (fractional, ``NaN``/``Infinity``, or outside
             ``0..0xFFFFFFFF``) -- a node's identity is never guessed, so
-            the whole file is refused.
+            the whole file is refused -- or ``myNodeNum`` is a reserved
+            or broadcast number (an entry with one is skipped with a
+            warning instead).
     """
     try:
         text = raw.decode("utf-8-sig")
@@ -642,6 +693,12 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
         )
 
     my_node_num = _node_number(doc.get("myNodeNum"), field="myNodeNum", source=source)
+    if my_node_num is not None and is_reserved_id(NodeId(my_node_num)):
+        raise BackupParseError(
+            f"{source}: myNodeNum {my_node_num:#x} is a reserved or broadcast number, "
+            "never a node's own.",
+            source=source,
+        )
 
     entries: list[NodeDbEntry] = []
     for index, item in enumerate(nodes):
@@ -649,6 +706,12 @@ def parse_nodedb_json(raw: bytes, *, source: str) -> NodeDbBackup:
             continue
         num_int = _node_number(item.get("num"), field=f"nodes[{index}].num", source=source)
         if num_int is None:
+            continue
+        if is_reserved_id(NodeId(num_int)):
+            warnings.append(
+                f"{source}: nodes[{index}].num {num_int:#x} is a reserved or broadcast "
+                "number, never a node's; skipped."
+            )
             continue
 
         public_key: bytes | None = None

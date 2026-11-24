@@ -746,6 +746,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh adopt --from-backup` no longer reads a backup's impossible values
+  as real ones: a node-db export whose `myNodeNum` is a reserved or the
+  broadcast number is refused (an entry with one is skipped with a
+  warning), a profile value marked `base64:` that is not base64 (which
+  read as no key at all) is refused, and so is a fractional number for an
+  enum (role `1.5` read as `CLIENT_MUTE`).
 - A server that trickles its answer no longer holds a request for as long
   as the size cap lasts, four times over: a response body still arriving
   after ten minutes fails the request once, without a retry.
