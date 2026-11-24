@@ -174,14 +174,38 @@ def test_contact_problem_wants_an_email_address_or_a_url(contact: str) -> None:
     )
 
 
-@pytest.mark.parametrize("contact", ["ops@", "https://", "http://[::1", "ops@.", "https://./"])
+@pytest.mark.parametrize(
+    "contact",
+    [
+        "ops@",
+        "https://",
+        "http://[::1",
+        "ops@.",
+        "https://./",
+        "me@x..pl",
+        "me@.x.pl",
+        "https://a..pl/",
+        "me@999.1.1.1",
+        "me@1.2.3",
+        "https://300.1.1.1/",
+        "me@mesh.123",
+    ],
+)
 def test_contact_problem_wants_a_domain(contact: str) -> None:
     assert contact_problem(contact) == f"Contact '{contact}' has no valid domain."
 
 
 @pytest.mark.parametrize(
     "contact",
-    ["http://127.0.0.1", "https://[::1]/", "ops@[10.0.0.1]", "ops@[IPv6:fe80::1]", "a@[192.0.2.1]"],
+    [
+        "http://127.0.0.1",
+        "https://[::1]/",
+        "ops@[10.0.0.1]",
+        "ops@[IPv6:fe80::1]",
+        "a@[192.0.2.1]",
+        # Shared address space (RFC 6598): not private, yet not global either.
+        "ops@[100.64.1.1]",
+    ],
 )
 def test_contact_problem_refuses_an_address_that_reaches_nobody(contact: str) -> None:
     assert contact_problem(contact) == (
@@ -213,7 +237,15 @@ def test_contact_problem_refuses_a_control_character_without_echoing_it(contact:
 
 
 @pytest.mark.parametrize(
-    "contact", ["me@gmail.com, https://site.org", "me@exa mple.org", "me@gmail.com;x", "me@x.pl ("]
+    "contact",
+    [
+        "me@gmail.com, https://site.org",
+        "me@exa mple.org",
+        "me@gmail.com;x",
+        "me@x.pl (",
+        # Only `Name <me@host>` loses its closing bracket.
+        "me@mydomain.org>",
+    ],
 )
 def test_contact_problem_wants_only_a_domain_after_the_last_at_sign(contact: str) -> None:
     assert contact_problem(contact) == (
@@ -254,6 +286,10 @@ def test_contact_problem_takes_the_domain_after_the_last_at_sign() -> None:
         "ops@[8.8.8.8]",
         "ops@[IPv6:2606:4700:4700::1111]",
         "https://[2606:4700:4700::1111]/",
+        "ops@mesh.pl.",
+        "https://203.0.114.7/",
+        "ops@8.8.8.8",
+        "ops@1password.com",
     ],
 )
 def test_contact_problem_accepts_a_real_looking_contact(contact: str) -> None:

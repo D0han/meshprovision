@@ -774,6 +774,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A contact whose domain has an empty label (`me@x..pl`) or a number as
+  its last label (`me@999.1.1.1`, `me@1.2.3`, which are no IP addresses)
+  is now refused like the other contacts that reach nobody (exit code 2).
 - `mesh db backup --backup-dir DIR` no longer changes an existing
   directory's mode to `0700` (dropping a shared directory's group access
   and setgid bit); it makes `DIR` owner-only only when it creates it. The

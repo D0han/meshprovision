@@ -70,7 +70,8 @@ cannot reach you: a domain reserved for examples or tests (`example.com`,
 `example.org`, `example.net`, any `*.example`, `*.test` or `*.invalid`
 name, `localhost`, and the local-only `*.local`, `*.internal` and
 `home.arpa`, including their subdomains), a single-label domain
-(`ops@mailhost`), or a loopback, private or reserved IP address (a public
+(`ops@mailhost`), a domain with an empty label (`ops@x..pl`) or a number
+as its last label (`ops@999.1.1.1`, which is no IP address), or a loopback, private or reserved IP address (a public
 one in brackets is fine). The text after the last `@` must be only a
 domain (a trailing `(comment)` is allowed): add a name as `Name
 <me@host>`. Only these are recognised:

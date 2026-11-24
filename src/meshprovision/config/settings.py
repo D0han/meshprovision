@@ -195,7 +195,8 @@ def contact_problem(contact: str) -> str | None:
     lorastats.pl bans IP addresses that send a dummy contact, so a contact
     must be an email address or an ``http(s)://`` URL in printable ASCII
     (it travels in an HTTP header), its domain must have two labels or
-    more and must not be a reserved example domain (``example.com``,
+    more, none empty and the last not a number, and must not be a reserved
+    example domain (``example.com``,
     ``*.example``, ``*.test``, ``*.invalid``, ``localhost``, ...), and an
     IP address in it must be a public one. Only reserved domains are
     recognised as placeholders: any other domain is taken to be yours.
@@ -232,6 +233,11 @@ def contact_problem(contact: str) -> str | None:
             f"Contact '{text}' names a loopback, private or reserved address, which reaches nobody."
         )
     labels = host.lower().rstrip(".").split(".")
+    if "" in labels or labels[-1].isdigit():
+        # An empty label (x..pl, .x.pl) or a number as the top-level label
+        # (999.1.1.1, 1.2.3: not an IP address, as that was tried above)
+        # names no host on the internet.
+        return f"Contact '{text}' has no valid domain."
     if any(".".join(labels[i:]) in _RESERVED_CONTACT_DOMAINS for i in range(len(labels))):
         return (
             f"Contact '{text}' is a placeholder: its domain is reserved for examples "
