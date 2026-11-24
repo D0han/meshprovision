@@ -277,6 +277,32 @@ def test_a_write_the_device_silently_drops_fails_the_read_back(
     assert "Peers synced" not in result.stderr
 
 
+def test_a_different_device_answering_the_read_back_confirms_nothing(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
+) -> None:
+    """The target drops the writes; the device that answers the reconnect is in sync."""
+    target = bus.use(FakeMeshInterface(SELF_HEX))
+    target.drop_peer_writes = True
+    other = FakeMeshInterface(E_HEX)
+    b_num = int(NodeId.parse(B_HEX))
+    other.known_nodes[b_num] = {
+        "num": b_num,
+        "user": {"publicKey": _b64(KEY_B)},
+        "isFavorite": True,
+    }
+    bus.then(other)
+
+    result = invoke(runner, ["peers", *PORT_ARGS, "--apply", "--json"], env)
+
+    assert result.exit_code == 5
+    assert (
+        f"Reconnected to a different node (!{E_HEX}) than the one written to (!{SELF_HEX})"
+        in result.stderr
+    )
+    assert "Peers synced" not in result.stderr
+    assert json.loads(result.stdout)["unconfirmed"] == [f"!{B_HEX}"]
+
+
 def test_a_rejected_write_is_reported_and_fails_the_run(
     runner: CliRunner, env: dict[str, str], bus: DeviceBus, fleet: Path
 ) -> None:

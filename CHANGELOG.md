@@ -774,6 +774,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh peers --apply` (and the `sync_peers` step of `mesh provision`)
+  reported "Peers synced" with exit code 0 when a different device
+  answered the read-back reconnect and already held the planned contacts;
+  it now names the device that answered and reports every planned node
+  unconfirmed (exit code 5).
 - At `-vvv`, a `meshtastic` or `bleak` log record's traceback is withheld
   when it may carry key material (an exception raised with a raw frame in
   its text used to print the frame in full); the record itself still

@@ -122,9 +122,25 @@ def _plan(
     return own, plan, reasons
 
 
+@dataclass(frozen=True, slots=True)
+class _ReadBack:
+    """What the device showed after the writes and a reconnect.
+
+    Attributes:
+        node_id: The id of the device that answered, or ``None`` when the
+            session cannot read back.
+        missing: Nodes it still lacks as contact or favorite.
+        still_favorited: Archived nodes it still has favorited.
+    """
+
+    node_id: NodeId | None = None
+    missing: tuple[NodeId, ...] = ()
+    still_favorited: tuple[NodeId, ...] = ()
+
+
 def _remaining_after(
     db: DbSession, session: DeviceSession, *, known_bad: frozenset[bytes], prune_archived: bool
-) -> tuple[tuple[NodeId, ...], tuple[NodeId, ...]]:
+) -> _ReadBack:
     """Re-read the device after the writes and list what did not stick.
 
     Args:
@@ -134,16 +150,31 @@ def _remaining_after(
         prune_archived: Whether the first plan unfavorited archived nodes.
 
     Returns:
-        The nodes the device still lacks as contact or favorite, and the
-        archived nodes it still has favorited; both empty when the session
-        cannot read back (an in-place session has no independent view of
-        the device).
+        The read-back, with the id of the device that answered; empty when
+        the session cannot read back (an in-place session has no
+        independent view of the device).
     """
     if not session.reads_back:
-        return (), ()
+        return _ReadBack()
     session.refresh()
-    _, replan, _ = _plan(db, session, known_bad=known_bad, prune_archived=prune_archived)
-    return tuple(action.contact.node_id for action in replan.actions), replan.unfavorite
+    got, replan, _ = _plan(db, session, known_bad=known_bad, prune_archived=prune_archived)
+    return _ReadBack(
+        node_id=got,
+        missing=tuple(action.contact.node_id for action in replan.actions),
+        still_favorited=replan.unfavorite,
+    )
+
+
+def _planned_nodes(plan: peers.PeersPlan) -> tuple[NodeId, ...]:
+    """List every node the plan changes, for a read-back that cannot confirm any.
+
+    Args:
+        plan: The plan that was applied.
+
+    Returns:
+        The nodes to add or favorite, then the archived nodes to unfavorite.
+    """
+    return (*(action.contact.node_id for action in plan.actions), *plan.unfavorite)
 
 
 def run_peers(
@@ -210,11 +241,11 @@ def run_peers(
     for node_id, message in outcome.failures:
         ctx.error(f"{node_id.display}: {message}")
     try:
-        missing, still_favorited = _remaining_after(
+        read_back = _remaining_after(
             db, session, known_bad=known_bad, prune_archived=prune_archived
         )
     except ConnectionBackendError as exc:
-        unconfirmed = (*(action.contact.node_id for action in plan.actions), *plan.unfavorite)
+        unconfirmed = _planned_nodes(plan)
         failed = {node_id for node_id, _ in outcome.failures}
         sent = sum(1 for node_id in unconfirmed if node_id not in failed)
         ctx.error(
@@ -224,6 +255,18 @@ def run_peers(
         return PeersReport(
             own_node=own, plan=plan, applied=True, outcome=outcome, remaining=unconfirmed
         )
+    if read_back.node_id is not None and read_back.node_id != own:
+        # Never judge the writes by another device's NodeDB: it says nothing
+        # about whether the one written to took them.
+        ctx.error(
+            f"Reconnected to a different node ({read_back.node_id.display}) than the one "
+            f"written to ({own.display}); could not confirm the changes. Re-run `mesh peers` "
+            "with the right device connected to check."
+        )
+        return PeersReport(
+            own_node=own, plan=plan, applied=True, outcome=outcome, remaining=_planned_nodes(plan)
+        )
+    missing, still_favorited = read_back.missing, read_back.still_favorited
     if missing:
         names = ", ".join(node_id.display for node_id in missing)
         ctx.error(f"Sent, but the device does not show {names} after reconnecting.")
