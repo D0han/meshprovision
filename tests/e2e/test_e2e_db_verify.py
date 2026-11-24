@@ -128,6 +128,27 @@ def test_db_verify_all_zero_admin_key_exits_six(
     assert any("all_zero" in p["message"] for p in weak_key_problems)
 
 
+def test_db_verify_flags_a_small_order_key_with_bit_255_set(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """X25519 ignores bit 255, so e0eb..b880 is the order-8 point e0eb..b800."""
+    node = NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")
+    weak_pub = KeyRecord.from_material(
+        "deadbe01",
+        KeyType.ADMIN_PUBLIC,
+        bytes.fromhex("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880"),
+        origin=KeyOrigin.CAPTURED,
+    )
+    seed_db(nodes=[node], keys=[weak_pub])
+
+    result = invoke(runner, ["db", "verify", "--json"], env)
+
+    assert result.exit_code == 6
+    document = json.loads(result.stdout)
+    messages = [p["message"] for p in document["problems"] if p["kind"] == "weak_key"]
+    assert any("small_order" in message for message in messages)
+
+
 def test_db_verify_finds_blocklist_next_to_a_db_path_outside_the_cwd(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:

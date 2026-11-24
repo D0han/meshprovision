@@ -1280,6 +1280,29 @@ def test_admin_import_allow_weak_still_refuses_a_small_order_key(
     assert "ADMIN9_pub" not in rows
 
 
+@pytest.mark.parametrize(
+    "hex_key",
+    [
+        "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880",
+        "0000000000000000000000000000000000000000000000000000000000000080",
+    ],
+)
+def test_admin_import_allow_weak_refuses_a_small_order_key_with_bit_255_set(
+    runner: CliRunner, env: dict[str, str], hex_key: str
+) -> None:
+    """X25519 ignores bit 255, so this is still a small-order point: no flag overrides it."""
+    b64 = base64.b64encode(bytes.fromhex(hex_key)).decode("ascii")
+
+    plain = invoke(runner, ["admin", "import", f"ADMIN9={b64}"], env)
+    forced = invoke(runner, ["admin", "import", f"ADMIN9={b64}", "--allow-weak"], env)
+
+    assert plain.exit_code == ExitCode.CRYPTO
+    assert forced.exit_code == ExitCode.CRYPTO
+    assert "no flag can override this refusal" in forced.stderr
+    loaded = ods.load_database(Path(env["MESHPROVISION_DB_PATH"]))
+    assert loaded.keys == ()
+
+
 def test_admin_import_allow_weak_authorizes_a_blocklist_file_only_key(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:

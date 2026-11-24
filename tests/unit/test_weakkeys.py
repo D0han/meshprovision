@@ -163,6 +163,65 @@ def test_audit_public_key_small_order_point_is_blocklist_and_small_order() -> No
     assert checks.get(WeakKeyCheck.SMALL_ORDER) == "critical"
 
 
+def _with_high_bit(point: bytes) -> bytes:
+    return point[:-1] + bytes([point[-1] | 0x80])
+
+
+_HIGH_BIT_SMALL_ORDER_HEX = (
+    # e0eb7a7c..b800 and 5f9c95bc..1157 (the order-8 points) with bit 255 set,
+    # plus 0, 1, p - 1, p and p + 1 with it set.
+    "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880",
+    "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f11d7",
+    "0000000000000000000000000000000000000000000000000000000000000080",
+    "0100000000000000000000000000000000000000000000000000000000000080",
+    "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+)
+
+
+def test_high_bit_table_is_the_seven_small_order_points_with_bit_255_set() -> None:
+    assert {bytes.fromhex(h) for h in _HIGH_BIT_SMALL_ORDER_HEX} == {
+        _with_high_bit(point) for point in SMALL_ORDER_POINTS
+    }
+
+
+@pytest.mark.parametrize("hex_key", _HIGH_BIT_SMALL_ORDER_HEX)
+def test_small_order_point_with_bit_255_set_is_refused(hex_key: str) -> None:
+    """X25519 ignores bit 255 (RFC 7748), so these are the same degenerate points."""
+    public = bytes.fromhex(hex_key)
+
+    result = audit_public_key(public)
+
+    checks = {f.check: f.severity for f in result.findings}
+    assert is_small_order(public)
+    assert checks.get(WeakKeyCheck.SMALL_ORDER) == "critical"
+    assert checks.get(WeakKeyCheck.BLOCKLIST) == "critical"
+    assert result.overridable is False
+
+
+def test_all_zero_point_with_bit_255_set_is_all_zero() -> None:
+    result = audit_public_key(bytes(31) + b"\x80")
+
+    assert WeakKeyCheck.ALL_ZERO in {f.check for f in result.findings}
+
+
+def test_private_key_keeps_bit_255_in_the_all_zero_check() -> None:
+    """Only public keys are compared with bit 255 cleared."""
+    result = audit_private_key(bytes(31) + b"\x80")
+
+    assert WeakKeyCheck.ALL_ZERO not in {f.check for f in result.findings}
+
+
+def test_public_blocklist_entry_matches_with_either_bit_255() -> None:
+    public = generate_keypair().public
+    flipped = public[:-1] + bytes([public[-1] ^ 0x80])
+
+    result = audit_public_key(flipped, known_bad=frozenset({public}))
+
+    assert WeakKeyCheck.BLOCKLIST in {f.check for f in result.findings}
+
+
 # ---------------------------------------------------------------------------
 # Private/public mismatch.
 # ---------------------------------------------------------------------------

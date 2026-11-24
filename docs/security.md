@@ -161,7 +161,10 @@ points from libsodium's `has_small_order()` blocklist in
 (`p = 2**255-19`). Each carries a provenance comment, so the file is
 auditable rather than a magic list. The same 7 values are also compiled
 into `crypto/known_bad_keys.py:SMALL_ORDER_POINTS`, so they still apply if the
-file is absent. The file was deliberately **not** padded with invented
+file is absent. A public key is compared with its top bit (bit 255)
+cleared, as X25519 ignores that bit (RFC 7748; libsodium does the same),
+so each point is also caught with that bit set, and a blocklist file
+entry matches either form. The file was deliberately **not** padded with invented
 entries — a padded blocklist gives false assurance, which is worse than
 an honest short one.
 

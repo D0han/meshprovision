@@ -2040,6 +2040,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The weak-key audit now ignores the top bit of a public key, as X25519
+  itself does, so the 7 small-order points with that bit set are refused
+  too: `mesh admin import` (even with `--allow-weak`), `mesh db verify`,
+  `mesh adopt`, `mesh peers` and the lockdown gate let two of them through
+  with no finding and the rest with only an overridable one.
 - A cache directory other users can write is now refused by every
   command that reads it, not only when an HTTP request is made: `mesh
   health --no-fetch`, `mesh network ... --no-fetch` and `mesh remote

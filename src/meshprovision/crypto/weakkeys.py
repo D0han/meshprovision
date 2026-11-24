@@ -70,6 +70,7 @@ __all__ = [
     "audit_node",
     "audit_private_key",
     "audit_public_key",
+    "canonical_public_u",
     "find_duplicate_public_keys",
     "hamming_weight",
     "is_all_zero",
@@ -342,6 +343,33 @@ def is_vulnerable_firmware(version: str | tuple[int, int, int] | None) -> bool:
     return FIRMWARE_VULNERABLE_MIN <= version < FIRMWARE_FIXED_MIN
 
 
+_X25519_HIGH_BIT_MASK: Final = 0x7F
+"""Mask that clears bit 255 of an X25519 public key's last byte."""
+
+
+def canonical_public_u(public: bytes) -> bytes:
+    """Clear bit 255 of an X25519 public key, as the key exchange itself does.
+
+    RFC 7748 section 5: an implementation ignores the most significant bit
+    of the final byte of a received u-coordinate. So a public key with that
+    bit set is the same curve point as the one without it, and libsodium's
+    small-order check compares ``s[31] & 0x7f`` for the same reason. The
+    all-zero, small-order and public-key blocklist checks compare this
+    form, so none of the 7 small-order points gets through with the top
+    bit set.
+
+    Args:
+        public: The raw public key bytes.
+
+    Returns:
+        ``public`` with bit 255 cleared, or ``public`` unchanged when it is
+        not exactly :data:`meshprovision.crypto.keys.X25519_KEY_SIZE` bytes.
+    """
+    if len(public) != keys.X25519_KEY_SIZE:
+        return bytes(public)
+    return bytes(public[:-1]) + bytes([public[-1] & _X25519_HIGH_BIT_MASK])
+
+
 def is_all_zero(raw: bytes) -> bool:
     """Check whether every byte of ``raw`` is zero.
 
@@ -359,7 +387,9 @@ def is_small_order(public: bytes) -> bool:
 
     Every candidate is compared in constant time, and every comparison
     always runs (no early exit), so the result does not leak *which*
-    point matched via timing.
+    point matched via timing. Bit 255 is ignored (see
+    :func:`canonical_public_u`), so each point also matches with that bit
+    set.
 
     Args:
         public: The candidate public key.
@@ -372,9 +402,10 @@ def is_small_order(public: bytes) -> bool:
     """
     if len(public) != keys.X25519_KEY_SIZE:
         return False
+    candidate = canonical_public_u(public)
     hit = False
     for point in SMALL_ORDER_POINTS:
-        hit |= hmac.compare_digest(public, point)
+        hit |= hmac.compare_digest(candidate, point)
     return hit
 
 
@@ -465,20 +496,24 @@ def find_duplicate_public_keys(keys: Mapping[str, bytes]) -> dict[str, tuple[str
     return result
 
 
-def _in_blocklist(raw: bytes, bad_set: Collection[bytes]) -> bool:
+def _in_blocklist(raw: bytes, bad_set: Collection[bytes], *, public: bool = False) -> bool:
     """Check ``raw`` against a blocklist in constant time.
 
     Args:
         raw: The candidate key bytes.
         bad_set: The blocklist to check against.
+        public: Compare with bit 255 cleared on both sides (see
+            :func:`canonical_public_u`), for a public key.
 
     Returns:
         ``True`` if ``raw`` matches any entry, comparing every entry
         (no early exit).
     """
+    candidate = canonical_public_u(raw) if public else raw
     hit = False
-    for candidate in bad_set:
-        hit |= hmac.compare_digest(raw, bytes(candidate))
+    for entry in bad_set:
+        bad = canonical_public_u(bytes(entry)) if public else bytes(entry)
+        hit |= hmac.compare_digest(candidate, bad)
     return hit
 
 
@@ -496,7 +531,8 @@ def _structural_findings(
     Args:
         raw: The 32-byte key material to inspect.
         include_small_order: Whether to also run the small-order-point
-            check (only meaningful for public keys).
+            check (only meaningful for public keys). Also makes the
+            all-zero check ignore bit 255, as X25519 does for a public key.
         fp: Pre-computed redacted fingerprint of ``raw``.
         node_id: Affected node id, in display form, when known.
         key_ref: Affected key reference in the ``Keys`` sheet, when known.
@@ -507,7 +543,9 @@ def _structural_findings(
     """
     findings: list[WeakKeyFinding] = []
 
-    if is_all_zero(raw):
+    # A public key's bit 255 is ignored by X25519 (see canonical_public_u),
+    # so 00..0080 is the all-zero point too.
+    if is_all_zero(canonical_public_u(raw) if include_small_order else raw):
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.ALL_ZERO,
@@ -620,7 +658,7 @@ def audit_public_key(
     fp = fingerprint(raw)
 
     findings: list[WeakKeyFinding] = []
-    if _in_blocklist(raw, bad_set):
+    if _in_blocklist(raw, bad_set, public=True):
         findings.append(
             WeakKeyFinding(
                 check=WeakKeyCheck.BLOCKLIST,
