@@ -1629,7 +1629,7 @@ mesh db renumber deadbe01 3a7c19e2
 | Option | Meaning |
 |---|---|
 | `--strict` (`verify`) | Treat a bare warning (no error or critical problem) as a failing exit code too |
-| `--backup-dir` (`backup`, `restore`) | Directory backups are stored under/read from. Defaults to a `backups/` directory next to the database (`data/backups` for the default `data/nodes_db.ods` path). Never affects where the known-good copy lives (see below) — that's always the database's own default-resolved location |
+| `--backup-dir` (`backup`, `restore`) | Directory backups are stored under/read from. Defaults to a `backups/` directory next to the database (`data/backups` for the default `data/nodes_db.ods` path), which mesh keeps owner-only (`0700`). A directory `--backup-dir` names is made `0700` only when mesh creates it; an existing one keeps its mode. Never affects where the known-good copy lives (see below) — that's always the database's own default-resolved location |
 | `--retention` (`backup`) | Number of backups to retain; `0` keeps them all (default: 20) |
 | `--list` (`backup`) | List existing backups instead of creating one; also reports the known-good copy's timestamp, when one exists |
 | `--known-good` (`restore`) | Restore the known-good safety copy instead of naming a `BACKUP` path — mutually exclusive with it. Refused, before touching the database, when the copy's recorded provenance is not verified (see [Recovering from a bad hand-edit](database.md#recovering-from-a-bad-hand-edit)); a `BACKUP` path is never provenance-checked |

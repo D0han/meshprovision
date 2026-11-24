@@ -774,6 +774,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh db backup --backup-dir DIR` no longer changes an existing
+  directory's mode to `0700` (dropping a shared directory's group access
+  and setgid bit); it makes `DIR` owner-only only when it creates it. The
+  default `backups/` directory beside the database is still kept `0700`.
 - `mesh peers --apply` (and the `sync_peers` step of `mesh provision`)
   reported "Peers synced" with exit code 0 when a different device
   answered the read-back reconnect and already held the planned contacts;

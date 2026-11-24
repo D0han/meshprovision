@@ -404,6 +404,53 @@ def _monotonic_backup_time(
     return newest + _NAME_TIMESTAMP_STEP
 
 
+def _make_backup_dir(directory: Path, target: Path) -> bool:
+    """Create the backup directory if it is missing.
+
+    Args:
+        directory: The backup directory.
+        target: The file being backed up, for the error.
+
+    Returns:
+        Whether this call created ``directory``.
+
+    Raises:
+        AtomicWriteError: If it cannot be created, or exists but is not a
+            directory.
+    """
+    try:
+        directory.mkdir(parents=True)
+    except FileExistsError as exc:
+        if directory.is_dir():
+            return False
+        raise AtomicWriteError(
+            f"Failed to create backup directory {directory}: {exc}", path=str(target)
+        ) from exc
+    except OSError as exc:
+        raise AtomicWriteError(
+            f"Failed to create backup directory {directory}: {exc}", path=str(target)
+        ) from exc
+    return True
+
+
+def _is_default_backup_dir(directory: Path, target: Path) -> bool:
+    """Check whether ``directory`` is the default backup directory for ``target``.
+
+    Args:
+        directory: An existing backup directory.
+        target: The file being backed up.
+
+    Returns:
+        Whether it is :func:`backup_dir_for`'s default for ``target``;
+        ``False`` when that cannot be told (the default is missing or
+        cannot be resolved).
+    """
+    try:
+        return directory.samefile(backup_dir_for(target))
+    except (OSError, AtomicWriteError):
+        return False
+
+
 def create_backup(
     target: Path,
     *,
@@ -428,7 +475,9 @@ def create_backup(
     Args:
         target: The file to back up.
         backup_dir: Directory to store the backup under. Defaults to
-            :func:`backup_dir_for`'s resolution.
+            :func:`backup_dir_for`'s resolution. That default is made
+            owner-only (``0700``) on every call; any other directory only
+            when this call creates it, never when it already exists.
         retention: Number of backups to retain for ``target`` after this
             one is created. ``<= 0`` keeps everything.
         now: Timestamp to embed in the backup's name. Defaults to the
@@ -449,17 +498,16 @@ def create_backup(
         return None
 
     resolved_dir = backup_dir_for(target, backup_dir)
-    try:
-        resolved_dir.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        raise AtomicWriteError(
-            f"Failed to create backup directory {resolved_dir}: {exc}", path=str(target)
-        ) from exc
-
-    try:
-        resolved_dir.chmod(BACKUP_DIR_MODE)
-    except OSError as exc:
-        _logger.debug("Failed to chmod backup directory %s: %s", resolved_dir, exc)
+    created = _make_backup_dir(resolved_dir, target)
+    # The default backups/ directory beside the target is mesh's own, so it
+    # is tightened every time (git checks the tracked data/backups out
+    # 0755). Another existing directory (`--backup-dir`) may be shared (a
+    # home directory, a setgid project directory): its mode is theirs.
+    if created or _is_default_backup_dir(resolved_dir, target):
+        try:
+            resolved_dir.chmod(BACKUP_DIR_MODE)
+        except OSError as exc:
+            _logger.debug("Failed to chmod backup directory %s: %s", resolved_dir, exc)
 
     name_targets = backup_name_targets(target)
     # Before this call's own temp exists, so it can never sweep it.

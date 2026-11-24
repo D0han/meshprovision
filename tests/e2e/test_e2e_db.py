@@ -58,6 +58,43 @@ def test_db_backup_create_and_list(
     assert document["backups"][0]["size_bytes"] > 0
 
 
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_db_backup_leaves_an_existing_backup_dir_mode_alone(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """A shared --backup-dir (setgid, group-writable) keeps its mode; a new one is 0700."""
+    seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    shared.chmod(0o2775)
+    fresh = tmp_path / "fresh" / "backups"
+
+    kept = invoke(runner, ["db", "backup", "--backup-dir", str(shared)], env)
+    made = invoke(runner, ["db", "backup", "--backup-dir", str(fresh)], env)
+
+    assert kept.exit_code == 0
+    assert made.exit_code == 0
+    assert shared.stat().st_mode & 0o7777 == 0o2775
+    assert len(list(shared.glob("*.ods"))) == 1
+    assert fresh.stat().st_mode & 0o777 == 0o700
+
+
+@pytest.mark.skipif(os.name != "posix", reason="permission bits are not meaningful on this OS")
+def test_db_backup_still_tightens_the_default_backup_dir(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    """The default backups/ beside the db is mesh's own, even when named explicitly."""
+    db_path = seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    default = db_path.resolve().parent / "backups"
+    default.mkdir(exist_ok=True)
+    default.chmod(0o755)
+
+    result = invoke(runner, ["db", "backup", "--backup-dir", str(default)], env)
+
+    assert result.exit_code == 0
+    assert default.stat().st_mode & 0o777 == 0o700
+
+
 def test_db_backup_retention_prunes_older_backups(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:
