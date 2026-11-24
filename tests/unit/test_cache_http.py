@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import email.utils
+import functools
 import gzip
 import inspect
 import json
@@ -14,6 +15,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import cast
 
 import httpx
 import pytest
@@ -1856,3 +1858,49 @@ def test_a_call_naming_no_cap_gets_the_default_and_none_exceeds_the_ceiling() ->
     for method in (http_module.CachedHTTPClient.get, http_module.CachedHTTPClient.request):
         default = inspect.signature(method).parameters["max_bytes"].default
         assert default == http_module.DEFAULT_RESPONSE_BYTES
+
+
+class _TrickledResponse:
+    """A streamed response stand-in whose chunks arrive one clock tick apart."""
+
+    def __init__(self, chunks: int, clock: list[float]) -> None:
+        self.request = httpx.Request("GET", URL)
+        self._chunks = chunks
+        self._clock = clock
+
+    def iter_bytes(self) -> Iterator[bytes]:
+        for _ in range(self._chunks):
+            self._clock[0] += 1.0
+            yield b"x"
+
+
+def test_a_body_still_arriving_after_the_deadline_is_refused() -> None:
+    clock = [0.0]
+    response = cast("httpx.Response", _TrickledResponse(5, clock))
+
+    with pytest.raises(http_module._ResponseTooSlowError, match="longer than 3 s"):
+        http_module._read_capped(response, 100, deadline=3.0, clock=lambda: clock[0])
+
+
+def test_a_body_that_arrives_by_the_deadline_is_read() -> None:
+    clock = [0.0]
+    response = cast("httpx.Response", _TrickledResponse(3, clock))
+
+    assert http_module._read_capped(response, 100, deadline=3.0, clock=lambda: clock[0]) == b"xxx"
+
+
+@respx.mock
+def test_a_body_too_slow_to_arrive_fails_once_without_a_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    route = respx.get(URL).mock(return_value=httpx.Response(200, json={"a": 1}))
+    monkeypatch.setattr(
+        http_module,
+        "_read_capped",
+        functools.partial(http_module._read_capped, deadline=-1.0),
+    )
+
+    with pytest.raises(HttpError, match="took longer than -1 s to arrive"):
+        _make_client(tmp_path, now=[1000.0]).get(URL)
+
+    assert route.call_count == 1

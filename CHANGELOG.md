@@ -746,6 +746,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A server that trickles its answer no longer holds a request for as long
+  as the size cap lasts, four times over: a response body still arriving
+  after ten minutes fails the request once, without a retry.
 - A database file without a suffix (`--db-path fleet`) no longer gets a
   backup that `mesh db backup --list`, restore and pruning never see when
   two backups claim the same timestamp: the `-1` collision mark went

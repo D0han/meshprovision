@@ -98,6 +98,7 @@ if TYPE_CHECKING:
     from types import TracebackType
 
 __all__ = [
+    "BODY_READ_DEADLINE_SECONDS",
     "CACHE_ENTRY_VERSION",
     "DEFAULT_BACKOFF_BASE",
     "DEFAULT_BACKOFF_MAX",
@@ -139,6 +140,14 @@ DEFAULT_RESPONSE_BYTES: Final[int] = 64 * 1024 * 1024
 
 DEFAULT_TIMEOUT_SECONDS: Final[float] = 15.0
 """Default per-request ``httpx`` timeout, in seconds."""
+
+BODY_READ_DEADLINE_SECONDS: Final[float] = 600.0
+"""The longest one response body may take to arrive, in seconds.
+
+``httpx``'s timeout applies to each read, so a server trickling a byte
+every few seconds would otherwise hold one request (and each retry) for
+as long as the size cap lasts. Ten minutes is a 128 MiB body at about
+0.2 MiB/s."""
 
 DEFAULT_MAX_RETRIES: Final[int] = 3
 """Default number of retries after the first attempt (total attempts = this + 1)."""
@@ -295,25 +304,58 @@ class _ResponseTooLargeError(httpx.RequestError):
         super().__init__(f"the response body is larger than {limit} bytes", request=request)
 
 
-def _read_capped(response: httpx.Response, limit: int) -> bytes:
+class _ResponseTooSlowError(httpx.RequestError):
+    """A response body took longer than :data:`BODY_READ_DEADLINE_SECONDS` to arrive.
+
+    A :class:`httpx.RequestError` (not a ``TransportError``), like
+    :class:`_ResponseTooLargeError`: a server that slow would be as slow
+    again, so it is never retried.
+    """
+
+    def __init__(self, deadline: float, *, request: httpx.Request) -> None:
+        """Initialize the error.
+
+        Args:
+            deadline: The deadline the body exceeded, in seconds.
+            request: The request whose response was too slow.
+        """
+        super().__init__(
+            f"the response body took longer than {deadline:g} s to arrive", request=request
+        )
+
+
+def _read_capped(
+    response: httpx.Response,
+    limit: int,
+    *,
+    deadline: float = BODY_READ_DEADLINE_SECONDS,
+    clock: Callable[[], float] = time.monotonic,
+) -> bytes:
     """Read a streamed response's decoded body, stopping past ``limit`` bytes.
 
     Args:
         response: A response opened with ``stream=True``.
         limit: The largest body accepted, in bytes.
+        deadline: The longest the whole body may take, in seconds.
+        clock: A monotonic clock, in seconds.
 
     Returns:
         The decoded body.
 
     Raises:
         _ResponseTooLargeError: If the body exceeds the cap.
+        _ResponseTooSlowError: If the body is still arriving after
+            ``deadline`` seconds.
     """
+    give_up_at = clock() + deadline
     chunks: list[bytes] = []
     size = 0
     for chunk in response.iter_bytes():
         size += len(chunk)
         if size > limit:
             raise _ResponseTooLargeError(limit, request=response.request)
+        if clock() > give_up_at:
+            raise _ResponseTooSlowError(deadline, request=response.request)
         chunks.append(chunk)
     return b"".join(chunks)
 
@@ -1438,8 +1480,9 @@ class CachedHTTPClient:
             HttpError: On a non-retryable failure (including a
                 ``TooManyRedirects`` redirect loop, a refused HTTPS ->
                 non-HTTPS redirect, a redirect to an invalid URL, an
-                undecodable response body, or one
-                larger than ``max_bytes``), or
+                undecodable response body, one larger than ``max_bytes``,
+                or one still arriving after
+                :data:`BODY_READ_DEADLINE_SECONDS`), or
                 after exhausting retries on a retryable transport error.
             RateLimitError: If the server responds with HTTP 429 (never
                 retried automatically; starts the host's cool-down), or
@@ -1487,7 +1530,8 @@ class CachedHTTPClient:
             except httpx.RequestError as exc:
                 # Deterministic for a given server state (a redirect loop, a
                 # refused HTTPS downgrade, an invalid redirect target, an
-                # undecodable body), unlike `TransportError` above -- so this
+                # undecodable, too large or too slow body), unlike
+                # `TransportError` above -- so this
                 # is not retried. Must stay after the `TransportError` arm,
                 # since `TransportError` is itself a `RequestError` subclass.
                 error_type = (
