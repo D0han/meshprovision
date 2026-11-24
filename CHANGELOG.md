@@ -774,6 +774,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh db backup` of a database that does not load still copies it, but
+  now warns and skips `--retention` pruning: repeated runs (cron) used to
+  push the last good backups out with copies of the broken file.
 - A missing database now gets the same "Node database not found" error
   and `mesh init` hint (exit code 4) from `mesh status`, `mesh health`
   and every `mesh network` view, also with `--no-fetch`, as from `mesh db

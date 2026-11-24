@@ -136,6 +136,8 @@ otherwise reported by fingerprint only, never its raw material;
   final name, so a power cut cannot leave any of them empty or torn.
   Before writing, `mesh` loads the new content back in memory and refuses
   to replace the database (taking no backup either) if it would not load.
+  `mesh db backup` copies a database that does not load as it is, warns,
+  and prunes nothing then.
   In a text cell, a carriage return (`\r\n` or `\r`) is stored as a line
   feed, and a control character or other code point a spreadsheet cannot
   hold (a lone surrogate, a non-character) as `�` (U+FFFD), on save and on

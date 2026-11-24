@@ -337,11 +337,23 @@ def db_backup(
     if not path.is_file():
         raise AtomicWriteError(f"Nothing to back up: {path} does not exist.", path=str(path))
 
-    backup_info = backups.create_backup(path, backup_dir=resolved_backup_dir, retention=retention)
+    # Pruned only once the copy is known to load: a broken database backed up
+    # by cron must not push the last good backups out.
+    backup_info = backups.create_backup(path, backup_dir=resolved_backup_dir, retention=0)
     if backup_info is None:
         raise AtomicWriteError(f"Nothing to back up: {path} does not exist.", path=str(path))
 
     ctx.success(f"Backed up {path} -> {backup_info.path} ({backup_info.size_bytes} bytes)")
+    problem = _load_problem(backup_info.path, source=path)
+    if problem is None:
+        backups.prune_backups_quietly(
+            path, backup_dir=resolved_backup_dir, retention=retention, keep=backup_info.path
+        )
+    else:
+        ctx.warn(
+            f"{path} does not load as a valid database ({problem}); it was backed up as it "
+            "is, and no older backup was pruned. Fix it, or `mesh db restore --known-good`."
+        )
     if json_output:
         echo_json(
             {
@@ -351,6 +363,25 @@ def db_backup(
                 "size_bytes": backup_info.size_bytes,
             }
         )
+
+
+def _load_problem(copy: Path, *, source: Path) -> str | None:
+    """Say why a backup copy does not load as a database, if it does not.
+
+    Args:
+        copy: The backup just written.
+        source: The database it was copied from, for the message.
+
+    Returns:
+        ``None`` when the copy loads; otherwise the reason.
+    """
+    try:
+        ods.parse_database(copy.read_bytes(), source=source)
+    except OSError as exc:
+        return exc.strerror or str(exc)
+    except MeshprovisionError as exc:
+        return exc.user_message
+    return None
 
 
 @db.command(name="restore")

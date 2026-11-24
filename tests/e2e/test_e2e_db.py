@@ -117,6 +117,28 @@ def test_db_backup_retention_prunes_older_backups(
     assert len(list(backup_dir.glob("*.ods"))) == 1
 
 
+def test_db_backup_of_a_database_that_does_not_load_keeps_the_good_backups(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
+) -> None:
+    """A cron backup of a broken database must not prune the last good ones away."""
+    db_path = seed_db(nodes=[NodeRecord(node_id="deadbe01", short_name="MT00", region="EU_868")])
+    backup_dir = tmp_path / "cron-backups"
+    args = ["db", "backup", "--backup-dir", str(backup_dir), "--retention", "2"]
+    assert invoke(runner, args, env).exit_code == 0
+    good = db_path.read_bytes()
+    db_path.write_bytes(b"junk\n")
+
+    runs = [invoke(runner, args, env) for _ in range(3)]
+
+    assert all(run.exit_code == 0 for run in runs)
+    assert all("does not load as a valid database" in run.stderr for run in runs)
+    assert all("no older backup was pruned" in run.stderr for run in runs)
+    assert "`mesh db restore --known-good`" in runs[0].stderr
+    copies = [path.read_bytes() for path in backup_dir.glob("*.ods")]
+    assert len(copies) == 4
+    assert copies.count(good) == 1
+
+
 def test_db_backup_list_with_no_backups_reports_none_found(
     runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path], tmp_path: Path
 ) -> None:
