@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import errno
+import importlib
+import inspect
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -483,3 +485,65 @@ def test_ble_backend_connect_does_not_close_a_link_that_never_came_up(
         BLEBackend("AA:BB:CC:DD:EE:FF").connect()
 
     assert closed == []
+
+
+# ---------------------------------------------------------------------------
+# Backend.connect() success: what reaches the meshtastic constructors.
+# ---------------------------------------------------------------------------
+
+_CONNECT_CASES = (
+    pytest.param(
+        "meshtastic.serial_interface",
+        "SerialInterface",
+        SerialBackend("/dev/ttyUSB7", timeout=11),
+        {"devPath": "/dev/ttyUSB7", "timeout": 11},
+        id="serial",
+    ),
+    pytest.param(
+        "meshtastic.ble_interface",
+        "BLEInterface",
+        BLEBackend("AA:BB:CC:DD:EE:FF", timeout=12),
+        {"address": "AA:BB:CC:DD:EE:FF", "timeout": 12},
+        id="ble",
+    ),
+    pytest.param(
+        "meshtastic.tcp_interface",
+        "TCPInterface",
+        TCPBackend("192.168.1.50", port=4404, timeout=13),
+        {"hostname": "192.168.1.50", "portNumber": 4404, "timeout": 13},
+        id="tcp",
+    ),
+)
+
+
+@pytest.mark.parametrize(("module", "name", "backend", "expected"), _CONNECT_CASES)
+def test_connect_passes_the_backends_settings_and_returns_the_interface(
+    monkeypatch: pytest.MonkeyPatch,
+    module: str,
+    name: str,
+    backend: SerialBackend | BLEBackend | TCPBackend,
+    expected: dict[str, object],
+) -> None:
+    interface_class = getattr(importlib.import_module(module), name)
+    recorded: list[dict[str, object]] = []
+
+    def recording_init(self: object, **kwargs: object) -> None:
+        recorded.append(kwargs)
+
+    monkeypatch.setattr(interface_class, "__init__", recording_init)
+    monkeypatch.setattr(interface_class, "__del__", lambda _self: None, raising=False)
+
+    iface = backend.connect()
+
+    assert isinstance(iface, interface_class)
+    assert recorded == [expected]
+
+
+@pytest.mark.parametrize(("module", "name", "backend", "expected"), _CONNECT_CASES)
+def test_the_meshtastic_constructors_still_take_those_keywords(
+    module: str, name: str, backend: object, expected: dict[str, object]
+) -> None:
+    del backend
+    parameters = inspect.signature(getattr(importlib.import_module(module), name)).parameters
+
+    assert set(expected) <= set(parameters)
