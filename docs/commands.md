@@ -109,6 +109,11 @@ keypair recorded (`origin=captured`), not regenerated; a key already
 registered under another ref is refused, unless that ref is the one
 being bootstrapped with `mesh admin bootstrap --ref`.
 
+Bluetooth is always planned on with a fixed PIN (`bluetooth.enabled=true`,
+`mode=FIXED_PIN`): the row's `ble_pin`, or a new random 6-digit PIN for a
+row without one. The template has no setting to leave Bluetooth off or in
+another pairing mode.
+
 **Maintenance warning.** Applying a plan writes the device's
 configuration and reboots it. Before asking for confirmation (and also
 with `--yes`, `--json` or `--non-interactive`), a non-empty plan is
