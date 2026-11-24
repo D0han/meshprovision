@@ -434,6 +434,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- pydantic is now required at 2.8 or later, the first that runs on
+  Python 3.13; the source distribution includes `CONTRIBUTING.md`, which
+  the README links; a `.devN` release tag is published as a GitHub
+  pre-release like `aN`, `bN` and `rcN`.
 - An invalid `MESHPROVISION_*` setting is now reported by its variable
   name and where it came from (the environment, which overrides `.env`,
   or the `.env` file by its path) instead of the internal field name and

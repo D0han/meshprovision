@@ -82,12 +82,14 @@ jobs:
 
       - name: Tell whether the tag is a pre-release
         id: kind
-        # A PEP 440 pre-release suffix (aN, bN, rcN) only: the tag guard in
-        # the build job makes the tag the pyproject version.
+        # A PEP 440 pre-release (aN, bN, rcN) or development release
+        # (.devN, alone or after the others), as the tag guard in the build
+        # job makes the tag the pyproject version. A post-release (.postN)
+        # is a full release, so it is not marked.
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(a|b|rc)[0-9]+$ ]]; then
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+((a|b|rc)[0-9]+)?(\.post[0-9]+)?(\.dev[0-9]+)?$ && "$TAG" =~ (a|b|rc)[0-9]+|\.dev[0-9]+$ ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
@@ -110,6 +112,12 @@ jobs:
   # Note the distribution name is `meshprovision`; only the console script is
   # named `mesh`, so this does not collide with the unrelated abandoned
   # `mesh` distribution on PyPI.
+  #
+  # PyPI refuses a package whose metadata holds a direct reference, so first
+  # replace the `meshtastic @ git+...` pin in pyproject.toml with a released
+  # version that has what the pin is for, and pin the two actions below to
+  # full commit SHAs like every other step (tests/unit/test_ci_workflows.py
+  # checks only the active jobs).
   #
   # publish-pypi:
   #   name: publish to PyPI

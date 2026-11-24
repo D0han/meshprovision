@@ -30,9 +30,14 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    # ruff is pinned twice, in pyproject.toml and as the ruff-pre-commit
+    # rev; Dependabot would bump only the first, so bump both by hand
+    # (`pre-commit autoupdate` and the matching pin).
+    ignore:
+      - dependency-name: "ruff"
     groups:
       dev-tooling:
-        patterns: ["ruff", "mypy", "pytest*", "pre-commit", "detect-secrets", "respx", "responses"]
+        patterns: ["mypy", "pytest*", "pre-commit", "detect-secrets", "respx", "responses"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

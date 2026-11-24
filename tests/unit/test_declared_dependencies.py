@@ -240,3 +240,12 @@ def test_protobuf_lower_bound_has_field_descriptor_is_repeated() -> None:
 
     assert lower is not None
     assert tuple(int(part) for part in lower.group(1).split(".")) >= (6, 31)
+
+
+def test_pydantic_lower_bound_runs_on_python_3_13() -> None:
+    """pydantic-core wheels before pydantic 2.8 stop at Python 3.12."""
+    (pydantic,) = [r for r in _runtime_requirements() if r.lower().startswith("pydantic")]
+    lower = re.search(r">=\s*([0-9.]+)", pydantic)
+
+    assert lower is not None
+    assert tuple(int(part) for part in lower.group(1).split(".")) >= (2, 8)

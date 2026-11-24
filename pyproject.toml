@@ -32,10 +32,12 @@ dependencies = [
   # for why, and re-evaluate once an official 2.8-compatible release lands.
   "meshtastic @ git+https://github.com/meshtastic/python.git@0a1835760c2437314a2d3544bbdd8b6fead559bc",
   # Lower bounds are the oldest releases the test suite passes on (round
-  # 65): click 8.2 for the CLI tests, httpx 0.25 (the first on httpcore 1);
-  # the others with every test passing at that version.
+  # 65, measured on Python 3.11): click 8.2 for the CLI tests, httpx 0.25
+  # (the first on httpcore 1); the others with every test passing at that
+  # version. pydantic 2.8 is the first that runs on Python 3.13 (older
+  # pydantic-core wheels stop at 3.12).
   "cryptography>=38.0.4",
-  "pydantic>=2.0",
+  "pydantic>=2.8",
   "rich>=13.3.1",
   "click>=8.2",
   "structlog>=22.1",
@@ -114,6 +116,7 @@ include = [
   "data/known_bad_keys.txt",
   "README.md",
   "CHANGELOG.md",
+  "CONTRIBUTING.md",
   "LICENSE",
 ]
 

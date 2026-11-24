@@ -20,3 +20,14 @@ def test_the_typed_classifier_has_its_marker() -> None:
 
     assert "Typing :: Typed" in classifiers
     assert (Path(meshprovision.__file__).parent / "py.typed").is_file()
+
+
+def test_the_sdist_holds_every_document_the_readme_links() -> None:
+    sdist = tomllib.loads(_PYPROJECT.read_text(encoding="utf-8"))["tool"]["hatch"]["build"][
+        "targets"
+    ]["sdist"]["include"]
+    readme = (_PYPROJECT.parent / "README.md").read_text(encoding="utf-8")
+
+    for document in ("CONTRIBUTING.md", "CHANGELOG.md", "LICENSE", "docs"):
+        assert f"]({document}" in readme or document == "LICENSE"
+        assert document in sdist
