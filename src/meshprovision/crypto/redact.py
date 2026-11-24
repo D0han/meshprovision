@@ -159,12 +159,25 @@ LIBRARY_SECRET_FIELDS: Final[tuple[str, ...]] = (
     "password",
     "fixed_pin",
     "session_passkey",
+    "pin_code",
+    "pin",
+    "passphrase",
+    "channel_url",
 )
 """Protobuf field names whose value may be secret, in snake_case.
 
 Every field of ``provisioning.detect_types.SECRET_FIELDS`` (which a test
-pins, as this module cannot import it), plus a channel's ``psk`` and an
-admin session's ``session_passkey``."""
+pins, as this module cannot import it), plus a channel's ``psk``, an
+admin session's ``session_passkey``, the screen lock's ``pin_code``
+(``DeviceUIConfig``), the Bluetooth pairing ``pin``
+(``BluetoothConnectionStatus``), the lockdown ``passphrase``
+(``LockdownAuth``) and a ``channel_url`` (``DeviceProfile``; the URL
+carries the channel keys). A unit test walks the pinned protobufs and
+fails on a new secret-looking field missing here.
+
+``pin`` also matches the GPIO pin fields (``gpio_pin``, ``ptt_pin``, ...),
+as an underscore may precede a name, so a module-config record that
+names one is withheld too: the safe direction."""
 
 
 def _camel_case(name: str) -> str:

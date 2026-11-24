@@ -3,14 +3,26 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import io
 import logging
+import pkgutil
 import re
 from collections.abc import Callable
 
+import meshtastic.protobuf
 import pytest
 import structlog
-from meshtastic.protobuf import mesh_pb2
+from google.protobuf import json_format
+from google.protobuf.descriptor import Descriptor, FieldDescriptor
+from google.protobuf.message import Message
+from meshtastic.protobuf import (
+    admin_pb2,
+    clientonly_pb2,
+    connection_status_pb2,
+    device_ui_pb2,
+    mesh_pb2,
+)
 
 import meshprovision.crypto.redact as redact_module
 from meshprovision.cli.logging_setup import configure_logging
@@ -151,6 +163,47 @@ class TestScrubText:
         assert scrub_text(text_hex63) == text_hex63
 
 
+_SECRET_LOOKING_TOKEN = re.compile(r"\w*key|pass\w*|psk|pin|url|secret|token")
+
+_NOT_SECRET_FIELDS: dict[str, str] = {
+    "gpio_pin": "a GPIO number",
+    "monitor_pin": "a GPIO number",
+    "ptt_pin": "a GPIO number",
+    "inputbroker_pin_a": "a GPIO number",
+    "inputbroker_pin_b": "a GPIO number",
+    "inputbroker_pin_press": "a GPIO number",
+    "allow_undefined_pin_access": "a flag",
+    "is_key_manually_verified": "a flag",
+    "public_key_switch": "a node-list filter flag",
+}
+"""Secret-looking scalar fields that hold no secret, with the reason."""
+
+
+def _secret_looking_protobuf_fields() -> set[str]:
+    """Name every scalar field in the pinned protobufs with a secret-looking word.
+
+    Message-typed fields are left out: their text is ``name {`` with the
+    value in their own fields, which the walk visits.
+    """
+    names: set[str] = set()
+
+    def walk(descriptor: Descriptor) -> None:
+        for field in descriptor.fields:
+            if field.type == FieldDescriptor.TYPE_MESSAGE:
+                continue
+            if any(_SECRET_LOOKING_TOKEN.fullmatch(t) for t in field.name.split("_")):
+                names.add(field.name)
+        for nested in descriptor.nested_types:
+            walk(nested)
+
+    for module in pkgutil.iter_modules(meshtastic.protobuf.__path__):
+        if module.name.endswith("_pb2"):
+            loaded = importlib.import_module(f"meshtastic.protobuf.{module.name}")
+            for descriptor in loaded.DESCRIPTOR.message_types_by_name.values():
+                walk(descriptor)
+    return names
+
+
 class TestLibraryRecordMayLeak:
     """Each predicate of ``library_record_may_leak`` holds on its own.
 
@@ -241,6 +294,51 @@ class TestLibraryRecordMayLeak:
     @pytest.mark.parametrize("word", ["passwords_seen", "pskless", "public_keys"])
     def test_a_longer_word_holding_a_secret_field_name_is_not_withheld(self, word: str) -> None:
         assert not redact_module.library_record_may_leak(f"{word}: 3")
+
+    @pytest.mark.parametrize(
+        "message",
+        [
+            pytest.param(
+                mesh_pb2.FromRadio(deviceuiConfig=device_ui_pb2.DeviceUIConfig(pin_code=123456)),
+                id="screen-lock-pin",
+            ),
+            pytest.param(
+                admin_pb2.AdminMessage(
+                    lockdown_auth=admin_pb2.LockdownAuth(passphrase=b"correct horse")
+                ),
+                id="lockdown-passphrase",
+            ),
+            pytest.param(
+                clientonly_pb2.DeviceProfile(channel_url="https://meshtastic.org/e/#CgMSAQE"),
+                id="channel-url",
+            ),
+            pytest.param(
+                connection_status_pb2.BluetoothConnectionStatus(pin=654321),
+                id="bluetooth-pin",
+            ),
+        ],
+    )
+    def test_a_secret_in_newer_protobuf_text_is_withheld(self, message: Message) -> None:
+        text = f"Received from radio: {message}"
+        camel = str(json_format.MessageToDict(message))
+
+        assert scrub_text(text) == text
+        assert redact_module.library_record_may_leak(text)
+        assert redact_module.library_record_may_leak(camel)
+
+    def test_every_secret_looking_protobuf_field_is_a_library_secret_field(self) -> None:
+        """A protobuf pin bump that adds such a field fails here until it is listed."""
+        found = _secret_looking_protobuf_fields()
+
+        missing = {
+            name
+            for name in found
+            if name not in _NOT_SECRET_FIELDS
+            and not redact_module.library_record_may_leak(f"{name}: 1")
+        }
+
+        assert missing == set()
+        assert set(_NOT_SECRET_FIELDS) <= found, "stale entry in _NOT_SECRET_FIELDS"
 
     def test_every_secret_device_field_is_a_library_secret_field(self) -> None:
         assert {name for _, name in SECRET_FIELDS} <= set(redact_module.LIBRARY_SECRET_FIELDS)

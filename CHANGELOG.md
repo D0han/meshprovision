@@ -2045,6 +2045,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- `mesh -vv` and `-vvv` no longer print the screen-lock PIN
+  (`DeviceUIConfig.pin_code`), the Bluetooth pairing PIN, a lockdown
+  passphrase or a channel URL (which carries the channel keys) from the
+  meshtastic library's protobuf text; a unit test now walks the pinned
+  protobufs for any new secret-looking field.
 - The weak-key audit now ignores the top bit of a public key, as X25519
   itself does, so the 7 small-order points with that bit set are refused
   too: `mesh admin import` (even with `--allow-weak`), `mesh db verify`,
