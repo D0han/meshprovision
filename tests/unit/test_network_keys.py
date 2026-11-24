@@ -25,7 +25,7 @@ from meshprovision.network.keys import (
     short_digest,
 )
 from meshprovision.network.rawpackets import AdvertisedKey
-from meshprovision.nodeid import NodeId
+from meshprovision.nodeid import NodeId, key_derived_id
 from tests.unit.network_fixtures import NOW
 
 pytestmark = pytest.mark.unit
@@ -236,6 +236,66 @@ def test_a_migration_older_than_the_window_is_judged_on_every_stored_sighting(da
 
     assert [(f.kind.value, f.severity.value) for f in scan.findings] == [("migration", "info")]
     assert not scan.fleet_critical
+
+
+def _renumbered() -> tuple[str, KeySeen, KeySeen]:
+    """Our 2.7 id's sightings, then our derived 2.8 id's, as after ``mesh db renumber``."""
+    new_id = key_derived_id(_KEY).hex
+    old = KeySeen(
+        "a", _DIGEST, _H - 20 * HOUR_SECONDS, _H - 15 * HOUR_SECONDS, (_H - 20 * HOUR_SECONDS,)
+    )
+    new = KeySeen(new_id, _DIGEST, _H - 14 * HOUR_SECONDS, _H, (_H,), derived=True)
+    return new_id, old, new
+
+
+def test_our_old_id_after_the_database_followed_the_renumber_is_a_migration() -> None:
+    new_id, old, new = _renumbered()
+
+    scan = scan_keys((old, new), (fleet_key(new_id, _KEY),), start=_START)
+
+    assert [(f.kind, f.severity, f.nodes) for f in scan.findings] == [
+        (FindingKind.MIGRATION, Severity.INFO, ("a", new_id))
+    ]
+    assert not scan.fleet_critical
+
+
+def test_our_old_id_heard_after_our_derived_id_started_is_still_critical() -> None:
+    new_id, old, new = _renumbered()
+    late = KeySeen("a", _DIGEST, old.first, _H - 10 * HOUR_SECONDS, old.hours)
+
+    scan = scan_keys((late, new), (fleet_key(new_id, _KEY),), start=_START)
+
+    assert [(f.kind, f.severity) for f in scan.findings] == [
+        (FindingKind.OUR_KEY_ELSEWHERE, Severity.CRITICAL)
+    ]
+
+
+def test_a_clone_heard_only_long_before_our_derived_id_stays_critical() -> None:
+    new_id, _, new = _renumbered()
+    long_before = KeySeen(
+        "a",
+        _DIGEST,
+        new.first - 9 * 24 * HOUR_SECONDS,
+        new.first - 8 * 24 * HOUR_SECONDS,
+        (floor_hour(new.first - 8 * 24 * HOUR_SECONDS),),
+    )
+
+    scan = scan_keys((long_before, new), (fleet_key(new_id, _KEY),), start=_START)
+
+    assert [(f.kind, f.severity) for f in scan.findings] == [
+        (FindingKind.OUR_KEY_ELSEWHERE, Severity.CRITICAL)
+    ]
+
+
+def test_another_of_our_nodes_holding_our_key_is_no_migration() -> None:
+    new_id, old, new = _renumbered()
+
+    scan = scan_keys((old, new), (fleet_key(new_id, _KEY), FleetKey("a")), start=_START)
+
+    assert (FindingKind.MIGRATION, Severity.INFO) not in [
+        (f.kind, f.severity) for f in scan.findings
+    ]
+    assert scan.fleet_critical
 
 
 def test_our_key_on_its_derived_id_while_our_node_is_still_heard_is_critical() -> None:

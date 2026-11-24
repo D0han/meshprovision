@@ -737,6 +737,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh network keys` no longer reports a node renumbered with
+  `mesh db renumber` as critical "our key on another id" (exit code 6) for
+  the 30 days its old id stays stored: the old id heard only before the
+  new one is the same firmware 2.8 migration, reported as info.
 - The "database is locked" message no longer names a negative or
   impossibly large pid read from a damaged lock file.
 - A Bluetooth connection whose configuration handshake fails or times

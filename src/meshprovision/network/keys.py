@@ -63,6 +63,7 @@ from meshprovision.nodeid import key_derived_id
 __all__ = [
     "KEY_DIGEST_CHARS",
     "MAX_KEY_HOURS",
+    "MIGRATION_MAX_GAP_SECONDS",
     "FindingKind",
     "FleetKey",
     "KeyAudit",
@@ -82,6 +83,13 @@ KEY_DIGEST_CHARS: Final[int] = 16
 
 MAX_KEY_HOURS: Final[int] = 168
 """The most hours a key's sighting keeps (the newest)."""
+
+MIGRATION_MAX_GAP_SECONDS: Final[float] = 7 * 24 * 3600.0
+"""The longest silence between a renumbered node's old id and its new one.
+
+A move to firmware 2.8 is a reboot (or an upgrade that keeps the node off
+the air for a while); an old id heard last more than a week before our
+node's first sighting is not taken for the same node."""
 
 _PREFIX_CHARS: Final[int] = len("sha256:")
 
@@ -403,6 +411,10 @@ def _our_keys(
                     finding = KeyFinding(
                         FindingKind.MIGRATION, Severity.INFO, entry.digest, nodes, fleet=True
                     )
+                elif entry.node not in ours and _migrated_from(full, mine, heard):
+                    finding = KeyFinding(
+                        FindingKind.MIGRATION, Severity.INFO, entry.digest, nodes[::-1], fleet=True
+                    )
                 else:
                     finding = KeyFinding(
                         FindingKind.OUR_KEY_ELSEWHERE,
@@ -433,6 +445,23 @@ def _migrated_to(entry: KeySeen, own: Collection[KeySeen]) -> bool:
     derived id alone proves nothing while our node is not heard.
     """
     return bool(own) and entry.derived and all(old.last < entry.first for old in own)
+
+
+def _migrated_from(entry: KeySeen, mine: FleetKey, own: Collection[KeySeen]) -> bool:
+    """Tell whether ``entry`` is the old id our key-derived node had before a move to 2.8.
+
+    The database already follows the new id (``mesh db renumber``) while
+    the old id's sightings stay stored: it is the same move seen from the
+    other side when our id is derived from the key, the other id is not
+    (nor, the caller checks, another of our nodes), and our node was
+    first heard after the old id went quiet, within
+    :data:`MIGRATION_MAX_GAP_SECONDS`. A clone heard only long before our
+    node was first heard stays critical.
+    """
+    if not mine.derived or entry.derived or not own:
+        return False
+    first_ours = min(new.first for new in own)
+    return entry.last < first_ours and first_ours - entry.last <= MIGRATION_MAX_GAP_SECONDS
 
 
 def _weak_keys(window: tuple[KeySeen, ...], ours: Mapping[str, FleetKey]) -> list[KeyFinding]:

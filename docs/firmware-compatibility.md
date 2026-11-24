@@ -228,7 +228,8 @@ What meshprovision does about it:
   [`mesh db renumber OLD NEW`](commands.md#mesh-db) command to run first.
   [`mesh network keys`](commands.md#mesh-network-keys) reports such a move
   as a `migration` when the old id was heard (in the 30 days stored)
-  before the new one; when it was not heard at all, the move looks exactly
+  before the new one, both before and after the database followed the
+  move; when it was not heard at all, the move looks exactly
   like a clone and stays critical, naming that command.
 - **A first region set is refused.** `mesh provision` refuses a plan
   that would set the LoRa region of a 2.8 device whose region is still
