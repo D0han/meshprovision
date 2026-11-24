@@ -746,6 +746,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A template that gives one key twice in a mapping (a pasted second
+  `region:` in `lora:`) is refused with exit code 2, naming both lines,
+  instead of silently meaning the last value. A key a YAML `<<` merge
+  brings in may still be overridden.
 - `mesh adopt --from-backup` no longer reads a backup's impossible values
   as real ones: a node-db export whose `myNodeNum` is a reserved or the
   broadcast number is refused (an entry with one is skipped with a

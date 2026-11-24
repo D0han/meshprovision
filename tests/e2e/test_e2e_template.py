@@ -72,6 +72,20 @@ def test_template_validate_malformed_yaml_exits_two(
     assert "not valid YAML" in result.stderr
 
 
+def test_template_validate_refuses_a_repeated_key(
+    runner: CliRunner, env: dict[str, str], tmp_path: Path, write_template: Callable[..., Path]
+) -> None:
+    example = write_template().read_text(encoding="utf-8")
+    doubled = tmp_path / "doubled.yaml"
+    doubled.write_text(example.replace("\nlora:\n", "\nlora:\n  region: US\n", 1), encoding="utf-8")
+    env["MESHPROVISION_TEMPLATE_PATH"] = str(doubled)
+
+    result = invoke(runner, ["template", "validate"], env)
+
+    assert result.exit_code == 2, result.output
+    assert "found duplicate key 'region'" in result.stderr
+
+
 def test_template_validate_empty_file_exits_two(
     runner: CliRunner, env: dict[str, str], tmp_path: Path
 ) -> None:

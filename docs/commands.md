@@ -1775,9 +1775,10 @@ mesh template validate
 mesh --template-path ./candidate.yaml template validate --json
 ```
 
-`validate` checks the configured template file — name pattern byte
-limits, namespace capacity, `admin_nodes` shape and count, forbidden
-key-material fields — with no database and no device connection at all.
+`validate` checks the configured template file — a key given twice in
+one mapping (refused, naming both lines: YAML would silently keep the
+last), name pattern byte limits, namespace capacity, `admin_nodes` shape
+and count, forbidden key-material fields — with no database and no device connection at all.
 `mesh db verify` already runs the same checks as part of validating a
 database, but deliberately *degrades* a template failure to a warning
 there (verifying a database has to keep working even with a broken

@@ -846,6 +846,43 @@ def test_load_template_text_malformed_yaml_raises() -> None:
         load_template_text("key: [unterminated", source="<test>")
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        pytest.param("lora:\n  region: EU_868\n  hop_limit: 3\n  region: US\n", id="nested"),
+        pytest.param("lora: {region: EU_868, region: US}\n", id="flow-same-line"),
+        pytest.param("version: 1\nversion: 1\n", id="top-level-same-value"),
+    ],
+)
+def test_load_template_text_refuses_a_repeated_key(text: str) -> None:
+    with pytest.raises(TemplateValidationError, match="found duplicate key") as exc_info:
+        load_template_text(text, source="<test>")
+
+    first_line = 2 if text.startswith("lora:\n") else 1
+    assert f"(first given on line {first_line})" in str(exc_info.value)
+
+
+def test_load_template_text_lets_a_key_override_a_merged_one() -> None:
+    text = (
+        "x-base: &base {hop_limit: 3}\n"
+        "lora:\n  <<: *base\n  hop_limit: 4\n  region: EU_868\n  modem_preset: LONG_FAST\n"
+    )
+
+    try:
+        load_template_text(text, source="<test>")
+    except TemplateValidationError as exc:
+        assert "duplicate key" not in str(exc)
+
+
+def test_load_template_text_lets_a_merge_chain_through() -> None:
+    text = "base: &b {k: 1}\na: {x: &mid {<<: *b, k: 2}}\nc: {<<: *mid}\n"
+
+    with pytest.raises(TemplateValidationError) as exc_info:
+        load_template_text(text, source="<test>")
+
+    assert "duplicate key" not in str(exc_info.value)
+
+
 def test_load_template_text_top_level_list_raises() -> None:
     with pytest.raises(TemplateValidationError):
         load_template_text("- 1\n- 2\n", source="<test>")

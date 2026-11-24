@@ -37,7 +37,7 @@ import logging
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Any, Final
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
@@ -711,6 +711,50 @@ def load_template(path: Path | str) -> TemplateConfig:
     return load_template_text(text, source=str(resolved))
 
 
+class _UniqueKeySafeLoader(yaml.SafeLoader):
+    """``yaml.SafeLoader`` that refuses a mapping repeating one of its own keys.
+
+    PyYAML keeps the last value, so a pasted second ``region:`` in the
+    ``lora:`` block would silently change what the template means. A key
+    a ``<<`` merge brings in may still be overridden, as YAML intends.
+    """
+
+    def compose_mapping_node(self, anchor: dict[Any, yaml.Node]) -> yaml.MappingNode:
+        """Compose a mapping, refusing a key it already holds.
+
+        Checked on the mapping as written, before any ``<<`` merge is
+        flattened into it, so a merge chain never looks like a repeat.
+
+        Args:
+            anchor: The mapping's anchor, as PyYAML passes it (typed as its stubs do).
+
+        Returns:
+            The composed mapping node.
+
+        Raises:
+            yaml.composer.ComposerError: If a key repeats, naming both lines.
+        """
+        node = super().compose_mapping_node(anchor)
+        first_lines: dict[tuple[str, str], int] = {}
+        for key_node, _ in node.value:
+            if not isinstance(key_node, yaml.ScalarNode) or key_node.tag == _MERGE_TAG:
+                continue
+            key = (key_node.tag, key_node.value)
+            first = first_lines.get(key)
+            if first is not None:
+                raise yaml.composer.ComposerError(
+                    "while composing a mapping",
+                    node.start_mark,
+                    f"found duplicate key {key_node.value!r} (first given on line {first})",
+                    key_node.start_mark,
+                )
+            first_lines[key] = key_node.start_mark.line + 1
+        return node
+
+
+_MERGE_TAG: Final[str] = "tag:yaml.org,2002:merge"
+
+
 def load_template_text(text: str, *, source: str = "<string>") -> TemplateConfig:
     """Parse and validate template YAML already read into memory.
 
@@ -725,7 +769,8 @@ def load_template_text(text: str, *, source: str = "<string>") -> TemplateConfig
     Raises:
         TemplateValidationError: If ``text`` is empty or comments-only
             (a YAML document that parses to ``None``), is not valid
-            YAML, its top level is not a mapping, or its contents fail
+            YAML (a mapping that repeats a key included), its top level
+            is not a mapping, or its contents fail
             :class:`TemplateConfig` validation. An empty document is
             rejected rather than silently treated as ``{}``, since that
             would apply every field default (region, preset, role, name
@@ -736,7 +781,7 @@ def load_template_text(text: str, *, source: str = "<string>") -> TemplateConfig
             catch it.
     """
     try:
-        data = yaml.safe_load(text)
+        data = yaml.load(text, Loader=_UniqueKeySafeLoader)  # noqa: S506 - a SafeLoader
     except yaml.YAMLError as exc:
         raise TemplateValidationError(f"{source} is not valid YAML: {exc}", field=None) from exc
 
