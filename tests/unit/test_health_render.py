@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import re
@@ -30,6 +31,7 @@ from meshprovision.health.rules import (
 )
 from meshprovision.nodeid import NodeId
 from meshprovision.status import timefmt
+from meshprovision.status.cadence import Cadence, CadenceSource
 from meshprovision.status.merge import MergedNode, Thresholds, humanize_age
 from meshprovision.status.report import SourceFailure, StatusReport
 
@@ -907,3 +909,17 @@ def test_a_hidden_column_takes_its_cells_with_it() -> None:
     assert "Short" not in headers
     assert "Every" not in headers
     assert str(table.columns[headers.index("Verdict")]._cells[0]) == "OK"
+
+
+def test_a_learned_cadence_without_a_role_is_not_called_the_role_default() -> None:
+    node = MergedNode(
+        node_id=_A,
+        short_name="D0h5",
+        long_name="Alpha",
+        cadence=Cadence(timedelta(hours=3), CadenceSource.HISTORY),
+    )
+
+    text = _detail(dataclasses.replace(_health(node=node), role=None))
+
+    assert "(learned from its history)" in text
+    assert "role is unknown" not in text

@@ -22,6 +22,7 @@ from meshprovision.datasources.lorastats import (
     validate_regions,
 )
 from meshprovision.datasources.models import (
+    LAST_SEEN_FUTURE_SKEW,
     MAX_SEEN_BY_TOPICS,
     CoercionTracker,
     NodeObservation,
@@ -2151,3 +2152,17 @@ def test_loranet_time_within_the_skew_is_kept() -> None:
     obs = parse_node(_LORANET_NID, payload, observed_at=_LORANET_READ_AT)
 
     assert obs.last_seen == datetime.fromtimestamp(1_700_000_000 + 240, tz=UTC)
+
+
+def test_loranet_times_exactly_at_the_skew_are_kept() -> None:
+    at_the_skew = _LORANET_READ_AT + LAST_SEEN_FUTURE_SKEW
+    stamp = int(at_the_skew.timestamp())
+    payload = {
+        "seenBy": {"msh/PL/2/e/LongFast/!aabbccdd": stamp, "msh/PL/2/e/LongFast/!250643bc": stamp}
+    }
+
+    obs = parse_node(_LORANET_NID, payload, observed_at=_LORANET_READ_AT)
+
+    assert obs.last_seen == at_the_skew
+    assert obs.seen_by_times == (at_the_skew,)
+    assert obs.self_uplink_seen == at_the_skew
