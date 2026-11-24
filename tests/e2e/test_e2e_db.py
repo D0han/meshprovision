@@ -148,7 +148,7 @@ def test_db_backup_list_with_no_backups_reports_none_found(
     result = invoke(runner, ["db", "backup", "--backup-dir", str(backup_dir), "--list"], env)
 
     assert result.exit_code == 0
-    assert "No backups found." in result.stdout
+    assert result.stdout == "No backups found.\n"
 
 
 def test_db_backup_list_plain_text_shows_path_and_size(
@@ -569,6 +569,8 @@ def test_db_backup_list_shows_the_known_good_line_when_present(
 
     assert result.exit_code == 0
     assert "known-good:" in result.stdout
+    assert "No backups found." not in result.stdout
+    assert result.stdout.splitlines()[1] == "No timestamped backups found."
 
     as_json = invoke(runner, ["db", "backup", "--list", "--json"], env)
     document = json.loads(as_json.stdout)

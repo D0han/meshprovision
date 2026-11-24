@@ -774,6 +774,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `mesh db backup --list` with only the known-good copy says "No
+  timestamped backups found." under its line, not "No backups found.".
 - `mesh db backup` of a database that does not load still copies it, but
   now warns and skips `--retention` pruning: repeated runs (cron) used to
   push the last good backups out with copies of the broken file.

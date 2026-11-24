@@ -242,7 +242,8 @@ def _print_backup_list(
                 f"[{status.provenance.value}]"
             )
         if not infos:
-            ctx.print_out("No backups found.")
+            # The known-good copy above is not one of the timestamped backups.
+            ctx.print_out("No timestamped backups found." if status else "No backups found.")
         else:
             for info in infos:
                 ctx.print_out(
