@@ -31,20 +31,22 @@ from meshprovision.health.drift import (
     passive_drift,
 )
 from meshprovision.health.history import NodeHistory
+from meshprovision.health.importance import (
+    Importance,
+    RegionImportance,
+    rank_importance,
+)
 from meshprovision.health.metrics import NodeMetrics, compute_metrics
 from meshprovision.health.refresh import HealthRefresher, RefreshFailure, RefreshOutcome
 from meshprovision.health.rules import (
     Advice,
     BatteryReading,
     Finding,
-    Importance,
     NodeContext,
-    RegionImportance,
     Verdict,
     advise,
     assess,
     battery_reading,
-    rank_importance,
 )
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.network.maintenance import StoredImpact, stored_impacts
@@ -300,7 +302,7 @@ def assess_nodes(
         floor: The shortest thresholds the nodes were merged with
             (``None``: the defaults).
         region: How much each node's region relied on it (see
-            :func:`~meshprovision.health.rules.rank_importance`).
+            :func:`~meshprovision.health.importance.rank_importance`).
 
     Returns:
         One :class:`NodeHealth` per reported node, in ``nodes`` order.

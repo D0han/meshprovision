@@ -277,3 +277,11 @@ def test_the_docs_state_each_value(docs: str, phrase: str) -> None:
     # Exactly once: a value inside a longer number, or repeated in another
     # sentence, would let a change to this one go unnoticed.
     assert _standalone(phrase, docs) == 1
+
+
+def test_the_region_cap_is_the_http_clients_ceiling() -> None:
+    """A higher cap would be clamped quietly by the client's own min()."""
+    from meshprovision.cache.http import MAX_RESPONSE_BYTES
+    from meshprovision.datasources.lorastats_region import REGION_RAW_MAX_BYTES
+
+    assert REGION_RAW_MAX_BYTES <= MAX_RESPONSE_BYTES

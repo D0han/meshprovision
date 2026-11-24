@@ -2,7 +2,10 @@
 
 A leaf module: every renderer and rule that reads a battery level shares
 this one sentinel and comparison, so none treats a level above 101 (a
-garbled reading near the sentinel) differently from the others.
+garbled reading near the sentinel) differently from the others. The one
+exception is deliberate: :func:`meshprovision.health.packets.parse_telemetry`
+drops a battery above 101 from a text telemetry payload as out of range,
+since there it is a parse of free text, not a reported level.
 """
 
 from __future__ import annotations

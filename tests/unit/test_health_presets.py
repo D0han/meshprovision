@@ -15,6 +15,9 @@ from meshprovision.datasources.models import NodeObservation
 from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import ManagementMode
 from meshprovision.health import render
+from meshprovision.health.importance import (
+    Importance,
+)
 from meshprovision.health.metrics import NodeMetrics
 from meshprovision.health.report import HealthReport, assess_nodes
 from meshprovision.health.rules import (
@@ -25,7 +28,6 @@ from meshprovision.health.rules import (
     LONG_PRESET_MAX_NODES,
     LONG_PRESETS,
     PRESET_AIRTIME_MS,
-    Importance,
     NodeContext,
     advise,
     chatty_limit,

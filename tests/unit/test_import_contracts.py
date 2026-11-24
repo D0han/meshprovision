@@ -147,6 +147,7 @@ FORBIDDEN_IMPORTS: Final[tuple[tuple[str, tuple[str, ...]], ...]] = (
     ("provisioning/discovery.py", ("meshtastic", "meshprovision.provisioning.connection")),
     ("config/settings.py", ("meshprovision.config.template",)),
     ("cli/help_format.py", ("meshprovision",)),
+    ("battery.py", ("meshprovision",)),
     ("cli/command_text.py", ("meshprovision",)),
     ("cli/logging_setup.py", ("meshprovision.cli",)),
     ("cli/adopt_backup.py", _CLI_COMMANDS),

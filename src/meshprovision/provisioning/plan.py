@@ -68,13 +68,12 @@ from meshprovision.name_pattern import LONG_NAME_MAX_BYTES, SHORT_NAME_MAX_BYTES
 from meshprovision.provisioning import detect
 from meshprovision.provisioning.plan_admin_keys import KeyPlan, plan_admin_key_material
 from meshprovision.provisioning.plan_diff import diff_fields, values_equal
-from meshprovision.provisioning.plan_firmware import (
+from meshprovision.provisioning.plan_firmware import firmware_adjustments, role_change_warning
+from meshprovision.provisioning.plan_firmware_refusals import (
     custom_modem_refusal,
-    firmware_adjustments,
     known_only_warning,
     local_admin_refusal,
     replaced_role_refusal,
-    role_change_warning,
 )
 from meshprovision.provisioning.plan_lora import (
     channel_num_wrap_warning,
@@ -612,13 +611,13 @@ def build_plan(inputs: PlanInputs) -> ChangePlan:
             or a key fails the weak-key audit).
         PlanConflictError: If the plan would write role ``REPEATER`` to
             firmware that replaces it (see
-            :func:`~meshprovision.provisioning.plan_firmware.replaced_role_refusal`),
+            :func:`~meshprovision.provisioning.plan_firmware_refusals.replaced_role_refusal`),
             ``rebroadcast_mode`` ``KNOWN_ONLY`` to firmware that then
             ignores the connected client (see
-            :func:`~meshprovision.provisioning.plan_firmware.local_admin_refusal`),
+            :func:`~meshprovision.provisioning.plan_firmware_refusals.local_admin_refusal`),
             ``lora.use_preset`` false to a node holding a radio
             parameter of 0 (see
-            :func:`~meshprovision.provisioning.plan_firmware.custom_modem_refusal`),
+            :func:`~meshprovision.provisioning.plan_firmware_refusals.custom_modem_refusal`),
             or a region or preset the device's firmware cannot run (see
             :func:`~meshprovision.provisioning.plan_lora.lora_firmware_refusal`).
     """

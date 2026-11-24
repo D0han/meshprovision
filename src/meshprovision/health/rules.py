@@ -34,16 +34,7 @@ from types import MappingProxyType
 from typing import Final
 
 from meshprovision.battery import EXTERNAL_POWER_BATTERY_LEVEL, is_external_power
-from meshprovision.health.importance import (
-    IMPORTANCE_HIGH_SCORE,
-    IMPORTANCE_MEDIUM_SCORE,
-    MIN_RECEPTIONS,
-    RELAY_DEPENDENCY_SHARE,
-    ROUTER_ROLES,
-    Importance,
-    RegionImportance,
-    rank_importance,
-)
+from meshprovision.health.importance import MIN_RECEPTIONS, ROUTER_ROLES, Importance
 from meshprovision.health.metrics import NodeMetrics
 from meshprovision.health.packets import FUTURE_SKEW_SECONDS
 from meshprovision.status.cadence import OFFLINE_MISSED, CadenceSource, interval_text
@@ -65,18 +56,13 @@ __all__ = [
     "CHATTY_REFERENCE_PRESET",
     "DEFAULT_HOP_LIMIT",
     "HOP_ADVICE_MIN_SAMPLES",
-    "IMPORTANCE_HIGH_SCORE",
-    "IMPORTANCE_MEDIUM_SCORE",
     "LONG_PRESETS",
     "LONG_PRESET_MAX_NODES",
-    "MIN_RECEPTIONS",
     "PRESET_AIRTIME_MS",
     "REBOOTS_WARN",
     "REBOOTS_WINDOW_DAYS",
     "RELAY_CONCENTRATION_SHARE",
-    "RELAY_DEPENDENCY_SHARE",
     "ROUTER_MIN_GATEWAYS",
-    "ROUTER_ROLES",
     "SILENCE_RUN_MISSED",
     "SILENCE_WARN_HOURS",
     "SILENT_CRIT_SECONDS",
@@ -84,15 +70,12 @@ __all__ = [
     "Advice",
     "BatteryReading",
     "Finding",
-    "Importance",
     "NodeContext",
-    "RegionImportance",
     "Verdict",
     "advise",
     "assess",
     "battery_reading",
     "chatty_limit",
-    "rank_importance",
 ]
 
 SILENT_WARN_SECONDS: Final[float] = 2 * 3600.0

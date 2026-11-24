@@ -14,10 +14,15 @@ from rich.text import Text
 
 from meshprovision.cache.http import CachedHTTPClient
 from meshprovision.health import render as health_render
+from meshprovision.health.importance import (
+    Importance,
+)
 from meshprovision.health.metrics import NodeMetrics
 from meshprovision.health.refresh import HealthRefresher, RefreshFailure, RefreshOutcome
 from meshprovision.health.report import NodeHealth, StatusHealth, assess_status
-from meshprovision.health.rules import Importance, Verdict
+from meshprovision.health.rules import (
+    Verdict,
+)
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render

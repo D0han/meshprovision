@@ -6,12 +6,12 @@ from datetime import UTC, datetime
 
 import pytest
 
+from meshprovision.battery import EXTERNAL_POWER_BATTERY_LEVEL
 from meshprovision.datasources.models import NodeObservation
 from meshprovision.network.buckets import LastHop, Radio, Traffic
 from meshprovision.network.keys import KeySeen
 from meshprovision.network.relays import (
     DEVICE_METRICS_FRESH_SECONDS,
-    EXTERNAL_POWER_LEVEL,
     MAX_PLAUSIBLE_VOLTAGE,
     MAX_UPTIME_SECONDS,
     NOT_IN_LORANET,
@@ -339,7 +339,7 @@ def test_device_notes(device: DeviceHealth, notes: tuple[str, ...]) -> None:
 
 
 def test_the_device_thresholds() -> None:
-    assert (EXTERNAL_POWER_LEVEL, DEVICE_METRICS_FRESH_SECONDS, RECENT_REBOOT_SECONDS) == (
+    assert (EXTERNAL_POWER_BATTERY_LEVEL, DEVICE_METRICS_FRESH_SECONDS, RECENT_REBOOT_SECONDS) == (
         101,
         86400.0,
         3600.0,

@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final
 from urllib.parse import quote
 
+from meshprovision.cache.http import MAX_RESPONSE_BYTES
 from meshprovision.datasources.base import SOURCE_LORASTATS, require_json_list
 from meshprovision.datasources.lorastats import (
     LORASTATS_BASE_URL,
@@ -55,8 +56,8 @@ __all__ = [
 LORASTATS_PACKETS_RAW_PATH: Final[str] = "/API/{region}/PacketsRaw/JSON"
 """Region-scoped raw packets (base64 ``MeshPacket`` per gateway uplink), filterable by ``since``."""
 
-REGION_RAW_MAX_BYTES: Final[int] = 128 * 1024 * 1024
-"""The largest raw-packets answer accepted (the HTTP client's own ceiling).
+REGION_RAW_MAX_BYTES: Final[int] = MAX_RESPONSE_BYTES
+"""The largest raw-packets answer accepted: the HTTP client's own ceiling.
 
 A busy region's day was about 25 MB once and has outgrown 48 MB; the answer
 is decoded whole in memory, so this is the most a refresh may ask of it. A

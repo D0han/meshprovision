@@ -10,7 +10,7 @@ import pytest
 from meshprovision.config.template import TemplateConfig, load_template_text
 from meshprovision.enums import region_table
 from meshprovision.errors import PlanConflictError
-from meshprovision.provisioning import detect, plan_firmware
+from meshprovision.provisioning import detect, plan_firmware, plan_firmware_refusals
 from meshprovision.provisioning.detect import LiveChannel
 from meshprovision.provisioning.plan import (
     ChangePlan,
@@ -336,11 +336,11 @@ def test_the_boot_minimums() -> None:
 
 
 def test_the_repeater_firmware_floor() -> None:
-    assert plan_firmware.REPEATER_REPLACED_MIN_FIRMWARE == (2, 7, 11)
+    assert plan_firmware_refusals.REPEATER_REPLACED_MIN_FIRMWARE == (2, 7, 11)
 
 
 def test_the_known_only_firmware_floor() -> None:
-    assert plan_firmware.KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE == (2, 8, 0)
+    assert plan_firmware_refusals.KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE == (2, 8, 0)
 
 
 def _flat(text: str) -> str:
@@ -367,13 +367,14 @@ def _flat(text: str) -> str:
         ),
         pytest.param(
             "`REPEATER` only on firmware before "
-            + ".".join(str(part) for part in plan_firmware.REPEATER_REPLACED_MIN_FIRMWARE),
+            + ".".join(str(part) for part in plan_firmware_refusals.REPEATER_REPLACED_MIN_FIRMWARE),
             id="repeater",
         ),
         pytest.param(
             "`KNOWN_ONLY` only on firmware before "
             + ".".join(
-                str(part) for part in plan_firmware.KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE
+                str(part)
+                for part in plan_firmware_refusals.KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE
             ),
             id="known-only",
         ),

@@ -21,6 +21,9 @@ from meshprovision.db.nodes import NodeRecord
 from meshprovision.db.schema import ManagementMode
 from meshprovision.errors import ExitCode
 from meshprovision.health.history import HOUR_SECONDS, HourBucket, NodeHistory, NodeInfoSeen
+from meshprovision.health.importance import (
+    RegionImportance,
+)
 from meshprovision.health.refresh import RefreshFailure, RefreshOutcome
 from meshprovision.health.report import (
     HealthOptions,
@@ -33,7 +36,9 @@ from meshprovision.health.report import (
     rejudged_nodes,
     run_health,
 )
-from meshprovision.health.rules import RegionImportance, Verdict
+from meshprovision.health.rules import (
+    Verdict,
+)
 from meshprovision.health.store import HISTORY_DIRNAME, HistoryStore
 from meshprovision.network.impact import Dependant, Level, NodeImpact
 from meshprovision.network.maintenance import StoredImpact

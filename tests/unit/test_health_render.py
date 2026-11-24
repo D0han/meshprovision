@@ -16,10 +16,18 @@ from rich.text import Text
 from meshprovision.health import render
 from meshprovision.health.drift import DriftSource, PassiveDrift
 from meshprovision.health.history import GatewayCheck, LocalStatsPoint, NodeHistory, TelemetryPoint
+from meshprovision.health.importance import (
+    Importance,
+    RegionImportance,
+)
 from meshprovision.health.metrics import BatteryTrend, NodeMetrics, RelayShare
 from meshprovision.health.refresh import RefreshFailure, RefreshOutcome
 from meshprovision.health.report import HealthReport, NodeHealth, StatusHealth, assess_nodes
-from meshprovision.health.rules import Advice, Finding, Importance, RegionImportance, Verdict
+from meshprovision.health.rules import (
+    Advice,
+    Finding,
+    Verdict,
+)
 from meshprovision.nodeid import NodeId
 from meshprovision.status import timefmt
 from meshprovision.status.merge import MergedNode, Thresholds, humanize_age

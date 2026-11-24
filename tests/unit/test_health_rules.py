@@ -6,8 +6,17 @@ import dataclasses
 
 import pytest
 
-from meshprovision.health import importance, rules
+from meshprovision.health import importance
 from meshprovision.health.history import GatewayCheck, NodeHistory
+from meshprovision.health.importance import (
+    IMPORTANCE_HIGH_SCORE,
+    IMPORTANCE_MEDIUM_SCORE,
+    MIN_RECEPTIONS,
+    RELAY_DEPENDENCY_SHARE,
+    Importance,
+    RegionImportance,
+    rank_importance,
+)
 from meshprovision.health.metrics import BatteryTrend, NodeMetrics, RelayShare, compute_metrics
 from meshprovision.health.packets import FUTURE_SKEW_SECONDS
 from meshprovision.health.rules import (
@@ -24,13 +33,9 @@ from meshprovision.health.rules import (
     CHATTY_PER_HOUR,
     DEFAULT_HOP_LIMIT,
     HOP_ADVICE_MIN_SAMPLES,
-    IMPORTANCE_HIGH_SCORE,
-    IMPORTANCE_MEDIUM_SCORE,
-    MIN_RECEPTIONS,
     REBOOTS_WARN,
     REBOOTS_WINDOW_DAYS,
     RELAY_CONCENTRATION_SHARE,
-    RELAY_DEPENDENCY_SHARE,
     ROUTER_MIN_GATEWAYS,
     SILENCE_RUN_MISSED,
     SILENCE_WARN_HOURS,
@@ -39,14 +44,11 @@ from meshprovision.health.rules import (
     Advice,
     BatteryReading,
     Finding,
-    Importance,
     NodeContext,
-    RegionImportance,
     Verdict,
     advise,
     assess,
     battery_reading,
-    rank_importance,
 )
 from meshprovision.nodeid import NodeId
 from meshprovision.status import render
@@ -551,10 +553,10 @@ def test_importance_of_a_gateway(metrics: NodeMetrics, expected: int) -> None:
 @pytest.mark.parametrize(
     ("score", "level"),
     [
-        (rules.IMPORTANCE_HIGH_SCORE, "high"),
-        (rules.IMPORTANCE_HIGH_SCORE - 1, "medium"),
-        (rules.IMPORTANCE_MEDIUM_SCORE, "medium"),
-        (rules.IMPORTANCE_MEDIUM_SCORE - 1, "low"),
+        (importance.IMPORTANCE_HIGH_SCORE, "high"),
+        (importance.IMPORTANCE_HIGH_SCORE - 1, "medium"),
+        (importance.IMPORTANCE_MEDIUM_SCORE, "medium"),
+        (importance.IMPORTANCE_MEDIUM_SCORE - 1, "low"),
     ],
 )
 def test_importance_levels(score: int, level: str, monkeypatch: pytest.MonkeyPatch) -> None:

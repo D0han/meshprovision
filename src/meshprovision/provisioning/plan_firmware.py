@@ -38,15 +38,6 @@ from meshprovision.lora_regions import (
     UNKNOWN_PRESET_NAME,
     boot_uses_default_slot,
 )
-from meshprovision.provisioning.plan_firmware_refusals import (
-    CUSTOM_MODEM_FIELDS,
-    KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE,
-    REPEATER_REPLACED_MIN_FIRMWARE,
-    custom_modem_refusal,
-    known_only_warning,
-    local_admin_refusal,
-    replaced_role_refusal,
-)
 from meshprovision.provisioning.plan_warnings import PlanWarning, PlanWarningCode
 
 if TYPE_CHECKING:
@@ -59,8 +50,6 @@ __all__ = [
     "BOOT_PRESET_CHECK_MIN_FIRMWARE",
     "BOOT_ROUTER_FLOOR_MIN_FIRMWARE",
     "BOOT_SLOT_CHECK_MIN_FIRMWARE",
-    "CUSTOM_MODEM_FIELDS",
-    "KNOWN_ONLY_DROPS_LOCAL_ADMIN_MIN_FIRMWARE",
     "MAX_INTERVAL_MIN_FIRMWARE",
     "MAX_INTERVAL_SECS",
     "OLD_MAX_INTERVAL_SECS",
@@ -70,18 +59,13 @@ __all__ = [
     "PRESET_CHANNEL_NAMES",
     "PUBLIC_CHANNEL_MAX_POSITION_PRECISION",
     "REGION_POWER_LIMITS_DBM",
-    "REPEATER_REPLACED_MIN_FIRMWARE",
     "ROLE_DEFAULT_FIELDS",
     "SMART_MINIMUM_INTERVAL_FLOOR_SECS",
     "TELEMETRY_INTERVAL_FIELDS",
     "TELEMETRY_INTERVAL_FLOOR_ROUTER_SECS",
     "TELEMETRY_INTERVAL_FLOOR_SECS",
     "FirmwareAdjustment",
-    "custom_modem_refusal",
     "firmware_adjustments",
-    "known_only_warning",
-    "local_admin_refusal",
-    "replaced_role_refusal",
     "role_change_warning",
 ]
 

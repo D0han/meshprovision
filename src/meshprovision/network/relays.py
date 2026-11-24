@@ -57,7 +57,6 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEVICE_METRICS_FRESH_SECONDS",
-    "EXTERNAL_POWER_LEVEL",
     "MAX_PLAUSIBLE_VOLTAGE",
     "MAX_UPTIME_SECONDS",
     "MIN_RELAYED",
@@ -93,9 +92,6 @@ MIN_RELAYED: Final[int] = 20
 
 RELYING_SHARE: Final[float] = 0.5
 """A gateway relies on a relay that carried at least this share of its relayed receptions."""
-
-EXTERNAL_POWER_LEVEL: Final[int] = EXTERNAL_POWER_BATTERY_LEVEL
-"""The battery level Meshtastic reports on external power."""
 
 DEVICE_METRICS_FRESH_SECONDS: Final[float] = 24 * 3600.0
 """Device metrics older than this are shown with their age."""
@@ -172,7 +168,9 @@ def device_health(observation: NodeObservation) -> DeviceHealth:
     voltage = observation.voltage
     uptime = observation.uptime_seconds
     return DeviceHealth(
-        battery_level=level if level is not None and 0 < level < EXTERNAL_POWER_LEVEL else None,
+        battery_level=level
+        if level is not None and 0 < level < EXTERNAL_POWER_BATTERY_LEVEL
+        else None,
         external_power=is_external_power(level),
         voltage=voltage if voltage is not None and 0 < voltage <= MAX_PLAUSIBLE_VOLTAGE else None,
         uptime_seconds=uptime if uptime is not None and 0 <= uptime <= MAX_UPTIME_SECONDS else None,

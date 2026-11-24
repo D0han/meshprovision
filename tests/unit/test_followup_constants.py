@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from meshprovision import firmware, nodeid
+from meshprovision.battery import EXTERNAL_POWER_BATTERY_LEVEL
 from meshprovision.cli import provision_keys
 from meshprovision.datasources import loranet
 from meshprovision.db import pending_keys, renumber
@@ -51,7 +52,7 @@ def test_the_firmware_2_8_identity_constants() -> None:
 def test_the_relay_device_constants() -> None:
     assert (relays.MAX_PLAUSIBLE_VOLTAGE, relays.MAX_UPTIME_SECONDS) == (100.0, 0xFFFFFFFF)
     assert (
-        relays.EXTERNAL_POWER_LEVEL,
+        EXTERNAL_POWER_BATTERY_LEVEL,
         relays.DEVICE_METRICS_FRESH_SECONDS,
         relays.RECENT_REBOOT_SECONDS,
         relays.NOT_IN_LORANET,
@@ -155,7 +156,7 @@ _FIRMWARE_FLOOR = ".".join(str(part) for part in firmware.KEY_DERIVED_ID_MIN_FIR
         pytest.param(
             _NETWORK, f"above {relays.MAX_PLAUSIBLE_VOLTAGE:g} V", id="max-plausible-voltage"
         ),
-        pytest.param(_NETWORK, f"level {relays.EXTERNAL_POWER_LEVEL}", id="external-power-level"),
+        pytest.param(_NETWORK, f"level {EXTERNAL_POWER_BATTERY_LEVEL}", id="external-power-level"),
         pytest.param(
             _NETWORK,
             f"more than {_hours(relays.DEVICE_METRICS_FRESH_SECONDS)} old",

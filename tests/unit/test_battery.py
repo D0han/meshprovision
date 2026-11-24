@@ -25,9 +25,9 @@ def test_is_external_power(level: int | None, powered: bool) -> None:
     assert is_external_power(level) is powered
 
 
-def test_the_sentinel_is_101_and_relays_shares_it() -> None:
+def test_the_sentinel_is_101() -> None:
     assert EXTERNAL_POWER_BATTERY_LEVEL == 101
-    assert relays.EXTERNAL_POWER_LEVEL is EXTERNAL_POWER_BATTERY_LEVEL
+    assert not hasattr(relays, "EXTERNAL_POWER_LEVEL")
 
 
 @pytest.mark.parametrize("level", [101, 150])

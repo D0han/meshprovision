@@ -23,6 +23,10 @@ from rich.text import Text
 from meshprovision.battery import is_external_power
 from meshprovision.datasources.models import parse_epoch
 from meshprovision.health.drift import DriftSource, PassiveDrift
+from meshprovision.health.importance import (
+    Importance,
+    RegionImportance,
+)
 from meshprovision.health.metrics import NodeMetrics, RelayShare
 from meshprovision.health.packets import (
     PORT_NEIGHBORINFO,
@@ -36,8 +40,6 @@ from meshprovision.health.rules import (
     BATTERY_FROM_HISTORY,
     CHATTY_REFERENCE_PRESET,
     BatteryReading,
-    Importance,
-    RegionImportance,
     Verdict,
     chatty_limit,
 )
