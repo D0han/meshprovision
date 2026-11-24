@@ -1149,6 +1149,38 @@ def test_backup_name_re_rejects_a_sibling_stem_prefixed_database(tmp_path: Path)
     assert pattern.fullmatch("fleet-west.known-good.ods") is None
 
 
+def test_a_directory_with_a_backup_name_is_not_a_backup(tmp_path: Path) -> None:
+    """rs67 T5: only regular files count, so prune never tries to unlink a directory."""
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    target = tmp_path / "db.ods"
+    (backup_dir / "db-20260101T000000.000000Z.ods").mkdir()
+    own = backup_dir / "db-20260102T000000.000000Z.ods"
+    own.write_bytes(b"a real backup")
+
+    assert [info.path for info in list_backups(target, backup_dir=backup_dir)] == [own]
+
+
+def test_a_full_disk_while_writing_the_temp_file_is_an_atomic_write_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rs67 T4: the error is an AtomicWriteError, the target is intact, no temp is left."""
+    target = tmp_path / "db.ods"
+    target.write_bytes(b"old content")
+
+    def _disk_full(self: Path, data: bytes) -> int:
+        raise OSError(errno.ENOSPC, "No space left on device", str(self))
+
+    monkeypatch.setattr(Path, "write_bytes", _disk_full)
+
+    with pytest.raises(AtomicWriteError, match="No space left on device"):
+        write_bytes_atomic(target, b"new content", backup=False)
+
+    monkeypatch.undo()
+    assert target.read_bytes() == b"old content"
+    assert [path.name for path in tmp_path.iterdir()] == ["db.ods"]
+
+
 def test_list_backups_excludes_a_sibling_database_sharing_a_stem_prefix(tmp_path: Path) -> None:
     """Reproduces aspect 3's HIGH, widened.
 

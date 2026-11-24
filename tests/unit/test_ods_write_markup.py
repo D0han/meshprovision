@@ -24,6 +24,8 @@ pytestmark = pytest.mark.unit
 _TABLE = "urn:oasis:names:tc:opendocument:xmlns:table:1.0"
 _OFFICE = "urn:oasis:names:tc:opendocument:xmlns:office:1.0"
 _TEXT = "urn:oasis:names:tc:opendocument:xmlns:text:1.0"
+_STYLE = "urn:oasis:names:tc:opendocument:xmlns:style:1.0"
+_FO = "urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
 
 
 def _t(name: str) -> str:
@@ -87,3 +89,26 @@ def test_every_header_cell_carries_its_column_description(content: Element) -> N
             for annotation in header.iter(f"{{{_OFFICE}}}annotation")
         ]
         assert notes == [column.description for column in sheet.columns]
+
+
+def test_every_header_cell_has_the_bold_header_style(tmp_path: Path) -> None:
+    """rs67 T13: a header cell naming another style would lose its bold look."""
+    path = tmp_path / "db.ods"
+    ods_write.write_database(path, nodes=[], keys=[], backup=False)
+    with zipfile.ZipFile(path) as archive:
+        content: Element = ElementTree.fromstring(archive.read("content.xml"))
+        styles: Element = ElementTree.fromstring(archive.read("styles.xml"))
+    bold = {
+        style.get(f"{{{_STYLE}}}name")
+        for style in styles.iter(f"{{{_STYLE}}}style")
+        if any(
+            props.get(f"{{{_FO}}}font-weight") == "bold"
+            for props in style.iter(f"{{{_STYLE}}}text-properties")
+        )
+    }
+
+    for table in content.iter(_t("table")):
+        header = next(table.iter(_t("table-row")))
+        names = {cell.get(_t("style-name")) for cell in header.iter(_t("table-cell"))}
+        assert names == {ods_write.HEADER_CELL_STYLE_NAME}, table.get(_t("name"))
+    assert ods_write.HEADER_CELL_STYLE_NAME in bold
