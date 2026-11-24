@@ -170,8 +170,8 @@ def _with_high_bit(point: bytes) -> bytes:
 _HIGH_BIT_SMALL_ORDER_HEX = (
     # e0eb7a7c..b800 and 5f9c95bc..1157 (the order-8 points) with bit 255 set,
     # plus 0, 1, p - 1, p and p + 1 with it set.
-    "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880",
-    "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f11d7",
+    "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880",  # pragma: allowlist secret
+    "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f11d7",  # pragma: allowlist secret
     "0000000000000000000000000000000000000000000000000000000000000080",
     "0100000000000000000000000000000000000000000000000000000000000080",
     "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",

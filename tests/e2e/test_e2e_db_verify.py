@@ -136,7 +136,10 @@ def test_db_verify_flags_a_small_order_key_with_bit_255_set(
     weak_pub = KeyRecord.from_material(
         "deadbe01",
         KeyType.ADMIN_PUBLIC,
-        bytes.fromhex("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880"),
+        bytes.fromhex(
+            "e0eb7a7c3b41b8ae1656e3faf19fc46a"  # pragma: allowlist secret
+            "da098deb9c32b1fd866205165f49b880"  # pragma: allowlist secret
+        ),
         origin=KeyOrigin.CAPTURED,
     )
     seed_db(nodes=[node], keys=[weak_pub])

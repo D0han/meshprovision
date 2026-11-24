@@ -1283,7 +1283,8 @@ def test_admin_import_allow_weak_still_refuses_a_small_order_key(
 @pytest.mark.parametrize(
     "hex_key",
     [
-        "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880",
+        "e0eb7a7c3b41b8ae1656e3faf19fc46a"  # pragma: allowlist secret
+        "da098deb9c32b1fd866205165f49b880",  # pragma: allowlist secret
         "0000000000000000000000000000000000000000000000000000000000000080",
     ],
 )
