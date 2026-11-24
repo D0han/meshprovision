@@ -171,7 +171,7 @@ def diff(
         dest_record = db.nodes.find(node)
         gateway_record = None if gateway is None else db.nodes.find(gateway)
         public_keys = db.keys.public_key_map()
-    history = HistoryStore(ctx.settings.cache_dir / HISTORY_DIRNAME).load(node)
+    history = HistoryStore(ctx.trusted_cache_dir() / HISTORY_DIRNAME).load(node)
     reading = _air_util_tx(history, now=time.time())
     plan = plan_dry_run(
         _inputs(

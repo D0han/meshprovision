@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 import sys
 import time
@@ -289,6 +290,21 @@ def test_no_fetch_ignores_a_placeholder_contact_it_never_sends(
 
     assert result.exit_code == 0, result.output
     assert router.calls.call_count == 0
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_no_fetch_refuses_a_cache_dir_others_can_write(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    cache = Path(env["MESHPROVISION_CACHE_DIR"])
+    cache.mkdir(parents=True, exist_ok=True)
+    cache.chmod(0o777)
+
+    result = invoke(runner, ["health", "--no-fetch"], env)
+
+    assert result.exit_code == 2, result.output
+    assert f"Refusing to use the cache directory {cache}" in result.stderr
 
 
 def test_no_fetch_without_history_reports_unknown(

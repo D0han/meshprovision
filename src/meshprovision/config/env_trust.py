@@ -125,23 +125,35 @@ def directory_is_private(directory: Path) -> bool:
     """Return whether only the current user (or root) can create files in ``directory``.
 
     The directory must be owned by the current user and pass the same
-    mode-bit checks as a discovered ``.env`` (see
-    :func:`_env_trust_problems`): not world-writable, and group-writable
-    only through the user's own private primary group. Its ACL is not
-    read.
+    checks as a discovered ``.env`` (see :func:`_env_trust_problems`):
+    not world-writable, group-writable only through the user's own
+    private primary group, and no POSIX ACL entry granting another user
+    or group write access. Owner, mode and ACL are read through one open
+    descriptor; an ACL that cannot be read or decoded counts as not
+    private.
 
     Args:
         directory: The directory to check.
 
     Returns:
         True if it is private; False otherwise, including when it can't
-        be stat-ed.
+        be opened.
     """
     try:
-        st = directory.stat()
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     except OSError:
         return False
-    return st.st_uid == os.getuid() and not _env_trust_problems(directory, st, None)
+    try:
+        st = os.fstat(fd)
+        if st.st_uid != os.getuid():
+            return False
+        try:
+            acl = _read_access_acl(fd, directory)
+        except SettingsError:
+            return False
+        return not _env_trust_problems(directory, st, acl)
+    finally:
+        os.close(fd)
 
 
 _POSIX_ACL_XATTR: Final[str] = "system.posix_acl_access"

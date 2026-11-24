@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import json
+import os
 import socket
 import time
 from collections.abc import Callable, Iterator
@@ -195,6 +196,22 @@ def test_dry_run_of_the_example_template_on_long_fast_is_allowed_at_cw_7(
     ):
         assert text in result.stdout
     assert " ".join(ESTIMATE_LINE.split()) in " ".join(result.stdout.split())
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_dry_run_refuses_a_cache_dir_others_can_write(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db, firmware="2.7.11")
+    cache = Path(env["MESHPROVISION_CACHE_DIR"])
+    cache.mkdir(parents=True, exist_ok=True)
+    cache.chmod(0o777)
+
+    result = invoke(runner, ["remote", "diff", "deadbe01", "--dry-run"], env)
+
+    assert result.exit_code == 2, result.output
+    assert result.stdout == ""
+    assert f"Refusing to use the cache directory {cache}" in result.stderr
 
 
 def test_a_section_on_long_moderate_fits(

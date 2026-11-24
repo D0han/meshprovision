@@ -64,6 +64,7 @@ from meshprovision.errors import (
     NodeArchivedError,
     NodeNotEnrolledError,
     PlanConflictError,
+    SettingsError,
 )
 from meshprovision.firmware import derives_node_id_from_key
 from meshprovision.network.maintenance import maintenance_note
@@ -519,6 +520,20 @@ def _serial_api_refusal(
     )
 
 
+def _maintenance_note(ctx: CliContext, node: NodeId, *, renumbers: bool) -> str | None:
+    """Read the maintenance note from the stored network data, if the cache can be trusted.
+
+    The note is information only, so a cache directory others can write
+    skips it with a warning instead of refusing the run.
+    """
+    try:
+        directory = ctx.trusted_cache_dir() / NETWORK_DIRNAME
+    except SettingsError as exc:
+        ctx.warn(f"Maintenance note skipped: {exc.message}")
+        return None
+    return maintenance_note(node, directory, renumbers=renumbers)
+
+
 def run_provision(
     ctx: CliContext,
     session: apply.DeviceSession,
@@ -643,9 +658,9 @@ def run_provision(
                 "it may belong to someone else."
             )
         note = (
-            maintenance_note(
+            _maintenance_note(
+                ctx,
                 change_plan.node_id,
-                ctx.settings.cache_dir / NETWORK_DIRNAME,
                 renumbers=change_plan.key_plan.regenerate
                 and derives_node_id_from_key(live.firmware_version),
             )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -330,6 +331,21 @@ def test_no_fetch_ignores_a_placeholder_contact_it_never_sends(
     assert result.exit_code == 0, result.output
     assert (lorastats.raw, lorastats.listed) == ([], [])
     assert "MESHPROVISION_CONTACT" not in result.stderr
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_no_fetch_refuses_a_cache_dir_others_can_write(
+    runner: CliRunner, env: dict[str, str], seed_db: Callable[..., Path]
+) -> None:
+    _seed(seed_db)
+    _run(runner, env, ["keys", "--region", "PL"])
+    cache = Path(env["MESHPROVISION_CACHE_DIR"])
+    cache.chmod(0o777)
+
+    result, _ = _run(runner, env, ["keys", "--region", "PL", "--no-fetch"])
+
+    assert result.exit_code == 2, result.output
+    assert f"Refusing to use the cache directory {cache}" in result.stderr
 
 
 def test_no_fetch_without_stored_data_exits_three(

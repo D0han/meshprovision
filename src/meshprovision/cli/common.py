@@ -998,6 +998,26 @@ class CliContext:
 
         return DbSession(db=db, nodes=NodeRepository(db), keys=KeyRepository(db))
 
+    def trusted_cache_dir(self) -> Path:
+        """Return the cache directory once it passed the shared trust check.
+
+        Every command that reads a store under it (health histories,
+        network data, the region memo) gets the directory from here, so
+        none of them trusts a directory another user can write.
+
+        Returns:
+            :attr:`Settings.cache_dir <meshprovision.config.settings.Settings.cache_dir>`.
+
+        Raises:
+            SettingsError: If it is owned by another user or others can
+                write to it (see
+                :func:`~meshprovision.cache.http.check_cache_root`).
+        """
+        from meshprovision.cache.http import check_cache_root
+
+        check_cache_root(self.settings.cache_dir)
+        return self.settings.cache_dir
+
     def http_client(self, *, require_contact: bool = True, sends: bool = True) -> CachedHTTPClient:
         """Build a :class:`~meshprovision.cache.http.CachedHTTPClient` from settings.
 
@@ -1022,7 +1042,7 @@ class CliContext:
         from meshprovision.cache.http import CachedHTTPClient
 
         return CachedHTTPClient(
-            cache_dir=self.settings.cache_dir,
+            cache_dir=self.trusted_cache_dir(),
             user_agent=self.settings.user_agent(require_contact=require_contact, sends=sends),
             ttl=self.settings.cache_ttl,
             force_refresh=self.force_refresh,

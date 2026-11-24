@@ -1975,6 +1975,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- A cache directory other users can write is now refused by every
+  command that reads it, not only when an HTTP request is made: `mesh
+  health --no-fetch`, `mesh network ... --no-fetch` and `mesh remote
+  diff --dry-run` read the health and network history from it unchecked
+  (`mesh provision` skips its maintenance note instead, with a warning),
+  and the check now also reads the directory's POSIX ACL (a named user
+  with write access passed on a host with per-user groups).
 - `mesh -vv` and `-vvv` no longer print a node's Wi-Fi password or MQTT
   password. The meshtastic library logs every message it receives in
   protobuf text (`Received from radio: ...`), where a printable

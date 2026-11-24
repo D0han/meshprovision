@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -201,3 +202,19 @@ def test_the_warning_says_a_key_write_on_firmware_2_8_changes_the_node_id(
     assert result.exit_code == 0, result.output
     changes = "Applying this plan reboots it and changes its node id (firmware >= 2.8 derives"
     assert (changes in result.stderr) is renumbers
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_a_cache_dir_others_can_write_skips_the_note_but_not_the_run(
+    runner: CliRunner, env: dict[str, str], bus: DeviceBus
+) -> None:
+    iface = bus.use(FakeMeshInterface(_NODE))
+    directory = _seed_store(env)
+    directory.parent.chmod(0o777)
+
+    result = invoke(runner, ["provision", "--port", "/dev/ttyFAKE0", "--yes"], env)
+
+    assert result.exit_code == 0, result.output
+    assert "warning: Maintenance note skipped: Refusing to use the cache directory" in result.stderr
+    assert _WARNING not in result.stderr
+    assert iface.localNode.written_sections

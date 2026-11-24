@@ -789,3 +789,45 @@ def test_discovered_env_real_acl_write_entry_is_refused_until_the_hint_runs(
     command = (exc_info.value.hint or "").split("`")[1]
     subprocess.run(["/bin/sh", "-c", command], check=True)
     assert load_settings(environ={}).contact == "d0hanzibi+me@gmail.com"
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+@pytest.mark.parametrize(
+    ("acl", "private"),
+    [
+        pytest.param(None, True, id="no-acl"),
+        pytest.param(_acl((_USER, _R, 1), (_MASK, _RW, _NO_ID)), True, id="named-read-only"),
+        pytest.param(_acl((_USER, _RW, 1), (_MASK, _RW, _NO_ID)), False, id="named-user-write"),
+        pytest.param(_acl((_GROUP, _RW, 1), (_MASK, _RW, _NO_ID)), False, id="named-group-write"),
+        pytest.param(_acl((_USER, _RW, 1), (_MASK, _R, _NO_ID)), True, id="write-masked"),
+        pytest.param(b"garbage", False, id="undecodable"),
+    ],
+)
+def test_directory_is_private_reads_the_directorys_acl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, acl: bytes | None, private: bool
+) -> None:
+    directory = tmp_path / "cache"
+    directory.mkdir(mode=0o700)
+    directory.chmod(0o700)
+    monkeypatch.setattr(os, "getxattr", _fake_getxattr(acl), raising=False)
+
+    assert env_trust.directory_is_private(directory) is private
+
+
+@pytest.mark.skipif(not hasattr(os, "getuid"), reason="POSIX ownership")
+def test_directory_is_private_refuses_an_acl_it_cannot_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing_getxattr(*args: object, **kwargs: object) -> bytes:
+        raise OSError(errno.EACCES, os.strerror(errno.EACCES))
+
+    monkeypatch.setattr(os, "getxattr", failing_getxattr, raising=False)
+
+    assert not env_trust.directory_is_private(tmp_path)
+
+
+def test_directory_is_private_is_false_for_a_file(tmp_path: Path) -> None:
+    path = tmp_path / "file"
+    path.write_text("x", encoding="utf-8")
+
+    assert not env_trust.directory_is_private(path)

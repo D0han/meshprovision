@@ -114,6 +114,7 @@ __all__ = [
     "CachedHTTPClient",
     "CachedResponse",
     "cache_key",
+    "check_cache_root",
 ]
 
 _logger = logging.getLogger(__name__)
@@ -836,6 +837,48 @@ def _read_entry_bytes(path: Path) -> bytes:
     return raw
 
 
+def check_cache_root(root: Path) -> None:
+    """Create the cache root owner-only, or refuse one other users can write.
+
+    The one trust check for ``MESHPROVISION_CACHE_DIR``, run by the HTTP
+    client and by every command that reads the stores under it (health
+    histories, network data, the region memo) before it opens one. A
+    root this creates gets :data:`_CACHE_ROOT_MODE`; an existing one is
+    never chmod-ed. Another user who can create files in it could plant
+    answers or history that the reports would trust, so on POSIX it must
+    be owned by the current user and writable by no one else, its POSIX
+    ACL included (see
+    :func:`~meshprovision.config.env_trust.directory_is_private`).
+
+    Args:
+        root: The cache directory.
+
+    Raises:
+        SettingsError: If the existing root is owned by another user or
+            writable by others.
+    """
+    try:
+        root.mkdir(parents=True, mode=_CACHE_ROOT_MODE)
+    except FileExistsError:
+        if not root.is_dir():
+            # Nothing can be read from or planted under it; a write reports it.
+            _logger.debug("cache root %s is not a directory", root)
+        elif hasattr(os, "getuid") and not directory_is_private(root):
+            quoted = shlex.quote(str(root))
+            raise SettingsError(
+                f"Refusing to use the cache directory {root}: it is owned by another "
+                "user or others can write to it, so its entries cannot be trusted.",
+                hint=(
+                    f"Run `chmod go-w {quoted}` (and `setfacl -b {quoted}` if an ACL grants "
+                    "write access) if it is yours, or set MESHPROVISION_CACHE_DIR to a "
+                    "directory of your own."
+                ),
+            ) from None
+    except OSError as exc:
+        # Writing an entry reports it; a read just misses.
+        _logger.debug("could not create cache root %s: %s", root, exc)
+
+
 class CachedHTTPClient:
     """Disk-backed TTL cache wrapping ``httpx.Client``.
 
@@ -1349,38 +1392,15 @@ class CachedHTTPClient:
                 tmp.unlink(missing_ok=True)
 
     def _check_cache_root(self) -> None:
-        """Create the cache root owner-only, or refuse one other users can write, once.
-
-        A root this tool creates gets :data:`_CACHE_ROOT_MODE`; an existing
-        one (``MESHPROVISION_CACHE_DIR`` may name any directory) is never
-        chmod-ed. Another user who can create files in the root could plant
-        entries that ``mesh status`` and ``mesh health`` would trust, so on
-        POSIX it must be owned by the current user and writable by no one
-        else, as a discovered ``.env`` file's directory (see
-        :func:`~meshprovision.config.env_trust.directory_is_private`).
+        """Run :func:`check_cache_root` on this client's cache root, once.
 
         Raises:
             SettingsError: If the existing root is owned by another user or
-                writable by others.
+                writable by others (see :func:`check_cache_root`).
         """
         if self._root_checked:
             return
-        root = self._cache_dir
-        try:
-            root.mkdir(parents=True, mode=_CACHE_ROOT_MODE)
-        except FileExistsError:
-            if hasattr(os, "getuid") and not directory_is_private(root):
-                raise SettingsError(
-                    f"Refusing to use the cache directory {root}: it is owned by another "
-                    "user or others can write to it, so its entries cannot be trusted.",
-                    hint=(
-                        f"Run `chmod go-w {shlex.quote(str(root))}` if it is yours, or set "
-                        "MESHPROVISION_CACHE_DIR to a directory of your own."
-                    ),
-                ) from None
-        except OSError as exc:
-            # Writing an entry reports it; a read just misses.
-            _logger.debug("could not create cache root %s: %s", root, exc)
+        check_cache_root(self._cache_dir)
         self._root_checked = True
 
     def _fetch_with_retry(
